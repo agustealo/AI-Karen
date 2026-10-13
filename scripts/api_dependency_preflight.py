@@ -53,9 +53,17 @@ def main() -> int:
     print(json.dumps({"check": "interpreter", "python": sys.version.split()[0], "working_directory": str(Path.cwd())}))
     crawler_ok = dependency("crawl4ai", "crawl4ai")
     browser_ok = dependency("playwright", "playwright")
+    supabase_ok = dependency("supabase", "supabase")
+    if supabase_ok:
+        try:
+            from supabase import create_client
+            supabase_ok = callable(create_client)
+        except (ImportError, AttributeError):
+            supabase_ok = False
+        print(json.dumps({"check": "supabase_factory", "create_client_available": supabase_ok}))
     rbac_ok = permissions()
-    print(json.dumps({"check": "summary", "crawler_deps_ready": crawler_ok and browser_ok, "rbac_config_ready": rbac_ok}))
-    return 0 if crawler_ok and browser_ok and rbac_ok else 1
+    print(json.dumps({"check": "summary", "crawler_deps_ready": crawler_ok and browser_ok, "supabase_sdk_ready": supabase_ok, "rbac_config_ready": rbac_ok}))
+    return 0 if crawler_ok and browser_ok and supabase_ok and rbac_ok else 1
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ SQLAlchemy
 psycopg[binary]
 psycopg2-binary
 asyncpg
+supabase==2.32.0
 redis
 aiofiles
 aiohttp
