@@ -26,12 +26,14 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const featuredPreview =
     featuredItem?.content ||
     featuredItem?.snippet ||
-    response?.summary ||
-    'No live preview is available yet.';
+    'No retrieved page preview is available.';
   const featuredHref = featuredItem?.url || '';
-  const statusLabel = response?.diagnostics?.degraded ? 'Degraded retrieval' : sourceCount > 0 ? 'Sources retrieved' : 'No sources retrieved';
+  const statusLabel = !sourceCount && !resultCount
+    ? response?.diagnostics?.degraded ? 'Search failed: no evidence' : 'No sources retrieved'
+    : response?.diagnostics?.degraded ? 'Partial evidence' : 'Sources retrieved';
+  const hasEvidence = sourceCount > 0 || resultCount > 0;
   const capabilityTags = [
-    `Provider ${providerLabel}`,
+    `Search provider ${providerLabel}`,
     `${sourceCount} sources`,
     `${resultCount} cards`,
     statusLabel,
@@ -56,6 +58,26 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   if (state.isLoading) return <LoadingState state={state} />;
   if (state.error) return <ErrorState error={state.error} />;
   if (!response) return <EmptyState />;
+  if (!hasEvidence) {
+    return (
+      <div role="status" className="flex h-full flex-col justify-center gap-3 p-8 text-foreground">
+        <h2 className="text-xl font-semibold">No search evidence retrieved</h2>
+        <p className="max-w-2xl text-sm text-muted-foreground">
+          {response.summary || 'The search completed without any usable source links or pages.'}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Search provider: {providerLabel}. No result or citation has been verified.
+        </p>
+        {response.diagnostics?.warnings?.length ? (
+          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+            {response.diagnostics.warnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    );
+  }
 
   const renderTabContent = () => {
     switch (currentTab) {
