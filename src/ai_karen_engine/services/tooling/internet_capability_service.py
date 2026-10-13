@@ -738,21 +738,24 @@ class InternetCapabilityService:
                 "request_id": execution_context.request_id,
             },
             "provider": self._provider_name(search_providers),
-            "liveSearch": { # NextJS UI prefers liveSearch camelCase often, keep both for compatibility
+            # Keep legacy response keys, but never embed full crawler HTML/markdown
+            # or duplicate large processed passages into the public API response.
+            # Evidence is already available through bounded sources and results.
+            "liveSearch": {
                 "mode": mode,
                 "query": request.query,
                 "expanded_queries": list(expanded_queries)[:5],
-                "urls": list(urls),
-                "crawl_results": list(crawl_results),
-                "processed_chunks": list(processed_chunks),
+                "urls": list(urls)[:25],
+                "crawl_results": [],
+                "processed_chunks": [],
             },
             "live_search": {
                 "mode": mode,
                 "query": request.query,
                 "expanded_queries": list(expanded_queries)[:5],
-                "urls": list(urls),
-                "crawl_results": list(crawl_results),
-                "processed_chunks": list(processed_chunks),
+                "urls": list(urls)[:25],
+                "crawl_results": [],
+                "processed_chunks": [],
             },
             "execution_time_ms": execution_time_ms,
         }
