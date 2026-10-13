@@ -185,10 +185,23 @@ class DistilBertSemanticEncoder(SemanticEncoder):
     ) -> str | None:
         huggingface_hub_dir = _default_huggingface_hub_dir()
         local_root = Path(self.config.local_model_root)
-        orchestrator_matches = sorted(
-            local_root.glob(f"*--{model_name}/main")
-        ) if "/" not in model_name else [
-            local_root / model_name.replace("/", "--") / "main"
+        # The canonical downloader publishes SHA-pinned revisions, not only
+        # "main". Resolve exactly the model's owner/repository slot and prefer
+        # an existing complete local snapshot. Never scan unrelated models.
+        model_slot = model_name.replace("/", "--")
+        slots = (
+            [local_root / model_slot]
+            if "/" in model_name
+            else sorted(local_root.glob(f"*--{model_name}"))
+        )
+        orchestrator_matches = [
+            revision
+            for slot in slots
+            if slot.is_dir() and not slot.is_symlink()
+            for revision in sorted(slot.iterdir())
+            if revision.is_dir()
+            and not revision.is_symlink()
+            and (revision / "config.json").is_file()
         ]
         candidate_dirs = [
             Path(self.config.local_model_root) / model_name,
