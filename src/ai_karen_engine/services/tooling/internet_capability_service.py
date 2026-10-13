@@ -1287,6 +1287,7 @@ class InternetCapabilityService:
             metadata = result.get("metadata", {}) or {}
             markdown = result.get("markdown", "") or ""
             text = result.get("text", "") or ""
+            bounded_markdown = markdown[:4000]
             title = (
                 metadata.get("title")
                 or metadata.get("og:title")
@@ -1305,17 +1306,17 @@ class InternetCapabilityService:
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
-                    "full_content": markdown,
-                    "markdown": markdown,
+                    "full_content": bounded_markdown,
+                    "markdown": bounded_markdown,
                     "content_ref": f"content:{hashlib.sha256(markdown.encode()).hexdigest()[:16]}",
                     "content_hash": hashlib.sha256(markdown.encode()).hexdigest()[:16],
-                    "extracted_data": result.get("extracted_content"),
+                    "extracted_data": None,  # Raw structured output is not a consumer-safe unbounded field.
                     "publishedDate": metadata.get("published_date")
                     or metadata.get("date")
                     or metadata.get("article:published_time"),
                     "relevanceScore": round(max(0.0, 1.0 - (len(sources) * 0.08)), 2),
-                    "links": result.get("links", []),
-                    "media": result.get("media", {}),
+                    "links": [],
+                    "media": {},
                 }
             )
 
@@ -1338,7 +1339,7 @@ class InternetCapabilityService:
                     "url": url,
                     "domain": urlparse(url).netloc if url else "",
                     "snippet": self._summarize_text(content, 280),
-                    "content": content,
+                    "content": content[:1500],
                     "score": float(chunk.get("score", 0.0) or 0.0),
                     "metadata": chunk.get("metadata", {}) or {},
                 }
