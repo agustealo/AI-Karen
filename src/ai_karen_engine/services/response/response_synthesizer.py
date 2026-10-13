@@ -135,6 +135,11 @@ class ResponseSynthesizer:
             final_validation = self.validator.validate(text, contract)
             if not final_validation.valid:
                 logger.error(f"Response validation failed again after retry: {final_validation.reason}")
+                if contract.purpose == "tool_synthesis" and contract.requires_live_data:
+                    metadata["degraded_mode"] = True
+                    metadata["degradation_reason"] = final_validation.reason
+                    metadata["response_source"] = "citation_validation_failure"
+                    text = "I found search evidence, but could not verify the generated answer against its source links. Please review the listed sources."
                 if contract.purpose == "chat" and not text:
                      text = "I'm sorry, I'm having trouble generating a valid response right now. Please try again or switch models."
 
