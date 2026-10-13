@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict, Any
 import hashlib
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class SearchResultProcessor:
 
     def _rank(self, chunks: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
         """Rank chunks based on keyword relevance to the query."""
-        query_words = set(query.lower().split())
+        query_words = set(re.findall(r"\\b\\w+\\b", query.casefold()))
         
         for c in chunks:
             score = self._calculate_score(c["content"], query_words)
@@ -79,14 +80,17 @@ class SearchResultProcessor:
 
     def _calculate_score(self, content: str, query_words: set) -> float:
         """Calculate a basic relevance score for a chunk."""
-        content_lower = content.lower()
-        score = 0.0
-        
-        # Keyword frequency score
-        for word in query_words:
-            if len(word) < 3: continue
-            matches = content_lower.count(word)
-            score += matches * 1.0
+        # Match complete words only. Substrings such as "cat" in "catalog"
+        # are not independent evidence of relevance.
+        tokens = re.findall(r"\\b\\w+\\b", content.casefold())
+        frequencies = {}
+        for token in tokens:
+            frequencies[token] = frequencies.get(token, 0) + 1
+        score = sum(
+            min(frequencies.get(word, 0), 5)
+            for word in query_words
+            if len(word) >= 3
+        )
             
         # Boost for matches in headers (simplified)
         if content.startswith("#"):

@@ -196,12 +196,31 @@ class WebSearchDispatcher(ExtensionBase):
                         "InternetCapabilityService returned no live results for mode %s",
                         mode,
                     )
+                    # A strategy-only handler is not a live search fallback.
+                    # Preserve the real diagnostics and expose the empty result.
+                    internet_result["can_execute"] = False
+                    internet_result["success"] = False
+                    internet_result.setdefault("sources", [])
+                    internet_result.setdefault("results", [])
+                    internet_result.setdefault("status", "no_results")
+                    return internet_result
                 except Exception as exc:
                     self.logger.warning(
                         "InternetCapabilityService failed for mode %s",
                         mode,
                         extra={"error": str(exc), "query": query},
                     )
+                    return {
+                        "success": False,
+                        "can_execute": False,
+                        "status": "error",
+                        "error": str(exc),
+                        "plugin_id": self._get_manifest_id(),
+                        "mode": mode,
+                        "query": query,
+                        "sources": [],
+                        "results": [],
+                    }
 
             result = await handler.execute(prepared, query)
             result.setdefault("mode", mode)

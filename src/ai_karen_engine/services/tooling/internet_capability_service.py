@@ -1140,7 +1140,12 @@ class InternetCapabilityService:
 
         for item in results:
             if isinstance(item, dict):
+                if item.get("success") is False:
+                    continue
                 normalized.append(item)
+                continue
+
+            if getattr(item, "success", True) is False:
                 continue
 
             value = {
