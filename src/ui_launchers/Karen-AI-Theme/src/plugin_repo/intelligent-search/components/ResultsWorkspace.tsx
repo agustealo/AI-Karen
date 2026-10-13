@@ -116,8 +116,8 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         </div>
       </div>
 
-      <div className="relative grid min-h-[65vh] flex-1 gap-4 px-4 py-4 lg:px-6 lg:py-6"
-        style={{ gridTemplateColumns: showDetails ? `minmax(0, 1fr) ${detailsWidth}px` : 'minmax(0, 1fr)' }}>
+      <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
+        style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>
         <section className="flex min-h-[55vh] min-w-0 flex-col gap-4">
           <div className="rounded-3xl border border-border/60 bg-card/70 p-2 shadow-sm backdrop-blur">
             <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Search results</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
