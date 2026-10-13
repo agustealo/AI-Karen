@@ -32,3 +32,21 @@ def test_unavailable_model_never_claims_safe_or_neutral_inference() -> None:
     assert '"safety_check": False' in source
     assert '"confidence": 0.0' in source
     assert '"context_continuity": 0.0' in source
+
+
+
+def test_encoder_resolves_sha_pinned_canonical_model_slot(tmp_path) -> None:
+    from ai_karen_engine.core.intelligence.ml.encoders.distilbert import (
+        DistilBertSemanticEncoder,
+    )
+
+    root = tmp_path / "transformers"
+    revision = root / "distilbert--distilbert-base-uncased" / ("a" * 40)
+    revision.mkdir(parents=True)
+    (revision / "config.json").write_text("{}", encoding="utf-8")
+    # Avoid heavyweight initialization; exercise the exact discovery helper.
+    encoder = object.__new__(DistilBertSemanticEncoder)
+    encoder.config = type("Config", (), {"local_model_root": str(root)})()
+    assert encoder._resolve_model_source(
+        "distilbert/distilbert-base-uncased", "", ""
+    ) == str(revision)
