@@ -44,3 +44,33 @@ def test_no_authorized_sources_fails_closed():
     result = ResponseValidator().validate("Jamaica became independent in 1962.", empty_evidence)
     assert not result.valid
     assert result.reason == "missing_authorized_source_evidence"
+
+
+def test_discovery_only_link_cannot_authorize_citation():
+    discovery = ResponseContract(
+        purpose="tool_synthesis",
+        requires_live_data=True,
+        latest_user_message="History of Jamaica",
+        tool_results=[{"sources": [{"url": "https://discovery.example/history", "evidence_level": "search_snippet"}]}],
+    )
+    result = ResponseValidator().validate("History: https://discovery.example/history", discovery)
+    assert not result.valid
+    assert result.reason == "missing_authorized_source_evidence"
+
+
+def test_fetched_page_can_authorize_citation():
+    fetched = ResponseContract(
+        purpose="tool_synthesis",
+        requires_live_data=True,
+        latest_user_message="History of Jamaica",
+        tool_results=[{"sources": [{"url": "https://verified.example/history", "evidence_level": "fetched_page"}]}],
+    )
+    assert ResponseValidator().validate("History: https://verified.example/history", fetched).valid
+
+
+def test_synthesizer_rechecks_after_retry_before_returning():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[2]
+           / "src/ai_karen_engine/services/response/response_synthesizer.py").read_text()
+    assert "verified = self.validator.validate(text, contract)" in src
+    assert 'metadata["response_source"] = "citation_validation_failure"' in src

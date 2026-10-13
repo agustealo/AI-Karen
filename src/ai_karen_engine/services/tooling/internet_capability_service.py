@@ -1327,6 +1327,7 @@ class InternetCapabilityService:
                     "evidence_id": f"evidence_{len(sources)}_{hashlib.md5(url.encode()).hexdigest()[:8]}",
                     "url": url,
                     "canonical_url": url,
+                    "evidence_level": "fetched_page",
                     "title": title,
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
