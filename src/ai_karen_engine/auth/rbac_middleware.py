@@ -361,7 +361,7 @@ _PERMISSION_ALIASES: Dict[str, Permission] = {
 }
 
 
-def _resolve_permission_names(raw_permissions: Iterable[str]) -> Set[Permission]:
+def _resolve_permission_names(raw_permissions: Iterable[str], *, source: str = "unspecified") -> Set[Permission]:
     resolved: Set[Permission] = set()
     for value in raw_permissions:
         try:
@@ -373,8 +373,9 @@ def _resolve_permission_names(raw_permissions: Iterable[str]) -> Set[Permission]
                 continue
             logger.warning(
                 "Unrecognized RBAC permission '%s' (role names are not permissions); "
-                "check the effective permissions source and granted role entries",
+                "check the effective permissions source and granted role entries (origin=%s)",
                 value,
+                source,
             )
     return resolved
 
@@ -405,13 +406,13 @@ def _build_role_permissions() -> Dict[Role, RolePermissions]:
         if isinstance(raw_permissions, list) and raw_permissions in (["*"], ["all"]):
             permissions = _all_permissions()
         else:
-            permissions = _resolve_permission_names(raw_permissions)
+            permissions = _resolve_permission_names(raw_permissions, source=f"role_config:{role.value}")
             if raw_permissions and not permissions and default_entry.get("permissions"):
                 logger.warning(
                     "No recognized permissions configured for role '%s'; using built-in defaults",
                     role.value,
                 )
-                permissions = _resolve_permission_names(default_entry["permissions"])
+                permissions = _resolve_permission_names(default_entry["permissions"], source=f"built_in_default:{role.value}")
 
         role_permissions[role] = RolePermissions(
             role=role,
@@ -456,7 +457,7 @@ class RBACManager:
                 continue
             self._collect_permissions(role, permissions)
         # Claims originate from the verified authenticated identity.
-        permissions.update(_resolve_permission_names(user.get("permissions") or []))
+        permissions.update(_resolve_permission_names(user.get("permissions") or [], source="authenticated_permission_claims"))
         return permissions
 
     def has_permission(
