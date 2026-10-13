@@ -13,6 +13,8 @@ interface ResultsWorkspaceProps {
 export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<string>(modeConfig.resultTabs[0] || 'results');
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
+  const [detailsWidth, setDetailsWidth] = useState(280);
+  const [showDetails, setShowDetails] = useState(false);
 
   const validTabs = modeConfig.resultTabs;
   const currentTab = validTabs.includes(activeTab) ? activeTab : validTabs[0];
@@ -21,17 +23,17 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
   const providerLabel = String(
-    response?.provider || response?.metadata?.provider || 'crawl4ai',
+    response?.provider || response?.metadata?.provider || 'Unknown',
   );
   const elapsed = response?.execution_time_ms ? `${response.execution_time_ms}ms` : 'live';
   const featuredItem = response?.results?.[0] ?? response?.sources?.[0];
   const featuredPreview =
     featuredItem?.content ||
     featuredItem?.snippet ||
-    response?.summary ||
-    'No live preview is available yet.';
+    'No retrieved preview available.';
   const featuredHref = featuredItem?.url || '';
-  const statusLabel = response?.diagnostics?.degraded ? 'Degraded live fallback' : 'Live crawl';
+  const hasEvidence = sourceCount > 0 || resultCount > 0;
+  const statusLabel = response?.diagnostics?.degraded ? 'Degraded retrieval' : hasEvidence ? 'Sources available' : 'No evidence';
   const capabilityTags = [
     `Provider ${providerLabel}`,
     `${sourceCount} sources`,
@@ -58,6 +60,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   if (state.isLoading) return <LoadingState state={state} />;
   if (state.error) return <ErrorState error={state.error} />;
   if (!response) return <EmptyState />;
+  if (!hasEvidence) return <div role="status" className="p-8 space-y-3"><h2 className="text-xl font-semibold">No search evidence retrieved</h2><p className="text-muted-foreground">{response.summary || 'No usable source links or pages were returned.'}</p></div>;
 
   const renderTabContent = () => {
     switch (currentTab) {
@@ -77,7 +80,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-tl-3xl border-l border-t border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.12),transparent_30%),radial-gradient(circle_at_top_right,rgba(16,185,129,0.10),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_18%),hsl(var(--background))] shadow-[0_-1px_0_rgba(255,255,255,0.03),0_24px_70px_rgba(0,0,0,0.35)]">
+    <div className="relative flex min-h-[70vh] flex-1 flex-col overflow-hidden rounded-tl-3xl border-l border-t border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.12),transparent_30%),radial-gradient(circle_at_top_right,rgba(16,185,129,0.10),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_18%),hsl(var(--background))] shadow-[0_-1px_0_rgba(255,255,255,0.03),0_24px_70px_rgba(0,0,0,0.35)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),transparent_22%,transparent_78%,rgba(255,255,255,0.03))]" />
 
       <div className="relative border-b border-border/60 bg-background/70 px-5 py-5 backdrop-blur-xl lg:px-6">
@@ -113,9 +116,11 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         </div>
       </div>
 
-      <div className="relative grid min-h-0 flex-1 gap-6 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-6 lg:py-6">
-        <section className="flex min-h-0 flex-col gap-4">
+      <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
+        style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>
+        <section className="flex min-h-[55vh] min-w-0 flex-col gap-4">
           <div className="rounded-3xl border border-border/60 bg-card/70 p-2 shadow-sm backdrop-blur">
+            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Search results</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
             <div className="flex flex-wrap gap-2">
               {validTabs.map((tabId) => {
                 const label = tabId.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase());
@@ -138,14 +143,14 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-3xl border border-border/60 bg-card/80 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-6">
+          <div className="min-h-[50vh] min-w-0 flex-1 overflow-y-auto rounded-3xl border border-border/60 bg-card/80 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-6">
             {renderTabContent()}
           </div>
         </section>
 
-        <aside className="min-h-0 overflow-y-auto rounded-3xl border border-border/60 bg-card/75 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-5">
+        {showDetails && <aside className="min-h-[50vh] min-w-0 overflow-y-auto rounded-3xl border border-border/60 bg-card/75 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-5">
           <div className="space-y-4">
-
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">Details width<input aria-label="Details width" type="range" min={240} max={600} step={20} value={detailsWidth} onChange={event => setDetailsWidth(Number(event.target.value))} className="min-w-0 flex-1" /></label>
             <div className="rounded-3xl border border-border/60 bg-background/70 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted-foreground">
                 Featured preview
@@ -197,7 +202,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
               </div>
             </div>
           </div>
-        </aside>
+        </aside>}
       </div>
     </div>
   );
