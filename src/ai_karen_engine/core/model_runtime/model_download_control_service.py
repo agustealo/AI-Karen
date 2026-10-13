@@ -1165,7 +1165,10 @@ class ModelDownloadControlService:
                 and install_path
                 and not Path(install_path).is_symlink()
                 and Path(install_path).is_dir()
-                and any(Path(install_path).iterdir())
+                and any(
+                    child.name != ".cache" and not child.is_symlink()
+                    for child in Path(install_path).iterdir()
+                )
             )
 
             lookup_source = (

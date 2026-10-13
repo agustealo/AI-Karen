@@ -1053,3 +1053,34 @@ async def test_recommended_model_ignores_empty_or_symlink_install_roots(
     )
     result = await service.get_recommendations()
     assert result["essential_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_recommended_cache_only_directory_is_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path, FakeModelDownloadRepository())
+    install_path = tmp_path / "installed"
+    install_path.mkdir()
+    (install_path / ".cache").mkdir()
+    (install_path / ".cache" / "metadata.json").write_text("{}", encoding="utf-8")
+    service._orchestrator.snapshot_registry_entry = AsyncMock(
+        return_value={"install_path": str(install_path)}
+    )
+    service._orchestrator.get_model_info = AsyncMock(
+        side_effect=RuntimeError("source unavailable")
+    )
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.model_download_control_service.load_model_download_recommendations",
+        lambda: {"recommendations": [{
+            "id": "spacy-english-core",
+            "model_id": "spacy/en_core_web_sm",
+            "tier": "essential",
+        }]},
+    )
+    result = await service.get_recommendations()
+    assert result["essential_installed"] == 0
+    assert result["essential_ready"] is False
+    (install_path / "config.cfg").write_text("[nlp]", encoding="utf-8")
+    result = await service.get_recommendations()
+    assert result["essential_installed"] == 1
