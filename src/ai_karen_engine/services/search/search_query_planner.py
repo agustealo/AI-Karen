@@ -16,14 +16,9 @@ class SearchQueryPlanner:
         if not base:
             return []
 
-        # Standard expansions to cover different search angles
-        expansions = [
-            base,
-            f"{base} latest updates",
-            f"{base} comprehensive guide",
-            f"{base} technical documentation",
-            f"{base} vs alternatives comparison"
-        ]
+        # Ordinary queries should not acquire an unrelated news, comparison or
+        # documentation intent. CORTEX/mode-specific retrieval owns expansion.
+        expansions = [base]
 
         # Deduplicate and return
         return list(dict.fromkeys(expansions))
