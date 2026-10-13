@@ -110,11 +110,20 @@ class WebSearchDispatcher(ExtensionBase):
 
     def get_status(self) -> Dict[str, Any]:
         """Return the current status of the extension."""
+        initialized = bool(self._handlers)
+        all_modes_ready = len(self._handlers) == len(MODE_HANDLER_MAP)
+        internet_ready = self._internet_service is not None
         return {
-            "status": "healthy",
-            "initialized": True,
+            "status": (
+                "ready" if all_modes_ready and internet_ready
+                else "degraded" if initialized else "unavailable"
+            ),
+            "initialized": initialized,
             "version": getattr(self.manifest, "version", "unknown"),
             "handler_count": len(self._handlers),
+            "expected_handler_count": len(MODE_HANDLER_MAP),
+            "internet_service_initialized": internet_ready,
+            "live_search_verified": False,
         }
 
     async def execute_hook(
@@ -174,13 +183,13 @@ class WebSearchDispatcher(ExtensionBase):
                     if internet_result.get("sources") or internet_result.get("results"):
                         internet_result.setdefault("mode", mode)
                         internet_result["can_execute"] = True
-                        internet_result.setdefault("provider", "crawl4ai")
+                        internet_result.setdefault("provider", "unknown")
                         internet_result.setdefault("results", [])
                         internet_result.setdefault("sources", [])
                         internet_result.setdefault("extractedData", None)
                         metadata = internet_result.get("metadata")
                         if isinstance(metadata, dict):
-                            metadata.setdefault("provider", "crawl4ai")
+                            metadata.setdefault("provider", "unknown")
                         return internet_result
 
                     self.logger.info(
