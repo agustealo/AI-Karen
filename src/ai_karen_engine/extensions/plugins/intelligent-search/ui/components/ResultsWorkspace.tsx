@@ -20,8 +20,8 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const sources = response?.sources ?? [];
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
-  const providerLabel = response?.provider || response?.metadata?.provider || 'crawl4ai';
-  const elapsed = response?.execution_time_ms ? `${response.execution_time_ms}ms` : 'live';
+  const providerLabel = response?.provider || response?.metadata?.provider || 'Unknown';
+  const elapsed = response?.execution_time_ms ? `${response.execution_time_ms}ms` : 'Not reported';
   const featuredItem = response?.results?.[0] ?? response?.sources?.[0];
   const featuredPreview =
     featuredItem?.content ||
@@ -29,7 +29,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
     response?.summary ||
     'No live preview is available yet.';
   const featuredHref = featuredItem?.url || '';
-  const statusLabel = response?.diagnostics?.degraded ? 'Degraded live fallback' : 'Live crawl';
+  const statusLabel = response?.diagnostics?.degraded ? 'Degraded retrieval' : sourceCount > 0 ? 'Sources retrieved' : 'No sources retrieved';
   const capabilityTags = [
     `Provider ${providerLabel}`,
     `${sourceCount} sources`,
@@ -83,7 +83,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-[11px] uppercase tracking-[0.32em] text-muted-foreground shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Live crawl workspace
+              Search evidence workspace
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
@@ -104,7 +104,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <SignalTile label="Query" value={response.query || 'live request'} icon={<Radar className="h-4 w-4" />} />
+          <SignalTile label="Query" value={response.query || 'Query unavailable'} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="Provider" value={providerLabel} icon={<Database className="h-4 w-4" />} />
           <SignalTile label="URLs" value={response.diagnostics?.urlsFound ?? sourceCount} icon={<ArrowUpRight className="h-4 w-4" />} />
           <SignalTile label="Chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
