@@ -79,7 +79,7 @@ export function ResultsPanel({ response }: PanelProps) {
   const sourceCount = response.diagnostics?.sourceCount ?? sources.length ?? 0;
   const resultCount = results.length;
   const providerLabel = String(
-    response.provider || response.metadata?.provider || 'crawl4ai',
+    response.provider || response.metadata?.provider || 'Unknown',
   );
 
   React.useEffect(() => {
@@ -88,12 +88,27 @@ export function ResultsPanel({ response }: PanelProps) {
 
   return (
     <div className="space-y-6">
+      {results.length > 0 && (
+        <section aria-label="Relevant search passages" className="rounded-3xl border border-border/60 bg-card/90 p-5">
+          <h3 className="mb-2 text-xl font-semibold text-foreground">Relevant passages</h3>
+          <p className="mb-4 text-sm text-muted-foreground">Excerpts from retrieved pages, not an AI-generated answer. Open the sources to check context.</p>
+          <div className="space-y-4">
+            {results.slice(0, 5).map((result, index) => (
+              <article key={result.id || result.url + index} className="rounded-2xl border border-border/50 p-4">
+                <a href={result.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline-offset-4 hover:underline">{result.title || result.domain || 'Source passage'} <ExternalLink className="inline h-3 w-3" /></a>
+                <p className="mt-2 line-clamp-5 whitespace-pre-wrap break-words text-sm leading-7 text-muted-foreground">{result.snippet || result.content?.slice(0, 350)}</p>
+                <p className="mt-2 text-xs text-muted-foreground">{result.domain || domainFromUrl(result.url)}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
       {/* 1. Summary & Overview Section */}
       <div className="rounded-3xl border border-border/60 bg-card/90 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.18)]">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border/40 pb-5">
           <div className="space-y-2">
             <p className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground font-bold">Intelligent Summary</p>
-            <h3 className="text-xl font-semibold text-foreground">Synthesis of {sourceCount} sources</h3>
+            <h3 className="text-xl font-semibold text-foreground">Retrieval overview: {sourceCount} sources</h3>
           </div>
           <button 
             onClick={() => sendToChat({ title: 'Search Summary', snippet: response.summary, url: 'Live Search Intelligence' })}
@@ -107,7 +122,7 @@ export function ResultsPanel({ response }: PanelProps) {
         <div className="mt-5 grid gap-6 lg:grid-cols-[1fr_300px]">
           <div className="space-y-4">
             <div className="rounded-2xl border border-border/60 bg-background/50 p-5 text-sm leading-7 text-muted-foreground backdrop-blur-sm">
-              {response.summary || <span className="italic">Karen was unable to generate a summary for this crawl.</span>}
+              {response.summary || <span className="italic">No retrieval overview is available.</span>}
             </div>
             <div className="flex flex-wrap gap-2 pt-2">
               <MetricPill label="Provider" value={providerLabel} />
@@ -123,7 +138,7 @@ export function ResultsPanel({ response }: PanelProps) {
              </div>
              <div>
                <p className="text-sm font-semibold text-foreground">Structured Output</p>
-               <p className="text-[11px] text-muted-foreground mt-1">Crawl4AI identified {results.length} key passages from the live web.</p>
+               <p className="text-[11px] text-muted-foreground mt-1">The search returned {results.length} ranked passages. Review original pages to verify context.</p>
              </div>
           </div>
         </div>

@@ -60,6 +60,7 @@ def main() -> int:
             supabase_ok = callable(create_client)
         except (ImportError, AttributeError):
             supabase_ok = False
+        print(json.dumps({"check": "supabase_factory", "create_client_available": supabase_ok}))
     rbac_ok = permissions()
     print(json.dumps({"check": "summary", "crawler_deps_ready": crawler_ok and browser_ok, "supabase_sdk_ready": supabase_ok, "rbac_config_ready": rbac_ok}))
     return 0 if crawler_ok and browser_ok and supabase_ok and rbac_ok else 1

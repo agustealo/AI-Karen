@@ -738,21 +738,24 @@ class InternetCapabilityService:
                 "request_id": execution_context.request_id,
             },
             "provider": self._provider_name(search_providers),
-            "liveSearch": { # NextJS UI prefers liveSearch camelCase often, keep both for compatibility
+            # Keep legacy response keys, but never embed full crawler HTML/markdown
+            # or duplicate large processed passages into the public API response.
+            # Evidence is already available through bounded sources and results.
+            "liveSearch": {
                 "mode": mode,
                 "query": request.query,
                 "expanded_queries": list(expanded_queries)[:5],
-                "urls": list(urls),
-                "crawl_results": list(crawl_results),
-                "processed_chunks": list(processed_chunks),
+                "urls": list(urls)[:25],
+                "crawl_results": [],
+                "processed_chunks": [],
             },
             "live_search": {
                 "mode": mode,
                 "query": request.query,
                 "expanded_queries": list(expanded_queries)[:5],
-                "urls": list(urls),
-                "crawl_results": list(crawl_results),
-                "processed_chunks": list(processed_chunks),
+                "urls": list(urls)[:25],
+                "crawl_results": [],
+                "processed_chunks": [],
             },
             "execution_time_ms": execution_time_ms,
         }
@@ -1284,6 +1287,7 @@ class InternetCapabilityService:
             metadata = result.get("metadata", {}) or {}
             markdown = result.get("markdown", "") or ""
             text = result.get("text", "") or ""
+            bounded_markdown = markdown[:4000]
             title = (
                 metadata.get("title")
                 or metadata.get("og:title")
@@ -1302,17 +1306,17 @@ class InternetCapabilityService:
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
-                    "full_content": markdown,
-                    "markdown": markdown,
+                    "full_content": bounded_markdown,
+                    "markdown": bounded_markdown,
                     "content_ref": f"content:{hashlib.sha256(markdown.encode()).hexdigest()[:16]}",
                     "content_hash": hashlib.sha256(markdown.encode()).hexdigest()[:16],
-                    "extracted_data": result.get("extracted_content"),
+                    "extracted_data": None,  # Raw structured output is not a consumer-safe unbounded field.
                     "publishedDate": metadata.get("published_date")
                     or metadata.get("date")
                     or metadata.get("article:published_time"),
                     "relevanceScore": round(max(0.0, 1.0 - (len(sources) * 0.08)), 2),
-                    "links": result.get("links", []),
-                    "media": result.get("media", {}),
+                    "links": [],
+                    "media": {},
                 }
             )
 
@@ -1335,7 +1339,7 @@ class InternetCapabilityService:
                     "url": url,
                     "domain": urlparse(url).netloc if url else "",
                     "snippet": self._summarize_text(content, 280),
-                    "content": content,
+                    "content": content[:1500],
                     "score": float(chunk.get("score", 0.0) or 0.0),
                     "metadata": chunk.get("metadata", {}) or {},
                 }
@@ -1362,30 +1366,30 @@ class InternetCapabilityService:
                 )
             return f"No live sources were found for '{query}'."
 
-        top_domains = ", ".join(
-            list(
-                dict.fromkeys(
-                    [
-                        source.get("domain") or source.get("title", "")
-                        for source in list(sources)[:3]
-                        if source.get("domain") or source.get("title")
-                    ]
-                )
-            )[:3]
+        # A retrieval overview is not an answer. Give a short, source-attributed
+        # evidence preview instead of displaying internal crawl statistics.
+        # Only fetched passages may contribute answer-preview text; discovery
+        # snippets are displayed separately with their own evidence labels.
+        excerpts: List[str] = []
+        seen_domains: set[str] = set()
+        for result in results:
+            url = self._normalize_url(result.get("url"))
+            domain = urlparse(url).netloc if url else ""
+            snippet = str(result.get("snippet") or "").strip()
+            if not url or not snippet or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            excerpts.append(f"{self._summarize_text(snippet, 220)} (Source: {url})")
+            if len(excerpts) == 3:
+                break
+
+        if excerpts:
+            return "Relevant retrieved excerpts (not a generated answer): " + " ".join(excerpts)
+
+        return (
+            f"Found {len(sources)} search links for '{query}', but no fetched "
+            "passages are available to summarize. Open a source to verify its content."
         )
-
-        base = (
-            f"Live crawl for '{query}' completed in {execution_time_ms}ms using {mode} mode. "
-            f"Collected {len(sources)} sources and ranked {len(results)} candidate passages."
-        )
-
-        if top_domains:
-            base += f" Top domains: {top_domains}."
-
-        if degraded and warnings:
-            base += f" Degraded warning: {warnings[0]}"
-
-        return base
 
     def _build_insights(
         self,
