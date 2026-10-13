@@ -74,3 +74,53 @@ async def test_curated_model_metadata_live_source_and_revision(tmp_path) -> None
                 "config.cfg and meta.json; wheel-only snapshots require a "
                 "governed extraction path before Install Essentials can work"
             )
+
+
+@pytest.mark.asyncio
+async def test_spacy_live_download_registry_and_linguistic_inference(tmp_path) -> None:
+    """Opt-in artifact proof: canonical download, persisted registry and spaCy inference.
+
+    Must run inside the actual backend Python environment with spaCy installed.
+    Do not make normal CI depend on model downloads.
+    """
+    if os.getenv("KAREN_LIVE_SPACY_ARTIFACT_PROOF") != "1":
+        pytest.skip("Requires explicit live spaCy artifact proof opt-in")
+    import spacy
+
+    catalog = load_model_download_recommendations()["recommendations"]
+    item = next(entry for entry in catalog if entry["id"] == "spacy-english-core")
+    # Source verification precedes downloading and must resolve immutable SHA.
+    models_root = tmp_path / "models"
+    registry_path = tmp_path / "registry.json"
+    orchestrator = ModelOrchestratorService({
+        "models_root": str(models_root),
+        "registry_path": str(registry_path),
+    })
+    remote = await orchestrator.get_model_info(item["model_id"], refresh_remote=True)
+    assert remote.license and remote.license.strip(), "Source license unavailable"
+    assert not remote.gated, "Unexpected gated model source"
+    assert remote.revision and IMMUTABLE_REVISION.fullmatch(remote.revision)
+
+    from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
+        DownloadRequest,
+    )
+
+    result = await orchestrator.download_model(DownloadRequest(
+        model_id=item["model_id"],
+        revision=remote.revision,
+        storage_key="spacy",
+    ))
+    from pathlib import Path
+    root = Path(result.install_path)
+    assert root.is_dir() and not root.is_symlink()
+    assert (root / "config.cfg").is_file()
+    assert (root / "meta.json").is_file()
+    registry = await orchestrator.snapshot_registry_entry(item["model_id"])
+    assert registry is not None
+    assert Path(registry["install_path"]) == root
+    # Exercise exactly the path the canonical download publishes.
+    nlp = spacy.load(root)
+    doc = nlp("Karen runs local language analysis in Detroit.")
+    assert nlp.pipe_names
+    assert len(doc) > 0
+    assert any(token.pos_ for token in doc), "Expected linguistic analysis"
