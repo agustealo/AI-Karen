@@ -143,6 +143,19 @@ class ResponseSynthesizer:
                 if contract.purpose == "chat" and not text:
                      text = "I'm sorry, I'm having trouble generating a valid response right now. Please try again or switch models."
 
+        # A failed initial check must not leak through when no retry route is
+        # available, or when the retried output still cannot be verified.
+        if contract.purpose == "tool_synthesis" and contract.requires_live_data:
+            verified = self.validator.validate(text, contract)
+            if not verified.valid:
+                metadata["degraded_mode"] = True
+                metadata["degradation_reason"] = verified.reason
+                metadata["response_source"] = "citation_validation_failure"
+                text = (
+                    "I could not verify an answer against the retrieved source links. "
+                    "Please review the available sources."
+                )
+
         return self.sanitizer.sanitize(text), metadata
 
     def _build_metadata_from_result(self, result: ProviderExecutionResult) -> Dict[str, Any]:
