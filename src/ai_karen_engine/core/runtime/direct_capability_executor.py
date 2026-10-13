@@ -698,6 +698,17 @@ class DirectCapabilityExecutor:
                 )
                 return prefix + "\\n\\n" + "\\n\\n".join(passages)
 
+            # Weather tool measurements can be useful even when the provider
+            # supplies no page URL; do not discard legitimate weather data.
+            if intent == "search.weather":
+                measurements = [
+                    str(item.get("snippet") or item.get("content") or "").strip()[:400]
+                    for item in results[:3]
+                    if item.get("snippet") or item.get("content")
+                ]
+                if measurements:
+                    return "Weather information returned by the live capability (source URL unavailable):\\n\\n" + "\\n\\n".join(measurements)
+
             summary = str(payload.get("summary") or "").strip()
             if summary:
                 return summary
