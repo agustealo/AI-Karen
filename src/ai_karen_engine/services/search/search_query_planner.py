@@ -19,7 +19,7 @@ class SearchQueryPlanner:
         # Standard expansions to cover different search angles
         expansions = [
             base,
-            f"{base} latest updates 2026",
+            f"{base} latest updates",
             f"{base} comprehensive guide",
             f"{base} technical documentation",
             f"{base} vs alternatives comparison"
