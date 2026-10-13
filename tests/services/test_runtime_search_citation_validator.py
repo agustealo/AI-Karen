@@ -32,3 +32,15 @@ def test_missing_citation_is_rejected_with_evidence():
 def test_normal_chat_not_affected():
     contract_without_evidence = ResponseContract(latest_user_message="Hi")
     assert ResponseValidator().validate("Hello there.", contract_without_evidence).valid
+
+
+def test_no_authorized_sources_fails_closed():
+    empty_evidence = ResponseContract(
+        purpose="tool_synthesis",
+        requires_live_data=True,
+        latest_user_message="Jamaica history",
+        tool_results=[{"sources": [], "results": []}],
+    )
+    result = ResponseValidator().validate("Jamaica became independent in 1962.", empty_evidence)
+    assert not result.valid
+    assert result.reason == "missing_authorized_source_evidence"
