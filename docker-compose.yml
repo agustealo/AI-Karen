@@ -387,7 +387,7 @@ services:
       DEBUG: "true"
       AUTH_MODE: "hybrid"
       # Set PYTHONPATH to include src directory for proper module imports
-      PYTHONPATH: "/app:/app/src:$PYTHONPATH"
+      PYTHONPATH: "/app:/app/src"
       # Do not skip production-style initialization
       KARI_FAST_STARTUP: "true"
       WARMUP_LLM: "false"
