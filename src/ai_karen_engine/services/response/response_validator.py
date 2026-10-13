@@ -47,6 +47,10 @@ class ResponseValidator:
             allowed: set[str] = set()
             def collect(value: Any) -> None:
                 if isinstance(value, dict):
+                    # Discovery links are not fetched evidence and cannot
+                    # authorize a citation to page content.
+                    if value.get("evidence_level") == "search_snippet":
+                        return
                     for key, item in value.items():
                         if key in {"url", "canonical_url", "final_url"} and isinstance(item, str):
                             parsed = urlsplit(item)
