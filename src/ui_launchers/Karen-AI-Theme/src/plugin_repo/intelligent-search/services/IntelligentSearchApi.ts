@@ -34,9 +34,7 @@ function normalizeSearchResponse(value: unknown): IntelligentSearchResponse {
     }
   }
 
-  return {
-    summary: '',
-  };
+  throw new Error('Search returned an invalid response. Please check plugin runtime health and try again.');
 }
 
 export const IntelligentSearchApi = {
