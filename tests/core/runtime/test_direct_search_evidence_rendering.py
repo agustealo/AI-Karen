@@ -21,3 +21,12 @@ def test_anonymous_snippet_does_not_look_cited():
     })
     assert "Unsupported anonymous claim" not in text
     assert "No fetched evidence available" in text
+
+
+def test_weather_without_page_link_still_reports_live_measurement():
+    executor = object.__new__(DirectCapabilityExecutor)
+    text = executor._render("search.weather", "weather Detroit", {
+        "results": [{"snippet": "Detroit is 61°F with light rain."}]
+    })
+    assert "61°F" in text
+    assert "source URL unavailable" in text
