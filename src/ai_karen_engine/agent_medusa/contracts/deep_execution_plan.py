@@ -99,6 +99,38 @@ class DeepExecutionPlan:
             and all(dep_id in completed_step_ids for dep_id in step.dependencies)
         ]
     
+    def mark_blocked_dependents(self) -> int:
+        """Mark steps blocked by failed or skipped prerequisites, transitively.
+
+        Never treat an unsuccessful prerequisite as an executable dependency.
+        This is deterministic for any validated DAG and preserves the blocker
+        IDs in the step receipt for user-facing and audit diagnostics.
+        """
+        blocked_count = 0
+        while True:
+            step_by_id = {step.id: step for step in self.steps}
+            changed = False
+            for step in self.steps:
+                if step.status != StepStatus.PENDING:
+                    continue
+                blockers = sorted(
+                    dep_id
+                    for dep_id in step.dependencies
+                    if dep_id in step_by_id
+                    and step_by_id[dep_id].status in {
+                        StepStatus.FAILED,
+                        StepStatus.SKIPPED,
+                    }
+                )
+                if not blockers:
+                    continue
+                step.status = StepStatus.SKIPPED
+                step.error = "blocked_dependencies:" + ",".join(blockers)
+                blocked_count += 1
+                changed = True
+            if not changed:
+                return blocked_count
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "request_id": self.request_id,

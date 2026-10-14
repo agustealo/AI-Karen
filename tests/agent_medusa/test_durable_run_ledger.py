@@ -131,6 +131,7 @@ class InMemoryDurableLedger:
         status: str,
         completed_at: datetime,
         error_type: str | None,
+        outcome_status: str | None = None,
     ) -> None:
         record = self._owned(run_id, tenant_id, worker_id)
         if record["status"] not in {"created", "running", "cancellation_requested"}:
@@ -139,6 +140,7 @@ class InMemoryDurableLedger:
         record["status"] = status
         record["completed_at"] = completed_at
         record["error_type"] = error_type
+        record["outcome_status"] = outcome_status
         self._transition(run_id, previous, status, worker_id, "runtime", completed_at)
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
@@ -303,6 +305,7 @@ class InMemoryDurableLedger:
             "owner_worker_id": record["owner_worker_id"],
             "status": record["status"],
             "error_type": record["error_type"],
+            "outcome_status": record.get("outcome_status"),
             "audit_event_ref": record["audit_event_ref"],
             "cancellable": False,
             "distributed_control": {
@@ -430,6 +433,7 @@ def test_terminal_run_survives_manager_recreation_with_context_and_transitions()
         )
 
         assert restored["status"] == "completed"
+        assert restored["outcome_status"] == "success"
         assert restored["request_id"] == "req-1"
         assert restored["session_id"] == "session-1"
         assert restored["policy_decision_id"] == "policy-1"

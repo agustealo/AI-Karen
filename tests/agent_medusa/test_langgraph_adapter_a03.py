@@ -84,3 +84,49 @@ async def test_invalid_plan_cannot_invoke_coordinator(runtime_request, plan, mes
         with pytest.raises(PermissionError, match=message):
             await MedusaLangGraphAdapter().execute_plan(runtime_request, plan)
     handle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_specialist_execution_is_also_routed_through_canonical_coordinator():
+    request = _request()
+    result = object()
+    with patch(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator."
+        "MedusaCoordinator.handle_request",
+        new_callable=AsyncMock,
+        return_value=result,
+    ) as handle:
+        actual = await MedusaLangGraphAdapter().execute_specialist(
+            request,
+            _plan(),
+            "analyst",
+            {"question": "inspect this"},
+        )
+
+    assert actual is result
+    handle.assert_awaited_once()
+    forwarded_request = handle.await_args.args[0]
+    assert forwarded_request.authorized_plan["allowed_agents"] == ["analyst"]
+    assert forwarded_request.authorized_plan["authorized_user_id"] == "user-1"
+    assert forwarded_request.authorized_plan["authorized_tenant_id"] == "tenant-1"
+    assert forwarded_request.context["langgraph_specialist_input"] == {
+        "question": "inspect this"
+    }
+
+
+@pytest.mark.asyncio
+async def test_specialist_execution_refuses_agent_outside_runtime_policy():
+    request = _request()
+    with patch(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator."
+        "MedusaCoordinator.handle_request",
+        new_callable=AsyncMock,
+    ) as handle:
+        with pytest.raises(PermissionError, match="not authorized"):
+            await MedusaLangGraphAdapter().execute_specialist(
+                request,
+                _plan(),
+                "researcher",
+                {"question": "inspect this"},
+            )
+    handle.assert_not_awaited()

@@ -64,6 +64,7 @@ class ExecutionRun:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
     error_type: str | None = None
+    outcome_status: str | None = None
     shared_registered: bool = False
     durable_registered: bool = False
     heartbeat_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -83,6 +84,7 @@ class ExecutionRun:
                 self.completed_at.isoformat() if self.completed_at else None
             ),
             "error_type": self.error_type,
+            "outcome_status": self.outcome_status,
             "cancellable": self.status is ExecutionRunStatus.RUNNING,
             "durable": self.durable_registered,
             "response_source": "worker_local_execution",
@@ -252,18 +254,49 @@ class MedusaRunManager:
             )
         return run
 
+    async def mark_response(self, run_id: str, outcome_status: str) -> None:
+        """Persist task outcome separately from execution lifecycle."""
+
+        normalized = str(outcome_status or "").strip().lower()
+        if normalized not in {"success", "partial", "degraded", "error", "timeout"}:
+            raise ValueError(f"Unsupported Medusa outcome status: {outcome_status}")
+        lifecycle = (
+            ExecutionRunStatus.COMPLETED
+            if normalized in {"success", "partial", "degraded"}
+            else ExecutionRunStatus.FAILED
+        )
+        await self._mark_terminal(
+            run_id,
+            lifecycle,
+            outcome_status=normalized,
+            error_type=(
+                None
+                if lifecycle is ExecutionRunStatus.COMPLETED
+                else f"Response{normalized.title()}"
+            ),
+        )
+
     async def mark_completed(self, run_id: str) -> None:
-        await self._mark_terminal(run_id, ExecutionRunStatus.COMPLETED)
+        await self._mark_terminal(
+            run_id,
+            ExecutionRunStatus.COMPLETED,
+            outcome_status="success",
+        )
 
     async def mark_failed(self, run_id: str, exc: BaseException) -> None:
         await self._mark_terminal(
             run_id,
             ExecutionRunStatus.FAILED,
             error_type=type(exc).__name__,
+            outcome_status="error",
         )
 
     async def mark_cancelled(self, run_id: str) -> None:
-        await self._mark_terminal(run_id, ExecutionRunStatus.CANCELLED)
+        await self._mark_terminal(
+            run_id,
+            ExecutionRunStatus.CANCELLED,
+            outcome_status="cancelled",
+        )
 
     async def _mark_terminal(
         self,
@@ -271,6 +304,7 @@ class MedusaRunManager:
         status: ExecutionRunStatus,
         *,
         error_type: str | None = None,
+        outcome_status: str | None = None,
     ) -> None:
         heartbeat_task: asyncio.Task[None] | None = None
         completed_at = datetime.now(timezone.utc)
@@ -278,9 +312,20 @@ class MedusaRunManager:
             run = self._runs.get(run_id)
             if run is None:
                 return
+            if run.status is ExecutionRunStatus.CANCELLING:
+                status = ExecutionRunStatus.CANCELLED
+                outcome_status = "cancelled"
+                error_type = None
+            elif run.status in {
+                ExecutionRunStatus.COMPLETED,
+                ExecutionRunStatus.FAILED,
+                ExecutionRunStatus.CANCELLED,
+            }:
+                return
             run.status = status
             run.completed_at = completed_at
             run.error_type = error_type
+            run.outcome_status = outcome_status
             heartbeat_task = run.heartbeat_task
             run.heartbeat_task = None
             if run_id not in self._terminal_order:
@@ -300,6 +345,7 @@ class MedusaRunManager:
                 status=status,
                 completed_at=completed_at,
                 error_type=error_type,
+                outcome_status=outcome_status,
             )
 
         if run.shared_registered:
@@ -316,6 +362,27 @@ class MedusaRunManager:
                     "Medusa terminal state could not be written to shared coordination",
                     extra={"run_id": run_id, "status": status.value},
                 )
+            else:
+                set_outcome_status = getattr(
+                    self._distributed_store,
+                    "set_outcome_status",
+                    None,
+                )
+                if set_outcome_status is not None and outcome_status is not None:
+                    try:
+                        await set_outcome_status(
+                            run_id=run_id,
+                            worker_id=self._settings.worker_id,
+                            outcome_status=outcome_status,
+                        )
+                    except DistributedRunStoreUnavailable:
+                        logger.warning(
+                            "Medusa outcome status could not be written to shared coordination",
+                            extra={
+                                "run_id": run_id,
+                                "outcome_status": outcome_status,
+                            },
+                        )
 
     async def cancel(
         self,
@@ -582,6 +649,7 @@ class MedusaRunManager:
         status: ExecutionRunStatus,
         completed_at: datetime,
         error_type: str | None,
+        outcome_status: str | None = None,
     ) -> None:
         try:
             await self._durable_ledger.mark_terminal(
@@ -591,6 +659,7 @@ class MedusaRunManager:
                 status=status.value,
                 completed_at=completed_at,
                 error_type=error_type,
+                outcome_status=outcome_status,
             )
         except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
             logger.exception(

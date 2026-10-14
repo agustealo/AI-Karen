@@ -141,7 +141,7 @@ class CapabilityAwareMedusaPlanner:
             reg
             for reg in all_agents
             if reg.agent_id in allowed_agents
-            and reg.lifecycle_state not in ("disabled", "archived")
+            and reg.lifecycle_state == "active"
         ]
 
         required_capabilities = {

@@ -65,7 +65,13 @@ class AgentMedusaService:
         if not self._initialized:
             await self.initialize()
         
-        correlation_id = request.request_id
+        execution_context = request.context.get("execution_context")
+        requirements = request.execution_requirements or {}
+        correlation_id = str(
+            getattr(execution_context, "correlation_id", "")
+            or requirements.get("correlation_id")
+            or request.request_id
+        )
         trace = self.tracer.start_trace(
             agent_id="medusa_coordinator",
             correlation_id=correlation_id,
