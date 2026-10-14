@@ -16,10 +16,7 @@ from ai_karen_engine.agent_medusa.contracts.runtime_response import (
     ResponseStatus,
     RuntimeResponse,
 )
-from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import (
-    MedusaCoordinator,
-    MedusaPartialOutcome,
-)
+from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import MedusaCoordinator
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     DegradationState,
@@ -75,6 +72,7 @@ async def test_partial_response_is_not_recorded_as_successful_run_completion() -
     run_manager.mark_completed = AsyncMock()
     run_manager.mark_failed = AsyncMock()
     run_manager.mark_cancelled = AsyncMock()
+    run_manager.mark_response = AsyncMock()
     coordinator = MedusaCoordinator(run_manager=run_manager)
 
     with patch.object(
@@ -92,9 +90,8 @@ async def test_partial_response_is_not_recorded_as_successful_run_completion() -
 
     assert response.status is ResponseStatus.PARTIAL
     run_manager.mark_completed.assert_not_awaited()
-    run_manager.mark_failed.assert_awaited_once()
-    failure = run_manager.mark_failed.await_args.args[1]
-    assert isinstance(failure, MedusaPartialOutcome)
+    run_manager.mark_failed.assert_not_awaited()
+    run_manager.mark_response.assert_awaited_once_with("req-1", "partial")
 
 
 @pytest.mark.asyncio
@@ -104,6 +101,7 @@ async def test_success_response_remains_successful_run_completion() -> None:
     run_manager.mark_completed = AsyncMock()
     run_manager.mark_failed = AsyncMock()
     run_manager.mark_cancelled = AsyncMock()
+    run_manager.mark_response = AsyncMock()
     coordinator = MedusaCoordinator(run_manager=run_manager)
 
     with patch.object(
@@ -119,8 +117,9 @@ async def test_success_response_remains_successful_run_completion() -> None:
     ):
         await coordinator.handle_request(_request())
 
-    run_manager.mark_completed.assert_awaited_once_with("req-1")
+    run_manager.mark_completed.assert_not_awaited()
     run_manager.mark_failed.assert_not_awaited()
+    run_manager.mark_response.assert_awaited_once_with("req-1", "success")
 
 
 @pytest.mark.asyncio
