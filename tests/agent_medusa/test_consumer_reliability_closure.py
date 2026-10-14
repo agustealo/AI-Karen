@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -17,6 +18,8 @@ from ai_karen_engine.agent_medusa.contracts.runtime_response import (
     RuntimeResponse,
 )
 from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import MedusaCoordinator
+from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
+from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     DegradationState,
@@ -253,3 +256,36 @@ def test_langchain_adapter_has_no_nested_event_loop_or_raw_exception_response() 
 def test_step_trace_uses_cortex_correlation_identity() -> None:
     coordinator = MedusaCoordinator()
     assert coordinator._correlation_id(_request()) == "corr-1"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_wins_race_against_late_success_response() -> None:
+    settings = AgentMedusaRuntimeSettings(
+        distributed_run_control_enabled=False,
+        durable_run_ledger_enabled=False,
+        durable_run_ledger_required=False,
+        worker_id="consumer-reliability-test",
+    )
+    manager = MedusaRunManager(settings=settings)
+    task = asyncio.create_task(asyncio.sleep(30))
+
+    await manager.register(
+        run_id="cancel-race-1",
+        correlation_id="corr-cancel-race-1",
+        request_id="req-cancel-race-1",
+        session_id="session-1",
+        policy_decision_id="policy-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        task=task,
+    )
+    await manager.cancel(run_id="cancel-race-1", tenant_id="tenant-1")
+    await manager.mark_response("cancel-race-1", "success")
+
+    snapshot = await manager.get(run_id="cancel-race-1", tenant_id="tenant-1")
+    assert snapshot["status"] == "cancelled"
+    assert snapshot["outcome_status"] == "cancelled"
+    assert snapshot["cancellable"] is False
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
