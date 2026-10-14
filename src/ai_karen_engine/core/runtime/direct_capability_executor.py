@@ -441,13 +441,45 @@ class DirectCapabilityExecutor:
             )
 
         if intent == "search.weather":
-            return bool(
-                payload.get("extractedData")
-                or payload.get("results")
-                or payload.get("sources")
-            )
+            return bool(DirectCapabilityExecutor._weather_observation(payload))
 
         return bool(payload)
+
+    @staticmethod
+    def _weather_observation(payload: Dict[str, Any]) -> Optional[str]:
+        """Only meteorological measurements count as live weather evidence.
+
+        Generic search excerpts, city encyclopedias and organization names
+        cannot establish current weather. Preserve provider provenance in the
+        surrounding capability result rather than claiming a verified forecast.
+        """
+        fields = ("temperature", "temp", "temperature_c", "temperature_f",
+                  "conditions", "condition", "humidity", "wind_speed",
+                  "precipitation", "forecast", "high", "low")
+        containers = [payload.get("extractedData"), payload.get("weather"),
+                      payload.get("current"), payload.get("observation")]
+        for candidate in containers:
+            if not isinstance(candidate, dict):
+                continue
+            present = [
+                f"{key}: {candidate[key]}"
+                for key in fields
+                if candidate.get(key) not in (None, "", [], {})
+            ]
+            if present and any(
+                candidate.get(key) not in (None, "", [], {})
+                for key in ("temperature", "temp", "temperature_c",
+                            "temperature_f", "conditions", "condition",
+                            "forecast")
+            ):
+                qualifiers = [
+                    f"{key}: {candidate[key]}"
+                    for key in ("location", "city", "observed_at", "timestamp",
+                                "valid_time", "updated_at", "date")
+                    if candidate.get(key) not in (None, "", [], {})
+                ]
+                return ", ".join((qualifiers + present)[:10])
+        return None
 
     def _success(
         self,
@@ -692,6 +724,14 @@ class DirectCapabilityExecutor:
                 if label:
                     return f"The current time in {label} is {value}."
                 return f"The current time is {value}."
+
+        if intent == "search.weather":
+            observation = self._weather_observation(payload)
+            return (
+                observation
+                if observation
+                else "Live weather measurements are unavailable from the configured providers."
+            )
 
         if intent in {"search.weather", "search.general"}:
             extracted = payload.get("extractedData")
