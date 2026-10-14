@@ -64,7 +64,7 @@ class ResponseValidator:
             collect(getattr(contract, "tool_results", []))
             if not allowed:
                 return ValidationResult(valid=False, reason="missing_authorized_source_evidence")
-            cited = re.findall(r"https?://[^\\s)\\]>]+", text)
+            cited = re.findall(r"https?://[^\s)\]>]+", text)
             if not cited:
                 return ValidationResult(valid=False, reason="missing_evidence_citation")
             if any(url.rstrip("/").rstrip(".,;") not in allowed for url in cited):
