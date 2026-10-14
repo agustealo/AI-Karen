@@ -202,9 +202,13 @@ export default function PluginStorePage() {
     [searchPlugins, setSearchParams],
   );
 
-  const handleRefresh = useCallback(() => {
+  const handleRefresh = useCallback(async () => {
     setOperationError('');
-    void refreshPlugins();
+    try {
+      await refreshPlugins();
+    } catch (cause) {
+      setOperationError(getErrorMessage(cause));
+    }
   }, [refreshPlugins]);
 
   const handleUninstall = useCallback(async () => {
