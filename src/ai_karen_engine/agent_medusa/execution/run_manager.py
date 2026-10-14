@@ -345,26 +345,8 @@ class MedusaRunManager:
                 status=status,
                 completed_at=completed_at,
                 error_type=error_type,
+                outcome_status=outcome_status,
             )
-            set_outcome_status = getattr(
-                self._durable_ledger,
-                "set_outcome_status",
-                None,
-            )
-            if set_outcome_status is not None and outcome_status is not None:
-                try:
-                    await set_outcome_status(
-                        run_id=run_id,
-                        tenant_id=run.tenant_id,
-                        outcome_status=outcome_status,
-                    )
-                except DurableRunLedgerUnavailable:
-                    if self._settings.durable_run_ledger_required:
-                        raise
-                    logger.exception(
-                        "Medusa durable outcome persistence unavailable",
-                        extra={"run_id": run_id, "outcome_status": outcome_status},
-                    )
 
         if run.shared_registered:
             try:
@@ -667,6 +649,7 @@ class MedusaRunManager:
         status: ExecutionRunStatus,
         completed_at: datetime,
         error_type: str | None,
+        outcome_status: str | None = None,
     ) -> None:
         try:
             await self._durable_ledger.mark_terminal(
@@ -676,6 +659,7 @@ class MedusaRunManager:
                 status=status.value,
                 completed_at=completed_at,
                 error_type=error_type,
+                outcome_status=outcome_status,
             )
         except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
             logger.exception(
