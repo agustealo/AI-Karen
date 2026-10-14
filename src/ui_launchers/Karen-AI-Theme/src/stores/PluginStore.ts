@@ -98,25 +98,32 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   installPlugin: async (pluginId: string, version?: string) => {
     set((state) => ({
       installingPlugins: new Set([...state.installingPlugins, pluginId]),
+      error: null,
     }));
 
     try {
       await pluginStoreService.installPlugin({ plugin_id: pluginId, version });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Failed to install plugin';
+      set({ error: message });
+      throw new Error(message);
+    } finally {
       set((state) => {
-        const newInstalling = new Set(state.installingPlugins);
-        newInstalling.delete(pluginId);
-        return { installingPlugins: newInstalling };
+        const installingPlugins = new Set(state.installingPlugins);
+        installingPlugins.delete(pluginId);
+        return { installingPlugins };
       });
-      await get().searchPlugins();
-    } catch (error) {
-      set((state) => {
-        const newInstalling = new Set(state.installingPlugins);
-        newInstalling.delete(pluginId);
-        return {
-          error: error instanceof Error ? error.message : 'Failed to install plugin',
-          installingPlugins: newInstalling,
-        };
-      });
+    }
+
+    // The package operation succeeded. A read-back failure must never be
+    // mislabeled as an installation failure or presented as verified UI state.
+    await get().searchPlugins();
+    const refreshError = get().error;
+    if (refreshError) {
+      throw new Error(
+        'Plugin installation request succeeded, but the plugin list could not be refreshed: ' +
+          refreshError,
+      );
     }
   },
 
