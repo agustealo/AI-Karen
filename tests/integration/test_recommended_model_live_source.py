@@ -180,3 +180,56 @@ async def test_distilbert_live_pinned_download_and_nonfallback_encoding(tmp_path
     assert output.dimensions == 768
     assert len(output.vector) == 768
     assert any(abs(float(value)) > 0 for value in output.vector)
+
+
+@pytest.mark.asyncio
+async def test_qwen_live_registered_provider_inference() -> None:
+    """Opt-in inference against a real, already-running registered local provider.
+
+    This proves provider execution only, not download, deployment or model loading.
+    The operator must configure KAREN_LIVE_QWEN_PROVIDER_ID for a registered
+    endpoint exposing the recommended Qwen model.
+    """
+    if os.getenv("KAREN_LIVE_QWEN_PROVIDER_PROOF") != "1":
+        pytest.skip("Requires explicit live Qwen provider proof opt-in")
+
+    provider_id = os.getenv("KAREN_LIVE_QWEN_PROVIDER_ID", "").strip()
+    assert provider_id, "Set KAREN_LIVE_QWEN_PROVIDER_ID to a registered local provider"
+
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+    from ai_karen_engine.core.model_runtime.provider_execution import (
+        execute_provider_endpoint,
+    )
+    from ai_karen_engine.core.model_runtime.runtime_engine import (
+        EndpointProtocol,
+        Locality,
+    )
+
+    item = next(
+        entry for entry in load_model_download_recommendations()["recommendations"]
+        if entry["id"] == "qwen3-lightweight-chat"
+    )
+    registry = ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint(provider_id)
+    assert endpoint is not None, "Provider is not registered"
+    assert endpoint.enabled and endpoint.locality == Locality.LOCAL
+    assert endpoint.protocol == EndpointProtocol.OPENAI_COMPATIBLE
+    assert "chat_completion" in endpoint.capabilities
+
+    result = await execute_provider_endpoint(
+        endpoint,
+        messages=[{
+            "role": "user",
+            "content": "Respond in one short sentence describing a local language model.",
+        }],
+        model=item["model_id"],
+        max_tokens=80,
+        temperature=0.0,
+    )
+    assert result.provider_id == endpoint.provider_id
+    assert result.text.strip(), "Provider returned no real generated text"
+    assert result.model == item["model_id"], (
+        "Provider executed a different model than the recommended Qwen3"
+    )
