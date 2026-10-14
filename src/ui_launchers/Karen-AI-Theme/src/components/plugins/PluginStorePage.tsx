@@ -129,9 +129,8 @@ export default function PluginStorePage() {
      * existing store actions once and lets the store manage request/cache state.
      */
     void loadCategories();
-    void loadTrending();
     void searchPlugins();
-  }, [loadCategories, loadTrending, searchPlugins]);
+  }, [loadCategories, searchPlugins]);
 
   const handleSearch = useCallback(
     (params: typeof searchParams) => {
