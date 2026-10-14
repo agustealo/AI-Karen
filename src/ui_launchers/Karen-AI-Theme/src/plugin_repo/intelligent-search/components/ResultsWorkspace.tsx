@@ -121,7 +121,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         <section className="flex min-h-[55vh] min-w-0 flex-col gap-4">
           <div className="rounded-3xl border border-border/60 bg-card/70 p-2 shadow-sm backdrop-blur">
             <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Evidence and sources</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
-            <div className="flex flex-wrap gap-2">
+            <nav aria-label="Search result sections" className="flex flex-wrap gap-2">
               {validTabs.map((tabId) => {
                 const label = tabId.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase());
                 const isActive = currentTab === tabId;
@@ -130,7 +130,10 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
                   <button
                     key={tabId}
                     onClick={() => setActiveTab(tabId)}
-                    className={`rounded-2xl px-4 py-2.5 text-sm font-medium transition-all ${
+                    type="button"
+                    aria-current={isActive ? "page" : undefined}
+                    aria-label={`Show ${label} search information`}
+                    className={`min-h-11 rounded-2xl px-4 py-2.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                       isActive
                         ? 'bg-primary text-primary-foreground shadow-[0_10px_24px_rgba(0,0,0,0.2)]'
                         : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground'
@@ -140,7 +143,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
                   </button>
                 );
               })}
-            </div>
+            </nav>
           </div>
 
           <div className="min-h-[50vh] min-w-0 flex-1 overflow-y-auto rounded-3xl border border-border/60 bg-card/80 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-6">
