@@ -1320,6 +1320,11 @@ class InternetCapabilityService:
                 or urlparse(url).netloc
             )
             preview_source = text or markdown
+            clean_passages = self.processor.process([result], str(result.get("query") or ""))
+            if clean_passages:
+                preview_source = clean_passages[0]["content"]
+            else:
+                preview_source = ""
 
             sources.append(
                 {
@@ -1332,8 +1337,8 @@ class InternetCapabilityService:
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
-                    "full_content": bounded_markdown,
-                    "markdown": bounded_markdown,
+                    "full_content": preview_source[:4000],
+                    "markdown": preview_source[:4000],
                     "content_ref": f"content:{hashlib.sha256(markdown.encode()).hexdigest()[:16]}",
                     "content_hash": hashlib.sha256(markdown.encode()).hexdigest()[:16],
                     "extracted_data": None,  # Raw structured output is not a consumer-safe unbounded field.
