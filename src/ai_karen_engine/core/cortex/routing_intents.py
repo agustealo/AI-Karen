@@ -249,9 +249,9 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
     # Contextual "happening" questions about private/application state are
     # not public news requests. Do not route them to external web search.
     private_happening = bool(re.search(
-        r"\\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|"
-        r"private|internal|confidential|this)\\b", q
-    )) and bool(re.search(r"\\b(?:happening|going on)\\b", q))
+        r"\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|"
+        r"private|internal|confidential|this)\b", q
+    )) and bool(re.search(r"\b(?:happening|going on)\b", q))
 
     # Specialized routes use bounded intent patterns, not substring hits. This
     # keeps deterministic fallback available when Intelligence is offline while
