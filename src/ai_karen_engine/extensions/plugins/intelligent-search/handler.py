@@ -6,6 +6,9 @@ from ai_karen_engine.services.tooling.internet_capability_service import (
     InternetExecutionContext,
 )
 from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+from ai_karen_engine.services.database.repositories.repository_factory import (
+    get_runtime_search_article_service,
+)
 
 from ai_karen_engine.extensions.platform.core.host.base import (
     ExtensionBase,
@@ -65,7 +68,9 @@ class WebSearchDispatcher(ExtensionBase):
             # Search provider defaults/configuration are owned by the canonical
             # search registry plus central runtime config. Do not create a
             # second provider-config authority from legacy manifest metadata.
-            self._internet_service = InternetCapabilityService()
+            self._internet_service = InternetCapabilityService(
+                article_service=get_runtime_search_article_service()
+            )
 
             # Pre-initialize handlers to set up search clients
             for mode, handler_class in MODE_HANDLER_MAP.items():
