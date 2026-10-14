@@ -104,17 +104,16 @@ class WebSearchClient:
         # The registry owns eligibility and order. Search transports may fail
         # independently; never mistake one failed endpoint for an unavailable
         # web.search capability.
-        candidates = [
-            selected,
-            *(
+        candidates = [selected]
+        if provider is None:
+            candidates.extend(
                 candidate
                 for candidate in self.registry.sorted_enabled()
                 if candidate != selected
                 and self.registry.get_descriptor(candidate) is not None
                 and self.registry.get_descriptor(candidate).health
                 not in {"unhealthy", "degraded"}
-            ),
-        ]
+            )
         # Search more than one healthy provider; a successful Wikipedia fallback
         # must not monopolize a broad web query. Keep the registry responsible
         # for eligibility and priority, and bound the number of providers tried.
@@ -124,6 +123,8 @@ class WebSearchClient:
         configured = self.settings.get("aggregation", {})
         if isinstance(configured, dict):
             aggregation.update(configured)
+        # Limit contributing result providers, not attempted transports. A failed
+        # provider must not consume the fallback budget.
         provider_limit = max(1, min(int(aggregation["max_providers"]), len(candidates)))
         minimum_hosts = max(1, int(aggregation["min_distinct_hosts"]))
         if provider is not None:
@@ -134,7 +135,7 @@ class WebSearchClient:
         seen_urls: set[str] = set()
         hosts: set[str] = set()
         contributing: list[str] = []
-        for candidate in candidates[:provider_limit]:
+        for candidate in candidates:
             try:
                 response = await self._search_with_provider(
                     candidate, query, max_results, time_range, **kwargs
@@ -162,6 +163,8 @@ class WebSearchClient:
                 contributed = True
             if contributed:
                 contributing.append(candidate)
+                if len(contributing) >= provider_limit:
+                    break
             if len(combined) >= max_results and len(hosts) >= minimum_hosts:
                 break
 
