@@ -1952,7 +1952,10 @@ class ChatRuntime:
             result = await self._composition.expression_gateway.generate(task)
             if not await meter.check_duration():
                 return None
-            answer = str(result.text or "").strip()
+            # Do not reclassify an emergency/static fallback as a model answer.
+            if not result.provider or not result.model or not result.text:
+                return None
+            answer = str(result.text).strip()
             verdict = ResponseValidator().validate(answer, contract)
             if not verdict.valid:
                 logger.warning("search_answer_citation_rejected", extra={
