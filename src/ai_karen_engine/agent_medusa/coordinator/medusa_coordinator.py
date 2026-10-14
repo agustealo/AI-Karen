@@ -35,22 +35,6 @@ from ..response.assembler import ResponseAssembler
 logger = logging.getLogger(__name__)
 
 
-class MedusaPartialOutcome(RuntimeError):
-    """The execution finished, but only part of the requested task succeeded."""
-
-
-class MedusaDegradedOutcome(RuntimeError):
-    """The execution finished under an explicitly degraded contract."""
-
-
-class MedusaTimeoutOutcome(RuntimeError):
-    """The execution exhausted its time budget before successful completion."""
-
-
-class MedusaErrorOutcome(RuntimeError):
-    """The execution returned a terminal error response."""
-
-
 class MedusaCoordinator:
     """Canonical multi-agent execution coordinator.
 
@@ -193,18 +177,10 @@ class MedusaCoordinator:
             )
             return to_safe_response(exc, correlation_id=requirements.correlation_id)
         else:
-            if response.status is ResponseStatus.SUCCESS:
-                await self.run_manager.mark_completed(request.request_id)
-            else:
-                outcome_error = {
-                    ResponseStatus.PARTIAL: MedusaPartialOutcome,
-                    ResponseStatus.DEGRADED: MedusaDegradedOutcome,
-                    ResponseStatus.TIMEOUT: MedusaTimeoutOutcome,
-                    ResponseStatus.ERROR: MedusaErrorOutcome,
-                }.get(response.status, MedusaErrorOutcome)(
-                    f"Medusa response finished with {response.status.value} outcome"
-                )
-                await self.run_manager.mark_failed(request.request_id, outcome_error)
+            await self.run_manager.mark_response(
+                request.request_id,
+                response.status.value,
+            )
             logger.info(
                 "medusa_run_finished",
                 extra={
@@ -522,7 +498,6 @@ class MedusaCoordinator:
             raise
         finally:
             await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
-
 
     def _correlation_id(self, request: RuntimeRequest) -> str:
         requirements = ExecutionRequirements(**request.execution_requirements)
