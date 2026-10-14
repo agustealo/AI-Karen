@@ -19,6 +19,9 @@ async def test_general_search_aggregates_hosts_across_providers():
         "duckduckgo": {"enabled": True, "priority": 100},
         "searxng": {"enabled": True, "priority": 95},
         "wikipedia": {"enabled": True, "priority": 85},
+        "brave_search_free": {"enabled": False},
+        "mojeek": {"enabled": False},
+        "startpage": {"enabled": False},
     }})
     client = WebSearchClient(settings={"aggregation": {
         "max_providers": 3, "min_distinct_hosts": 3,
