@@ -127,10 +127,12 @@ async def test_distinct_correlation_id_reaches_run_ledger():
         },
     )
     request.context["execution_context"] = MagicMock(correlation_id="trace-42")
-    coordinator._handle_request = AsyncMock(return_value=MagicMock())
+    response = MagicMock()
+    response.status.value = "success"
+    coordinator._handle_request = AsyncMock(return_value=response)
 
     await coordinator.handle_request(request)
 
     assert manager.register.await_args.kwargs["request_id"] == "test-request"
     assert manager.register.await_args.kwargs["correlation_id"] == "trace-42"
-    manager.mark_response.assert_awaited_once_with("test-request", coordinator._handle_request.return_value.status.value)
+    manager.mark_response.assert_awaited_once_with("test-request", "success")
