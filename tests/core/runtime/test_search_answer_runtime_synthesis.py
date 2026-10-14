@@ -162,3 +162,16 @@ async def test_untrusted_page_instructions_cannot_authorize_invented_citations()
         request, decision, meter, retrieved
     ) is None
     gateway.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_malformed_source_url_never_reaches_model_gateway():
+    runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
+        model_text="Unsupported"
+    )
+    retrieved.sources[0]["url"] = "https://"
+    assert await runtime._synthesize_search_evidence(
+        request, decision, meter, retrieved
+    ) is None
+    gateway.generate.assert_not_called()
+    meter.consume_model_call.assert_not_called()
