@@ -30,6 +30,7 @@ from ai_karen_engine.core.model_runtime.management.model_orchestrator_service im
     E_INVALID,
     E_COMPAT,
     E_NET,
+    E_QUOTA,
     E_NOT_FOUND,
     E_LICENSE,
     E_PERM,
@@ -1141,7 +1142,17 @@ class ModelDownloadControlService:
             return "Model source rejected access. Check Hugging Face credentials and repository permissions."
         if error.code == E_NOT_FOUND:
             return "Model repository or revision was not found. Verify the configured model ID."
+        if error.code == E_QUOTA:
+            return "Model source rate limit reached (HTTP 429). Retry later or configure authenticated Hugging Face access."
         if error.code == E_NET:
+            detail = str(error.details.get("error_type") or "")
+            http_status = error.details.get("http_status")
+            if detail in {"ConnectTimeout", "ReadTimeout", "TimeoutException", "Timeout"}:
+                return "Model source metadata request timed out. Check backend proxy and source reachability."
+            if detail in {"SSLError", "SSLCertVerificationError", "SSLCertError"}:
+                return "Model source TLS certificate validation failed. Check backend CA certificates and TLS proxy."
+            if http_status in {500, 502, 503, 504}:
+                return f"Model source returned HTTP {http_status}. Retry when the upstream service recovers."
             return "Model metadata request failed. Check backend internet access, proxy, DNS and TLS configuration."
         return "Model access terms could not be verified. Inspect backend model-download logs and retry."
 

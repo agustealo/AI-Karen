@@ -463,13 +463,23 @@ class ModelOrchestratorService:
             elif status_code == 404:
                 code = E_NOT_FOUND
                 message = "Model repository or revision was not found"
+            elif status_code == 429:
+                code = E_QUOTA
+                message = "Model source rate limit exceeded"
+            elif status_code is not None and 500 <= status_code <= 599:
+                code = E_NET
+                message = "Model source service is unavailable"
             else:
                 code = E_NET
                 message = "Model source metadata request failed"
             raise ModelOrchestratorError(
                 code,
                 message,
-                {"model_id": model_id, "error_type": type(exc).__name__},
+                {
+                    "model_id": model_id,
+                    "error_type": type(exc).__name__,
+                    "http_status": status_code if isinstance(status_code, int) else None,
+                },
             ) from exc
 
         siblings = getattr(remote, "siblings", None) or []
