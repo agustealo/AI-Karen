@@ -122,14 +122,21 @@ async def test_planner_never_selects_draft_or_retired_definitions() -> None:
         )
         for state in ("draft", "disabled", "archived", "active")
     ]
-    registry = SimpleNamespace(
-        list_agents=lambda: None,
-    )
-
     async def list_agents():
         return registrations
 
-    registry.list_agents = list_agents
+    async def get_agent_health(agent_id: str):
+        return {
+            "exists": True,
+            "healthy": agent_id == "active",
+            "readiness_reason": "ready" if agent_id == "active" else "inactive",
+            "unknown_dependencies": [],
+        }
+
+    registry = SimpleNamespace(
+        list_agents=list_agents,
+        get_agent_health=get_agent_health,
+    )
     planner = CapabilityAwareMedusaPlanner()
     selected = await planner._resolve_registrations(
         requirements=ExecutionRequirements(
