@@ -361,8 +361,29 @@ class MedusaCoordinator:
             and authorized_plan.degradation_state is not None
             and authorized_plan.degradation_state.degraded
         )
-        is_ready = health.get("healthy") is True or dependency_verified
-        is_degraded = not is_ready and explicitly_degraded
+        # Explicit degradation never reactivates disabled/archived agents,
+        # overrides missing registrations, or turns a known missing dependency
+        # into a successfully fulfilled in-plan dependency.
+        lifecycle_state = str(getattr(registration, "lifecycle_state", "")).lower()
+        eligible_definition = (
+            health.get("exists") is True
+            and lifecycle_state == "active"
+        )
+        dependency_verified = bool(
+            eligible_definition
+            and not health.get("missing_dependencies")
+            and health.get("readiness_reason") == "dependencies_unverified"
+            and dependency_verified
+        )
+        is_ready = eligible_definition and (
+            health.get("healthy") is True or dependency_verified
+        )
+        is_degraded = (
+            eligible_definition
+            and not is_ready
+            and explicitly_degraded
+            and not health.get("missing_dependencies")
+        )
 
         if not is_ready and not is_degraded:
             reason = str(
