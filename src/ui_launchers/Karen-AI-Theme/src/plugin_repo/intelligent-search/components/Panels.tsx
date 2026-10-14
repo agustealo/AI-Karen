@@ -154,7 +154,7 @@ export function ResultsPanel({ response }: PanelProps) {
 
           <div className="grid gap-0 xl:grid-cols-[320px_1fr]">
             <div className="border-r border-border/60 bg-muted/10">
-              <div role="group" aria-label="Available source previews" className="max-h-[32rem] space-y-1 overflow-auto p-3 custom-scrollbar">
+              <div role="group" aria-label="Available source previews" className="h-[22rem] min-h-[12rem] max-h-[75vh] resize-y space-y-1 overflow-auto p-3 custom-scrollbar">
                 {sources.map((source, index) => {
                   const isActive = index === activeSourceIndex;
                   return (
@@ -199,7 +199,7 @@ export function ResultsPanel({ response }: PanelProps) {
                 )}
               </div>
               
-              <div className="p-6 flex-1 overflow-auto max-h-[28rem] custom-scrollbar min-h-[16rem]">
+              <div className="h-[26rem] min-h-[16rem] max-h-[75vh] resize-y overflow-auto p-6 custom-scrollbar">
                 <h3 className="text-xl font-semibold mb-4 text-foreground leading-tight">
                   {featuredSource?.title || 'Source Preview'}
                 </h3>
@@ -333,7 +333,7 @@ export function SourcesPanel({ response }: PanelProps) {
              <div className="p-4 border-b border-border/40">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Captured Domains</p>
              </div>
-             <div className="max-h-[32rem] overflow-auto custom-scrollbar">
+             <div className="h-[24rem] min-h-[12rem] max-h-[75vh] resize-y overflow-auto custom-scrollbar">
                 {sources.map((s, i) => (
                   <button
                     key={s.id || i}
@@ -358,7 +358,7 @@ export function SourcesPanel({ response }: PanelProps) {
                 </div>
              </div>
 
-             <div className="p-6 overflow-auto max-h-[32rem] custom-scrollbar">
+             <div className="h-[26rem] min-h-[16rem] max-h-[75vh] resize-y overflow-auto p-6 custom-scrollbar">
                 {sourceViewMode === 'snippet' && (
                   <p className="whitespace-pre-wrap break-words text-sm leading-8 text-muted-foreground/90">
                     {featuredSource?.content || featuredSource?.snippet || 'No readable excerpt returned.'}
