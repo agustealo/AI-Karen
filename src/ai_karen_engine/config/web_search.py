@@ -24,6 +24,13 @@ DEFAULT_SEARXNG_INSTANCES: List[str] = [
 ]
 
 
+# Bounded search aggregation defaults; operator settings may override these.
+DEFAULT_AGGREGATION_CONFIG: Dict[str, int] = {
+    "max_providers": 5,
+    "min_distinct_hosts": 3,
+}
+
+
 DEFAULT_PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
     "duckduckgo": {
         "enabled": True,
