@@ -152,9 +152,9 @@ export function ResultsPanel({ response }: PanelProps) {
              </span>
           </div>
 
-          <div className="grid gap-0 xl:grid-cols-[320px_1fr]">
-            <div className="border-r border-border/60 bg-muted/10">
-              <div role="group" aria-label="Available source previews" className="h-[22rem] min-h-[12rem] max-h-[75vh] resize-y space-y-1 overflow-auto p-3 custom-scrollbar">
+          <div className="grid min-w-0 gap-0 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+            <div className="min-w-0 border-b border-border/60 bg-muted/10 xl:border-b-0 xl:border-r">
+              <div role="group" aria-label="Available source previews" className="flex gap-2 overflow-x-auto p-3 xl:block xl:h-[22rem] xl:min-h-[12rem] xl:max-h-[75vh] xl:resize-y xl:space-y-1 xl:overflow-y-auto custom-scrollbar">
                 {sources.map((source, index) => {
                   const isActive = index === activeSourceIndex;
                   return (
@@ -164,7 +164,7 @@ export function ResultsPanel({ response }: PanelProps) {
                       onClick={() => setActiveSourceIndex(index)}
                       aria-pressed={isActive}
                       aria-label={`Preview source ${index + 1}: ${source.title || source.domain || source.url || "Untitled source"}`}
-                      className={`w-full rounded-xl border px-3 py-3 text-left transition-all ${
+                      className={`w-44 shrink-0 rounded-xl border px-3 py-3 text-left transition-all xl:w-full ${
                         isActive
                           ? 'border-primary/50 bg-primary/10 shadow-sm focus-visible:ring-2 focus-visible:ring-primary'
                           : 'border-transparent hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-primary'
@@ -187,9 +187,9 @@ export function ResultsPanel({ response }: PanelProps) {
               </div>
             </div>
 
-            <div className="flex flex-col bg-background/40">
-              <div className="flex items-center justify-between border-b border-border/60 bg-muted/20 px-5 py-3">
-                <div className="flex gap-4">
+            <div className="flex min-w-0 flex-col bg-background/40">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/20 px-4 py-3 lg:px-5">
+                <div className="flex flex-wrap gap-2 sm:gap-4">
                   <ViewToggle active={sourceViewMode === 'snippet'} onClick={() => setSourceViewMode('snippet')} label="Snippet" icon={<AlignLeft className="h-3 w-3" />} />
                   <ViewToggle active={sourceViewMode === 'markdown'} onClick={() => setSourceViewMode('markdown')} label="Markdown" icon={<FileText className="h-3 w-3" />} />
                   <ViewToggle active={sourceViewMode === 'json'} onClick={() => setSourceViewMode('json')} label="JSON" icon={<Code className="h-3 w-3" />} />
@@ -199,7 +199,7 @@ export function ResultsPanel({ response }: PanelProps) {
                 )}
               </div>
               
-              <div className="h-[26rem] min-h-[16rem] max-h-[75vh] resize-y overflow-auto p-6 custom-scrollbar">
+              <div className="min-w-0 overflow-auto p-4 sm:p-6 xl:h-[26rem] xl:min-h-[16rem] xl:max-h-[75vh] xl:resize-y custom-scrollbar">
                 <h3 className="text-xl font-semibold mb-4 text-foreground leading-tight">
                   {featuredSource?.title || 'Source Preview'}
                 </h3>
