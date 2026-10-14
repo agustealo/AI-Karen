@@ -17,6 +17,7 @@ export interface SearchSourceItem {
   article_preview?: string | null;
   article_complete?: boolean;
   article_char_count?: number;
+  article_id?: string | null;
   markdown?: string;
   extracted_data?: Record<string, unknown>;
   publishedDate?: string;
