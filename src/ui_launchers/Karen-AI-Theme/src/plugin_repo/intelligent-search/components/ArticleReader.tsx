@@ -13,7 +13,8 @@ const numberedPattern = /^\s*\d+[.)]\s+(.+)$/;
 /**
  * Render plain extracted source text as accessible reading blocks.
  * Content is always treated as untrusted text: no HTML injection, raw
- * markdown execution, iframe embedding, or network requests.
+ * markdown execution, or iframe embedding. Stored documents are fetched only
+ * through the authenticated search article API.
  */
 export function ArticleReader({ source }: ArticleReaderProps) {
   const [storedArticle, setStoredArticle] = useState<{ id: string; text: string } | null>(null);
