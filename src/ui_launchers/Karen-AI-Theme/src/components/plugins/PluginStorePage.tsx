@@ -78,6 +78,7 @@ export default function PluginStorePage() {
     searchResponse,
     categories,
     trendingPlugins,
+    trendingError,
     installingPlugins,
     setSearchParams,
     searchPlugins,
@@ -133,9 +134,14 @@ export default function PluginStorePage() {
      * existing store actions once and lets the store manage request/cache state.
      */
     void loadCategories();
-    void loadTrending();
     void searchPlugins();
-  }, [loadCategories, loadTrending, searchPlugins]);
+  }, [loadCategories, searchPlugins]);
+
+  useEffect(() => {
+    if (activeTab === 'trending') {
+      void loadTrending();
+    }
+  }, [activeTab, loadTrending]);
 
   const handleSearch = useCallback(
     (params: typeof searchParams) => {
@@ -465,7 +471,13 @@ export default function PluginStorePage() {
             </CardHeader>
 
             <CardContent>
-              {loading && trendingPlugins.length === 0 ? (
+              {trendingError ? (
+                <div role="status" className="py-10 text-center text-sm text-muted-foreground">
+                  <p>Trending plugins are currently unavailable.</p>
+                  <p className="mt-2">{trendingError}</p>
+                  <Button type="button" variant="outline" className="mt-4" onClick={() => void loadTrending()}>Retry trending</Button>
+                </div>
+              ) : loading && trendingPlugins.length === 0 ? (
                 <div
                   className="flex flex-col items-center justify-center py-12"
                   role="status"
