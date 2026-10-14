@@ -68,3 +68,16 @@ def test_unrelated_article_is_not_presented_as_relevant_evidence():
         "Jamaican History",
     )
     assert result == []
+
+
+def test_relevant_article_can_return_substantive_section_without_query_repetition():
+    processor = SearchResultProcessor()
+    paragraph = ("The island became independent from the United Kingdom in August 1962. "
+                 "Its parliamentary institutions evolved over subsequent decades, "
+                 "while artists, musicians, and community leaders shaped national identity.")
+    result = processor.process(
+        [{"url": "https://en.wikipedia.org/wiki/History_of_Jamaica", "markdown": paragraph}],
+        "Jamaican history",
+    )
+    assert result
+    assert "independent" in result[0]["content"]
