@@ -1915,13 +1915,16 @@ class ChatRuntime:
         from ai_karen_engine.services.response.response_prompt_builder import ResponsePromptBuilder
         from ai_karen_engine.services.response.response_validator import ResponseValidator
 
+        from urllib.parse import urlsplit
+
         sources = []
         for item in retrieved.sources:
             if not isinstance(item, dict) or item.get("evidence_level") != "fetched_page":
                 continue
             url = str(item.get("url") or "")
             passage = str(item.get("content") or item.get("markdown") or "")[:1000]
-            if url.startswith(("https://", "http://")) and passage:
+            parsed = urlsplit(url)
+            if parsed.scheme in {"http", "https"} and parsed.hostname and passage:
                 sources.append({"url": url, "content": passage, "evidence_level": "fetched_page"})
             if len(sources) >= 4:
                 break
