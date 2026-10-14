@@ -91,6 +91,14 @@ class DurableRunLedger(Protocol):
         error_type: str | None,
     ) -> None: ...
 
+    async def set_outcome_status(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        outcome_status: str,
+    ) -> None: ...
+
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None: ...
 
     async def list_runs(
@@ -393,6 +401,59 @@ class PostgresDurableRunLedger:
             transition_kind="terminal",
             error_type=error_type,
         )
+
+    async def set_outcome_status(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        outcome_status: str,
+    ) -> None:
+        """Persist the user-visible task outcome without redefining lifecycle."""
+
+        normalized = str(outcome_status or "").strip().lower()
+        if normalized not in {
+            "success",
+            "partial",
+            "degraded",
+            "error",
+            "timeout",
+            "cancelled",
+        }:
+            raise ValueError(f"Invalid Medusa outcome status: {outcome_status}")
+        try:
+            async with self._postgres.get_async_session() as session:
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
+                result = await session.execute(
+                    text("""
+                        UPDATE agent_medusa_runs
+                        SET metadata = jsonb_set(
+                                COALESCE(metadata, '{}'::jsonb),
+                                '{outcome_status}',
+                                to_jsonb(CAST(:outcome_status AS text)),
+                                true
+                            ),
+                            updated_at = GREATEST(updated_at, now())
+                        WHERE run_id = :run_id
+                          AND tenant_id = CAST(:tenant_id AS uuid)
+                    """),
+                    {
+                        "run_id": run_id,
+                        "tenant_id": canonical_tenant_id,
+                        "outcome_status": normalized,
+                    },
+                )
+                _require_transition(
+                    result,
+                    run_id=run_id,
+                    transition="outcome_status",
+                )
+        except DurableRunLedgerTransitionConflict:
+            raise
+        except SQLAlchemyError as exc:
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
         try:
@@ -734,7 +795,8 @@ class PostgresDurableRunLedger:
                    cancel_requested_at,
                    reconciled_at,
                    audit_event_ref,
-                   error_type
+                   error_type,
+                   metadata
             FROM agent_medusa_runs
         """
 
@@ -751,6 +813,11 @@ class PostgresDurableRunLedger:
             "owner_worker_id": str(row.get("owner_worker_id") or ""),
             "status": status,
             "error_type": row.get("error_type"),
+            "outcome_status": (
+                (row.get("metadata") or {}).get("outcome_status")
+                if isinstance(row.get("metadata"), dict)
+                else None
+            ),
             "audit_event_ref": row.get("audit_event_ref"),
             "cancellable": False,
             "distributed_control": {
