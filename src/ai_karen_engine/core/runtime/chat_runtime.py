@@ -1625,7 +1625,12 @@ class ChatRuntime:
             for item in messages[:-2]
         ):
             return False
-        request.metadata["clarification_effective_query"] = f"{original}\nAdditional {slot}: {answer}"
+        if slot == "weather_location":
+            if not re.fullmatch(r"[A-Za-z][A-Za-z .,\'-]{0,79}", answer):
+                return False
+            request.metadata["clarification_effective_query"] = f"What\'s the weather in {answer}?"
+        else:
+            request.metadata["clarification_effective_query"] = f"{original}\nAdditional {slot}: {answer}"
         request.metadata["clarification_resolved"] = True
         request.metadata["clarification_slot"] = slot
         request.metadata["clarification_source"] = "authorized_conversation"
