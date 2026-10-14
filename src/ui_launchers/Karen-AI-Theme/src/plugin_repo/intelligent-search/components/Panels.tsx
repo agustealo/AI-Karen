@@ -160,8 +160,8 @@ export function ResultsPanel({ response }: PanelProps) {
         <div className="rounded-3xl border border-border/60 bg-card/90 overflow-hidden shadow-[0_24px_60px_rgba(0,0,0,0.18)]">
           <div className="bg-muted/30 px-6 py-4 border-b border-border/60 flex items-center justify-between">
              <div className="flex items-center gap-2">
-               <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-               <p className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground font-bold">Source Intelligence</p>
+               <FileText className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+               <p className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground font-bold">Source explorer</p>
              </div>
              <span className="text-[10px] bg-background/80 border border-border/60 px-2 py-0.5 rounded-full text-muted-foreground">
                {activeSourceIndex + 1} / {sources.length}
@@ -193,6 +193,9 @@ export function ResultsPanel({ response }: PanelProps) {
                         <span className={`truncate text-[11px] font-bold uppercase tracking-wider ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>
                           {source.domain || domainFromUrl(source.url)}
                         </span>
+                        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                          {source.evidence_level === 'fetched_page' ? 'Fetched page' : source.evidence_level === 'search_snippet' ? 'Discovery link' : 'Source link'}
+                        </span>
                       </div>
                       <div className={`truncate text-sm font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground/80'}`}>
                         {source.title || source.url}
@@ -219,6 +222,13 @@ export function ResultsPanel({ response }: PanelProps) {
                 <h3 className="text-xl font-semibold mb-4 text-foreground leading-tight">
                   {featuredSource?.title || 'Source Preview'}
                 </h3>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  {featuredSource?.evidence_level === 'fetched_page'
+                    ? 'Fetched page content provided by the search backend. Verify claims against the original page.'
+                    : featuredSource?.evidence_level === 'search_snippet'
+                      ? 'Discovery excerpt. The original page has not been verified as fetched evidence.'
+                      : 'Source preview. Fetch status is not specified by the backend.'}
+                </p>
                 
                 {sourceViewMode === 'snippet' && (
                   <p className="whitespace-pre-wrap break-words text-sm leading-8 text-muted-foreground/90">
