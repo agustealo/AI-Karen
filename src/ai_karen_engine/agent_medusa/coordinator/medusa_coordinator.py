@@ -19,7 +19,7 @@ from ..contracts.deep_execution_plan import (
 )
 from ..contracts.events import AgentEvent, AgentEventType
 from ..contracts.runtime_request import RuntimeRequest
-from ..contracts.runtime_response import RuntimeResponse
+from ..contracts.runtime_response import RuntimeResponse, ResponseStatus
 from ..contracts.safe_error import to_safe_response
 from ..contracts.specialist_execution import SpecialistExecutionContext
 from ..contracts.trace import ExecutionTrajectory
@@ -33,6 +33,22 @@ from ..registry_factory import get_implementation_factory
 from ..response.assembler import ResponseAssembler
 
 logger = logging.getLogger(__name__)
+
+
+class MedusaPartialOutcome(RuntimeError):
+    """The execution finished, but only part of the requested task succeeded."""
+
+
+class MedusaDegradedOutcome(RuntimeError):
+    """The execution finished under an explicitly degraded contract."""
+
+
+class MedusaTimeoutOutcome(RuntimeError):
+    """The execution exhausted its time budget before successful completion."""
+
+
+class MedusaErrorOutcome(RuntimeError):
+    """The execution returned a terminal error response."""
 
 
 class MedusaCoordinator:
@@ -177,14 +193,26 @@ class MedusaCoordinator:
             )
             return to_safe_response(exc, correlation_id=requirements.correlation_id)
         else:
-            await self.run_manager.mark_completed(request.request_id)
+            if response.status is ResponseStatus.SUCCESS:
+                await self.run_manager.mark_completed(request.request_id)
+            else:
+                outcome_error = {
+                    ResponseStatus.PARTIAL: MedusaPartialOutcome,
+                    ResponseStatus.DEGRADED: MedusaDegradedOutcome,
+                    ResponseStatus.TIMEOUT: MedusaTimeoutOutcome,
+                    ResponseStatus.ERROR: MedusaErrorOutcome,
+                }.get(response.status, MedusaErrorOutcome)(
+                    f"Medusa response finished with {response.status.value} outcome"
+                )
+                await self.run_manager.mark_failed(request.request_id, outcome_error)
             logger.info(
-                "medusa_run_completed",
+                "medusa_run_finished",
                 extra={
                     "run_id": request.request_id,
                     "correlation_id": requirements.correlation_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
+                    "outcome_status": response.status.value,
                 },
             )
             return response
@@ -340,8 +368,34 @@ class MedusaCoordinator:
         )
         step.status = StepStatus.RUNNING
         emitter = emitter or self.event_emitter
+        registration = await self.registry.get_agent(step.agent_specialist)
+        if registration is None:
+            raise ValueError(
+                f"Specialist {step.agent_specialist} not found in registry"
+            )
+
         health = await self.registry.get_agent_health(step.agent_specialist)
-        is_degraded = bool(health.get("exists") and not health.get("healthy"))
+        dependency_verified = await self._dependencies_verified_by_completed_steps(
+            step=step,
+            plan=plan,
+            unresolved=set(health.get("unknown_dependencies") or []),
+        )
+        explicitly_degraded = bool(
+            authorized_plan.degraded_allowed
+            and authorized_plan.degradation_state is not None
+            and authorized_plan.degradation_state.degraded
+        )
+        is_ready = health.get("healthy") is True or dependency_verified
+        is_degraded = not is_ready and explicitly_degraded
+
+        if not is_ready and not is_degraded:
+            reason = str(
+                health.get("readiness_reason")
+                or ("missing_registration" if not health.get("exists") else "unhealthy")
+            )
+            raise RuntimeError(
+                f"Specialist {step.agent_specialist} is not execution-ready: {reason}"
+            )
 
         if is_degraded:
             await self.lifecycle.set_status(
@@ -350,37 +404,27 @@ class MedusaCoordinator:
             )
             if degraded_agents is not None:
                 degraded_agents.append(step.agent_specialist)
+            degradation_reason = (
+                getattr(authorized_plan.degradation_state, "reason_code", None)
+                or str(health.get("readiness_reason") or "policy_authorized_degradation")
+            )
             if degradation_reasons is not None:
-                degradation_reasons[step.agent_specialist] = health.get(
-                    "degradation_reason",
-                    "Agent unhealthy",
-                )
+                degradation_reasons[step.agent_specialist] = degradation_reason
             step.degradation_metadata = DegradationMetadata(
                 degraded=True,
-                degradation_reason=health.get(
-                    "degradation_reason",
-                    "Agent unhealthy",
-                ),
+                degradation_reason=degradation_reason,
                 affected_agent=step.agent_specialist,
                 fallback_level=DegradationLevel.PARTIAL,
-                capabilities_lost=(
-                    list(health.get("capabilities_lost", []))
-                    if isinstance(
-                        health.get("capabilities_lost", []), (list, tuple, set)
+                capabilities_lost=list(
+                    getattr(
+                        authorized_plan.degradation_state,
+                        "capabilities_lost",
+                        [],
                     )
-                    else (
-                        [str(health.get("capabilities_lost"))]
-                        if health.get("capabilities_lost")
-                        else []
-                    )
+                    or []
                 ),
             )
 
-        registration = await self.registry.get_agent(step.agent_specialist)
-        if registration is None:
-            raise ValueError(
-                f"Specialist {step.agent_specialist} not found in registry"
-            )
         specialist = self.factory.resolve(registration)
 
         if emitter is not None:
@@ -389,7 +433,7 @@ class MedusaCoordinator:
                     type=AgentEventType.AGENT_STARTED,
                     agent_id=step.agent_specialist,
                     message=f"step {step.id} started",
-                    correlation_id=request.request_id,
+                    correlation_id=self._correlation_id(request),
                     metadata={"step_id": step.id, "degraded": is_degraded},
                 )
             )
@@ -406,7 +450,7 @@ class MedusaCoordinator:
             user_id=str(request.user_id or "").strip(),
             policy_decision_id=authorized_plan.policy_decision_id,
             trajectory_id=request.request_id,
-            correlation_id=request.request_id,
+            correlation_id=self._correlation_id(request),
             step_id=step.id,
             budget_meter=meter,
             event_emitter=emitter,
@@ -434,7 +478,7 @@ class MedusaCoordinator:
                         type=AgentEventType.AGENT_COMPLETED,
                         agent_id=step.agent_specialist,
                         message=f"step {step.id} completed",
-                        correlation_id=request.request_id,
+                        correlation_id=self._correlation_id(request),
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
@@ -467,7 +511,7 @@ class MedusaCoordinator:
                         type=AgentEventType.AGENT_FAILED,
                         agent_id=step.agent_specialist,
                         message=f"step {step.id} failed",
-                        correlation_id=request.request_id,
+                        correlation_id=self._correlation_id(request),
                         metadata={
                             "step_id": step.id,
                             "error_type": type(exc).__name__,
@@ -478,3 +522,43 @@ class MedusaCoordinator:
             raise
         finally:
             await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+
+
+    def _correlation_id(self, request: RuntimeRequest) -> str:
+        requirements = ExecutionRequirements(**request.execution_requirements)
+        return requirements.correlation_id
+
+    async def _dependencies_verified_by_completed_steps(
+        self,
+        *,
+        step: PlanStep,
+        plan: DeepExecutionPlan,
+        unresolved: set[str],
+    ) -> bool:
+        """Verify dependency readiness from completed provider steps, not catalog hope."""
+
+        if not unresolved:
+            return False
+        dependency_steps = {
+            candidate.id: candidate
+            for candidate in plan.steps
+            if candidate.id in step.dependencies
+        }
+        if len(dependency_steps) != len(step.dependencies):
+            return False
+
+        provided: set[str] = set()
+        for dependency in dependency_steps.values():
+            if dependency.status is not StepStatus.COMPLETED:
+                return False
+            registration = await self.registry.get_agent(dependency.agent_specialist)
+            if registration is None:
+                return False
+            for capability in registration.capabilities:
+                name = str(getattr(capability, "name", "") or "").strip()
+                cap_type = getattr(getattr(capability, "type", None), "value", None)
+                if name:
+                    provided.add(name)
+                if cap_type:
+                    provided.add(str(cap_type).strip())
+        return unresolved <= provided
