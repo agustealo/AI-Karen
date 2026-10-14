@@ -82,6 +82,10 @@ class PluginStoreService {
       `${this.baseUrl}/search?${searchParams.toString()}`,
     );
 
+    if (!response || !Array.isArray(response.plugins)) {
+      throw new Error('Plugin search endpoint returned an invalid response.');
+    }
+
     return {
       plugins: response.plugins.map((plugin) => this.transformPlugin(plugin)),
       total: response.total,
@@ -152,14 +156,21 @@ class PluginStoreService {
   }
 
   async getCategories(): Promise<CategoryInfo[]> {
-    return apiClient.get<CategoryInfo[]>(`${this.baseUrl}/categories`);
+    const response: unknown = await apiClient.get<unknown>(`${this.baseUrl}/categories`);
+    if (!Array.isArray(response)) {
+      throw new Error('Plugin categories endpoint returned an invalid response.');
+    }
+    return response as CategoryInfo[];
   }
 
   async getTrendingPlugins(limit = 10): Promise<Plugin[]> {
-    const response = await apiClient.get<PluginApiItem[]>(
+    const response: unknown = await apiClient.get<unknown>(
       `${this.baseUrl}/trending?limit=${limit}`,
     );
-    return response.map((plugin) => this.transformPlugin(plugin));
+    if (!Array.isArray(response)) {
+      throw new Error('Trending plugins endpoint returned an invalid response.');
+    }
+    return (response as PluginApiItem[]).map((plugin) => this.transformPlugin(plugin));
   }
 
   async getUpdates(installedPluginIds?: string[]): Promise<PluginUpdate[]> {

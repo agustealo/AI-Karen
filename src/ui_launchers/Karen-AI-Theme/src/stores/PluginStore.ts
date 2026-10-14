@@ -123,9 +123,12 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   loadCategories: async () => {
     try {
       const categories = await pluginStoreService.getCategories();
+      if (!Array.isArray(categories)) {
+        throw new Error('Plugin categories response must be an array.');
+      }
       set({ categories });
     } catch (error) {
-      console.error('Failed to load categories:', error);
+      set({ categories: [], error: error instanceof Error ? error.message : 'Failed to load plugin categories' });
     }
   },
 
