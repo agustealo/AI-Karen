@@ -89,6 +89,7 @@ class DurableRunLedger(Protocol):
         status: str,
         completed_at: datetime,
         error_type: str | None,
+        outcome_status: str | None = None,
     ) -> None: ...
 
     async def set_outcome_status(
@@ -385,8 +386,9 @@ class PostgresDurableRunLedger:
         status: str,
         completed_at: datetime,
         error_type: str | None,
+        outcome_status: str | None = None,
     ) -> None:
-        """Persist a terminal transition only for the recorded owner worker."""
+        """Persist lifecycle and outcome in the same owner-fenced transaction."""
 
         if status not in _TERMINAL_STATUSES:
             raise ValueError(f"Invalid durable Medusa terminal status: {status}")
@@ -400,6 +402,7 @@ class PostgresDurableRunLedger:
             source="runtime",
             transition_kind="terminal",
             error_type=error_type,
+            outcome_status=outcome_status,
         )
 
     async def set_outcome_status(
@@ -563,6 +566,7 @@ class PostgresDurableRunLedger:
                     "terminal_at": terminal_at,
                     "reconciled_at": reconciled_at,
                     "error_type": error_type,
+                    "outcome_status": outcome_status,
                 }
                 if normalized in _TERMINAL_STATUSES:
                     await session.execute(
@@ -651,6 +655,7 @@ class PostgresDurableRunLedger:
         source: str,
         transition_kind: str,
         error_type: str | None = None,
+        outcome_status: str | None = None,
     ) -> None:
         try:
             async with self._postgres.get_async_session() as session:
@@ -698,6 +703,15 @@ class PostgresDurableRunLedger:
                                 completed_at = :event_at,
                                 heartbeat_at = :event_at,
                                 error_type = :error_type,
+                                metadata = CASE
+                                    WHEN :outcome_status IS NULL THEN metadata
+                                    ELSE jsonb_set(
+                                        COALESCE(metadata, '{}'::jsonb),
+                                        '{outcome_status}',
+                                        to_jsonb(CAST(:outcome_status AS text)),
+                                        true
+                                    )
+                                END,
                                 updated_at = :event_at,
                                 last_worker_transition_at = :event_at
                             WHERE run_id = :run_id
