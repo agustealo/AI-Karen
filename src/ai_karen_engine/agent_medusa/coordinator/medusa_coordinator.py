@@ -243,12 +243,22 @@ class MedusaCoordinator:
                     plan.is_complete = True
                     break
 
+                plan.mark_blocked_dependents()
                 runnable_steps = plan.get_next_runnable_steps()
                 if not runnable_steps:
-                    if all(step.status == StepStatus.COMPLETED for step in plan.steps):
+                    if all(
+                        step.status in {
+                            StepStatus.COMPLETED,
+                            StepStatus.FAILED,
+                            StepStatus.SKIPPED,
+                        }
+                        for step in plan.steps
+                    ):
                         plan.is_complete = True
                         break
-                    raise RuntimeError("Medusa Execution Stalled: dependency failure")
+                    raise RuntimeError(
+                        "Medusa Execution Stalled: unresolved dependency graph"
+                    )
 
                 results = await asyncio.gather(
                     *[
