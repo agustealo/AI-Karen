@@ -13,3 +13,10 @@ def test_search_handoff_is_bounded_user_request():
     assert ".slice(0, 1200)" in source
     assert "karen:inject-message" in source
     assert "I found this information for you:" not in source
+
+
+def test_source_url_guard_uses_parseable_typescript():
+    source = PANEL.read_text(encoding="utf-8")
+    assert "item.url.startsWith('https://')" in source
+    assert "item.url.startsWith('http://')" in source
+    assert r"/^https?:\\/\\//" not in source
