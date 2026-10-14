@@ -107,15 +107,15 @@ export default function PluginStorePage() {
       : [];
   }, [plugins]);
 
-  const selectedCategoryLabel = useMemo(() => {
+  // Defend render and derived labels against stale or malformed persisted store state.\n  const safeCategories = Array.isArray(categories) ? categories : [];\n\n  const selectedCategoryLabel = useMemo(() => {
     if (!selectedCategory) {
       return '';
     }
 
-    const match = categories.find((category) => category.name === selectedCategory);
+    const match = safeCategories.find((category) => category.name === selectedCategory);
 
     return cleanString(match?.display_name) || cleanString(selectedCategory);
-  }, [categories, selectedCategory]);
+  }, [safeCategories, selectedCategory]);
 
   const browseEmptyMessage = selectedCategory
     ? `No plugins found in ${selectedCategoryLabel || selectedCategory}`
@@ -421,9 +421,9 @@ export default function PluginStorePage() {
                 </div>
               </div>
 
-              {categories.length > 0 && (
+              {safeCategories.length > 0 && (
                 <CategoryFilter
-                  categories={categories}
+                  categories={safeCategories}
                   selectedCategory={selectedCategory}
                   onCategoryChange={handleCategoryChange}
                 />
