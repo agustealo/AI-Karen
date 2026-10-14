@@ -236,10 +236,11 @@ class MedusaCoordinator:
 
         try:
             while not plan.is_complete:
-                if meter.exhausted:
+                if meter.exhausted or not await meter.check_duration():
                     for step in plan.steps:
                         if step.status == StepStatus.PENDING:
                             step.status = StepStatus.SKIPPED
+                            step.error = "execution_budget_exhausted"
                     plan.is_complete = True
                     break
 
@@ -260,6 +261,13 @@ class MedusaCoordinator:
                         "Medusa Execution Stalled: unresolved dependency graph"
                     )
 
+                # The validated DAG can expose more runnable nodes than the
+                # RuntimePolicy concurrency budget permits. Execute stable,
+                # bounded waves without giving adapters scheduling authority.
+                max_parallel = int(authorized_plan.budget.max_parallelism)
+                if max_parallel < 1:
+                    raise ValueError("Invalid Medusa parallelism budget")
+                wave = runnable_steps[:max_parallel]
                 results = await asyncio.gather(
                     *[
                         self._execute_step(
@@ -273,11 +281,11 @@ class MedusaCoordinator:
                             degraded_agents,
                             degradation_reasons,
                         )
-                        for step in runnable_steps
+                        for step in wave
                     ],
                     return_exceptions=True,
                 )
-                for step, result in zip(runnable_steps, results):
+                for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
                         step.status = StepStatus.FAILED
                         step.error = type(result).__name__
