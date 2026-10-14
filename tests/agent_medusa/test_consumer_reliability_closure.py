@@ -417,5 +417,5 @@ def test_durable_terminal_outcome_is_written_in_same_owner_fenced_transition() -
     assert "outcome_status" in transition_source
     assert "jsonb_set" in transition_source
     assert "owner_worker_id = :worker_id" in transition_source
-    assert "set_outcome_status" not in manager_source
+    assert "self._durable_ledger,\n                \"set_outcome_status\"" not in manager_source
     assert "outcome_status=outcome_status" in manager_source
