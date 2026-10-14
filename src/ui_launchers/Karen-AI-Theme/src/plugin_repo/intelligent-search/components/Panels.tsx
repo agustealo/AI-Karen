@@ -1,3 +1,4 @@
+import { ArticleReader } from './ArticleReader';
 import React, { useMemo, useState } from 'react';
 import { IntelligentSearchResponse, SearchResultItem, SearchSourceItem } from '../types';
 import { Send, FileText, Code, AlignLeft, Download, ExternalLink } from 'lucide-react';
@@ -231,11 +232,7 @@ export function ResultsPanel({ response }: PanelProps) {
                 </p>
                 
                 {featuredSource?.article_complete === false && <p role="status" className="mb-3 text-xs text-amber-600">Partial article preview. Full document retrieval is not available in this view.</p>}
-                {sourceViewMode === 'snippet' && (
-                  <p className="whitespace-pre-wrap break-words text-sm leading-8 text-muted-foreground/90">
-                    {featuredSource?.full_content || featuredSource?.article_preview || featuredSource?.content || featuredSource?.snippet || 'No readable source content available.'}
-                  </p>
-                )}
+                {sourceViewMode === 'snippet' && <ArticleReader source={featuredSource} />}
                 {sourceViewMode === 'markdown' && (
                   <pre className="whitespace-pre-wrap break-words text-xs leading-6 text-foreground/90 font-mono bg-muted/10 p-4 rounded-xl border border-border/40">
                     {featuredSource?.markdown || featuredSource?.article_preview || 'Markdown content not available for this source.'}
@@ -387,11 +384,7 @@ export function SourcesPanel({ response }: PanelProps) {
 
              <div className="h-[26rem] min-h-[16rem] max-h-[75vh] resize-y overflow-auto p-6 custom-scrollbar">
                 {featuredSource?.article_complete === false && <p role="status" className="mb-3 text-xs text-amber-600">Partial article preview. Full document retrieval is not available in this view.</p>}
-                {sourceViewMode === 'snippet' && (
-                  <p className="whitespace-pre-wrap break-words text-sm leading-8 text-muted-foreground/90">
-                    {featuredSource?.full_content || featuredSource?.article_preview || featuredSource?.content || featuredSource?.snippet || 'No readable source content available.'}
-                  </p>
-                )}
+                {sourceViewMode === 'snippet' && <ArticleReader source={featuredSource} />}
                 {sourceViewMode === 'markdown' && (
                   <pre className="whitespace-pre-wrap break-words text-xs leading-6 text-foreground/90 font-mono bg-muted/5 p-5 rounded-2xl border border-border/40">
                     {featuredSource?.markdown || featuredSource?.article_preview || 'Markdown content unavailable.'}
