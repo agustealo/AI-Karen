@@ -1,69 +1,54 @@
 import React from 'react';
+import { SlidersHorizontal, RotateCcw } from 'lucide-react';
 import { useIntelligentSearch } from './hooks/useIntelligentSearch';
 import { SearchHeader } from './components/SearchHeader';
-import { SearchQueryInput } from './components/SearchQueryInput';
-import { ModeSelector } from './components/ModeSelector';
-import { ModeSpecificControls } from './components/ModeSpecificControls';
-import { ResultsWorkspace } from './components/ResultsWorkspace';
 import { SearchControlsPanel } from './components/SearchControlsPanel';
+import { ResultsWorkspace } from './components/ResultsWorkspace';
 
 /**
- * IntelligentSearchPage Component
- * 
- * The main entry point for the Intelligent Search plugin.
- * Features a modern, responsive design with live crawl capabilities,
- * multiple search modes, and a robust results workspace.
+ * Search-first layout. The search controls remain accessible while evidence
+ * and source context own the primary reading area.
  */
 export default function IntelligentSearchPage() {
   const {
-    state,
-    modeConfig,
-    setQuery,
-    setMode,
-    updateOptions,
-    executeSearch,
-    resetSearch,
+    state, modeConfig, setQuery, setMode, updateOptions, executeSearch, resetSearch,
   } = useIntelligentSearch();
+  const [showControls, setShowControls] = React.useState(false);
 
   return (
-    <div className="flex flex-col h-full bg-background overflow-hidden">
-      {/* Header Section */}
-      <div className="p-4 lg:p-6 pb-0">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-background">
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 px-4 py-5 lg:px-8 lg:py-7">
         <SearchHeader modeConfig={modeConfig} state={state} />
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden p-4 lg:p-6 gap-6">
-        
-        {/* Left Column: Search Controls */}
-        <aside className="w-full lg:w-[400px] flex flex-col gap-6 overflow-y-auto pr-2 custom-scrollbar">
-          <SearchControlsPanel 
-            state={state}
-            modeConfig={modeConfig}
-            onQueryChange={setQuery}
-            onModeChange={setMode}
-            onOptionsChange={updateOptions}
-            onSubmit={executeSearch}
-          />
-
-          {/* Optional Reset Button */}
-          <div className="px-4 md:px-0">
-            <button
-              onClick={resetSearch}
-              className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Clear search results
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            Search the web, inspect evidence, then ask Karen to verify or explain a source.
+          </p>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => setShowControls(value => !value)}
+              aria-expanded={showControls} aria-controls="search-advanced-controls"
+              className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-border/70 px-4 py-2 text-sm font-medium text-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+              {showControls ? 'Hide search settings' : 'Search settings'}
             </button>
+            {state.response && <button type="button" onClick={resetSearch}
+              className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              <RotateCcw className="h-4 w-4" aria-hidden="true" /> Clear
+            </button>}
           </div>
-        </aside>
-
-        {/* Right Column: Results Workspace */}
-        <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <ResultsWorkspace 
-            state={state} 
-            modeConfig={modeConfig} 
-          />
-        </main>
+        </div>
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
+          <aside id="search-advanced-controls" className={showControls
+            ? 'min-w-0 xl:sticky xl:top-4 xl:self-start'
+            : 'min-w-0'}>
+            <SearchControlsPanel state={state} modeConfig={modeConfig}
+              onQueryChange={setQuery} onModeChange={setMode}
+              onOptionsChange={updateOptions} onSubmit={executeSearch}
+              showAdvanced={showControls} />
+          </aside>
+          <main className="min-w-0" aria-label="Search evidence and results">
+            <ResultsWorkspace state={state} modeConfig={modeConfig} />
+          </main>
+        </div>
       </div>
     </div>
   );
