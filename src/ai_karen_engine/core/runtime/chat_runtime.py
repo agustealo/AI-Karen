@@ -1953,7 +1953,7 @@ class ChatRuntime:
             if not await meter.check_duration():
                 return None
             # Do not reclassify an emergency/static fallback as a model answer.
-            if not result.provider or not result.model or not result.text:
+            if not result.provider or not result.model or not result.text or result.degraded:
                 return None
             answer = str(result.text).strip()
             verdict = ResponseValidator().validate(answer, contract)
