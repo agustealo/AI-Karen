@@ -114,3 +114,23 @@ def test_citation_url_parser_stops_at_whitespace():
         contract,
     )
     assert result.valid, result.reason
+
+
+def test_citation_validator_rejects_discovery_only_and_unattributed_urls():
+    from ai_karen_engine.services.response.response_contracts import ResponseContract
+    from ai_karen_engine.services.response.response_validator import ResponseValidator
+
+    for tool_results in [
+        [{"sources": [{"url": "https://example.org/discovery",
+                       "evidence_level": "search_snippet"}]}],
+        [{"url": "https://example.org/discovery", "summary": "unverified"}],
+    ]:
+        contract = ResponseContract(
+            purpose="tool_synthesis", intent="search.general", requires_live_data=True,
+            tool_results=tool_results,
+        )
+        result = ResponseValidator().validate(
+            "Claim (https://example.org/discovery).", contract
+        )
+        assert not result.valid
+        assert result.reason == "missing_authorized_source_evidence"
