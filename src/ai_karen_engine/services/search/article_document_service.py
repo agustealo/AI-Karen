@@ -54,7 +54,7 @@ class SearchArticleService:
             tenant_id=tenant_id, user_id=user_id,
             kind="search_article", filename=f"{digest[:24]}.txt",
             content_type="text/plain; charset=utf-8", data=data,
-            metadata={"source_url": source_url, "title": title, "sha256": digest},
+            metadata={"kind": "search_article", "source_url": source_url, "title": title, "sha256": digest},
         ))
         if not result.success or result.data is None:
             raise RuntimeError("Article persistence unavailable")
