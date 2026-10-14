@@ -133,4 +133,4 @@ async def test_distinct_correlation_id_reaches_run_ledger():
 
     assert manager.register.await_args.kwargs["request_id"] == "test-request"
     assert manager.register.await_args.kwargs["correlation_id"] == "trace-42"
-    manager.mark_completed.assert_awaited_once_with("test-request")
+    manager.mark_response.assert_awaited_once_with("test-request", coordinator._handle_request.return_value.status.value)
