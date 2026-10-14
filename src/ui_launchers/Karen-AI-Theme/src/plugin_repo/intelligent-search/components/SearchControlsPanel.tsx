@@ -29,7 +29,7 @@ export function SearchControlsPanel({
         <p className="text-xs leading-5 text-muted-foreground">Choose what to look for. Refine settings only when needed.</p>
       </div>
       <SearchQueryInput query={state.query} onQueryChange={onQueryChange}
-        onSubmit={onSubmit} disabled={disabled} />
+        onSubmit={onSubmit} disabled={disabled} allowEmptyQuery={['weather', 'stock_market'].includes(state.mode)} />
       <ModeSelector currentMode={state.mode} onModeChange={onModeChange} disabled={disabled} />
       {showAdvanced && (
         <div className="space-y-3 border-t border-border/60 pt-4" aria-label="Additional search settings">
