@@ -37,7 +37,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const capabilityTags = [
     `Provider ${providerLabel}`,
     `${sourceCount} sources`,
-    `${resultCount} cards`,
+    `${resultCount} passages`,
     statusLabel,
   ];
 
@@ -60,7 +60,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   if (state.isLoading) return <LoadingState state={state} />;
   if (state.error) return <ErrorState error={state.error} />;
   if (!response) return <EmptyState />;
-  if (!hasEvidence) return <div role="status" className="p-8 space-y-3"><h2 className="text-xl font-semibold">No search evidence retrieved</h2><p className="text-muted-foreground">{response.summary || 'No usable source links or pages were returned.'}</p></div>;
+  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-xl font-semibold">No sources found</h2><p className="text-muted-foreground">{response.summary || 'The search did not return usable evidence.'} Try a broader query or a different search mode.</p></div>;
 
   const renderTabContent = () => {
     switch (currentTab) {
@@ -88,7 +88,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-[11px] uppercase tracking-[0.32em] text-muted-foreground shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Live crawl workspace
+              Search evidence
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
@@ -102,26 +102,26 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
 
           <div className="flex flex-wrap gap-2">
             <StatBadge label="Sources" value={sourceCount} />
-            <StatBadge label="Cards" value={resultCount} />
+            <StatBadge label="Passages" value={resultCount} />
             <StatBadge label="Latency" value={elapsed} />
             <StatBadge label="Mode" value={state.mode.replace(/_/g, ' ')} />
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <details className="mt-5 rounded-xl border border-border/50 bg-card/60 p-3"><summary className="cursor-pointer text-sm font-medium text-muted-foreground">Technical search details</summary><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SignalTile label="Query" value={response.query || 'live request'} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="Provider" value={providerLabel} icon={<Database className="h-4 w-4" />} />
           <SignalTile label="URLs" value={response.diagnostics?.urlsFound ?? sourceCount} icon={<ArrowUpRight className="h-4 w-4" />} />
-          <SignalTile label="Chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
-        </div>
+          <SignalTile label="Retrieved chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
+        </div></details>
       </div>
 
       <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
         style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>
         <section className="flex min-h-[55vh] min-w-0 flex-col gap-4">
           <div className="rounded-3xl border border-border/60 bg-card/70 p-2 shadow-sm backdrop-blur">
-            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Search results</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Evidence and sources</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
+            <nav aria-label="Search result sections" className="flex flex-wrap gap-2">
               {validTabs.map((tabId) => {
                 const label = tabId.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase());
                 const isActive = currentTab === tabId;
@@ -130,7 +130,10 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
                   <button
                     key={tabId}
                     onClick={() => setActiveTab(tabId)}
-                    className={`rounded-2xl px-4 py-2.5 text-sm font-medium transition-all ${
+                    type="button"
+                    aria-current={isActive ? "page" : undefined}
+                    aria-label={`Show ${label} search information`}
+                    className={`min-h-11 rounded-2xl px-4 py-2.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                       isActive
                         ? 'bg-primary text-primary-foreground shadow-[0_10px_24px_rgba(0,0,0,0.2)]'
                         : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground'
@@ -140,7 +143,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
                   </button>
                 );
               })}
-            </div>
+            </nav>
           </div>
 
           <div className="min-h-[50vh] min-w-0 flex-1 overflow-y-auto rounded-3xl border border-border/60 bg-card/80 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-6">

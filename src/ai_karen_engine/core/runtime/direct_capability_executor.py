@@ -681,18 +681,33 @@ class DirectCapabilityExecutor:
                 for item in list(payload.get("results") or [])
                 if isinstance(item, dict)
             ]
-            snippets = [
-                str(item.get("snippet") or item.get("content") or "").strip()
-                for item in results[:3]
-            ]
-            snippets = [snippet for snippet in snippets if snippet]
-            if snippets:
+            passages = []
+            for item in results:
+                if len(passages) >= 3:
+                    break
+                excerpt = str(item.get("snippet") or item.get("content") or "").strip()[:400]
+                source_url = str(item.get("url") or "").strip()
+                if not excerpt or not source_url.startswith(("https://", "http://")):
+                    continue
+                passages.append(f"{excerpt}\nSource: {source_url}")
+            if passages:
                 prefix = (
-                    "Here’s the live weather information I found:"
+                    "Live weather evidence (retrieved excerpts, not a generated forecast):"
                     if intent == "search.weather"
-                    else "Here’s what I found live:"
+                    else "Retrieved evidence (not a synthesized answer):"
                 )
-                return prefix + "\n\n" + "\n\n".join(snippets)
+                return prefix + "\n\n" + "\n\n".join(passages)
+
+            # Weather tool measurements can be useful even when the provider
+            # supplies no page URL; do not discard legitimate weather data.
+            if intent == "search.weather":
+                measurements = [
+                    str(item.get("snippet") or item.get("content") or "").strip()[:400]
+                    for item in results[:3]
+                    if item.get("snippet") or item.get("content")
+                ]
+                if measurements:
+                    return "Weather information returned by the live capability (source URL unavailable):\n\n" + "\n\n".join(measurements)
 
             summary = str(payload.get("summary") or "").strip()
             if summary:

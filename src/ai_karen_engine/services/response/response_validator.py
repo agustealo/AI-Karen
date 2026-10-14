@@ -49,7 +49,12 @@ class ResponseValidator:
                 if isinstance(value, dict):
                     # Discovery links are not fetched evidence and cannot
                     # authorize a citation to page content.
-                    if value.get("evidence_level") == "search_snippet":
+                    # Only verified fetched pages may authorize model citations.
+                    # Other nested tool metadata is never a source of truth.
+                    if value.get("evidence_level") != "fetched_page":
+                        for key, item in value.items():
+                            if key not in {"url", "canonical_url", "final_url"}:
+                                collect(item)
                         return
                     for key, item in value.items():
                         if key in {"url", "canonical_url", "final_url"} and isinstance(item, str):
@@ -64,7 +69,7 @@ class ResponseValidator:
             collect(getattr(contract, "tool_results", []))
             if not allowed:
                 return ValidationResult(valid=False, reason="missing_authorized_source_evidence")
-            cited = re.findall(r"https?://[^\\s)\\]>]+", text)
+            cited = re.findall(r"https?://[^\s)\]>]+", text)
             if not cited:
                 return ValidationResult(valid=False, reason="missing_evidence_citation")
             if any(url.rstrip("/").rstrip(".,;") not in allowed for url in cited):

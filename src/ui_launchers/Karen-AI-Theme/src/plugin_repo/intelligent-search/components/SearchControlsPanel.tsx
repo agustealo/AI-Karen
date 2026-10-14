@@ -1,5 +1,5 @@
 import React from 'react';
-import { PlayCircle, Sparkles } from 'lucide-react';
+import { PlayCircle } from 'lucide-react';
 import { SearchQueryInput } from './SearchQueryInput';
 import { ModeSelector } from './ModeSelector';
 import { ModeSpecificControls } from './ModeSpecificControls';
@@ -13,60 +13,37 @@ interface SearchControlsPanelProps {
   onModeChange: (m: SearchModeId) => void;
   onOptionsChange: (opts: Partial<IntelligentSearchOptions>) => void;
   onSubmit: () => void;
+  showAdvanced?: boolean;
 }
 
-export function SearchControlsPanel({ 
-  state, modeConfig, onQueryChange, onModeChange, onOptionsChange, onSubmit 
+export function SearchControlsPanel({
+  state, modeConfig, onQueryChange, onModeChange, onOptionsChange,
+  onSubmit, showAdvanced = false,
 }: SearchControlsPanelProps) {
-  const isDisabled = state.isLoading;
-  const hasResponse = Boolean(state.response);
-
+  const disabled = state.isLoading;
+  const canSearch = Boolean(state.query.trim()) || ['weather', 'stock_market'].includes(state.mode);
   return (
-    <div className="flex flex-col gap-4 p-4 md:p-0">
-      <div className="rounded-3xl border border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_18%),hsl(var(--card))] p-4 shadow-[0_24px_60px_rgba(0,0,0,0.16)]">
-        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-muted-foreground">
-          <Sparkles className="h-3.5 w-3.5 text-primary" />
-          Command center
-        </div>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Configure the crawl, switch modes, and execute a live internet intelligence run.
-        </p>
+    <div className="space-y-4 rounded-2xl border border-border/60 bg-card/70 p-4 shadow-sm">
+      <div className="space-y-1">
+        <h2 className="text-base font-semibold text-foreground">Your search</h2>
+        <p className="text-xs leading-5 text-muted-foreground">Choose what to look for. Refine settings only when needed.</p>
       </div>
-
-      <SearchQueryInput 
-        query={state.query} 
-        onQueryChange={onQueryChange} 
-        onSubmit={onSubmit} 
-        disabled={isDisabled} 
-      />
-      
-      <ModeSelector 
-        currentMode={state.mode} 
-        onModeChange={onModeChange} 
-        disabled={isDisabled} 
-      />
-
-      <ModeSpecificControls 
-        modeConfig={modeConfig} 
-        options={state.options} 
-        onOptionsChange={onOptionsChange} 
-        disabled={isDisabled} 
-      />
-
-      <div className="rounded-3xl border border-border/60 bg-card/80 p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between text-xs uppercase tracking-[0.24em] text-muted-foreground">
-          <span>Run search</span>
-          <span>{hasResponse ? 'Refresh live results' : 'Ready'}</span>
+      <SearchQueryInput query={state.query} onQueryChange={onQueryChange}
+        onSubmit={onSubmit} disabled={disabled} allowEmptyQuery={['weather', 'stock_market'].includes(state.mode)} />
+      <ModeSelector currentMode={state.mode} onModeChange={onModeChange} disabled={disabled} />
+      {showAdvanced && (
+        <div className="space-y-3 border-t border-border/60 pt-4" aria-label="Additional search settings">
+          <h3 className="text-sm font-medium text-foreground">Advanced options</h3>
+          <ModeSpecificControls modeConfig={modeConfig}
+            options={state.options} onOptionsChange={onOptionsChange}
+            disabled={disabled} />
         </div>
-        <button
-          onClick={onSubmit}
-          disabled={isDisabled || (!state.query.trim() && !['weather', 'stock_market'].includes(state.mode))}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 font-semibold text-primary-foreground shadow-[0_16px_30px_rgba(0,0,0,0.18)] transition-colors hover:bg-primary/90 disabled:opacity-50"
-        >
-          <PlayCircle className="h-4 w-4" />
-          {isDisabled ? 'Searching...' : 'Execute Search'}
-        </button>
-      </div>
+      )}
+      <button type="button" onClick={onSubmit} disabled={disabled || !canSearch}
+        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+        <PlayCircle className="h-4 w-4" aria-hidden="true" />
+        {disabled ? 'Searching…' : state.response ? 'Update results' : 'Search'}
+      </button>
     </div>
   );
 }

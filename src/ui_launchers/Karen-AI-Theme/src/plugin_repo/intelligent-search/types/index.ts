@@ -18,6 +18,7 @@ export interface SearchSourceItem {
   extracted_data?: Record<string, unknown>;
   publishedDate?: string;
   relevanceScore?: number;
+  evidence_level?: 'fetched_page' | 'search_snippet';
   domain?: string;
   links?: Array<{ url: string; text: string; category?: string }>;
   media?: Record<string, unknown>;
