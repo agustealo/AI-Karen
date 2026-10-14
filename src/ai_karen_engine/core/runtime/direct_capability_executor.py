@@ -527,7 +527,9 @@ class DirectCapabilityExecutor:
         executor asks one targeted question before making an internet call.
         """
         explicit = re.search(
-            r"\b(?:weather(?:\s+like)?|forecast|temperature)\s+(?:in|for|at)\s+"
+            r"\b(?:weather(?:\s+like)?|forecast|temperature)"
+            r"(?:\s+(?:today|tomorrow|tonight|right\s+now|this\s+(?:morning|afternoon|evening)))?"
+            r"\s+(?:in|for|at)\s+"
             r"(?P<place>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})",
             query,
             flags=re.IGNORECASE,
@@ -544,7 +546,15 @@ class DirectCapabilityExecutor:
             if place:
                 return query
 
+        # A short reply can fill the immediately pending weather-location slot.
+        # Do not treat arbitrary one-word queries as locations unless runtime
+        # supplied the governed pending clarification for this same session.
         context = dict(metadata or {})
+        pending = context.get("pending_clarification")
+        if isinstance(pending, dict) and pending.get("missing_requirement") == "weather_location":
+            candidate = query.strip(" ?!. ,")
+            if re.fullmatch(r"[A-Za-z][A-Za-z .,'-]{1,119}", candidate):
+                return f"What's the weather in {candidate}?"
         location = context.get("weather_location")
         if not isinstance(location, str) or not location.strip():
             source = context.get("location_source")
