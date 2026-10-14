@@ -124,3 +124,59 @@ async def test_spacy_live_download_registry_and_linguistic_inference(tmp_path) -
     assert nlp.pipe_names
     assert len(doc) > 0
     assert any(token.pos_ for token in doc), "Expected linguistic analysis"
+
+
+@pytest.mark.asyncio
+async def test_distilbert_live_pinned_download_and_nonfallback_encoding(tmp_path) -> None:
+    """Opt-in real artifact and inference proof, not part of ordinary CI."""
+    if os.getenv("KAREN_LIVE_DISTILBERT_ARTIFACT_PROOF") != "1":
+        pytest.skip("Requires explicit live DistilBERT artifact proof opt-in")
+
+    from pathlib import Path
+    from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
+        DownloadRequest,
+    )
+    from ai_karen_engine.core.intelligence.ml.encoders.distilbert import (
+        DistilBertSemanticEncoder,
+    )
+    from ai_karen_engine.core.memory.signals.nlp_config import DistilBertConfig
+
+    item = next(
+        entry for entry in load_model_download_recommendations()["recommendations"]
+        if entry["id"] == "distilbert-semantic-encoder"
+    )
+    orchestrator = ModelOrchestratorService({
+        "models_root": str(tmp_path / "models"),
+        "registry_path": str(tmp_path / "registry.json"),
+    })
+    remote = await orchestrator.get_model_info(item["model_id"], refresh_remote=True)
+    assert remote.license and remote.license.strip(), "Source license unavailable"
+    assert not remote.gated, "Unexpected gated source"
+    assert remote.revision and IMMUTABLE_REVISION.fullmatch(remote.revision)
+
+    result = await orchestrator.download_model(DownloadRequest(
+        model_id=item["model_id"],
+        revision=remote.revision,
+        storage_key="transformers",
+        include_patterns=item.get("include_patterns"),
+    ))
+    root = Path(result.install_path)
+    assert root.is_dir() and not root.is_symlink()
+    assert (root / "config.json").is_file()
+    assert (root / "model.safetensors").is_file()
+    assert (root / "tokenizer_config.json").is_file()
+    registry = await orchestrator.snapshot_registry_entry(item["model_id"])
+    assert registry and Path(registry["install_path"]) == root
+
+    encoder = DistilBertSemanticEncoder(config=DistilBertConfig(
+        model_name=item["model_id"],
+        local_model_root=str(tmp_path / "models" / "transformers"),
+        enable_gpu=False,
+        enable_fallback=False,
+    ))
+    assert not encoder.fallback_mode and encoder.model is not None
+    output = await encoder.encode("Karen runs local semantic encoding.")
+    assert not output.fallback_used
+    assert output.dimensions == 768
+    assert len(output.vector) == 768
+    assert any(abs(float(value)) > 0 for value in output.vector)
