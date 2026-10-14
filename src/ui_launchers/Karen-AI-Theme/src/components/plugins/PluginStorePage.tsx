@@ -92,6 +92,11 @@ export default function PluginStorePage() {
   } = usePluginStore();
 
   const [activeTab, setActiveTab] = useState<PluginStoreTab>('browse');
+  useEffect(() => {
+    if (activeTab === 'trending' && trendingStatus === 'idle') {
+      void loadTrending();
+    }
+  }, [activeTab, trendingStatus, loadTrending]);
   const [selectedCategory, setSelectedCategory] = useState<
     PluginCategory | undefined
   >(searchParams.category);
