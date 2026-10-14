@@ -30,7 +30,6 @@ export function SearchControlsPanel({
       </div>
       <SearchQueryInput query={state.query} onQueryChange={onQueryChange}
         onSubmit={onSubmit} disabled={disabled} allowEmptyQuery={['weather', 'stock_market'].includes(state.mode)} />
-      <ModeSelector currentMode={state.mode} onModeChange={onModeChange} disabled={disabled} />
       {showAdvanced && (
         <div className="space-y-3 border-t border-border/60 pt-4" aria-label="Additional search settings">
           <h3 className="text-sm font-medium text-foreground">Advanced options</h3>
@@ -39,11 +38,16 @@ export function SearchControlsPanel({
             disabled={disabled} />
         </div>
       )}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <ModeSelector currentMode={state.mode} onModeChange={onModeChange} disabled={disabled} />
+        <div className="sm:pt-5">
       <button type="button" onClick={onSubmit} disabled={disabled || !canSearch}
-        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+        className="inline-flex min-h-11 w-full items-center justify-center gap-2 sm:w-auto rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
         <PlayCircle className="h-4 w-4" aria-hidden="true" />
         {disabled ? 'Searching…' : state.response ? 'Update results' : 'Search'}
       </button>
+        </div>
+      </div>
     </div>
   );
 }
