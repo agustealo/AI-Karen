@@ -230,14 +230,12 @@ async def test_weather_prefers_authorized_web_tool_before_plugin() -> None:
                 result={
                     "status": "ok",
                     "mode": "weather",
-                    "results": [
-                        {
-                            "snippet": (
-                                "Detroit is 61°F with light rain and a "
-                                "40% chance of precipitation."
-                            )
-                        }
-                    ],
+                    "weather": {
+                        "location": "Detroit",
+                        "temperature": "61°F",
+                        "conditions": "light rain",
+                        "precipitation": "40%",
+                    },
                     "sources": [],
                     "citations": [],
                 },
@@ -1173,7 +1171,11 @@ async def test_weather_uses_governed_profile_location_without_a_parallel_memory_
                 success=True,
                 result={
                     "status": "ok",
-                    "results": [{"snippet": "Sourced forecast for DC."}],
+                    "weather": {
+                        "location": "Washington, DC",
+                        "temperature": "18°C",
+                        "conditions": "cloudy",
+                    },
                 },
                 error=None,
             )
@@ -1724,3 +1726,42 @@ def test_live_search_requires_renderable_attributed_passage() -> None:
 def test_private_happening_questions_do_not_trigger_public_search(query: str) -> None:
     decision = resolve_capability_decision(query)
     assert decision.intent != "search.general"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "success", "results": [
+            {"url": "https://en.wikipedia.org/wiki/Detroit",
+             "snippet": "Detroit is the most populous city in Michigan."}]},
+        {"status": "success", "sources": [
+            {"url": "https://en.wikipedia.org/wiki/Weather_Underground",
+             "snippet": "The Weather Underground Organization was founded in 1969."}]},
+        {"status": "success", "extractedData": {"city": "Detroit"}},
+        {"status": "success", "results": [
+            {"url": "https://example.org", "snippet": "Weather in Detroit"}]},
+    ],
+)
+def test_weather_rejects_unrelated_search_evidence(payload: dict) -> None:
+    executor = DirectCapabilityExecutor()
+    assert not executor._payload_succeeded("search.weather", payload)
+    output = executor._render("search.weather", "weather today in Detroit", payload)
+    assert "Live weather measurements are unavailable" in output
+    assert "wikipedia" not in output.lower()
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        {"temperature_f": 58, "conditions": "Cloudy", "city": "Detroit",
+         "observed_at": "2026-10-14T10:00:00-04:00"},
+        {"temp": "14 C", "condition": "Rain", "location": "Detroit"},
+    ],
+)
+def test_weather_accepts_structured_observation(observation: dict) -> None:
+    payload = {"status": "success", "extractedData": observation}
+    executor = DirectCapabilityExecutor()
+    assert executor._payload_succeeded("search.weather", payload)
+    rendered = executor._render("search.weather", "weather in Detroit", payload)
+    assert "temperature_f:" in rendered or "temp:" in rendered
+    assert "Wikipedia" not in rendered
