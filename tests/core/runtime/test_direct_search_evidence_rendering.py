@@ -30,3 +30,25 @@ def test_weather_without_page_link_still_reports_live_measurement():
     })
     assert "61°F" in text
     assert "source URL unavailable" in text
+
+
+def test_evidence_rendering_uses_actual_line_breaks():
+    executor = object.__new__(DirectCapabilityExecutor)
+    text = executor._render("search.general", "history", {
+        "results": [
+            {"snippet": "First claim", "url": "https://example.org/first"},
+            {"snippet": "Second claim", "url": "https://example.org/second"},
+        ]
+    })
+    assert "First claim\nSource: https://example.org/first" in text
+    assert "\n\nSecond claim\nSource: https://example.org/second" in text
+    assert r"\nSource:" not in text
+
+
+def test_weather_measurement_has_real_paragraph_breaks():
+    executor = object.__new__(DirectCapabilityExecutor)
+    text = executor._render("search.weather", "Detroit weather", {
+        "results": [{"snippet": "61 F and rain"}]
+    })
+    assert "unavailable):\n\n61 F" in text
+    assert r"\n\n" not in text
