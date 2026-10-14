@@ -108,7 +108,10 @@ export default function PluginStorePage() {
   }, [plugins]);
 
   // Defend render and derived labels against stale or malformed persisted store state.
-  const safeCategories = Array.isArray(categories) ? categories : [];
+  const safeCategories = useMemo(
+    () => (Array.isArray(categories) ? categories : []),
+    [categories],
+  );
 
   const selectedCategoryLabel = useMemo(() => {
     if (!selectedCategory) {
