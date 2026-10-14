@@ -19,7 +19,7 @@ const sendToChat = (item: ChatInjectItem | undefined) => {
   if (!item) return;
   // ChatRuntime performs the answer generation and citation checks.
   // This is a bounded user request, never a forged assistant answer.
-  const url = typeof item.url === 'string' && /^https?:\\/\\//.test(item.url)
+  const url = typeof item.url === 'string' && (item.url.startsWith('https://') || item.url.startsWith('http://'))
     ? item.url.slice(0, 2000) : '';
   const excerpt = String(item.snippet || item.content || item.full_content || item.markdown || '')
     .slice(0, 1200);
