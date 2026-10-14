@@ -33,3 +33,11 @@ def test_install_failures_reach_page_and_refresh_failures_are_distinguished() ->
     assert "Plugin installation request succeeded, but the plugin list could not be refreshed:" in store
     assert "await get().searchPlugins();" in store
     assert "setOperationError(getErrorMessage(installError));" in page
+
+
+def test_plugin_store_refresh_catches_rejections_for_visible_error() -> None:
+    page = PAGE.read_text(encoding="utf-8")
+    assert "const handleRefresh = useCallback(async () => {" in page
+    assert "await refreshPlugins();" in page
+    assert "setOperationError(getErrorMessage(cause));" in page
+    assert "void refreshPlugins();" not in page
