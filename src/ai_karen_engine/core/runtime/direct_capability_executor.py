@@ -689,14 +689,14 @@ class DirectCapabilityExecutor:
                 source_url = str(item.get("url") or "").strip()
                 if not excerpt or not source_url.startswith(("https://", "http://")):
                     continue
-                passages.append(f"{excerpt}\\nSource: {source_url}")
+                passages.append(f"{excerpt}\nSource: {source_url}")
             if passages:
                 prefix = (
                     "Live weather evidence (retrieved excerpts, not a generated forecast):"
                     if intent == "search.weather"
                     else "Retrieved evidence (not a synthesized answer):"
                 )
-                return prefix + "\\n\\n" + "\\n\\n".join(passages)
+                return prefix + "\n\n" + "\n\n".join(passages)
 
             # Weather tool measurements can be useful even when the provider
             # supplies no page URL; do not discard legitimate weather data.
@@ -707,7 +707,7 @@ class DirectCapabilityExecutor:
                     if item.get("snippet") or item.get("content")
                 ]
                 if measurements:
-                    return "Weather information returned by the live capability (source URL unavailable):\\n\\n" + "\\n\\n".join(measurements)
+                    return "Weather information returned by the live capability (source URL unavailable):\n\n" + "\n\n".join(measurements)
 
             summary = str(payload.get("summary") or "").strip()
             if summary:
