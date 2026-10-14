@@ -30,6 +30,7 @@ from ai_karen_engine.core.model_runtime.management.model_orchestrator_service im
     E_INVALID,
     E_COMPAT,
     E_NET,
+    E_QUOTA,
     E_NOT_FOUND,
     E_LICENSE,
     E_PERM,
