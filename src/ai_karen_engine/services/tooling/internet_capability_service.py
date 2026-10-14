@@ -1311,15 +1311,16 @@ class InternetCapabilityService:
 
             metadata = result.get("metadata", {}) or {}
             markdown = result.get("markdown", "") or ""
-            text = result.get("text", "") or ""
-            bounded_markdown = markdown[:4000]
             title = (
                 metadata.get("title")
                 or metadata.get("og:title")
                 or result.get("title")
                 or urlparse(url).netloc
             )
-            preview_source = text or markdown
+            clean_passages = self.processor._chunk([result])
+            if not clean_passages:
+                continue
+            preview_source = clean_passages[0]["content"]
 
             sources.append(
                 {
@@ -1332,8 +1333,8 @@ class InternetCapabilityService:
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
-                    "full_content": bounded_markdown,
-                    "markdown": bounded_markdown,
+                    "full_content": preview_source[:4000],
+                    "markdown": preview_source[:4000],
                     "content_ref": f"content:{hashlib.sha256(markdown.encode()).hexdigest()[:16]}",
                     "content_hash": hashlib.sha256(markdown.encode()).hexdigest()[:16],
                     "extracted_data": None,  # Raw structured output is not a consumer-safe unbounded field.

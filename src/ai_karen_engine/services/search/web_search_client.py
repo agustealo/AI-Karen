@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -115,8 +115,26 @@ class WebSearchClient:
                 not in {"unhealthy", "degraded"}
             ),
         ]
+        # Search more than one healthy provider; a successful Wikipedia fallback
+        # must not monopolize a broad web query. Keep the registry responsible
+        # for eligibility and priority, and bound the number of providers tried.
+        from ai_karen_engine.config.web_search import DEFAULT_AGGREGATION_CONFIG
+
+        aggregation = dict(DEFAULT_AGGREGATION_CONFIG)
+        configured = self.settings.get("aggregation", {})
+        if isinstance(configured, dict):
+            aggregation.update(configured)
+        provider_limit = max(1, min(int(aggregation["max_providers"]), len(candidates)))
+        minimum_hosts = max(1, int(aggregation["min_distinct_hosts"]))
+        if provider is not None:
+            provider_limit = 1
+
         errors: list[str] = []
-        for candidate in candidates:
+        combined: list[SearchResult] = []
+        seen_urls: set[str] = set()
+        hosts: set[str] = set()
+        contributing: list[str] = []
+        for candidate in candidates[:provider_limit]:
             try:
                 response = await self._search_with_provider(
                     candidate, query, max_results, time_range, **kwargs
@@ -127,9 +145,44 @@ class WebSearchClient:
                 )
                 errors.append(f"{candidate}:{type(exc).__name__}")
                 continue
-            if response.results:
-                return response
-            errors.append(f"{candidate}:{response.error or 'no_results'}")
+            if not response.results:
+                errors.append(f"{candidate}:{response.error or 'no_results'}")
+                continue
+            contributed = False
+            for item in response.results:
+                parsed = urlsplit(str(item.url or ""))
+                if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                    continue
+                canonical = parsed._replace(fragment="").geturl().rstrip("/")
+                if canonical in seen_urls:
+                    continue
+                seen_urls.add(canonical)
+                combined.append(item)
+                hosts.add(parsed.hostname.lower().removeprefix("www."))
+                contributed = True
+            if contributed:
+                contributing.append(candidate)
+            if len(combined) >= max_results and len(hosts) >= minimum_hosts:
+                break
+
+        if combined:
+            # First pass chooses diverse hosts, second pass fills remaining slots.
+            diverse: list[SearchResult] = []
+            extras: list[SearchResult] = []
+            selected_hosts: set[str] = set()
+            for item in combined:
+                hostname = (urlsplit(item.url).hostname or "").lower().removeprefix("www.")
+                if hostname in selected_hosts:
+                    extras.append(item)
+                else:
+                    diverse.append(item)
+                    selected_hosts.add(hostname)
+            selected = (diverse + extras)[:max_results]
+            return SearchResponse(
+                query=query, results=selected,
+                total_results=len(combined),
+                provider="+".join(contributing),
+            )
 
         return SearchResponse(
             query=query,
