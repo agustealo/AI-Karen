@@ -245,10 +245,12 @@ class InternetCapabilityService:
         action_gate: Optional[ActionExecutionGate] = None,
         default_max_urls: int = 5,
         max_expanded_queries: int = 2,
+        article_service: Optional[Any] = None,
     ) -> None:
         self.planner = planner or SearchQueryPlanner()
         self.crawler = crawler or Crawl4AIIntegration()
         self.processor = processor or SearchResultProcessor()
+        self.article_service = article_service
         self.search_client = search_client
         self.search_client_factory = search_client_factory
         if provider_registry is not None:
@@ -385,6 +387,7 @@ class InternetCapabilityService:
                     crawl_results = await self._apply_extraction(crawl_results, request)
 
             processed_chunks = self.processor.process(crawl_results, request.query)
+            await self._persist_article_documents(crawl_results, execution_context)
 
             return self._build_response(
                 request=request,
@@ -1295,6 +1298,37 @@ class InternetCapabilityService:
 
         return citations
 
+    async def _persist_article_documents(
+        self,
+        crawl_results: Sequence[Dict[str, Any]],
+        context: ExecutionContext,
+    ) -> None:
+        """Attach a real ID only after tenant-governed persistence succeeds."""
+        if self.article_service is None:
+            return
+        tenant_id = str(context.tenant_id or "")
+        user_id = str(context.user_id or "")
+        if not tenant_id or tenant_id == "default" or not user_id or user_id == "anonymous":
+            return
+        for result in list(crawl_results)[:10]:
+            document = str(result.get("markdown") or result.get("text") or "")
+            url = self._normalize_url(result.get("url"))
+            if not url or not document:
+                continue
+            metadata = result.get("metadata") or {}
+            title = str(metadata.get("title") or result.get("title") or url)
+            try:
+                saved = await self.article_service.save(
+                    tenant_id=tenant_id, user_id=user_id,
+                    source_url=url, title=title, document=document,
+                )
+                result["article_id"] = saved.artifact_id
+            except Exception:
+                logger.exception(
+                    "internet_capability.article_persistence_failed",
+                    extra={"correlation_id": context.correlation_id, "url": url},
+                )
+
     def _build_sources(
         self,
         crawl_results: Sequence[Dict[str, Any]],
@@ -1345,6 +1379,7 @@ class InternetCapabilityService:
                     "article_complete": article_complete,
                     "article_char_count": len(document),
                     "content_ref": f"content:{content_hash[:16]}",
+                    "article_id": result.get("article_id"),
                     "content_hash": content_hash[:16],
                     "extracted_data": None,  # Raw structured output is not a consumer-safe unbounded field.
                     "publishedDate": metadata.get("published_date")
