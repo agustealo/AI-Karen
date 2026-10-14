@@ -1311,20 +1311,16 @@ class InternetCapabilityService:
 
             metadata = result.get("metadata", {}) or {}
             markdown = result.get("markdown", "") or ""
-            text = result.get("text", "") or ""
-            bounded_markdown = markdown[:4000]
             title = (
                 metadata.get("title")
                 or metadata.get("og:title")
                 or result.get("title")
                 or urlparse(url).netloc
             )
-            preview_source = text or markdown
             clean_passages = self.processor._chunk([result])
-            if clean_passages:
-                preview_source = clean_passages[0]["content"]
-            else:
-                preview_source = ""
+            if not clean_passages:
+                continue
+            preview_source = clean_passages[0]["content"]
 
             sources.append(
                 {
