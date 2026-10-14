@@ -220,3 +220,29 @@ async def test_worker_defers_failed_recovery_lease_without_generic_retry() -> No
     assert job_id == claim["job_id"]
     assert lease_token == claim["lease_token"]
     assert isinstance(error, ModelDownloadPublicationRecoveryRequired)
+
+
+@pytest.mark.parametrize(
+    ("code", "details", "expected"),
+    [
+        ("E_QUOTA", {"http_status": 429}, "rate limit"),
+        ("E_NET", {"error_type": "ConnectTimeout"}, "timed out"),
+        ("E_NET", {"error_type": "SSLError"}, "TLS certificate"),
+        ("E_NET", {"http_status": 503}, "HTTP 503"),
+        ("E_PERM", {"http_status": 403}, "credentials"),
+        ("E_NOT_FOUND", {"http_status": 404}, "not found"),
+    ],
+)
+def test_model_recommendation_source_errors_are_actionable_and_redacted(
+    code: str, details: dict, expected: str
+) -> None:
+    from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
+        ModelOrchestratorError,
+    )
+
+    error = ModelOrchestratorError(code, "Source unavailable", details)
+    message = ModelDownloadControlService._recommendation_verification_error(
+        error, "remote_model_metadata"
+    )
+    assert expected.lower() in message.lower()
+    assert "token" not in message.lower()
