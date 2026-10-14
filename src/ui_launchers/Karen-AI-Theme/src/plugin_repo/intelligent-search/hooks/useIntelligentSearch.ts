@@ -27,7 +27,8 @@ export function useIntelligentSearch() {
   }, []);
 
   const setQuery = useCallback((query: string) => {
-    setState((prev) => ({ ...prev, query }));
+    requestSequence.current += 1;
+    setState((prev) => ({ ...prev, query, isLoading: false, response: null, error: null }));
   }, []);
 
   const setMode = useCallback((mode: SearchModeId) => {
@@ -36,7 +37,8 @@ export function useIntelligentSearch() {
   }, []);
 
   const updateOptions = useCallback((newOptions: Partial<IntelligentSearchOptions>) => {
-    setState((prev) => ({ ...prev, options: { ...prev.options, ...newOptions } }));
+    requestSequence.current += 1;
+    setState((prev) => ({ ...prev, options: { ...prev.options, ...newOptions }, isLoading: false, response: null, error: null }));
   }, []);
 
   const executeSearch = useCallback(async () => {
