@@ -248,7 +248,8 @@ class MedusaCoordinator:
                 runnable_steps = plan.get_next_runnable_steps()
                 if not runnable_steps:
                     if all(
-                        step.status in {
+                        step.status
+                        in {
                             StepStatus.COMPLETED,
                             StepStatus.FAILED,
                             StepStatus.SKIPPED,
@@ -384,8 +385,7 @@ class MedusaCoordinator:
         # into a successfully fulfilled in-plan dependency.
         lifecycle_state = str(getattr(registration, "lifecycle_state", "")).lower()
         eligible_definition = (
-            health.get("exists") is True
-            and lifecycle_state == "active"
+            health.get("exists") is True and lifecycle_state == "active"
         )
         dependency_verified = bool(
             eligible_definition
