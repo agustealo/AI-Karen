@@ -78,6 +78,8 @@ export default function PluginStorePage() {
     searchResponse,
     categories,
     trendingPlugins,
+    trendingStatus,
+    trendingError,
     installingPlugins,
     setSearchParams,
     searchPlugins,
@@ -459,7 +461,7 @@ export default function PluginStorePage() {
             </CardHeader>
 
             <CardContent>
-              {loading && trendingPlugins.length === 0 ? (
+              {trendingStatus === 'loading' ? (
                 <div
                   className="flex flex-col items-center justify-center py-12"
                   role="status"
@@ -472,6 +474,12 @@ export default function PluginStorePage() {
                   <p className="text-sm text-muted-foreground">
                     Loading trending plugins...
                   </p>
+                </div>
+              ) : trendingStatus === 'unavailable' || trendingStatus === 'error' ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-12 text-center" role="status">
+                  <TrendingUp className="h-10 w-10 text-muted-foreground" aria-hidden="true" />
+                  <p className="text-sm text-muted-foreground">{trendingError}</p>
+                  {trendingStatus === 'error' && <Button variant="outline" onClick={() => void loadTrending()}>Retry trending</Button>}
                 </div>
               ) : trendingPlugins.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-center">
