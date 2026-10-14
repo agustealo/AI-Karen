@@ -348,6 +348,50 @@ async def execute_plugin_global(
     )
 
 
+@router.get("/search/articles/{article_id}")
+async def get_search_article(
+    article_id: str,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Read a saved search article, bound exclusively to the authenticated principal."""
+    user_id = str(current_user.get("user_id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    if not user_id or not tenant_id or tenant_id == "default":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated tenant and user required",
+        )
+
+    from ai_karen_engine.services.database.repositories.repository_factory import (
+        get_runtime_search_article_service,
+    )
+
+    service = get_runtime_search_article_service()
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stored article retrieval is unavailable",
+        )
+    try:
+        document = await service.read(
+            tenant_id=tenant_id, user_id=user_id, article_id=article_id
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Article access denied")
+    except (RuntimeError, UnicodeDecodeError) as exc:
+        logger.warning("Stored article retrieval failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stored article retrieval is unavailable",
+        )
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Article not found",
+        )
+    return {"article_id": article_id, "full_content": document}
+
+
 @router.get("/categories")
 async def get_plugin_categories(
     plugin_service: PluginService = Depends(get_plugin_service),
