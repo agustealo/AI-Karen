@@ -34,7 +34,6 @@ def test_absent_location_prompts_for_missing_input_without_fabricated_data():
     resolver = DirectCapabilityExecutor._weather_query_with_location
     assert resolver("What's the weather?", {}) is None
 
-
 def test_weather_today_in_city_is_explicit_and_does_not_clarify():
     resolver = DirectCapabilityExecutor._weather_query_with_location
     assert resolver("What's the weather today in Detroit?", {}) == (

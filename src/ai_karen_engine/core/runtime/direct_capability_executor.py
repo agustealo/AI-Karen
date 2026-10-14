@@ -419,7 +419,28 @@ class DirectCapabilityExecutor:
                 for key in ("value", "formatted", "time", "iso")
             )
 
-        if intent in {"search.weather", "search.general"}:
+        if intent == "search.general":
+            extracted = payload.get("extractedData")
+            if isinstance(extracted, dict) and any(
+                value not in (None, "", [], {})
+                for value in extracted.values()
+            ):
+                return True
+            # An empty source object or a URL without article evidence must
+            # not be represented to consumers as a successful live search.
+            return any(
+                isinstance(item, dict)
+                and str(item.get("url") or "").startswith(("https://", "http://"))
+                and bool(str(
+                    item.get("snippet")
+                    or item.get("content")
+                    or ""
+                ).strip())
+                for key in ("results", "sources")
+                for item in (payload.get(key) or [])
+            )
+
+        if intent == "search.weather":
             return bool(
                 payload.get("extractedData")
                 or payload.get("results")
@@ -546,9 +567,6 @@ class DirectCapabilityExecutor:
             if place:
                 return query
 
-        # A short reply can fill the immediately pending weather-location slot.
-        # Do not treat arbitrary one-word queries as locations unless runtime
-        # supplied the governed pending clarification for this same session.
         context = dict(metadata or {})
         pending = context.get("pending_clarification")
         if isinstance(pending, dict) and pending.get("missing_requirement") == "weather_location":
@@ -688,7 +706,9 @@ class DirectCapabilityExecutor:
 
             results = [
                 item
-                for item in list(payload.get("results") or [])
+                for item in list(
+                    payload.get("results") or payload.get("sources") or []
+                )
                 if isinstance(item, dict)
             ]
             passages = []
