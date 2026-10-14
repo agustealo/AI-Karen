@@ -104,3 +104,41 @@ def test_dependency_sort_rejects_cycles() -> None:
                 "analyst": ["researcher"],
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_planner_never_selects_draft_or_retired_definitions() -> None:
+    """Listing an agent must not confer execution eligibility."""
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.contracts.registration import AgentRegistration
+
+    registrations = [
+        AgentRegistration(
+            agent_id=state,
+            name=state,
+            description=state,
+            lifecycle_state=state,
+        )
+        for state in ("draft", "disabled", "archived", "active")
+    ]
+    registry = SimpleNamespace(
+        list_agents=lambda: None,
+    )
+
+    async def list_agents():
+        return registrations
+
+    registry.list_agents = list_agents
+    planner = CapabilityAwareMedusaPlanner()
+    selected = await planner._resolve_registrations(
+        requirements=ExecutionRequirements(
+            request_id="req-lifecycle",
+            correlation_id="corr-lifecycle",
+            requires_agent_delegation=True,
+        ),
+        registry=registry,
+        allowed_agents={registration.agent_id for registration in registrations},
+    )
+
+    assert [registration.agent_id for registration in selected] == ["active"]
