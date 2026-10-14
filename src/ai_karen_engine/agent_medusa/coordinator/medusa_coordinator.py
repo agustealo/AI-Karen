@@ -223,6 +223,7 @@ class MedusaCoordinator:
 
         meter = ExecutionBudgetMeter(authorized_plan.budget)
         meter.start()
+        started_at_ms = asyncio.get_running_loop().time() * 1000
         trajectory = ExecutionTrajectory(
             request_id=request.request_id,
             trajectory_id=request.request_id,
@@ -269,23 +270,48 @@ class MedusaCoordinator:
                 if max_parallel < 1:
                     raise ValueError("Invalid Medusa parallelism budget")
                 wave = runnable_steps[:max_parallel]
-                results = await asyncio.gather(
-                    *[
-                        self._execute_step(
-                            step,
-                            plan,
-                            request,
-                            authorized_plan,
-                            meter,
-                            request_emitter,
-                            trajectory,
-                            degraded_agents,
-                            degradation_reasons,
+                # A duration check between waves does not interrupt a hung
+                # specialist. Bound the running wave by the remaining request
+                # deadline, and cancel unfinished child tasks on timeout.
+                elapsed_ms = asyncio.get_running_loop().time() * 1000 - started_at_ms
+                remaining_seconds = (
+                    authorized_plan.budget.max_duration_ms - elapsed_ms
+                ) / 1000
+                if remaining_seconds <= 0:
+                    for step in wave:
+                        step.status = StepStatus.SKIPPED
+                        step.error = "execution_budget_exhausted"
+                    continue
+                try:
+                    async with asyncio.timeout(remaining_seconds):
+                        results = await asyncio.gather(
+                            *[
+                                self._execute_step(
+                                    step,
+                                    plan,
+                                    request,
+                                    authorized_plan,
+                                    meter,
+                                    request_emitter,
+                                    trajectory,
+                                    degraded_agents,
+                                    degradation_reasons,
+                                )
+                                for step in wave
+                            ],
+                            return_exceptions=True,
                         )
-                        for step in wave
-                    ],
-                    return_exceptions=True,
-                )
+                except TimeoutError:
+                    for step in wave:
+                        if step.status != StepStatus.COMPLETED:
+                            step.status = StepStatus.FAILED
+                            step.error = "execution_deadline_exceeded"
+                    for step in plan.steps:
+                        if step.status == StepStatus.PENDING:
+                            step.status = StepStatus.SKIPPED
+                            step.error = "execution_budget_exhausted"
+                    plan.is_complete = True
+                    break
                 for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
                         step.status = StepStatus.FAILED
