@@ -1310,7 +1310,6 @@ class InternetCapabilityService:
             seen_urls.add(url)
 
             metadata = result.get("metadata", {}) or {}
-            markdown = result.get("markdown", "") or ""
             title = (
                 metadata.get("title")
                 or metadata.get("og:title")
