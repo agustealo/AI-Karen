@@ -1710,3 +1710,17 @@ def test_live_search_requires_renderable_attributed_passage() -> None:
     rendered = executor._render("search.general", "Jamaica news", payload)
     assert "A retrieved report" in rendered
     assert "https://example.org/verified-report" in rendered
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What's happening in my account?",
+        "What's happening in our deployment?",
+        "What's happening in this function?",
+        "What's happening in your internal system?",
+    ],
+)
+def test_private_happening_questions_do_not_trigger_public_search(query: str) -> None:
+    decision = resolve_capability_decision(query)
+    assert decision.intent != "search.general"
