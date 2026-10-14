@@ -78,3 +78,30 @@ class RepositoryFactory:
         results["conversation"] = (await conv.health_check()).success
         results["artifact"] = (await artifact.health_check()).success
         return results
+
+
+def get_runtime_search_article_service():
+    """Resolve article persistence through the canonical initialized data clients.
+
+    No unconfigured storage stub is returned: search can continue with inline
+    previews when durable storage is unavailable.
+    """
+    from ai_karen_engine.database.factory import get_database_client
+    from ai_karen_engine.integrations.supabase_client import get_supabase_platform
+    from ai_karen_engine.services.search.article_document_service import SearchArticleService
+
+    platform = get_supabase_platform()
+    if platform.storage is None:
+        logger.info("Search article persistence disabled: platform storage unavailable")
+        return None
+
+    database = get_database_client()
+    if database is None or not callable(getattr(database, "get_async_session", None)):
+        logger.warning("Search article persistence disabled: database session unavailable")
+        return None
+
+    repositories = RepositoryFactory(
+        session_factory=database.get_async_session,
+        storage_client=platform,
+    )
+    return SearchArticleService(repositories.create_artifact_store())
