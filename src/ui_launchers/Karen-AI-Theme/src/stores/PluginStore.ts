@@ -119,18 +119,18 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   loadCategories: async () => {
     try {
       const categories = await pluginStoreService.getCategories();
-      set({ categories });
+      if (!Array.isArray(categories)) {\n        throw new Error('Plugin categories response must be an array.');\n      }\n      set({ categories });
     } catch (error) {
-      console.error('Failed to load categories:', error);
+      set({\n        categories: [],\n        error: error instanceof Error ? error.message : 'Failed to load plugin categories',\n      });
     }
   },
 
   loadTrending: async () => {
     try {
       const trending = await pluginStoreService.getTrendingPlugins();
-      set({ trendingPlugins: trending });
+      if (!Array.isArray(trending)) {\n        throw new Error('Trending plugins response must be an array.');\n      }\n      set({ trendingPlugins: trending });
     } catch (error) {
-      console.error('Failed to load trending plugins:', error);
+      set({\n        trendingPlugins: [],\n        error: error instanceof Error ? error.message : 'Failed to load trending plugins',\n      });
     }
   },
 
