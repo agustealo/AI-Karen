@@ -1648,3 +1648,34 @@ async def test_prompt_assembly_includes_authorized_typed_clarification_without_m
         "source": "authorized_conversation",
     }
     assert request.messages[-1]["content"] == "four"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What's the latest in Jamaica news",
+        "What's the latest news in Jamaica?",
+        "Any breaking news from Kingston?",
+        "What's happening in Jamaica?",
+        "Latest Jamaica news",
+    ],
+)
+def test_conversational_location_news_requires_live_retrieval(query: str) -> None:
+    decision = resolve_capability_decision(query)
+    assert decision.intent == "search.general"
+    assert decision.requires_live_data is True
+    assert decision.requires_tool is True
+    assert decision.allow_llm_only is False
+    assert decision.handler == "web_search"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Explain the history of Jamaica",
+        "Why is Jamaica culturally influential?",
+        "Explain why our latest refactor changed the cache key.",
+    ],
+)
+def test_non_current_questions_do_not_force_live_news_route(query: str) -> None:
+    assert resolve_capability_decision(query).intent != "search.general"
