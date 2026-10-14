@@ -1320,7 +1320,7 @@ class InternetCapabilityService:
                 or urlparse(url).netloc
             )
             preview_source = text or markdown
-            clean_passages = self.processor.process([result], str(result.get("query") or ""))
+            clean_passages = self.processor._chunk([result])
             if clean_passages:
                 preview_source = clean_passages[0]["content"]
             else:
