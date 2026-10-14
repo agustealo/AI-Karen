@@ -1679,3 +1679,34 @@ def test_conversational_location_news_requires_live_retrieval(query: str) -> Non
 )
 def test_non_current_questions_do_not_force_live_news_route(query: str) -> None:
     assert resolve_capability_decision(query).intent != "search.general"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "success", "sources": [{}]},
+        {"status": "success", "sources": [{"url": "https://example.org/story"}]},
+        {"status": "success", "results": [{"snippet": "An unsourced claim"}]},
+        {"status": "success", "results": []},
+        {"status": "error", "results": [{"url": "https://example.org", "snippet": "text"}]},
+    ],
+)
+def test_live_search_never_accepts_evidence_free_success(payload: dict) -> None:
+    assert not DirectCapabilityExecutor._payload_succeeded("search.general", payload)
+
+
+def test_live_search_requires_renderable_attributed_passage() -> None:
+    payload = {
+        "status": "success",
+        "results": [
+            {
+                "url": "https://example.org/verified-report",
+                "snippet": "A retrieved report with its publication source.",
+            }
+        ],
+    }
+    executor = DirectCapabilityExecutor()
+    assert executor._payload_succeeded("search.general", payload)
+    rendered = executor._render("search.general", "Jamaica news", payload)
+    assert "A retrieved report" in rendered
+    assert "https://example.org/verified-report" in rendered
