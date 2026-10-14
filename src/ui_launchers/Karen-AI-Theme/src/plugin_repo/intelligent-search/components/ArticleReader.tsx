@@ -16,15 +16,11 @@ const numberedPattern = /^\s*\d+[.)]\s+(.+)$/;
  * markdown execution, iframe embedding, or network requests.
  */
 export function ArticleReader({ source }: ArticleReaderProps) {
-  if (!source) {
-    return <p role="status" className="text-sm text-muted-foreground">Select a source to read.</p>;
-  }
-
   const [storedArticle, setStoredArticle] = useState<{ id: string; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const articleId = source.article_id || null;
-  const hasInlineComplete = source.article_complete === true && Boolean(source.full_content);
+  const articleId = source?.article_id || null;
+  const hasInlineComplete = source?.article_complete === true && Boolean(source?.full_content);
 
   useEffect(() => {
     let current = true;
@@ -45,6 +41,10 @@ export function ArticleReader({ source }: ArticleReaderProps) {
       });
     return () => { current = false; };
   }, [articleId, hasInlineComplete]);
+
+  if (!source) {
+    return <p role="status" className="text-sm text-muted-foreground">Select a source to read.</p>;
+  }
 
   const fetchedText = storedArticle?.id === articleId ? storedArticle.text : null;
   const documentText = fetchedText || source.full_content || source.article_preview || source.content || source.snippet || '';
