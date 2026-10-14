@@ -1,6 +1,8 @@
 import logging
 from typing import Any, Dict
 
+from ai_karen_engine.core.runtime.contracts import ExecutionContext
+from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
 from ai_karen_engine.services.tooling.internet_capability_service import (
     InternetCapabilityService,
 )
@@ -149,7 +151,11 @@ class WebSearchDispatcher(ExtensionBase):
             "mode": result.get("mode"),
         }
 
-    async def run(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(
+        self,
+        params: Dict[str, Any],
+        execution_context: ExtensionExecutionContext | None = None,
+    ) -> Dict[str, Any]:
         safe_params = params or {}
         query = safe_params.get("query", "") or ""
         context = safe_params.get("context", {}) or {}
@@ -172,6 +178,23 @@ class WebSearchDispatcher(ExtensionBase):
 
             if self._internet_service:
                 try:
+                    # Only the canonical kernel's typed execution context may
+                    # provide principal identity. User-supplied params.context
+                    # remains search-mode metadata, never an auth authority.
+                    scoped_context = None
+                    if execution_context is not None:
+                        scoped_context = ExecutionContext(
+                            request_id=execution_context.request_id,
+                            correlation_id=execution_context.correlation_id,
+                            user_id=execution_context.user_id,
+                            tenant_id=execution_context.tenant_id,
+                            session_id=execution_context.session_id,
+                            conversation_id=execution_context.conversation_id,
+                            policy_decision_id=execution_context.policy_decision_id,
+                            allowed_capabilities=list(execution_context.allowed_capabilities),
+                            resource_scope=dict(execution_context.resource_scope),
+                            audit_context=dict(execution_context.audit_context),
+                        )
                     internet_result = await self._internet_service.execute(
                         query,
                         config_override={
@@ -179,6 +202,7 @@ class WebSearchDispatcher(ExtensionBase):
                             "mode": mode,
                             "requested_mode": mode,
                         },
+                        context=scoped_context,
                     )
                     if internet_result.get("sources") or internet_result.get("results"):
                         internet_result.setdefault("mode", mode)
