@@ -85,3 +85,13 @@ async def test_model_budget_failure_does_not_call_gateway():
     )
     assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
     gateway.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_missing_model_identity_never_claims_grounded_synthesis():
+    runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
+        model_text="Jamaica became independent in 1962 (https://example.org/history)."
+    )
+    gateway.generate.return_value.provider = None
+    assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
+    gateway.generate.assert_awaited_once()
