@@ -14,8 +14,8 @@ def _article(paragraphs: int = 3) -> dict:
     return {
         "url": "https://example.org/history-of-jamaica",
         "title": "History of Jamaica",
-        "markdown": "\\n\\n".join(
-            f"## Period {index}\\n\\n{section}" for index in range(paragraphs)
+        "markdown": "\n\n".join(
+            f"## Period {index}\n\n{section}" for index in range(paragraphs)
         ),
         "metadata": {"title": "History of Jamaica"},
     }
