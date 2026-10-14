@@ -402,3 +402,20 @@ def test_coordinator_running_waves_have_hard_deadline_and_timeout_receipt() -> N
     ]
     assert timeouts, "Active specialist waves must be interrupted at the run deadline"
     assert "execution_deadline_exceeded" in inspect.getsource(MedusaCoordinator)
+
+
+def test_durable_terminal_outcome_is_written_in_same_owner_fenced_transition() -> None:
+    """Guard against reintroducing a separate non-atomic outcome update."""
+    import inspect
+
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        PostgresDurableRunLedger,
+    )
+
+    transition_source = inspect.getsource(PostgresDurableRunLedger._owned_transition)
+    manager_source = inspect.getsource(MedusaRunManager._mark_terminal)
+    assert "outcome_status" in transition_source
+    assert "jsonb_set" in transition_source
+    assert "owner_worker_id = :worker_id" in transition_source
+    assert "set_outcome_status" not in manager_source
+    assert "outcome_status=outcome_status" in manager_source
