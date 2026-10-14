@@ -1909,6 +1909,71 @@ class ChatRuntime:
             },
         )
 
+    async def _synthesize_search_evidence(self, request, decision, meter, retrieved):
+        """Use the existing model gateway only for bounded fetched-page evidence."""
+        from ai_karen_engine.services.response.response_contracts import ResponseContract
+        from ai_karen_engine.services.response.response_prompt_builder import ResponsePromptBuilder
+        from ai_karen_engine.services.response.response_validator import ResponseValidator
+
+        sources = []
+        for item in retrieved.sources:
+            if not isinstance(item, dict) or item.get("evidence_level") != "fetched_page":
+                continue
+            url = str(item.get("url") or "")
+            passage = str(item.get("content") or item.get("markdown") or "")[:1000]
+            if url.startswith(("https://", "http://")) and passage:
+                sources.append({"url": url, "content": passage, "evidence_level": "fetched_page"})
+            if len(sources) >= 4:
+                break
+        if not sources or not await meter.consume_model_call():
+            return None
+        query = next((str(m.get("content") or "") for m in reversed(request.messages)
+                      if m.get("role") == "user"), "")
+        contract = ResponseContract(
+            purpose="tool_synthesis", intent=decision.intent,
+            latest_user_message=query, requires_live_data=True,
+            allow_llm_only=False, tool_results=[{"sources": sources}],
+        )
+        from ai_karen_engine.core.expression.contracts import ExpressionTask
+        task = ExpressionTask(
+            task_id=f"grounded_search_{request.context.correlation_id}",
+            kind="chat", messages=ResponsePromptBuilder().build_messages(contract),
+            response_mode="text", required_capabilities=list(decision.required_capabilities),
+            forbidden_capabilities=list(decision.forbidden_capabilities),
+            preferred_provider=request.preferred_provider,
+            preferred_model=request.preferred_model,
+            max_tokens=request.max_tokens or decision.token_budget,
+            temperature=request.temperature, timeout_ms=decision.time_budget_ms,
+            correlation_id=request.context.correlation_id,
+            request_id=request.context.request_id,
+            metadata={"execution_mode": "grounded_search", "evidence_count": len(sources)},
+        )
+        try:
+            result = await self._composition.expression_gateway.generate(task)
+            if not await meter.check_duration():
+                return None
+            answer = str(result.text or "").strip()
+            verdict = ResponseValidator().validate(answer, contract)
+            if not verdict.valid:
+                logger.warning("search_answer_citation_rejected", extra={
+                    "correlation_id": request.context.correlation_id,
+                    "reason": verdict.reason,
+                })
+                return None
+            return answer, {
+                "actual_provider": result.provider, "actual_model": result.model,
+                "runtime_engine": result.runtime_engine or result.engine_id,
+                "response_source": "grounded_search_model",
+                "degraded_mode": result.degraded,
+                "degradation_reason": result.degradation_reason if result.degraded else None,
+            }
+        except Exception as exc:
+            logger.warning("search_answer_synthesis_failed", extra={
+                "correlation_id": request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            })
+            return None
+
     async def _run_simple(
         self,
         request: ChatExecutionRequest,
