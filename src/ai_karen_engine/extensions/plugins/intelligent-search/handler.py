@@ -3,6 +3,11 @@ from typing import Any, Dict
 
 from ai_karen_engine.services.tooling.internet_capability_service import (
     InternetCapabilityService,
+    InternetExecutionContext,
+)
+from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+from ai_karen_engine.services.database.repositories.repository_factory import (
+    get_runtime_search_article_service,
 )
 
 from ai_karen_engine.extensions.platform.core.host.base import (
@@ -63,7 +68,9 @@ class WebSearchDispatcher(ExtensionBase):
             # Search provider defaults/configuration are owned by the canonical
             # search registry plus central runtime config. Do not create a
             # second provider-config authority from legacy manifest metadata.
-            self._internet_service = InternetCapabilityService()
+            self._internet_service = InternetCapabilityService(
+                article_service=get_runtime_search_article_service()
+            )
 
             # Pre-initialize handlers to set up search clients
             for mode, handler_class in MODE_HANDLER_MAP.items():
@@ -149,7 +156,9 @@ class WebSearchDispatcher(ExtensionBase):
             "mode": result.get("mode"),
         }
 
-    async def run(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(
+        self, params: Dict[str, Any], execution_context: ExtensionExecutionContext | None = None
+    ) -> Dict[str, Any]:
         safe_params = params or {}
         query = safe_params.get("query", "") or ""
         context = safe_params.get("context", {}) or {}
@@ -172,6 +181,21 @@ class WebSearchDispatcher(ExtensionBase):
 
             if self._internet_service:
                 try:
+                    # Only the canonical executor's typed context may carry
+                    # user, tenant and permission authority into search.
+                    trusted_context = (
+                        InternetExecutionContext(
+                            user_id=execution_context.user_id,
+                            tenant_id=execution_context.tenant_id,
+                            session_id=execution_context.session_id,
+                            conversation_id=execution_context.conversation_id,
+                            correlation_id=execution_context.correlation_id,
+                            request_id=execution_context.request_id,
+                            permissions=tuple(execution_context.allowed_capabilities),
+                        )
+                        if isinstance(execution_context, ExtensionExecutionContext)
+                        else None
+                    )
                     internet_result = await self._internet_service.execute(
                         query,
                         config_override={
@@ -179,6 +203,7 @@ class WebSearchDispatcher(ExtensionBase):
                             "mode": mode,
                             "requested_mode": mode,
                         },
+                        context=trusted_context,
                     )
                     if internet_result.get("sources") or internet_result.get("results"):
                         internet_result.setdefault("mode", mode)

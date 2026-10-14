@@ -11,6 +11,7 @@ interface PluginStoreState {
   selectedPlugin: PluginDetails | null;
   categories: CategoryInfo[];
   trendingPlugins: Plugin[];
+  trendingStatus: 'idle' | 'loading' | 'available' | 'unavailable' | 'error';
   trendingError: string | null;
   updates: PluginUpdate[];
   installingPlugins: Set<string>;
@@ -40,6 +41,7 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   selectedPlugin: null,
   categories: [],
   trendingPlugins: [],
+  trendingStatus: 'idle',
   trendingError: null,
   updates: [],
   installingPlugins: new Set(),
@@ -126,24 +128,24 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
       }
       set({ categories });
     } catch (error) {
-      set({
-        categories: [],
-        error: error instanceof Error ? error.message : 'Failed to load plugin categories',
-      });
+      set({ categories: [], error: error instanceof Error ? error.message : 'Failed to load plugin categories' });
     }
   },
 
   loadTrending: async () => {
+    set({ trendingStatus: 'loading', trendingError: null });
     try {
       const trending = await pluginStoreService.getTrendingPlugins();
-      if (!Array.isArray(trending)) {
-        throw new Error('Trending plugins response must be an array.');
-      }
-      set({ trendingPlugins: trending, trendingError: null });
+      set({ trendingPlugins: trending, trendingStatus: 'available', trendingError: null });
     } catch (error) {
+      const unavailable = error instanceof Error &&
+        'status' in error && error.status === 501;
       set({
         trendingPlugins: [],
-        trendingError: error instanceof Error ? error.message : 'Failed to load trending plugins',
+        trendingStatus: unavailable ? 'unavailable' : 'error',
+        trendingError: unavailable
+          ? 'Trending recommendations are not configured on this marketplace.'
+          : error instanceof Error ? error.message : 'Trending plugins could not be loaded.',
       });
     }
   },

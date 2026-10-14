@@ -36,6 +36,14 @@ class SupabaseArtifactStore(ArtifactStore):
     async def _session(self) -> AsyncSession:
         return self._session_factory()
 
+    def _bucket(self):
+        """Reuse the initialized platform Storage client, never recreate credentials."""
+        storage = getattr(self._storage, "storage", None)
+        if storage is None or not callable(getattr(storage, "from_", None)):
+            raise RuntimeError("Supabase Storage capability is unavailable")
+        return storage.from_("artifacts")
+
+
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
         try:
@@ -55,19 +63,11 @@ class SupabaseArtifactStore(ArtifactStore):
             data = request.data or b""
             sha256 = __import__("hashlib").sha256(data).hexdigest()
 
-            # Store bytes in Supabase Storage
-            bucket = getattr(self._storage, "storage", None)
-            if bucket is None:
-                return RepositoryResult(success=False, error="Supabase storage client not configured")
-
+            # Resolve the canonical initialized platform client.
             try:
-                from supabase import create_client
-                if hasattr(self._storage, "url") and hasattr(self._storage, "key"):
-                    supabase = create_client(self._storage.url, self._storage.key)
-                    bucket_obj = supabase.storage.from_("artifacts")
-                    bucket_obj.upload(storage_key, data, {"contentType": request.content_type})
-                else:
-                    bucket.upload(storage_key, data, {"contentType": request.content_type})
+                self._bucket().upload(
+                    storage_key, data, {"content-type": request.content_type}
+                )
             except Exception as exc:
                 logger.error("Supabase Storage upload failed: %s", exc)
                 return RepositoryResult(success=False, error=f"storage_upload_failed: {exc}")
@@ -133,14 +133,7 @@ class SupabaseArtifactStore(ArtifactStore):
 
             storage_key = metadata.data.storage_key
             try:
-                from supabase import create_client
-                if hasattr(self._storage, "url") and hasattr(self._storage, "key"):
-                    supabase = create_client(self._storage.url, self._storage.key)
-                    bucket = supabase.storage.from_("artifacts")
-                    response = bucket.download(storage_key)
-                    data = response
-                else:
-                    data = self._storage.download(storage_key)
+                data = self._bucket().download(storage_key)
             except Exception as exc:
                 logger.error("Supabase Storage download failed: %s", exc)
                 return RepositoryResult(success=False, error=f"storage_download_failed: {exc}")
@@ -202,13 +195,7 @@ class SupabaseArtifactStore(ArtifactStore):
 
             # Delete from Supabase Storage
             try:
-                from supabase import create_client
-                if hasattr(self._storage, "url") and hasattr(self._storage, "key"):
-                    supabase = create_client(self._storage.url, self._storage.key)
-                    bucket = supabase.storage.from_("artifacts")
-                    bucket.remove([metadata.data.storage_key])
-                else:
-                    self._storage.delete(metadata.data.storage_key)
+                self._bucket().remove([metadata.data.storage_key])
             except Exception as exc:
                 logger.error("Supabase Storage delete failed: %s", exc)
                 return RepositoryResult(success=False, error=f"storage_delete_failed: {exc}")
@@ -318,13 +305,7 @@ class SupabaseArtifactStore(ArtifactStore):
 
             # Delete from Supabase Storage
             try:
-                from supabase import create_client
-                if hasattr(self._storage, "url") and hasattr(self._storage, "key"):
-                    supabase = create_client(self._storage.url, self._storage.key)
-                    bucket = supabase.storage.from_("artifacts")
-                    bucket.remove([metadata.data.storage_key])
-                else:
-                    self._storage.delete(metadata.data.storage_key)
+                self._bucket().remove([metadata.data.storage_key])
             except Exception as exc:
                 logger.error("Supabase Storage purge failed: %s", exc)
                 return RepositoryResult(success=False, error=f"storage_purge_failed: {exc}")
