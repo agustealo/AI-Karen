@@ -154,7 +154,7 @@ export function ResultsPanel({ response }: PanelProps) {
 
           <div className="grid gap-0 xl:grid-cols-[320px_1fr]">
             <div className="border-r border-border/60 bg-muted/10">
-              <div className="max-h-[32rem] space-y-1 overflow-auto p-3 custom-scrollbar">
+              <div role="group" aria-label="Available source previews" className="max-h-[32rem] space-y-1 overflow-auto p-3 custom-scrollbar">
                 {sources.map((source, index) => {
                   const isActive = index === activeSourceIndex;
                   return (
@@ -162,10 +162,12 @@ export function ResultsPanel({ response }: PanelProps) {
                       key={source.id || `${source.url}-${index}`}
                       type="button"
                       onClick={() => setActiveSourceIndex(index)}
+                      aria-pressed={isActive}
+                      aria-label={`Preview source ${index + 1}: ${source.title || source.domain || source.url || "Untitled source"}`}
                       className={`w-full rounded-xl border px-3 py-3 text-left transition-all ${
                         isActive
-                          ? 'border-primary/50 bg-primary/10 shadow-sm'
-                          : 'border-transparent hover:bg-muted/50'
+                          ? 'border-primary/50 bg-primary/10 shadow-sm focus-visible:ring-2 focus-visible:ring-primary'
+                          : 'border-transparent hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-primary'
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-1">
