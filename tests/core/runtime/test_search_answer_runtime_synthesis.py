@@ -25,3 +25,63 @@ async def test_no_fetched_pages_never_calls_model():
     assert result is None
     gateway.generate.assert_not_called()
     meter.consume_model_call.assert_not_called()
+
+
+def _synthesis_inputs(*, model_text, budget=True):
+    gateway = SimpleNamespace(generate=AsyncMock(return_value=SimpleNamespace(
+        text=model_text, provider="local-test", model="fixture-model",
+        runtime_engine="fixture-runtime", engine_id="fixture-engine",
+        degraded=False, degradation_reason=None,
+    )))
+    runtime = object.__new__(ChatRuntime)
+    runtime._composition = SimpleNamespace(expression_gateway=gateway)
+    meter = SimpleNamespace(
+        consume_model_call=AsyncMock(return_value=budget),
+        check_duration=AsyncMock(return_value=True),
+    )
+    request = SimpleNamespace(
+        messages=[{"role": "user", "content": "Jamaica history"}],
+        context=SimpleNamespace(correlation_id="test", request_id="request"),
+        preferred_provider=None, preferred_model=None, max_tokens=None, temperature=0.2,
+    )
+    decision = SimpleNamespace(
+        intent="search.general", required_capabilities=(),
+        forbidden_capabilities=(), token_budget=512, time_budget_ms=30000,
+    )
+    retrieved = SimpleNamespace(sources=[
+        {"url": "https://example.org/history", "evidence_level": "fetched_page",
+         "content": "Jamaica became independent in 1962."},
+    ])
+    return runtime, gateway, meter, request, decision, retrieved
+
+
+@pytest.mark.asyncio
+async def test_fetched_source_can_generate_cited_model_answer():
+    runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
+        model_text="Jamaica became independent in 1962 (https://example.org/history)."
+    )
+    output = await runtime._synthesize_search_evidence(request, decision, meter, retrieved)
+    assert output is not None
+    answer, metadata = output
+    assert "https://example.org/history" in answer
+    assert metadata["actual_provider"] == "local-test"
+    assert metadata["response_source"] == "grounded_search_model"
+    gateway.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unverified_url_does_not_escape_model_synthesis():
+    runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
+        model_text="Invented claim (https://unverified.example/facts)."
+    )
+    assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
+    gateway.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_model_budget_failure_does_not_call_gateway():
+    runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
+        model_text="Unused", budget=False
+    )
+    assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
+    gateway.generate.assert_not_called()
