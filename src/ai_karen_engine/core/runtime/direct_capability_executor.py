@@ -434,7 +434,6 @@ class DirectCapabilityExecutor:
                 and bool(str(
                     item.get("snippet")
                     or item.get("content")
-                    or item.get("title")
                     or ""
                 ).strip())
                 for key in ("results", "sources")
@@ -700,7 +699,9 @@ class DirectCapabilityExecutor:
 
             results = [
                 item
-                for item in list(payload.get("results") or [])
+                for item in list(
+                    payload.get("results") or payload.get("sources") or []
+                )
                 if isinstance(item, dict)
             ]
             passages = []
