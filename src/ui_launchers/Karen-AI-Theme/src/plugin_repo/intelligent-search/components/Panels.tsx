@@ -92,7 +92,23 @@ export function ResultsPanel({ response }: PanelProps) {
               <article key={result.id || result.url + index} className="rounded-2xl border border-border/50 p-4">
                 <a href={result.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline-offset-4 hover:underline">{result.title || result.domain || 'Source passage'} <ExternalLink className="inline h-3 w-3" /></a>
                 <p className="mt-2 line-clamp-5 whitespace-pre-wrap break-words text-sm leading-7 text-muted-foreground">{result.snippet || result.content?.slice(0, 350)}</p>
-                <p className="mt-2 text-xs text-muted-foreground">{result.domain || domainFromUrl(result.url)}</p>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">{result.domain || domainFromUrl(result.url)}</p>
+                  {sources.some(source => source.url && source.url === result.url) && (
+                    <button type="button"
+                      onClick={() => {
+                        const match = sources.findIndex(source => source.url && source.url === result.url);
+                        if (match >= 0) {
+                          setActiveSourceIndex(match);
+                          document.getElementById('search-source-explorer')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                      }}
+                      className="rounded-lg border border-border/60 px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      aria-label={`Preview supporting source for ${result.title || 'this passage'}`}>
+                      Preview in explorer
+                    </button>
+                  )}
+                </div>
               </article>
             ))}
           </div>
@@ -152,7 +168,7 @@ export function ResultsPanel({ response }: PanelProps) {
              </span>
           </div>
 
-          <div className="grid min-w-0 gap-0 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+          <div id="search-source-explorer" className="grid min-w-0 scroll-mt-6 gap-0 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
             <div className="min-w-0 border-b border-border/60 bg-muted/10 xl:border-b-0 xl:border-r">
               <div role="group" aria-label="Available source previews" className="flex gap-2 overflow-x-auto p-3 xl:block xl:h-[22rem] xl:min-h-[12rem] xl:max-h-[75vh] xl:resize-y xl:space-y-1 xl:overflow-y-auto custom-scrollbar">
                 {sources.map((source, index) => {
