@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { IntelligentSearchApi } from '../services/IntelligentSearchApi';
 import type { SearchSourceItem } from '../types';
 
 interface ArticleReaderProps {
@@ -19,9 +20,36 @@ export function ArticleReader({ source }: ArticleReaderProps) {
     return <p role="status" className="text-sm text-muted-foreground">Select a source to read.</p>;
   }
 
-  const documentText = source.full_content || source.article_preview || source.content || source.snippet || '';
-  const hasArticle = Boolean(source.full_content || source.article_preview);
-  const complete = source.article_complete === true;
+  const [storedArticle, setStoredArticle] = useState<{ id: string; text: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const articleId = source.article_id || null;
+  const hasInlineComplete = source.article_complete === true && Boolean(source.full_content);
+
+  useEffect(() => {
+    let current = true;
+    setStoredArticle(null);
+    setLoadError(false);
+    setLoading(false);
+    if (!articleId || hasInlineComplete) return () => { current = false; };
+    setLoading(true);
+    IntelligentSearchApi.fetchArticle(articleId)
+      .then(text => {
+        if (current) setStoredArticle({ id: articleId, text });
+      })
+      .catch(() => {
+        if (current) setLoadError(true);
+      })
+      .finally(() => {
+        if (current) setLoading(false);
+      });
+    return () => { current = false; };
+  }, [articleId, hasInlineComplete]);
+
+  const fetchedText = storedArticle?.id === articleId ? storedArticle.text : null;
+  const documentText = fetchedText || source.full_content || source.article_preview || source.content || source.snippet || '';
+  const hasArticle = Boolean(fetchedText || source.full_content || source.article_preview);
+  const complete = Boolean(fetchedText) || hasInlineComplete;
   const paragraphs = documentText.replace(/\r\n?/g, '\n').split(/\n\s*\n/).filter(Boolean);
 
   return (
@@ -30,11 +58,15 @@ export function ArticleReader({ source }: ArticleReaderProps) {
         <h3 className="text-2xl font-semibold leading-tight tracking-tight">{source.title || 'Untitled source'}</h3>
         <p className="text-xs text-muted-foreground break-all">{source.domain || source.url}</p>
         <p role="status" className="text-xs text-muted-foreground">
-          {!hasArticle
-            ? 'Discovery excerpt only. Full source content has not been provided.'
+          {loading
+            ? 'Loading the saved full article…'
             : complete
-              ? 'Fetched article text available in this view.'
-              : 'Partial article preview. The full document is not available in this view.'}
+              ? 'Full article text available in this view.'
+              : loadError
+                ? 'Saved article could not be loaded. Showing available preview.'
+                : !hasArticle
+                  ? 'Discovery excerpt only. Full source content has not been provided.'
+                  : 'Partial article preview. The full document is not available in this view.'}
         </p>
       </header>
       {paragraphs.length === 0 ? (
