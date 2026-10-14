@@ -11,6 +11,7 @@ interface PluginStoreState {
   selectedPlugin: PluginDetails | null;
   categories: CategoryInfo[];
   trendingPlugins: Plugin[];
+  trendingError: string | null;
   updates: PluginUpdate[];
   installingPlugins: Set<string>;
   
@@ -39,6 +40,7 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   selectedPlugin: null,
   categories: [],
   trendingPlugins: [],
+  trendingError: null,
   updates: [],
   installingPlugins: new Set(),
 
@@ -137,11 +139,11 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
       if (!Array.isArray(trending)) {
         throw new Error('Trending plugins response must be an array.');
       }
-      set({ trendingPlugins: trending });
+      set({ trendingPlugins: trending, trendingError: null });
     } catch (error) {
       set({
         trendingPlugins: [],
-        error: error instanceof Error ? error.message : 'Failed to load trending plugins',
+        trendingError: error instanceof Error ? error.message : 'Failed to load trending plugins',
       });
     }
   },
