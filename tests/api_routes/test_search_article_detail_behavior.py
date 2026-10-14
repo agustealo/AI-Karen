@@ -1,7 +1,5 @@
 """Authenticated article detail route behavior, including identity isolation."""
 
-from types import SimpleNamespace
-
 import pytest
 from fastapi import HTTPException
 
