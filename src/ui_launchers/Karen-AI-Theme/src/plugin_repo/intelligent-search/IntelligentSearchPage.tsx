@@ -30,9 +30,9 @@ export default function IntelligentSearchPage() {
               <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
               {showControls ? 'Hide search settings' : 'Search settings'}
             </button>
-            {state.response && <button type="button" onClick={resetSearch}
+            {(state.response || state.isLoading) && <button type="button" onClick={resetSearch}
               className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-              <RotateCcw className="h-4 w-4" aria-hidden="true" /> Clear
+              <RotateCcw className="h-4 w-4" aria-hidden="true" /> {state.isLoading ? 'Cancel search' : 'Clear'}
             </button>}
           </div>
         </div>
