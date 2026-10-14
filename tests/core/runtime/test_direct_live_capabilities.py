@@ -230,14 +230,12 @@ async def test_weather_prefers_authorized_web_tool_before_plugin() -> None:
                 result={
                     "status": "ok",
                     "mode": "weather",
-                    "results": [
-                        {
-                            "snippet": (
-                                "Detroit is 61°F with light rain and a "
-                                "40% chance of precipitation."
-                            )
-                        }
-                    ],
+                    "weather": {
+                        "location": "Detroit",
+                        "temperature": "61°F",
+                        "conditions": "light rain",
+                        "precipitation": "40%",
+                    },
                     "sources": [],
                     "citations": [],
                 },
@@ -1173,7 +1171,11 @@ async def test_weather_uses_governed_profile_location_without_a_parallel_memory_
                 success=True,
                 result={
                     "status": "ok",
-                    "results": [{"snippet": "Sourced forecast for DC."}],
+                    "weather": {
+                        "location": "Washington, DC",
+                        "temperature": "18°C",
+                        "conditions": "cloudy",
+                    },
                 },
                 error=None,
             )
