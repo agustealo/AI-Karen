@@ -14,11 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ...contracts.runtime_request import RuntimeRequest
-from ...contracts.runtime_response import RuntimeResponse, ResponseStatus
-from ...contracts.specialist_execution import SpecialistExecutionContext
-from ...specialists.bridges import GenerationBridge, ToolBridge
-from ...registry import get_medusa_registry
-from ...registry_factory import get_implementation_factory
+from ...contracts.runtime_response import RuntimeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +24,6 @@ class MedusaLangGraphAdapter:
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
-        self._registry = get_medusa_registry()
-        self._factory = get_implementation_factory()
-        self._generation_bridge: Optional[GenerationBridge] = None
-        self._tool_bridge: Optional[ToolBridge] = None
 
     async def execute_specialist(
         self,
@@ -40,62 +32,51 @@ class MedusaLangGraphAdapter:
         specialist_id: str,
         input_data: Dict[str, Any],
     ) -> RuntimeResponse:
-        """Execute a single Medusa specialist within a LangGraph node."""
-        registration = await self._registry.get_agent(specialist_id)
-        if registration is None:
-            return RuntimeResponse(
-                request_id=request.request_id,
-                status=ResponseStatus.ERROR,
-                content=f"Specialist {specialist_id} not found",
-                metadata={"error": "specialist_not_found"},
+        """Route a specialist-constrained LangGraph request through Medusa.
+
+        LangGraph may express graph structure, but it must not execute a
+        specialist outside RuntimePolicy, the canonical run manager, or Medusa's
+        execution-time readiness gates.
+        """
+        from ...coordinator.medusa_coordinator import MedusaCoordinator
+        from ai_karen_engine.core.runtime.workflow_runtime import _serialize_plan
+
+        if not request.execution_requirements:
+            raise PermissionError(
+                "LangGraph specialist execution requires CORTEX requirements"
             )
-
-        specialist = self._factory.resolve(registration)
-        if specialist is None:
-            return RuntimeResponse(
-                request_id=request.request_id,
-                status=ResponseStatus.ERROR,
-                content=f"Specialist {specialist_id} could not be resolved",
-                metadata={"error": "specialist_resolution_failed"},
+        if request.authorized_plan is None:
+            raise PermissionError(
+                "LangGraph specialist execution requires RuntimePolicy authorization"
             )
-
-        from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
-        meter = ExecutionBudgetMeter(plan.budget)
-        meter.start()
-
-        execution = SpecialistExecutionContext(
-            authorized_plan=plan,
-            tenant_id=getattr(request, "tenant_id", "default"),
-            user_id=request.user_id or "anonymous",
+        if request.authorized_plan.get("policy_decision_id") != plan.policy_decision_id:
+            raise PermissionError("LangGraph Medusa policy decision mismatch")
+        if not plan.matches_execution_scope(
+            user_id=str(request.user_id or "").strip(),
+            tenant_id=str(request.tenant_id or "").strip(),
+            session_id=request.session_id,
             policy_decision_id=plan.policy_decision_id,
-            trajectory_id=request.request_id,
-            correlation_id=request.request_id,
-            step_id=f"langgraph_{specialist_id}",
-            budget_meter=meter,
+        ):
+            raise PermissionError("LangGraph Medusa execution scope mismatch")
+        if getattr(plan.topology, "value", plan.topology) != "multi_agent":
+            raise PermissionError("LangGraph Medusa requires multi-agent topology")
+        if (
+            "*" not in set(plan.allowed_agents)
+            and specialist_id not in set(plan.allowed_agents)
+        ):
+            raise PermissionError(
+                "LangGraph specialist is not authorized by RuntimePolicy"
+            )
+
+        scoped_plan = replace(plan, allowed_agents=[specialist_id])
+        scoped_context = dict(request.context)
+        scoped_context["langgraph_specialist_input"] = dict(input_data)
+        governed_request = replace(
+            request,
+            context=scoped_context,
+            authorized_plan=_serialize_plan(scoped_plan),
         )
-
-        context = {
-            "session_id": request.session_id,
-            "request_id": request.request_id,
-            "previous_steps": {},
-        }
-
-        try:
-            result = await specialist.run(input_data, context, execution=execution)
-            return RuntimeResponse(
-                request_id=request.request_id,
-                status=ResponseStatus.SUCCESS,
-                content=result.get("content") or result.get("response") or str(result),
-                metadata={"specialist": specialist_id, "result": result},
-            )
-        except Exception as exc:
-            logger.error(f"Specialist {specialist_id} execution failed: {exc}")
-            return RuntimeResponse(
-                request_id=request.request_id,
-                status=ResponseStatus.ERROR,
-                content=str(exc),
-                metadata={"error": str(exc), "specialist": specialist_id},
-            )
+        return await MedusaCoordinator().handle_request(governed_request)
 
     async def execute_plan(
         self, request: RuntimeRequest, plan: AuthorizedExecutionPlan
