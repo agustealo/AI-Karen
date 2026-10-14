@@ -380,10 +380,9 @@ class MedusaCoordinator:
             )
             if degraded_agents is not None:
                 degraded_agents.append(step.agent_specialist)
-            degradation_reason = (
-                getattr(authorized_plan.degradation_state, "reason_code", None)
-                or str(health.get("readiness_reason") or "policy_authorized_degradation")
-            )
+            degradation_reason = getattr(
+                authorized_plan.degradation_state, "reason_code", None
+            ) or str(health.get("readiness_reason") or "policy_authorized_degradation")
             if degradation_reasons is not None:
                 degradation_reasons[step.agent_specialist] = degradation_reason
             step.degradation_metadata = DegradationMetadata(
