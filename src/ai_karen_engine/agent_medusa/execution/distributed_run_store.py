@@ -114,6 +114,14 @@ class DistributedRunStore(Protocol):
         error_type: str | None,
     ) -> None: ...
 
+    async def set_outcome_status(
+        self,
+        *,
+        run_id: str,
+        worker_id: str,
+        outcome_status: str,
+    ) -> None: ...
+
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
@@ -220,6 +228,7 @@ class RedisDistributedRunStore:
             "cancel_requested_at": "",
             "completed_at": "",
             "error_type": "",
+            "outcome_status": "",
         }
         try:
             pipeline = client.pipeline(transaction=True)
@@ -307,6 +316,34 @@ class RedisDistributedRunStore:
                 index_key,
                 self._settings.run_terminal_retention_seconds,
             )
+
+    async def set_outcome_status(
+        self,
+        *,
+        run_id: str,
+        worker_id: str,
+        outcome_status: str,
+    ) -> None:
+        """Attach task outcome to the retained shared run receipt."""
+
+        normalized = str(outcome_status or "").strip().lower()
+        if normalized not in {
+            "success",
+            "partial",
+            "degraded",
+            "error",
+            "timeout",
+            "cancelled",
+        }:
+            raise ValueError(f"Invalid Medusa outcome status: {outcome_status}")
+        client = await self._client()
+        run_key = self._run_key(run_id)
+        record = await client.hgetall(run_key)
+        if not record:
+            raise DistributedRunNotFound(run_id)
+        if record.get("owner_worker_id") != worker_id:
+            raise RuntimeError(f"Medusa run ownership metadata changed: {run_id}")
+        await client.hset(run_key, mapping={"outcome_status": normalized})
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
@@ -421,6 +458,7 @@ class RedisDistributedRunStore:
             "started_at": record.get("started_at") or None,
             "completed_at": record.get("completed_at") or None,
             "error_type": record.get("error_type") or None,
+            "outcome_status": record.get("outcome_status") or None,
             "cancellable": status == "running" and lease_alive,
             "distributed_control": {
                 "supported": True,
