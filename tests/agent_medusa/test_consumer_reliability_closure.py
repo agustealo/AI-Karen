@@ -380,3 +380,25 @@ def test_coordinator_parallel_waves_obey_runtime_policy_budget() -> None:
         and node.slice.upper.id == "max_parallel"
     ]
     assert bounded_waves, "Agent work must respect RuntimePolicy max_parallelism"
+
+
+def test_coordinator_running_waves_have_hard_deadline_and_timeout_receipt() -> None:
+    """The execution deadline must cover awaitable specialists, not only scheduling."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(MedusaCoordinator))
+    timeouts = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncWith)
+        and any(
+            isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Attribute)
+            and isinstance(item.context_expr.func.value, ast.Name)
+            and item.context_expr.func.value.id == "asyncio"
+            and item.context_expr.func.attr == "timeout"
+            for item in node.items
+        )
+    ]
+    assert timeouts, "Active specialist waves must be interrupted at the run deadline"
+    assert "execution_deadline_exceeded" in inspect.getsource(MedusaCoordinator)
