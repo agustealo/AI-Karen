@@ -41,3 +41,14 @@ def test_plugin_store_refresh_catches_rejections_for_visible_error() -> None:
     assert "await refreshPlugins();" in page
     assert "setOperationError(getErrorMessage(cause));" in page
     assert "void refreshPlugins();" not in page
+
+
+
+def test_failed_search_does_not_reuse_previous_plugin_list() -> None:
+    store = STORE.read_text(encoding="utf-8")
+    search_action = store.split("  searchPlugins: async () => {", 1)[1].split(
+        "  refreshPlugins: async () => {", 1
+    )[0]
+    assert "plugins: []" in search_action
+    assert "searchResponse: null" in search_action
+    assert "Failed to search plugins" in search_action
