@@ -101,6 +101,11 @@ class SearchResultProcessor:
         ranked = []
         for chunk in chunks:
             score = self._calculate_score(chunk["content"], terms)
+            context = str(chunk.get("source_metadata", {}).get("title") or "") + " " + urlparse(chunk["url"]).path.replace("_", " ")
+            # Article-level topic relevance can support otherwise factual paragraphs
+            # that do not repeat the query words in every sentence.
+            if score == 0 and self._calculate_score(context, terms) > 0:
+                score = 0.5
             if score > 0:
                 chunk["score"] = score
                 ranked.append(chunk)
