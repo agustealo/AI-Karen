@@ -127,7 +127,7 @@ async def test_success_response_remains_successful_run_completion() -> None:
 
 @pytest.mark.asyncio
 async def test_unhealthy_specialist_cannot_execute_without_explicit_degradation() -> None:
-    registration = SimpleNamespace(capabilities=[])
+    registration = SimpleNamespace(capabilities=[], lifecycle_state="active")
     registry = SimpleNamespace(
         get_agent=AsyncMock(return_value=registration),
         get_agent_health=AsyncMock(
@@ -136,6 +136,7 @@ async def test_unhealthy_specialist_cannot_execute_without_explicit_degradation(
                 "healthy": False,
                 "readiness_reason": "dependencies_unavailable",
                 "unknown_dependencies": [],
+                "missing_dependencies": [],
             }
         ),
     )
@@ -158,7 +159,7 @@ async def test_unhealthy_specialist_cannot_execute_without_explicit_degradation(
 @pytest.mark.asyncio
 async def test_policy_authorized_degradation_may_execute() -> None:
     specialist = SimpleNamespace(run=AsyncMock(return_value={"ok": True}))
-    registration = SimpleNamespace(capabilities=[])
+    registration = SimpleNamespace(capabilities=[], lifecycle_state="active")
     registry = SimpleNamespace(
         get_agent=AsyncMock(return_value=registration),
         get_agent_health=AsyncMock(
@@ -289,3 +290,36 @@ async def test_cancellation_wins_race_against_late_success_response() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_explicit_degradation_cannot_reactivate_disabled_specialist() -> None:
+    registration = SimpleNamespace(capabilities=[], lifecycle_state="disabled")
+    registry = SimpleNamespace(
+        get_agent=AsyncMock(return_value=registration),
+        get_agent_health=AsyncMock(
+            return_value={
+                "exists": True,
+                "healthy": False,
+                "readiness_reason": "inactive",
+                "unknown_dependencies": [],
+                "missing_dependencies": [],
+            }
+        ),
+    )
+    factory = SimpleNamespace(resolve=Mock())
+    coordinator = MedusaCoordinator(registry=registry, factory=factory)
+    step = PlanStep(id="step-1", agent_specialist="researcher")
+    with pytest.raises(RuntimeError, match="not execution-ready"):
+        await coordinator._execute_step(
+            step,
+            DeepExecutionPlan(request_id="req-1", steps=[step]),
+            _request(),
+            _plan(
+                degradation_state=DegradationState(
+                    degraded=True,
+                    reason_code="dependency_unavailable",
+                )
+            ),
+        )
+    factory.resolve.assert_not_called()
