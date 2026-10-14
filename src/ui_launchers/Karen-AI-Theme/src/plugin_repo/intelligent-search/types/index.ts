@@ -13,7 +13,10 @@ export interface SearchSourceItem {
   title: string;
   snippet?: string;
   content?: string;
-  full_content?: string;
+  full_content?: string | null;
+  article_preview?: string | null;
+  article_complete?: boolean;
+  article_char_count?: number;
   markdown?: string;
   extracted_data?: Record<string, unknown>;
   publishedDate?: string;
