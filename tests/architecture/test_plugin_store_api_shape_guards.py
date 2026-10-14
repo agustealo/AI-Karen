@@ -24,3 +24,12 @@ def test_store_and_page_never_assume_categories_loaded() -> None:
     assert "Array.isArray(categories) ? categories : []" in page
     assert "safeCategories.length > 0" in page
     assert "safeCategories.find(" in page
+
+
+def test_install_failures_reach_page_and_refresh_failures_are_distinguished() -> None:
+    store = STORE.read_text(encoding="utf-8")
+    page = PAGE.read_text(encoding="utf-8")
+    assert "throw new Error(message);" in store
+    assert "Plugin installation request succeeded, but the plugin list could not be refreshed:" in store
+    assert "await get().searchPlugins();" in store
+    assert "setOperationError(getErrorMessage(installError));" in page
