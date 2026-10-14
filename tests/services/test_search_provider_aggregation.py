@@ -54,3 +54,33 @@ async def test_explicit_provider_remains_pinned():
     response = await client.search("Jamaica", provider="wikipedia")
     assert response.results
     assert client._search_with_provider.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_first_five_providers_do_not_block_last_enabled_fallback():
+    registry = WebSearchProviderRegistry(settings={"search": {
+        "duckduckgo": {"enabled": True, "priority": 100},
+        "searxng": {"enabled": True, "priority": 95},
+        "brave_search_free": {"enabled": True, "priority": 91},
+        "mojeek": {"enabled": True, "priority": 88},
+        "startpage": {"enabled": True, "priority": 87},
+        "wikipedia": {"enabled": True, "priority": 85},
+    }})
+    client = WebSearchClient(settings={"aggregation": {
+        "max_providers": 5, "min_distinct_hosts": 3,
+    }}, registry=registry)
+
+    async def dispatch(name, query, maximum, time_range, **kwargs):
+        return SearchResponse(
+            query=query,
+            provider=name,
+            results=[item("https://en.wikipedia.org/wiki/History_of_Jamaica")]
+            if name == "wikipedia" else [],
+        )
+
+    client._search_with_provider = AsyncMock(side_effect=dispatch)
+    response = await client.search("Jamaican History")
+    assert [result.url for result in response.results] == [
+        "https://en.wikipedia.org/wiki/History_of_Jamaica"
+    ]
+    assert client._search_with_provider.await_count == 6
