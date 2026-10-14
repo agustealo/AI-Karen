@@ -323,3 +323,33 @@ async def test_explicit_degradation_cannot_reactivate_disabled_specialist() -> N
             ),
         )
     factory.resolve.assert_not_called()
+
+
+def test_failed_dependency_skips_transitive_dependents_without_blocking_siblings() -> None:
+    """A failed branch must not deadlock independent runnable work."""
+    failed = PlanStep(id="failed", agent_specialist="a", status=StepStatus.FAILED)
+    downstream = PlanStep(id="dependent", agent_specialist="b", dependencies=["failed"])
+    transitive = PlanStep(id="transitive", agent_specialist="c", dependencies=["dependent"])
+    independent = PlanStep(id="independent", agent_specialist="d")
+    plan = DeepExecutionPlan(
+        request_id="dag-recovery",
+        steps=[transitive, independent, downstream, failed],
+    )
+
+    assert plan.mark_blocked_dependents() == 2
+    assert downstream.status == StepStatus.SKIPPED
+    assert downstream.error == "blocked_dependencies:failed"
+    assert transitive.status == StepStatus.SKIPPED
+    assert transitive.error == "blocked_dependencies:dependent"
+    assert plan.get_next_runnable_steps() == [independent]
+    assert plan.mark_blocked_dependents() == 0
+
+
+def test_completed_dependencies_do_not_block_execution() -> None:
+    prerequisite = PlanStep(id="ready", agent_specialist="a", status=StepStatus.COMPLETED)
+    downstream = PlanStep(id="dependent", agent_specialist="b", dependencies=["ready"])
+    plan = DeepExecutionPlan(request_id="dag-success", steps=[prerequisite, downstream])
+
+    assert plan.mark_blocked_dependents() == 0
+    assert downstream.status == StepStatus.PENDING
+    assert plan.get_next_runnable_steps() == [downstream]
