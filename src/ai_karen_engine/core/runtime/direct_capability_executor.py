@@ -419,7 +419,29 @@ class DirectCapabilityExecutor:
                 for key in ("value", "formatted", "time", "iso")
             )
 
-        if intent in {"search.weather", "search.general"}:
+        if intent == "search.general":
+            extracted = payload.get("extractedData")
+            if isinstance(extracted, dict) and any(
+                value not in (None, "", [], {})
+                for value in extracted.values()
+            ):
+                return True
+            # An empty source object or a URL without article evidence must
+            # not be represented to consumers as a successful live search.
+            return any(
+                isinstance(item, dict)
+                and str(item.get("url") or "").startswith(("https://", "http://"))
+                and bool(str(
+                    item.get("snippet")
+                    or item.get("content")
+                    or item.get("title")
+                    or ""
+                ).strip())
+                for key in ("results", "sources")
+                for item in (payload.get(key) or [])
+            )
+
+        if intent == "search.weather":
             return bool(
                 payload.get("extractedData")
                 or payload.get("results")
