@@ -353,3 +353,30 @@ def test_completed_dependencies_do_not_block_execution() -> None:
     assert plan.mark_blocked_dependents() == 0
     assert downstream.status == StepStatus.PENDING
     assert plan.get_next_runnable_steps() == [downstream]
+
+
+def test_coordinator_parallel_waves_obey_runtime_policy_budget() -> None:
+    """Guard against accidentally restoring unbounded gather scheduling."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(MedusaCoordinator))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "gather"
+    ]
+    assert calls, "Medusa must retain canonical async scheduling"
+    bounded_waves = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "runnable_steps"
+        and isinstance(node.slice, ast.Slice)
+        and isinstance(node.slice.upper, ast.Name)
+        and node.slice.upper.id == "max_parallel"
+    ]
+    assert bounded_waves, "Agent work must respect RuntimePolicy max_parallelism"
