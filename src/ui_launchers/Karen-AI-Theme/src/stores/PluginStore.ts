@@ -62,7 +62,11 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
         loading: false,
       });
     } catch (error) {
+      // Do not display a previous search or installed state as current when
+      // the backend has not supplied a valid response for this request.
       set({
+        plugins: [],
+        searchResponse: null,
         error: error instanceof Error ? error.message : 'Failed to search plugins',
         loading: false,
       });
