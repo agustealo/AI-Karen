@@ -37,6 +37,15 @@ function normalizeSearchResponse(value: unknown): IntelligentSearchResponse {
 }
 
 export const IntelligentSearchApi = {
+  fetchArticle: async (articleId: string): Promise<string> => {
+    const result = await apiClient.get<{ article_id: string; full_content: string }>(
+      `/api/plugins/search/articles/${encodeURIComponent(articleId)}`
+    );
+    if (result.article_id !== articleId || typeof result.full_content !== 'string') {
+      throw new Error('Stored article response was invalid.');
+    }
+    return result.full_content;
+  },
   executeSearch: async (payload: Record<string, unknown>): Promise<IntelligentSearchResponse> => {
     const response = await apiClient.post<PluginExecutionEnvelope<IntelligentSearchResponse> | IntelligentSearchResponse>(
       '/api/plugins/execute',
