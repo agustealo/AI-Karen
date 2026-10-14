@@ -209,7 +209,7 @@ export function ResultsPanel({ response }: PanelProps) {
             <div className="flex min-w-0 flex-col bg-background/40">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/20 px-4 py-3 lg:px-5">
                 <div className="flex flex-wrap gap-2 sm:gap-4">
-                  <ViewToggle active={sourceViewMode === 'snippet'} onClick={() => setSourceViewMode('snippet')} label="Snippet" icon={<AlignLeft className="h-3 w-3" />} />
+                  <ViewToggle active={sourceViewMode === 'snippet'} onClick={() => setSourceViewMode('snippet')} label="Read" icon={<AlignLeft className="h-3 w-3" />} />
                   <ViewToggle active={sourceViewMode === 'markdown'} onClick={() => setSourceViewMode('markdown')} label="Markdown" icon={<FileText className="h-3 w-3" />} />
                   <ViewToggle active={sourceViewMode === 'json'} onClick={() => setSourceViewMode('json')} label="JSON" icon={<Code className="h-3 w-3" />} />
                 </div>
@@ -230,14 +230,15 @@ export function ResultsPanel({ response }: PanelProps) {
                       : 'Source preview. Fetch status is not specified by the backend.'}
                 </p>
                 
+                {featuredSource?.article_complete === false && <p role="status" className="mb-3 text-xs text-amber-600">Partial article preview. Full document retrieval is not available in this view.</p>}
                 {sourceViewMode === 'snippet' && (
                   <p className="whitespace-pre-wrap break-words text-sm leading-8 text-muted-foreground/90">
-                    {featuredSource?.content || featuredSource?.snippet || 'No content preview available.'}
+                    {featuredSource?.full_content || featuredSource?.article_preview || featuredSource?.content || featuredSource?.snippet || 'No readable source content available.'}
                   </p>
                 )}
                 {sourceViewMode === 'markdown' && (
                   <pre className="whitespace-pre-wrap break-words text-xs leading-6 text-foreground/90 font-mono bg-muted/10 p-4 rounded-xl border border-border/40">
-                    {featuredSource?.markdown || featuredSource?.full_content || 'Markdown content not available for this source.'}
+                    {featuredSource?.markdown || featuredSource?.article_preview || 'Markdown content not available for this source.'}
                   </pre>
                 )}
                 {sourceViewMode === 'json' && (
@@ -378,21 +379,22 @@ export function SourcesPanel({ response }: PanelProps) {
           <div className="flex flex-col">
              <div className="flex items-center justify-between border-b border-border/60 bg-muted/10 px-5 py-3">
                 <div className="flex gap-4">
-                  <ViewToggle active={sourceViewMode === 'snippet'} onClick={() => setSourceViewMode('snippet')} label="Readable" icon={<AlignLeft className="h-3 w-3" />} />
+                  <ViewToggle active={sourceViewMode === 'snippet'} onClick={() => setSourceViewMode('snippet')} label="Read" icon={<AlignLeft className="h-3 w-3" />} />
                   <ViewToggle active={sourceViewMode === 'markdown'} onClick={() => setSourceViewMode('markdown')} label="Markdown" icon={<FileText className="h-3 w-3" />} />
                   <ViewToggle active={sourceViewMode === 'json'} onClick={() => setSourceViewMode('json')} label="Raw JSON" icon={<Code className="h-3 w-3" />} />
                 </div>
              </div>
 
              <div className="h-[26rem] min-h-[16rem] max-h-[75vh] resize-y overflow-auto p-6 custom-scrollbar">
+                {featuredSource?.article_complete === false && <p role="status" className="mb-3 text-xs text-amber-600">Partial article preview. Full document retrieval is not available in this view.</p>}
                 {sourceViewMode === 'snippet' && (
                   <p className="whitespace-pre-wrap break-words text-sm leading-8 text-muted-foreground/90">
-                    {featuredSource?.content || featuredSource?.snippet || 'No readable excerpt returned.'}
+                    {featuredSource?.full_content || featuredSource?.article_preview || featuredSource?.content || featuredSource?.snippet || 'No readable source content available.'}
                   </p>
                 )}
                 {sourceViewMode === 'markdown' && (
                   <pre className="whitespace-pre-wrap break-words text-xs leading-6 text-foreground/90 font-mono bg-muted/5 p-5 rounded-2xl border border-border/40">
-                    {featuredSource?.markdown || featuredSource?.full_content || 'Markdown content unavailable.'}
+                    {featuredSource?.markdown || featuredSource?.article_preview || 'Markdown content unavailable.'}
                   </pre>
                 )}
                 {sourceViewMode === 'json' && (

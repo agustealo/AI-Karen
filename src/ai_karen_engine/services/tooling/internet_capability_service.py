@@ -1310,7 +1310,6 @@ class InternetCapabilityService:
             seen_urls.add(url)
 
             metadata = result.get("metadata", {}) or {}
-            markdown = result.get("markdown", "") or ""
             title = (
                 metadata.get("title")
                 or metadata.get("og:title")
@@ -1321,6 +1320,13 @@ class InternetCapabilityService:
             if not clean_passages:
                 continue
             preview_source = clean_passages[0]["content"]
+            # Keep the actual document separate from the ranked excerpt. Bounded
+            # inline content is a preview, never silently described as complete.
+            document = str(result.get("markdown") or result.get("text") or "")
+            max_inline_chars = 32000
+            article_complete = len(document) <= max_inline_chars
+            article_body = document[:max_inline_chars]
+            content_hash = hashlib.sha256(document.encode()).hexdigest()
 
             sources.append(
                 {
@@ -1333,10 +1339,13 @@ class InternetCapabilityService:
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
-                    "full_content": preview_source[:4000],
-                    "markdown": preview_source[:4000],
-                    "content_ref": f"content:{hashlib.sha256(markdown.encode()).hexdigest()[:16]}",
-                    "content_hash": hashlib.sha256(markdown.encode()).hexdigest()[:16],
+                    "full_content": article_body if article_complete else None,
+                    "markdown": article_body if article_complete else None,
+                    "article_preview": article_body if not article_complete else None,
+                    "article_complete": article_complete,
+                    "article_char_count": len(document),
+                    "content_ref": f"content:{content_hash[:16]}",
+                    "content_hash": content_hash[:16],
                     "extracted_data": None,  # Raw structured output is not a consumer-safe unbounded field.
                     "publishedDate": metadata.get("published_date")
                     or metadata.get("date")
