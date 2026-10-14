@@ -95,3 +95,22 @@ async def test_missing_model_identity_never_claims_grounded_synthesis():
     gateway.generate.return_value.provider = None
     assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
     gateway.generate.assert_awaited_once()
+
+
+def test_citation_url_parser_stops_at_whitespace():
+    from ai_karen_engine.services.response.response_contracts import ResponseContract
+    from ai_karen_engine.services.response.response_validator import ResponseValidator
+
+    contract = ResponseContract(
+        purpose="tool_synthesis", intent="search.general", requires_live_data=True,
+        latest_user_message="When did Jamaica gain independence?",
+        tool_results=[{"sources": [
+            {"url": "https://example.org/history", "evidence_level": "fetched_page",
+             "content": "Jamaica gained independence in 1962."}
+        ]}],
+    )
+    result = ResponseValidator().validate(
+        "Jamaica became independent in 1962. Source: https://example.org/history and more context.",
+        contract,
+    )
+    assert result.valid, result.reason
