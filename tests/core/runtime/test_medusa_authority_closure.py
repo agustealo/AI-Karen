@@ -322,7 +322,7 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
 
         run_manager = MagicMock()
         run_manager.register = AsyncMock()
-        run_manager.mark_completed = AsyncMock()
+        run_manager.mark_response = AsyncMock()
         run_manager.mark_failed = AsyncMock()
         run_manager.mark_cancelled = AsyncMock()
         coordinator = MedusaCoordinator(run_manager=run_manager)
@@ -336,6 +336,7 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
                 coordinator, "assembler", new_callable=AsyncMock
             ) as mock_assembler:
                 mock_assembler.assemble.return_value = MagicMock()
+                mock_assembler.assemble.return_value.status.value = "success"
                 await coordinator.handle_request(request)
 
         assert mock_plan.called
