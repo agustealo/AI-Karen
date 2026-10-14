@@ -39,6 +39,10 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\bweb\s+search\b",
             r"\blook\s+(?:it\s+)?up\s+online\b",
             r"\blook\s+online\s+(?:for|at)\b",
+            r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:in|from|about|on|for)\s+[\w .'-]+\s+(?:news|headlines|updates?)[?!.]*$",
+            r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:news|headlines|updates?)\s+(?:in|from|about|on|for)\s+[\w .'-]+[?!.]*$",
+            r"^(?:what(?:'s| is)\s+)?happening\s+(?:right\s+now\s+)?(?:in|across|around)\s+[\w .'-]+[?!.]*$",
+            r"^(?:any|what(?:'s| is)\s+the)\s+(?:breaking|latest|recent)\s+(?:news|headlines|updates?)\s+(?:from|in|about|on)\s+[\w .'-]+[?!.]*$",
             r"^(?:(?:please\s+)?(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|results?|score|price|release|version|information)[?!.]*$",
             r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|result|score|price|release|version)[?!.]*$",
             r"^(?:what(?:'s|\s+is)|which\s+is)\s+the\s+(?:current|latest)\s+(?:news|result|score|price|release|version)\s+(?:about|of|for)\s+[\w.+#-]+(?:\s+[\w.+#-]+){0,3}[?!.]*$",
@@ -242,6 +246,13 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
         r"\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|private|internal|confidential)\b", q
     )) and bool(re.search(r"\b(?:update|updates|status)\b", q))
 
+    # Contextual "happening" questions about private/application state are
+    # not public news requests. Do not route them to external web search.
+    private_happening = bool(re.search(
+        r"\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|"
+        r"private|internal|confidential|this)\b", q
+    )) and bool(re.search(r"\b(?:happening|going on)\b", q))
+
     # Specialized routes use bounded intent patterns, not substring hits. This
     # keeps deterministic fallback available when Intelligence is offline while
     # avoiding hijacks such as "what time complexity..." or incidental "latest".
@@ -251,7 +262,7 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
             re.search(pattern, q, flags=re.IGNORECASE)
             for pattern in patterns
         )
-        if intent == "search.general" and private_update:
+        if intent == "search.general" and (private_update or private_happening):
             matched = False
         if intent == "time.current":
             matched = matched or _looks_like_shorthand_time(query)

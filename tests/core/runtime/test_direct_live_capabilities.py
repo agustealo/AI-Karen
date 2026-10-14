@@ -1648,3 +1648,79 @@ async def test_prompt_assembly_includes_authorized_typed_clarification_without_m
         "source": "authorized_conversation",
     }
     assert request.messages[-1]["content"] == "four"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What's the latest in Jamaica news",
+        "What's the latest news in Jamaica?",
+        "Any breaking news from Kingston?",
+        "What's happening in Jamaica?",
+        "Latest Jamaica news",
+    ],
+)
+def test_conversational_location_news_requires_live_retrieval(query: str) -> None:
+    decision = resolve_capability_decision(query)
+    assert decision.intent == "search.general"
+    assert decision.requires_live_data is True
+    assert decision.requires_tool is True
+    assert decision.allow_llm_only is False
+    assert decision.handler == "web_search"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Explain the history of Jamaica",
+        "Why is Jamaica culturally influential?",
+        "Explain why our latest refactor changed the cache key.",
+    ],
+)
+def test_non_current_questions_do_not_force_live_news_route(query: str) -> None:
+    assert resolve_capability_decision(query).intent != "search.general"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "success", "sources": [{}]},
+        {"status": "success", "sources": [{"url": "https://example.org/story"}]},
+        {"status": "success", "results": [{"snippet": "An unsourced claim"}]},
+        {"status": "success", "results": []},
+        {"status": "error", "results": [{"url": "https://example.org", "snippet": "text"}]},
+    ],
+)
+def test_live_search_never_accepts_evidence_free_success(payload: dict) -> None:
+    assert not DirectCapabilityExecutor._payload_succeeded("search.general", payload)
+
+
+def test_live_search_requires_renderable_attributed_passage() -> None:
+    payload = {
+        "status": "success",
+        "results": [
+            {
+                "url": "https://example.org/verified-report",
+                "snippet": "A retrieved report with its publication source.",
+            }
+        ],
+    }
+    executor = DirectCapabilityExecutor()
+    assert executor._payload_succeeded("search.general", payload)
+    rendered = executor._render("search.general", "Jamaica news", payload)
+    assert "A retrieved report" in rendered
+    assert "https://example.org/verified-report" in rendered
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What's happening in my account?",
+        "What's happening in our deployment?",
+        "What's happening in this function?",
+        "What's happening in your internal system?",
+    ],
+)
+def test_private_happening_questions_do_not_trigger_public_search(query: str) -> None:
+    decision = resolve_capability_decision(query)
+    assert decision.intent != "search.general"
