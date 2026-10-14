@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { SearchModeId, IntelligentSearchOptions, IntelligentSearchState } from '../types';
 import { useSearchPayload } from './useSearchPayload';
 import { IntelligentSearchApi } from '../services/IntelligentSearchApi';
@@ -15,13 +15,24 @@ export function useIntelligentSearch() {
   });
 
   const { buildPayload } = useSearchPayload();
+  const requestSequence = useRef(0);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requestSequence.current += 1;
+    };
+  }, []);
 
   const setQuery = useCallback((query: string) => {
     setState((prev) => ({ ...prev, query }));
   }, []);
 
   const setMode = useCallback((mode: SearchModeId) => {
-    setState((prev) => ({ ...prev, mode, options: {}, error: null }));
+    requestSequence.current += 1;
+    setState((prev) => ({ ...prev, mode, options: {}, isLoading: false, response: null, error: null }));
   }, []);
 
   const updateOptions = useCallback((newOptions: Partial<IntelligentSearchOptions>) => {
@@ -34,23 +45,29 @@ export function useIntelligentSearch() {
       return;
     }
 
+    const requestId = ++requestSequence.current;
     setState((prev) => ({ ...prev, isLoading: true, error: null, response: null }));
 
     try {
       const payload = buildPayload(state.mode, state.query, state.options);
       const response = await IntelligentSearchApi.executeSearch(payload);
-      setState((prev) => ({ ...prev, isLoading: false, response }));
+      if (mounted.current && requestId === requestSequence.current) {
+        setState((prev) => ({ ...prev, isLoading: false, response }));
+      }
     } catch (error: unknown) {
-      setState((prev) => ({
-        ...prev,
-        isLoading: false,
-        error: error instanceof Error ? error : new Error(String(error))
-      }));
+      if (mounted.current && requestId === requestSequence.current) {
+        setState((prev) => ({
+          ...prev,
+          isLoading: false,
+          error: error instanceof Error ? error : new Error(String(error))
+        }));
+      }
     }
   }, [state.query, state.mode, state.options, buildPayload]);
 
   const resetSearch = useCallback(() => {
-    setState((prev) => ({ ...prev, query: '', error: null, response: null }));
+    requestSequence.current += 1;
+    setState((prev) => ({ ...prev, query: '', isLoading: false, error: null, response: null }));
   }, []);
 
   return {
