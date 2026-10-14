@@ -124,7 +124,7 @@ class WebSearchClient:
         configured = self.settings.get("aggregation", {})
         if isinstance(configured, dict):
             aggregation.update(configured)
-        provider_limit = max(1, min(int(aggregation["max_providers"]), len(candidates)))
+        # Limit contributing result providers, not attempted transports. A failed\n        # provider must not consume the fallback budget.\n        provider_limit = max(1, min(int(aggregation["max_providers"]), len(candidates)))
         minimum_hosts = max(1, int(aggregation["min_distinct_hosts"]))
         if provider is not None:
             provider_limit = 1
@@ -134,7 +134,7 @@ class WebSearchClient:
         seen_urls: set[str] = set()
         hosts: set[str] = set()
         contributing: list[str] = []
-        for candidate in candidates[:provider_limit]:
+        for candidate in candidates:
             try:
                 response = await self._search_with_provider(
                     candidate, query, max_results, time_range, **kwargs
