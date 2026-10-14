@@ -287,6 +287,11 @@ class ChatRuntime:
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
+                if decision.intent == "search.general" and direct_result.success:
+                    synthesized = await self._synthesize_search_evidence(request, decision, meter, direct_result)
+                    if synthesized is not None:
+                        text, answer_meta = synthesized
+                        provider_meta.update(answer_meta)
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
