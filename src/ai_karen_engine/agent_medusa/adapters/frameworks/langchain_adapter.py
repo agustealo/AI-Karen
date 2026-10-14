@@ -11,9 +11,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionTopology
 from ...contracts.runtime_request import RuntimeRequest
 from ...contracts.runtime_response import RuntimeResponse, ResponseStatus
+from ...contracts.safe_error import to_safe_response
 from ...specialists.bridges import GenerationBridge, ToolBridge
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,38 @@ class LangChainAdapter:
         agent_id: str,
         plan: Optional[AuthorizedExecutionPlan] = None,
     ) -> RuntimeResponse:
-        """Execute a specialist via LangChain AgentExecutor."""
+        """Execute one already-authorized specialist through LangChain."""
+
+        correlation_id = str(
+            getattr(request.context.get("execution_context"), "correlation_id", "")
+            or request.request_id
+        )
+        if plan is None:
+            return to_safe_response(
+                PermissionError("LangChain specialist execution requires RuntimePolicy plan"),
+                correlation_id=correlation_id,
+            )
+        if plan.topology is not ExecutionTopology.MULTI_AGENT:
+            return to_safe_response(
+                PermissionError("LangChain specialist execution requires multi-agent topology"),
+                correlation_id=correlation_id,
+            )
+        if not plan.matches_execution_scope(
+            user_id=str(request.user_id or "").strip(),
+            tenant_id=str(request.tenant_id or "").strip(),
+            session_id=request.session_id,
+            policy_decision_id=plan.policy_decision_id,
+        ):
+            return to_safe_response(
+                PermissionError("LangChain RuntimePolicy execution scope mismatch"),
+                correlation_id=correlation_id,
+            )
+        if "*" not in set(plan.allowed_agents) and agent_id not in set(plan.allowed_agents):
+            return to_safe_response(
+                PermissionError("LangChain specialist is not authorized by RuntimePolicy"),
+                correlation_id=correlation_id,
+            )
+
         try:
             from langchain.agents import AgentExecutor
             from langchain.agents.conversational_chat.base import (
@@ -51,7 +83,7 @@ class LangChainAdapter:
                 metadata={"error": "langchain_not_installed"},
             )
 
-        plan_data = self._plan_to_dict(plan) if plan else {}
+        plan_data = self._plan_to_dict(plan)
         allowed_tools = plan_data.get("allowed_tools", [])
 
         tools = await self._build_tools(allowed_tools, request, plan_data)
@@ -84,13 +116,17 @@ class LangChainAdapter:
                 metadata={"agent_id": agent_id, "framework": "langchain"},
             )
         except Exception as exc:
-            logger.error("LangChain execution failed for %s: %s", agent_id, exc)
-            return RuntimeResponse(
-                request_id=request.request_id,
-                status=ResponseStatus.ERROR,
-                content=str(exc),
-                metadata={"error": str(exc), "agent_id": agent_id},
+            logger.exception(
+                "LangChain specialist execution failed",
+                extra={
+                    "agent_id": agent_id,
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
             )
+            response = to_safe_response(exc, correlation_id=correlation_id)
+            response.metadata.update({"agent_id": agent_id, "framework": "langchain"})
+            return response
 
     async def _build_tools(
         self,
@@ -127,10 +163,8 @@ class LangChainAdapter:
             description: str = f"Tool {tool_name}"
 
             def _run(self, *args: Any, **kwargs: Any) -> str:
-                import asyncio
-
-                return asyncio.get_event_loop().run_until_complete(
-                    _run(*args, **kwargs)
+                raise RuntimeError(
+                    "LangChain Medusa tools are async-only; use the async execution path"
                 )
 
             async def _arun(self, *args: Any, **kwargs: Any) -> str:
@@ -172,8 +206,6 @@ class _LangChainLLMWrapper:
         return AIMessage(content=str(result))
 
     def invoke(self, prompt: Any, **kwargs: Any) -> Any:
-        import asyncio
-
-        return asyncio.get_event_loop().run_until_complete(
-            self.ainvoke(prompt, **kwargs)
+        raise RuntimeError(
+            "LangChain Medusa model calls are async-only; use ainvoke"
         )
