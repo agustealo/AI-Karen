@@ -17,6 +17,8 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
+from .consent_filter import recallable_memory_event
+
 from .ledger_models import (
     MemoryEvent,
     MemoryOpenLoop,
@@ -76,10 +78,9 @@ class PostgresUserStateRecallRetriever:
                     .where(
                         MemoryUserGoal.tenant_id == tenant_uuid,
                         MemoryUserGoal.user_id == user_uuid,
-                        MemoryEvent.tenant_id == tenant_uuid,
-                        MemoryEvent.user_id == user_uuid,
-                        MemoryEvent.consent_state == "granted",
-                        or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
+                        recallable_memory_event(
+                            tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                        ),
                         MemoryUserGoal.lifecycle_state.in_(
                             ("active", "blocked", "paused", "at_risk")
                         ),
@@ -103,10 +104,9 @@ class PostgresUserStateRecallRetriever:
                     .where(
                         MemoryOpenLoop.tenant_id == tenant_uuid,
                         MemoryOpenLoop.user_id == user_uuid,
-                        MemoryEvent.tenant_id == tenant_uuid,
-                        MemoryEvent.user_id == user_uuid,
-                        MemoryEvent.consent_state == "granted",
-                        or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
+                        recallable_memory_event(
+                            tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                        ),
                         MemoryOpenLoop.lifecycle_state == "open",
                         or_(MemoryOpenLoop.valid_to.is_(None), MemoryOpenLoop.valid_to > now),
                     )
@@ -129,10 +129,9 @@ class PostgresUserStateRecallRetriever:
                     .where(
                         MemoryProspectiveItem.tenant_id == tenant_uuid,
                         MemoryProspectiveItem.user_id == user_uuid,
-                        MemoryEvent.tenant_id == tenant_uuid,
-                        MemoryEvent.user_id == user_uuid,
-                        MemoryEvent.consent_state == "granted",
-                        or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
+                        recallable_memory_event(
+                            tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                        ),
                         MemoryProspectiveItem.lifecycle_state.in_(
                             ("dormant", "ready", "triggered")
                         ),
