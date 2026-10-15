@@ -1213,7 +1213,9 @@ class ChatRuntime:
         predicates continue through normal response generation unchanged.
         """
         from ai_karen_engine.core.runtime.evidence_sufficiency import (
-            EvidenceSufficiencyStatus, evaluate_personal_evidence,
+            EvidenceSufficiencyStatus,
+            evaluate_personal_evidence,
+            evaluate_conversation_personal_evidence,
         )
 
         attribute = str(
@@ -1233,21 +1235,39 @@ class ChatRuntime:
                 ("origin_location", "place you're from"),
                 ("work_location", "work location"),
             )
-            verified = [
-                (key, result)
-                for key, _label in fields
-                if (result := evaluate_personal_evidence(
+            verified = []
+            conversational = False
+            for key, _label in fields:
+                saved = evaluate_personal_evidence(
                     decision.cognitive_context,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    attribute=key,
-                )).status is EvidenceSufficiencyStatus.SUPPORTED
-            ]
+                    tenant_id=tenant_id, user_id=user_id, attribute=key,
+                )
+                recent = evaluate_conversation_personal_evidence(
+                    decision.cognitive_context,
+                    tenant_id=tenant_id, user_id=user_id, attribute=key,
+                )
+                if (
+                    saved.status is EvidenceSufficiencyStatus.SUPPORTED
+                    and recent.status is EvidenceSufficiencyStatus.SUPPORTED
+                    and saved.value.casefold() != recent.value.casefold()
+                ):
+                    continue  # Do not silently promote a disputed identity.
+                if saved.status is EvidenceSufficiencyStatus.SUPPORTED:
+                    verified.append((key, saved))
+                elif (
+                    saved.status in {EvidenceSufficiencyStatus.MISSING, EvidenceSufficiencyStatus.EXPIRED}
+                    and recent.status is EvidenceSufficiencyStatus.SUPPORTED
+                ):
+                    verified.append((key, recent))
+                    conversational = True
             meta = {
                 "evidence_sufficiency": "supported" if verified else "missing",
                 "evidence_reason": "verified_identity_summary" if verified else "no_verified_identity_facts",
                 "evidence_count": sum(len(result.evidence_ids) for _, result in verified),
-                "response_source": "authorized_memory_evidence",
+                "response_source": (
+                    "authorized_conversation_evidence"
+                    if conversational else "authorized_memory_evidence"
+                ),
                 "actual_provider": None,
                 "actual_model": None,
             }
@@ -1265,6 +1285,37 @@ class ChatRuntime:
             user_id=user_id,
             attribute=attribute,
         )
+        recent = evaluate_conversation_personal_evidence(
+            decision.cognitive_context,
+            tenant_id=tenant_id, user_id=user_id, attribute=attribute,
+        )
+        if (
+            result.status is EvidenceSufficiencyStatus.SUPPORTED
+            and recent.status is EvidenceSufficiencyStatus.SUPPORTED
+            and result.value.casefold() != recent.value.casefold()
+        ):
+            metadata = {
+                "evidence_sufficiency": "contradictory",
+                "evidence_reason": "saved_and_conversation_disagree",
+                "evidence_count": len(result.evidence_ids) + len(recent.evidence_ids),
+                "response_source": "authorized_memory_evidence",
+                "actual_provider": None, "actual_model": None,
+            }
+            return "Your saved information and what you said in this conversation disagree, so I can't confirm a single answer.", metadata
+        if (
+            result.status in {EvidenceSufficiencyStatus.MISSING, EvidenceSufficiencyStatus.EXPIRED}
+            and recent.status is EvidenceSufficiencyStatus.SUPPORTED
+        ):
+            return (
+                f"You told me in this conversation that your {attribute.replace('_', ' ')} is {recent.value}.",
+                {
+                    "evidence_sufficiency": "supported",
+                    "evidence_reason": recent.reason,
+                    "evidence_count": len(recent.evidence_ids),
+                    "response_source": "authorized_conversation_evidence",
+                    "actual_provider": None, "actual_model": None,
+                },
+            )
         metadata = {
             "evidence_sufficiency": result.status.value,
             "evidence_reason": result.reason,
@@ -1275,6 +1326,13 @@ class ChatRuntime:
         }
         if result.status is EvidenceSufficiencyStatus.SUPPORTED:
             return f"Your {attribute.replace('_', ' ')} is {result.value}.", metadata
+        if recent.status is EvidenceSufficiencyStatus.CONTRADICTORY:
+            return "You gave conflicting information in this conversation, so I can't verify a single answer.", {
+                **metadata, "evidence_sufficiency": "contradictory",
+                "evidence_reason": recent.reason,
+                "response_source": "authorized_conversation_evidence",
+                "evidence_count": len(recent.evidence_ids),
+            }
         if result.status is EvidenceSufficiencyStatus.AMBIGUOUS:
             return "Which detail about you would you like me to recall?", metadata
         if result.status is EvidenceSufficiencyStatus.CONTRADICTORY:
@@ -2608,7 +2666,13 @@ class ChatRuntime:
             if decision.intent == "memory.recall" else None
         )
         md.extra["personal_recall_grounded"] = (
-            normalized.get("response_source") == "authorized_memory_evidence"
+            normalized.get("response_source") in {
+                "authorized_memory_evidence", "authorized_conversation_evidence",
+            }
+        )
+        md.extra["personal_recall_evidence_source"] = (
+            normalized.get("response_source")
+            if md.extra["personal_recall_grounded"] else None
         )
 
         if memory_meta:
