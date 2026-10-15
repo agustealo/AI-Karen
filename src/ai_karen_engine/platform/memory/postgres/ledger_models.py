@@ -141,6 +141,9 @@ class ProfileFact(Base):
     category = Column(String(100), nullable=False)
     attribute = Column(String(255), nullable=False)
     value = Column(JSONB, nullable=False)
+    # Nullable for pre-MI-04 rows until governed historical reconciliation.
+    # Every new keyed projection is protected by a partial unique index.
+    projection_key = Column(String(64), nullable=True)
     confidence = Column(Float, default=1.0)
     source_type = Column(String(100), nullable=False)
     source_ref = Column(String(255), nullable=True)
@@ -152,6 +155,14 @@ class ProfileFact(Base):
 
     __table_args__ = (
         Index("idx_profile_fact_user_category", "user_id", "category"),
+        Index(
+            "uq_profile_fact_active_projection_key",
+            "tenant_id", "user_id", "projection_key",
+            unique=True,
+            postgresql_where=(
+                (valid_to.is_(None)) & (projection_key.is_not(None))
+            ),
+        ),
     )
 
 
