@@ -132,7 +132,7 @@ class MemoryFormationEvaluator:
         })
         sensitive_preference = (
             signal.signal_type == "preference"
-            and str(signal.metadata.get("domain") or "").casefold()
+            and str(signal.metadata.get("preference_domain") or "").casefold()
             in sensitive_preference_domains
         )
 
