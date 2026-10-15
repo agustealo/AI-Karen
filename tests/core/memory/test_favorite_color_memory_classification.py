@@ -30,3 +30,35 @@ def test_favorite_color_conversation_is_typed_preference(utterance: str) -> None
 def test_liking_black_without_favorite_claim_does_not_invent_favorite() -> None:
     signals = classify_explicit_user_memory("I love the color black.")
     assert not any(s.metadata.get("attribute") == "favorite_color" for s in signals)
+
+@pytest.mark.parametrize("question", [
+    "Whats my fav color?",
+    "what my fav color?",
+    "What's my favorite color?",
+    "What is my favourite colour?",
+    "Which is my favorite color?",
+])
+def test_favorite_color_questions_route_to_explicit_profile_attribute(question: str) -> None:
+    from ai_karen_engine.core.intelligence.profile_attribute import (
+        requested_profile_attribute,
+    )
+    from ai_karen_engine.core.memory.signals.semantic_classifier import (
+        is_personal_memory_recall_query,
+    )
+
+    assert requested_profile_attribute(question) == "favorite_color"
+    assert is_personal_memory_recall_query(question)
+
+
+@pytest.mark.parametrize("question", [
+    "Who am I?",
+    "What is my name?",
+    "What is my favorite food?",
+])
+def test_non_color_questions_do_not_route_to_color(question: str) -> None:
+    from ai_karen_engine.core.intelligence.profile_attribute import (
+        requested_profile_attribute,
+    )
+
+    assert requested_profile_attribute(question) != "favorite_color"
+
