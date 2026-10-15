@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import uuid
 
+import asyncpg
+
 import pytest
 from sqlalchemy import delete, select
 
@@ -191,3 +193,74 @@ async def test_live_reconciliation_rejects_oversized_scan_without_mutation():
             await session.execute(delete(MemoryEvent).where(
                 MemoryEvent.event_id.in_(ids),
             ))
+
+
+async def test_profile_fact_rls_blocks_cross_tenant_reads_with_unprivileged_role():
+    """Exercise actual database RLS, not SQL text inspection or ORM filters."""
+    tenant_a, tenant_b, user = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    event_a, event_b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for tenant, event_id, artist in (
+            (tenant_a, event_a, "Bob Marley"),
+            (tenant_b, event_b, "Nina Simone"),
+        ):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                session.add(MemoryEvent(
+                    event_id=event_id, tenant_id=tenant, user_id=user,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    event_type="memory_persisted", payload=_payload(artist),
+                ))
+                session.add(ProfileFact(
+                    event_id=event_id, tenant_id=tenant, user_id=user,
+                    category="preference", attribute="favorite_artist",
+                    source_type="chat_user",
+                    value={"value": artist, "text": f"I love {artist}",
+                           "cardinality": "set", "domain": "music"},
+                ))
+
+        connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            async with connection.transaction():
+                await connection.execute("SET LOCAL ROLE karen_ci_memory_reader")
+                await connection.execute(
+                    "SELECT set_config('app.current_tenant_id', $1, true)",
+                    str(tenant_a),
+                )
+                found = await connection.fetch(
+                    "SELECT event_id FROM public.profile_fact "
+                    "WHERE event_id = ANY($1::uuid[])",
+                    [event_a, event_b],
+                )
+                assert {item["event_id"] for item in found} == {event_a}
+            async with connection.transaction():
+                await connection.execute("SET LOCAL ROLE karen_ci_memory_reader")
+                await connection.execute(
+                    "SELECT set_config('app.current_tenant_id', $1, true)",
+                    str(tenant_b),
+                )
+                found = await connection.fetch(
+                    "SELECT event_id FROM public.profile_fact "
+                    "WHERE event_id = ANY($1::uuid[])",
+                    [event_a, event_b],
+                )
+                assert {item["event_id"] for item in found} == {event_b}
+            async with connection.transaction():
+                await connection.execute("SET LOCAL ROLE karen_ci_memory_reader")
+                # No tenant setting is explicitly denied by the RLS policy.
+                found = await connection.fetch(
+                    "SELECT event_id FROM public.profile_fact "
+                    "WHERE event_id = ANY($1::uuid[])",
+                    [event_a, event_b],
+                )
+                assert found == []
+        finally:
+            await connection.close()
+    finally:
+        for tenant, event_id in ((tenant_a, event_a), (tenant_b, event_b)):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                await session.execute(
+                    delete(ProfileFact).where(ProfileFact.event_id == event_id)
+                )
+                await session.execute(
+                    delete(MemoryEvent).where(MemoryEvent.event_id == event_id)
+                )
