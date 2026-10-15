@@ -316,6 +316,92 @@ def merge_memory_metadata(
     return merged
 
 
+# A ProfileFact is a *projection* of admitted evidence. The following adapter
+# computes its current-slot identity from canonical, typed cardinality rather
+# than repeating independent string comparisons across database code.
+PROFILE_PROJECTION_QUALIFIERS = (
+    "preference_key", "scope", "domain", "facet", "context",
+    "project_id", "task_id", "task_type", "location",
+)
+
+
+def profile_projection_slot(
+    value: Mapping[str, Any],
+    *,
+    source_event_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Describe a current profile slot without making a policy decision.
+
+    Legacy rows lacking cardinality have singleton semantics. Separate values
+    in a SET have separate slots; events/series require event provenance and
+    never supersede a different observation. None denotes an unkeyed event
+    during compatibility comparisons, not permission to coalesce it.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError("profile projection value must be a mapping")
+    raw_cardinality = value.get("cardinality") or FactCardinality.SINGLETON.value
+    try:
+        cardinality = FactCardinality(raw_cardinality)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("unsupported profile fact cardinality") from exc
+
+    qualifiers: dict[str, str] = {}
+    for name in PROFILE_PROJECTION_QUALIFIERS:
+        field_value = value.get(name)
+        if field_value is None:
+            continue
+        if not isinstance(field_value, (str, int, float)) or isinstance(field_value, bool):
+            raise ValueError(f"invalid profile projection qualifier: {name}")
+        normalized = str(field_value).strip().casefold()
+        if normalized:
+            qualifiers[name] = normalized
+
+    slot: dict[str, Any] = {
+        "cardinality": cardinality.value,
+        "qualifiers": qualifiers,
+    }
+    if cardinality is FactCardinality.SET:
+        member = value.get("value")
+        if not isinstance(member, (str, int, float)) or isinstance(member, bool):
+            raise ValueError("profile set member must be a scalar value")
+        slot["member"] = _required(str(member), "profile set member").casefold()
+    elif cardinality in (FactCardinality.EVENT, FactCardinality.TEMPORAL_SERIES):
+        if not source_event_id:
+            return None
+        slot["event_id"] = _required(source_event_id, "source_event_id")
+    return slot
+
+
+def profile_projection_key(
+    *,
+    tenant_id: str,
+    user_id: str,
+    category: str,
+    attribute: str,
+    value: Mapping[str, Any],
+    source_event_id: str,
+) -> str:
+    """Deterministic current-slot identity for PostgreSQL ProfileFact.
+
+    This is deliberately an adapter for legacy profile/category fields. A
+    SemanticAssertion.fact_key describes its semantic relation; both use
+    explicit scope and cardinality, but must not be conflated before the
+    asserted subject/predicate mapping is fully migrated.
+    """
+    slot = profile_projection_slot(value, source_event_id=source_event_id)
+    if slot is None:
+        raise ValueError("profile projection requires source event provenance")
+    identity = {
+        "tenant_id": _required(tenant_id, "tenant_id"),
+        "user_id": _required(user_id, "user_id"),
+        "category": _required(category, "category").casefold(),
+        "attribute": _required(attribute, "attribute").casefold(),
+        "slot": slot,
+    }
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "SCHEMA_VERSION", "SubjectKind", "AssertionModality", "FactCardinality",
     "MemoryOperation", "SemanticSubject", "SemanticPredicate",
@@ -323,5 +409,6 @@ __all__ = [
     "SemanticConfidence", "SemanticProvenance", "SemanticAssertion",
     "SEMANTIC_METADATA_KEYS", "RUNTIME_METADATA_KEYS",
     "RESERVED_MEMORY_METADATA_KEYS", "LEGACY_RUNTIME_SEMANTIC_FIELDS",
-    "merge_memory_metadata",
+    "merge_memory_metadata", "PROFILE_PROJECTION_QUALIFIERS",
+    "profile_projection_slot", "profile_projection_key",
 ]
