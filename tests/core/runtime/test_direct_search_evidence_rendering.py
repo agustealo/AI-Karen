@@ -80,3 +80,43 @@ def test_missing_publication_date_is_not_invented():
     })
     assert "Headline: Undated article" in text
     assert "Published" not in text
+
+
+def test_search_result_articles_are_carried_to_response_sources():
+    executor = object.__new__(DirectCapabilityExecutor)
+    payload = {
+        "results": [{
+            "title": "Jamaica news update",
+            "published_at": "2026-10-15T10:00:00Z",
+            "snippet": "An article with provider evidence.",
+            "url": "https://example.org/jamaica",
+        }]
+    }
+    result = executor._success(
+        0.0, "search.general", "latest Jamaica news", payload,
+        source="tool", source_id="web_search", attempts=[],
+    )
+    assert result.success is True
+    assert result.sources == payload["results"]
+    assert result.sources[0]["published_at"] == "2026-10-15T10:00:00Z"
+
+
+def test_search_response_sources_deduplicate_provider_entries():
+    executor = object.__new__(DirectCapabilityExecutor)
+    original = {"url": "https://example.org/news", "snippet": "Sourced article"}
+    payload = {"sources": [original], "results": [dict(original)]}
+    result = executor._success(
+        0.0, "search.general", "Jamaica news", payload,
+        source="tool", source_id="web_search", attempts=[],
+    )
+    assert result.sources == [original]
+
+
+def test_search_response_does_not_promote_unsourced_result_to_source():
+    executor = object.__new__(DirectCapabilityExecutor)
+    result = executor._success(
+        0.0, "search.general", "Jamaica news",
+        {"results": [{"snippet": "No verifiable link"}]},
+        source="tool", source_id="web_search", attempts=[],
+    )
+    assert result.sources == []
