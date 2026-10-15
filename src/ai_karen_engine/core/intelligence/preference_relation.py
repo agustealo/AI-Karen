@@ -117,6 +117,11 @@ def extract_favorite_assertion(text: str) -> FavoriteAssertion | None:
             continue
         value = " ".join(match.group("value").strip().split())
         value = _LEADING.sub("", value).strip()
+        # An uncertainty marker inside a reverse-form value describes
+        # modality, not the object.
+        value_hedged = bool(re.match(r"^i\s+(?:think|guess|feel|suspect)\s+", value, re.I))
+        if value_hedged:
+            value = re.sub(r"^i\s+(?:think|guess|feel|suspect)\s+", "", value, flags=re.I)
         if not value or _NEGATIVE.match(value):
             continue
         if value.casefold() in {"it", "its", "this", "that", "they", "them", "my", "your"}:
@@ -134,7 +139,7 @@ def extract_favorite_assertion(text: str) -> FavoriteAssertion | None:
         # A deictic "I think it's my favorite" remains uncertain, even
         # when the user explicitly names the object in the prior clause.
         preceding = utterance[:match.start()] if pattern is not _DEICTIC else ""
-        uncertain = bool(match.groupdict().get("hedge") or _HEDGE.search(preceding))
+        uncertain = bool(value_hedged or match.groupdict().get("hedge") or _HEDGE.search(preceding))
         correction = bool(
             re.search(r"\bactually\b", utterance[:match.end()], re.I)
             or re.search(r"\bnow\b", utterance[match.start():match.end()+5], re.I)
