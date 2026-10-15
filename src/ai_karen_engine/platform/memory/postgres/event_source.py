@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlalchemy import select
 
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
+from .consent_filter import recallable_memory_event
 from .ledger_models import MemoryEvent
 
 
@@ -45,10 +47,11 @@ class PostgresEventSource:
 
         async with async_transaction_scope(tenant_id=str(tenant_id)) as session:
             stmt = select(MemoryEvent).where(
-                MemoryEvent.tenant_id == tenant_uuid,
-                MemoryEvent.user_id == user_uuid,
                 MemoryEvent.event_id.in_(ids),
-                MemoryEvent.consent_state == "granted",
+                recallable_memory_event(
+                    tenant_id=tenant_uuid, user_id=user_uuid,
+                    now=datetime.now(timezone.utc).replace(tzinfo=None),
+                ),
             )
             rows = (await session.execute(stmt)).scalars().all()
 
