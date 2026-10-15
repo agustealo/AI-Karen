@@ -843,6 +843,7 @@ class ChatRuntime:
             )
             memory_persistence_failed = (
                 memory_recall_meta.get("memory_persistence_status") == "failed"
+                or bool(memory_recall_meta.get("memory_degraded"))
             )
 
         transcript_result = TranscriptPersistenceResult(
@@ -2934,7 +2935,10 @@ class ChatRuntime:
                 or "transcript_persistence_failed"
             )
         if not degradation_reason and memory_persistence_failed and not generation_error:
-            degradation_reason = "memory_persistence_failed"
+            degradation_reason = (
+                memory_recall_meta.get("memory_degradation_reason")
+                or "memory_persistence_failed"
+            )
 
         return {
             "correlation_id": ctx.correlation_id,
