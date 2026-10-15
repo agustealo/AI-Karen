@@ -117,3 +117,22 @@ def test_semantic_category_and_source_claims_must_match():
     row.source_type = "chat_user"
     event.payload["metadata"]["custom"]["signal_semantics"]["attribute"] = "job"
     assert issue(row, event, tenant, user) == "unverifiable_semantics"
+
+
+
+def test_legacy_value_without_normalization_must_equal_original_event_text():
+    tenant, user, row, event = sample()
+    del event.payload["metadata"]["custom"]["signal_semantics"]["normalized_value"]
+    # The old projector fell back to signal.text when no normalized value
+    # existed. It is not proof for any other rendered profile value.
+    assert issue(row, event, tenant, user) == "evidence_value_mismatch"
+    row.value["value"] = row.value["text"]
+    assert issue(row, event, tenant, user) is None
+
+
+def test_scope_qualifier_cannot_be_assigned_without_original_evidence():
+    tenant, user, row, event = sample()
+    row.value["scope"] = "project:karen"
+    assert issue(row, event, tenant, user) == "evidence_scope_mismatch"
+    event.payload["metadata"]["custom"]["signal_semantics"]["scope"] = "project:karen"
+    assert issue(row, event, tenant, user) is None
