@@ -30,7 +30,7 @@ _COLOR_IS_FAVORITE = re.compile(
 _FAVORITE_COLOR_HEDGED = re.compile(
     r"(?i)\b(?:i\s+(?:really\s+)?(?:love|like|adore)\s+(?:the\s+colou?r\s+)?"
     r"(?P<color>[a-z]+))\s*[,;.]?\s*"
-    r"(?:i\s+(?:think|guess|feel)\s+(?:it(?:'s| is)|that(?:'s| is))\s+"
+    r"(?:i\s+(?:think|guess|feel)\s+(?:it(?:'s|s| is)|that(?:'s| is))\s+"
     r"my\s+favou?rite\s+colou?r)\b"
 )
 _COLOR_IS_FAVORITE_EMPHATIC = re.compile(
