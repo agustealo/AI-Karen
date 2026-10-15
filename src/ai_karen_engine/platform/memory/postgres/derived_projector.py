@@ -57,8 +57,10 @@ class PostgresDerivedMemoryProjector:
         tenant_uuid = uuid.UUID(str(tenant_id))
         user_uuid = uuid.UUID(str(user_id))
         event_uuid = uuid.UUID(str(event_id))
-        merged = dict(signal.metadata or {})
-        merged.update(metadata or {})
+        # Per-signal semantics are canonical. Request/session context may enrich
+        # provenance, but never redefine the meaning extracted from the user.
+        merged = dict(metadata or {})
+        merged.update(signal.metadata or {})
 
         await self._project_relational_views(
             tenant_uuid=tenant_uuid,
