@@ -19,16 +19,24 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .ledger_models import MemoryEvent, ProfileFact
+from .ledger_models import ConsentScope, MemoryEvent, ProfileFact
 
 
 class PostgresProfileRecallRetriever:
     """Return current profile facts as scoped NeuroRecall candidates."""
 
     async def recall(self, query: MemoryQuery) -> list[MemoryEntry]:
-        activation = decide_activation_mode(query=query.text or "", has_profile=True)
-        if activation.mode.value not in {"profile", "deep"} and not self._looks_like_profile_query(query.text or ""):
-            return []
+        # CORTEX/Intelligence has already resolved typed profile predicates.
+        # Do not let NeuroRecall's older lexical activation heuristics discard
+        # semantically resolved queries with abbreviations or natural phrasing.
+        preferred_attribute = self._preferred_attribute(query.text or "")
+        if preferred_attribute is None:
+            activation = decide_activation_mode(query=query.text or "", has_profile=True)
+            if (
+                activation.mode.value not in {"profile", "deep"}
+                and not self._looks_like_profile_query(query.text or "")
+            ):
+                return []
 
         try:
             tenant_uuid = uuid.UUID(str(query.tenant_id or ""))
@@ -36,12 +44,11 @@ class PostgresProfileRecallRetriever:
         except ValueError:
             return []
 
-        preferred_attribute = self._preferred_attribute(query.text or "")
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         top_k = min(max(int(query.top_k or 10), 1), 50)
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
             stmt = (
-                select(ProfileFact)
+                select(ProfileFact, MemoryEvent)
                 .join(MemoryEvent, MemoryEvent.event_id == ProfileFact.event_id)
                 .where(
                     ProfileFact.tenant_id == tenant_uuid,
@@ -49,7 +56,9 @@ class PostgresProfileRecallRetriever:
                     MemoryEvent.tenant_id == tenant_uuid,
                     MemoryEvent.user_id == user_uuid,
                     MemoryEvent.consent_state == "granted",
+                    or_(MemoryEvent.valid_from.is_(None), MemoryEvent.valid_from <= now),
                     or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
+                    or_(ProfileFact.valid_from.is_(None), ProfileFact.valid_from <= now),
                     # Superseded or expired facts must never compete with the active value.
                     # Temporary facts remain eligible until their explicit validity window closes.
                     or_(ProfileFact.valid_to.is_(None), ProfileFact.valid_to > now),
@@ -62,11 +71,39 @@ class PostgresProfileRecallRetriever:
                     ProfileFact.confidence.desc(),
                     ProfileFact.updated_at.desc(),
                 )
-                .limit(top_k)
+                # Filter revoked scopes before the final top_k so a revoked
+                # result cannot crowd an otherwise valid profile answer.
+                .limit(min(top_k * 4, 200))
             )
-            rows = (await session.execute(stmt)).scalars().all()
+            rows = (await session.execute(stmt)).all()
+            scope_rows = (
+                await session.execute(
+                    select(ConsentScope).where(
+                        ConsentScope.tenant_id == tenant_uuid,
+                        ConsentScope.user_id == user_uuid,
+                    ).order_by(ConsentScope.granted_at.desc())
+                )
+            ).scalars().all()
 
-        return [self._entry(row, query) for row in rows]
+        latest_consent: dict[str, bool] = {}
+        for item in scope_rows:
+            latest_consent.setdefault(item.scope_name, bool(item.is_granted))
+
+        results: list[MemoryEntry] = []
+        for row, event in rows:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            vault = payload.get("vault")
+            scope = (
+                vault.get("consent_scope")
+                if isinstance(vault, dict) else None
+            )
+            scope = str(scope or "memory.write")
+            if latest_consent.get(scope) is False:
+                continue
+            results.append(self._entry(row, query))
+            if len(results) >= top_k:
+                break
+        return results
 
     @staticmethod
     def _preferred_attribute(text: str) -> str | None:

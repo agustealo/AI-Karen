@@ -843,6 +843,7 @@ class ChatRuntime:
             )
             memory_persistence_failed = (
                 memory_recall_meta.get("memory_persistence_status") == "failed"
+                or bool(memory_recall_meta.get("memory_degraded"))
             )
 
         transcript_result = TranscriptPersistenceResult(
@@ -1360,6 +1361,14 @@ class ChatRuntime:
                 f"Saved {persisted} memory fact"
                 f"{'s' if persisted != 1 else ''} for future conversations."
             )
+        if persisted > 0 and memory_meta.get("memory_persistence_status") == "persisted_projection_degraded":
+            return (
+                f"Stored {persisted} memory fact"
+                f"{'s' if persisted != 1 else ''} in durable memory, "
+                "but I couldn't confirm that recall projections completed successfully."
+            )
+        if memory_meta.get("memory_persistence_status") == "disabled_or_shadow":
+            return "I couldn't save this as long-term memory because durable learning is disabled or in shadow mode."
         reason = str(receipt.get("reason") or "")
         if reason == "memory_write_not_authorized" or memory_meta.get("memory_persistence_status") == "denied_by_policy":
             return "I couldn't save that information because memory writing was not authorized."
@@ -1431,7 +1440,17 @@ class ChatRuntime:
         memory_recall_meta: Dict[str, Any],
         plan: AuthorizedExecutionPlan,
     ) -> Dict[str, Any]:
-        if not await ActionExecutionGate.authorize(plan, "memory.write"):
+        ctx = request.context
+        # A capability grant is bound to its exact principal and session; it
+        # cannot be replayed against a different user's memory write.
+        if (
+            not plan.matches_execution_scope(
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+            )
+            or not await ActionExecutionGate.authorize(plan, "memory.write")
+        ):
             result = {
                 "status": "rejected",
                 "reason": "memory_write_not_authorized",
@@ -1440,7 +1459,6 @@ class ChatRuntime:
             memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
             return result
 
-        ctx = request.context
         user_message = self._extract_user_message(request.messages)
         user_message = self._resolve_explicit_memory_reference(request, user_message)
         if not user_message.strip():
@@ -1500,7 +1518,17 @@ class ChatRuntime:
                     "memory_authorization_proof_rejected"
                 )
             elif persisted > 0:
-                memory_recall_meta["memory_persistence_status"] = "persisted"
+                projection_failures = int(result.get("projection_failures") or 0)
+                if projection_failures:
+                    memory_recall_meta["memory_persistence_status"] = "persisted_projection_degraded"
+                    memory_recall_meta["memory_degraded"] = True
+                    memory_recall_meta["memory_degradation_reason"] = "memory_projection_failed"
+                else:
+                    memory_recall_meta["memory_persistence_status"] = "persisted"
+            elif result.get("write_authority") == "disabled_or_shadow":
+                memory_recall_meta["memory_persistence_status"] = "disabled_or_shadow"
+                memory_recall_meta["memory_degraded"] = True
+                memory_recall_meta["memory_degradation_reason"] = "durable_learning_disabled_or_shadow"
             elif formation_status in {"failed", "error"}:
                 memory_recall_meta["memory_persistence_status"] = "failed"
                 memory_recall_meta["memory_degraded"] = True
@@ -1515,6 +1543,12 @@ class ChatRuntime:
             )
             memory_recall_meta["memory_admitted_count"] = admitted
             memory_recall_meta["memory_persisted_count"] = persisted
+            memory_recall_meta["memory_projection_failures"] = int(
+                result.get("projection_failures") or 0
+            )
+            memory_recall_meta["memory_write_authority"] = str(
+                result.get("write_authority") or "unknown"
+            )
             memory_recall_meta["memory_formation_status"] = formation_status
             if reason:
                 memory_recall_meta["memory_formation_reason"] = str(reason)
@@ -2901,7 +2935,10 @@ class ChatRuntime:
                 or "transcript_persistence_failed"
             )
         if not degradation_reason and memory_persistence_failed and not generation_error:
-            degradation_reason = "memory_persistence_failed"
+            degradation_reason = (
+                memory_recall_meta.get("memory_degradation_reason")
+                or "memory_persistence_failed"
+            )
 
         return {
             "correlation_id": ctx.correlation_id,

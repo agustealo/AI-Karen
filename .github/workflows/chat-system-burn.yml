@@ -68,6 +68,9 @@ jobs:
       - name: Burn authorized conversation personal-fact grounding
         run: pytest tests/core/runtime/test_conversation_personal_sufficiency.py -q
 
+      - name: Burn durable memory write-read truth and scope binding
+        run: pytest tests/core/runtime/test_memory_write_recall_truth.py -q
+
       - name: Verify upbringing and inverted name recall
         run: pytest tests/core/runtime/test_upbringing_and_inverted_name_recall.py -q
 
