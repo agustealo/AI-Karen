@@ -21,7 +21,7 @@ from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
 
 
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
         reason="Only runs against isolated CI PostgreSQL with the opt-in flag",
