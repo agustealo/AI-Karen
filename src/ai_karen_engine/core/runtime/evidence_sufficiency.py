@@ -179,7 +179,12 @@ def evaluate_conversation_personal_evidence(
         # Classification, not a first-token guess, establishes first-person
         # attribution. This also admits "Black is my favorite color" while
         # rejecting reported speech and quotes via the shared interpreter.
-        if len(user_text) > 500:
+        if len(user_text) > 500 or (
+            not user_text.casefold().startswith(
+                ("my ", "i ", "i'm ", "i’ve ", "i've ", "call me ")
+            )
+            and not attribute.startswith("favorite_")
+        ):
             continue
         for signal in classify_explicit_user_memory(user_text):
             value = signal.metadata.get("normalized_value")
