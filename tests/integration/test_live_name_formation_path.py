@@ -164,10 +164,26 @@ async def test_explicit_name_chat_reaches_fresh_conversation_recall():
                 MemoryEvent.user_id == user,
             ))
 
-async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response():
-    """Natural favorite-color language must persist and answer from governed memory."""
+@pytest.mark.parametrize(
+    ("statement", "value", "attribute", "wordings"),
+    [
+        (
+            "No! I just love black, it is my favorite color.",
+            "black", "favorite_color",
+            ("What's my favorite color?", "what my fav color?", "Whats my fav color?"),
+        ),
+        (
+            "My favorite music genre is reggae.",
+            "reggae", "favorite_music_genre",
+            ("What's my favorite music genre?", "what my fav music genre?"),
+        ),
+    ],
+)
+async def test_explicit_favorite_chat_reaches_fresh_conversation_response(
+    statement, value, attribute, wordings,
+):
+    """Unseen favorite domains persist and recall via real governed PostgreSQL."""
     tenant, user = uuid.uuid4(), uuid.uuid4()
-    color = "black"
     session_a, session_b = str(uuid.uuid4()), str(uuid.uuid4())
     conversation_a, conversation_b = str(uuid.uuid4()), str(uuid.uuid4())
     factory = lambda: async_transaction_scope(tenant_id=str(tenant))
@@ -181,8 +197,7 @@ async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response(
 
     try:
         write_result = await formation.process_interaction(
-            # Explicit favorite assertion, not an uncertain "I think" hypothesis.
-            text="No! I just love black, it is my favorite color.",
+            text=statement,
             tenant_id=str(tenant),
             user_id=str(user),
             source_type="chat_user",
@@ -204,22 +219,18 @@ async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response(
         assert write_result.get("projection_failures", 0) == 0, write_result
 
         query = SimpleNamespace(
-            text="What's my favorite color?",
+            text=wordings[0],
             tenant_id=str(tenant),
             user_id=str(user),
             session_id=session_b,
             conversation_id=conversation_b,
             top_k=5,
         )
-        for wording in (
-            "What's my favorite color?",
-            "what my fav color?",
-            "Whats my fav color?",
-        ):
+        for wording in wordings:
             query.text = wording
             found = await retriever.recall(query)
             assert any(
-                f"favorite_color: {color}" == item.content for item in found
+                f"{attribute}: {value}" == item.content for item in found
             ), (wording, [item.content for item in found])
 
         from ai_karen_engine.core.context.contracts import (
@@ -241,7 +252,7 @@ async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response(
         ]
         decision = ExecutionDecision(
             intent="memory.recall",
-            policy_constraints={"personal_evidence_attribute": "favorite_color"},
+            policy_constraints={"personal_evidence_attribute": attribute},
         )
         decision.cognitive_context = SimpleNamespace(
             tenant_id=str(tenant),
@@ -257,7 +268,7 @@ async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response(
             tenant_id=str(tenant),
             user_id=str(user),
         )
-        assert answer == "Your favorite color is black."
+        assert answer == f"Your {attribute.replace('_', ' ')} is {value}."
         assert provenance["response_source"] == "authorized_memory_evidence"
         assert provenance["actual_provider"] is None
         assert provenance["evidence_sufficiency"] == "supported"
