@@ -26,7 +26,7 @@ class RuleBasedExtractor:
         explicit_types = {signal.signal_type for signal in signals}
 
         for pattern in self.preference_patterns:
-            if "goal" in explicit_types or "prospective_event" in explicit_types:
+            if explicit_types.intersection({"goal", "prospective_event", "preference"}):
                 break
             match = pattern.search(text)
             if match:
