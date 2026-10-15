@@ -264,6 +264,11 @@ SEMANTIC_METADATA_KEYS = frozenset({
 RESERVED_MEMORY_METADATA_KEYS = frozenset({
     "signal_semantics", "runtime_context",
 })
+# Legacy lifecycle transport hints have not yet moved to typed formation
+# contracts. They are not permitted to set identity or belief cardinality.
+LEGACY_RUNTIME_SEMANTIC_FIELDS = frozenset({
+    "goal_type", "event_type", "scope",
+})
 
 
 def merge_memory_metadata(
@@ -290,6 +295,10 @@ def merge_memory_metadata(
     ):
         raise ValueError("reserved memory metadata namespace supplied")
 
+    for key in (SEMANTIC_METADATA_KEYS - LEGACY_RUNTIME_SEMANTIC_FIELDS):
+        if key in runtime and key not in semantic:
+            raise ValueError(f"untrusted semantic projection metadata: {key}")
+
     for key in semantic.keys() & runtime.keys():
         if semantic[key] != runtime[key]:
             namespace = "runtime" if key in RUNTIME_METADATA_KEYS else "semantic"
@@ -313,5 +322,6 @@ __all__ = [
     "SemanticObject", "SemanticQualifiers", "SemanticTemporality",
     "SemanticConfidence", "SemanticProvenance", "SemanticAssertion",
     "SEMANTIC_METADATA_KEYS", "RUNTIME_METADATA_KEYS",
-    "RESERVED_MEMORY_METADATA_KEYS", "merge_memory_metadata",
+    "RESERVED_MEMORY_METADATA_KEYS", "LEGACY_RUNTIME_SEMANTIC_FIELDS",
+    "merge_memory_metadata",
 ]
