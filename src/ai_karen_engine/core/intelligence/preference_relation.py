@@ -95,6 +95,11 @@ def extract_favorite_assertion(text: str) -> FavoriteAssertion | None:
         quote in utterance for quote in ('"', "“", "”", "‘", "’")
     ):
         return None
+    # Our bounded clause grammar stops at periods. Refuse email and dotted
+    # address-like values rather than silently extracting a truncated secret
+    # that the existing formation privacy detector can no longer recognize.
+    if re.search(r"\b[\w.+-]+@[\w.-]+\b|\b\d{1,3}(?:\.\d{1,3}){2,}\b", utterance):
+        return None
 
     for pattern in (_DEICTIC, _FORWARD, _REVERSE):
         match = pattern.search(utterance)
