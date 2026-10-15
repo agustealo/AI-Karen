@@ -22,7 +22,8 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .ledger_models import MemoryAssertion
+from .consent_filter import recallable_memory_event
+from .ledger_models import MemoryAssertion, MemoryEvent
 
 
 class PostgresRecallScopeError(ValueError):
@@ -56,11 +57,19 @@ class PostgresRecallRetriever:
         top_k = min(max(int(query.top_k or 10), 1), 100)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        stmt = select(MemoryAssertion).where(
-            MemoryAssertion.tenant_id == tenant_uuid,
-            MemoryAssertion.user_id == user_uuid,
-            MemoryAssertion.consent_state == "granted",
-            or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
+        stmt = (
+            select(MemoryAssertion)
+            .join(MemoryEvent, MemoryEvent.event_id == MemoryAssertion.event_id)
+            .where(
+                MemoryAssertion.tenant_id == tenant_uuid,
+                MemoryAssertion.user_id == user_uuid,
+                MemoryAssertion.consent_state == "granted",
+                or_(MemoryAssertion.valid_from.is_(None), MemoryAssertion.valid_from <= now),
+                or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
+                recallable_memory_event(
+                    tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                ),
+            )
         )
 
         text = str(query.text or "").strip()
