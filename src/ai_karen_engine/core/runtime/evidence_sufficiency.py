@@ -144,3 +144,63 @@ def evaluate_personal_evidence(
     return EvidenceSufficiency(
         EvidenceSufficiencyStatus.MISSING, attribute, reason="no_matching_evidence",
     )
+
+
+def evaluate_conversation_personal_evidence(
+    context: CognitiveContext | None, *, tenant_id: str, user_id: str,
+    attribute: str | None,
+) -> EvidenceSufficiency:
+    """Evaluate attributed user statements from authorized conversation history."""
+    if not attribute:
+        return EvidenceSufficiency(EvidenceSufficiencyStatus.AMBIGUOUS, None)
+    if (
+        context is None or context.tenant_id != tenant_id or context.user_id != user_id
+        or EvidenceSource.CONVERSATION.value not in context.authorized_sources
+        or EvidenceSource.CONVERSATION.value in context.denied_sources
+        or EvidenceSource.CONVERSATION.value in context.unresolved_sources
+    ):
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.MISSING, attribute, reason="conversation_unavailable",
+        )
+    from ai_karen_engine.core.memory.signals.semantic_classifier import (
+        classify_explicit_user_memory,
+    )
+    facts: list[tuple[str, str]] = []
+    for item in context.evidence:
+        if (
+            item.source is not EvidenceSource.CONVERSATION
+            or item.scope is None or item.scope.tenant_id != tenant_id
+            or item.scope.user_id != user_id
+            or item.scope.conversation_id != context.requirements.conversation_id
+            or item.metadata.get("role") != "user"
+        ):
+            continue
+        user_text = item.content.strip()
+        if not user_text.casefold().startswith(
+            ("my ", "i ", "i'm ", "i’ve ", "i've ", "call me ")
+        ) or len(user_text) > 500:
+            continue
+        for signal in classify_explicit_user_memory(user_text):
+            value = signal.metadata.get("normalized_value")
+            if (
+                signal.metadata.get("attribute") == attribute
+                and signal.metadata.get("explicit_user_statement") is True
+                and isinstance(value, str) and 0 < len(value.strip()) <= 120
+            ):
+                facts.append((item.evidence_id, value.strip()))
+    if not facts:
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.MISSING, attribute,
+            reason="no_user_assertion_in_conversation",
+        )
+    if len({value.casefold() for _, value in facts}) > 1:
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.CONTRADICTORY, attribute,
+            evidence_ids=tuple(fid for fid, _ in facts),
+            reason="unresolved_conversation_conflict",
+        )
+    return EvidenceSufficiency(
+        EvidenceSufficiencyStatus.SUPPORTED, attribute, value=facts[-1][1],
+        evidence_ids=tuple(fid for fid, _ in facts),
+        reason="authorized_conversation_assertion_not_durable",
+    )
