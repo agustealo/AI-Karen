@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 
+from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
 from ai_karen_engine.core.context.contracts import (
     CognitiveContext, EvidenceContradictionStatus, EvidenceSource,
 )
@@ -16,6 +18,7 @@ from ai_karen_engine.core.context.contracts import (
 
 class EvidenceSufficiencyStatus(str, Enum):
     SUPPORTED = "supported"
+    SUPPORTED_SET = "supported_set"
     AMBIGUOUS = "ambiguous"
     MISSING = "missing"
     CONTRADICTORY = "contradictory"
@@ -28,11 +31,12 @@ class EvidenceSufficiency:
     attribute: str | None
     value: str | None = None
     evidence_ids: tuple[str, ...] = ()
+    values: tuple[str, ...] = ()
     reason: str = ""
 
     @property
     def may_assert(self) -> bool:
-        return self.status is EvidenceSufficiencyStatus.SUPPORTED
+        return self.status in {EvidenceSufficiencyStatus.SUPPORTED, EvidenceSufficiencyStatus.SUPPORTED_SET}
 
 
 def evaluate_personal_evidence(
@@ -42,6 +46,7 @@ def evaluate_personal_evidence(
     user_id: str,
     attribute: str | None,
     now: datetime | None = None,
+    cardinality: FactCardinality = FactCardinality.SINGLETON,
 ) -> EvidenceSufficiency:
     """Return a fact only if authorized, attributable, current and unopposed.
 
@@ -109,6 +114,16 @@ def evaluate_personal_evidence(
             evidence_ids=tuple(conflict_ids), reason="flagged_contradiction",
         )
     if live:
+        if cardinality is FactCardinality.SET:
+            distinct: dict[str, str] = {}
+            for _evidence_id, value in live:
+                distinct.setdefault(value.casefold(), value)
+            return EvidenceSufficiency(
+                EvidenceSufficiencyStatus.SUPPORTED_SET, attribute,
+                evidence_ids=tuple(item[0] for item in live),
+                values=tuple(distinct.values()),
+                reason="authorized_set_memory_evidence",
+            )
         values = {value.casefold() for _, value in live}
         if len(values) > 1:
             return EvidenceSufficiency(
