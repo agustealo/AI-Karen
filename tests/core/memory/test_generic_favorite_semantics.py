@@ -35,6 +35,8 @@ def test_unseen_favorite_domains_have_one_shared_semantics(statement, attribute,
     assert len(favorite) == 1, statement
     signal = favorite[0]
     assert signal.metadata["normalized_value"] == value
+    assert "domain" not in signal.metadata  # No scope drift for legacy favorites.
+    assert signal.metadata["preference_domain"]
     assert signal.metadata["assertion_modality"] == "asserted"
     assert signal.metadata["retention_scope"] == "user_profile"
     assert signal.metadata["explicit_user_statement"] is True
