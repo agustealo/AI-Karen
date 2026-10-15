@@ -45,8 +45,15 @@ class _Session:
     def __init__(self, scalars):
         self.scalars = list(scalars)
         self.added = []
+        self.advisory_locks = []
 
-    async def execute(self, _stmt):
+    async def execute(self, stmt, params=None):
+        if params is not None:
+            assert str(stmt) == "SELECT pg_advisory_xact_lock(:lock_id)"
+            assert set(params) == {"lock_id"}
+            assert isinstance(params["lock_id"], int)
+            self.advisory_locks.append(params["lock_id"])
+            return _Result()
         return _Result(self.scalars.pop(0) if self.scalars else None)
 
     def add(self, value):
