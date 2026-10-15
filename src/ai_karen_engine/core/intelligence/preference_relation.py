@@ -116,6 +116,10 @@ def extract_favorite_assertion(text: str) -> FavoriteAssertion | None:
         if not attribute:
             continue
         value = " ".join(match.group("value").strip().split())
+        # Negated values must be rejected *before* trimming discourse markers.
+        # Otherwise "no longer" could be mistaken for a leading "no".
+        if _NEGATIVE.match(value):
+            continue
         value = _LEADING.sub("", value).strip()
         # An uncertainty marker inside a reverse-form value describes
         # modality, not the object.
