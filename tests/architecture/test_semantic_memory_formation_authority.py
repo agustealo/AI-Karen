@@ -125,20 +125,25 @@ def test_derived_recall_requires_valid_canonical_source_event() -> None:
     vault = _text(
         "src/ai_karen_engine/platform/memory/postgres/vault.py"
     )
-    profile = _text(
-        "src/ai_karen_engine/platform/memory/postgres/profile_retriever.py"
-    )
-    user_state = _text(
-        "src/ai_karen_engine/platform/memory/postgres/user_state_retriever.py"
-    )
-    procedural = _text(
-        "src/ai_karen_engine/platform/memory/postgres/procedural_retriever.py"
-    )
+    base = "src/ai_karen_engine/platform/memory/postgres/"
+    shared = _text(base + "consent_filter.py")
 
     assert "source_event.valid_to =" in vault
-    for adapter in (profile, user_state, procedural):
-        assert "MemoryEvent.consent_state == \"granted\"" in adapter
-        assert "MemoryEvent.valid_to.is_(None)" in adapter
+    # One canonical SQL predicate prevents the independently implemented
+    # profile, assertion, goal, procedure and event adapters from bypassing
+    # post-write scope revocations.
+    assert 'MemoryEvent.consent_state == "granted"' in shared
+    assert "MemoryEvent.valid_to.is_(None)" in shared
+    assert "ConsentScope.is_granted" in shared
+    assert "ConsentScope.scope_name == event_consent_scope" in shared
+    for module in (
+        "profile_retriever.py", "recall_retriever.py",
+        "user_state_retriever.py", "procedural_retriever.py",
+        "event_source.py",
+    ):
+        adapter = _text(base + module)
+        assert "from .consent_filter import recallable_memory_event" in adapter
+        assert "recallable_memory_event(" in adapter
 
 
 def test_legacy_ram_goal_and_prospective_authorities_are_retired() -> None:
