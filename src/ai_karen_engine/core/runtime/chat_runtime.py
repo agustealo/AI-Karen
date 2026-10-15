@@ -1439,7 +1439,17 @@ class ChatRuntime:
         memory_recall_meta: Dict[str, Any],
         plan: AuthorizedExecutionPlan,
     ) -> Dict[str, Any]:
-        if not await ActionExecutionGate.authorize(plan, "memory.write"):
+        ctx = request.context
+        # A capability grant is bound to its exact principal and session; it
+        # cannot be replayed against a different user's memory write.
+        if (
+            not plan.matches_execution_scope(
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+            )
+            or not await ActionExecutionGate.authorize(plan, "memory.write")
+        ):
             result = {
                 "status": "rejected",
                 "reason": "memory_write_not_authorized",
@@ -1448,7 +1458,6 @@ class ChatRuntime:
             memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
             return result
 
-        ctx = request.context
         user_message = self._extract_user_message(request.messages)
         user_message = self._resolve_explicit_memory_reference(request, user_message)
         if not user_message.strip():
