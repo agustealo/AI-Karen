@@ -52,3 +52,31 @@ def test_weather_measurement_has_real_paragraph_breaks():
     })
     assert "unavailable):\n\n61 F" in text
     assert r"\n\n" not in text
+
+
+def test_news_excerpts_preserve_headline_and_provider_publication_time():
+    executor = object.__new__(DirectCapabilityExecutor)
+    text = executor._render("search.general", "What's the latest in Jamaica news?", {
+        "results": [{
+            "title": "Kingston transport announcement",
+            "published_at": "2026-10-14T12:30:00-05:00",
+            "snippet": "The transport agency published an update.",
+            "url": "https://example.org/jamaica/transport",
+        }]
+    })
+    assert "Headline: Kingston transport announcement" in text
+    assert "Published (provider-reported): 2026-10-14T12:30:00-05:00" in text
+    assert "Source: https://example.org/jamaica/transport" in text
+
+
+def test_missing_publication_date_is_not_invented():
+    executor = object.__new__(DirectCapabilityExecutor)
+    text = executor._render("search.general", "Jamaica news", {
+        "results": [{
+            "title": "Undated article",
+            "snippet": "A source excerpt",
+            "url": "https://example.org/undated",
+        }]
+    })
+    assert "Headline: Undated article" in text
+    assert "Published" not in text
