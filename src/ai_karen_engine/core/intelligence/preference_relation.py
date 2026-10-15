@@ -47,7 +47,7 @@ _REPORTED = re.compile(
     r"\b(?:he|she|they|someone|my\s+\w+)\s+(?:said|says|thinks|claims)\b",
     re.I,
 )
-_LEADING = re.compile(r"^(?:(?:actually|no|well|now)\s*[,;]?\s*)+", re.I)
+_LEADING = re.compile(r"^(?:(?:actually|no|well|now)\b\s*[,;]?\s*)+", re.I)
 _UNSUPPORTED_DOMAIN = frozenset({"what", "who", "where", "when", "why", "how", "thing"})
 
 
