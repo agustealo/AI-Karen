@@ -166,3 +166,51 @@ def test_corrected_favorite_marks_intent_but_keeps_single_attribute_identity():
     assert before.attribute == after.attribute == "favorite_genre"
     assert not before.explicit_correction
     assert after.explicit_correction
+
+
+@pytest.mark.asyncio
+async def test_sensitive_favorites_are_not_automatically_saved():
+    for statement in (
+        "My favorite password is hunter2.",
+        "My favorite medical diagnosis is something private.",
+        "My favorite political party is something private.",
+    ):
+        evaluator = MemoryFormationEvaluator(
+            signal_pipeline=_SingleSignalPipeline(
+                classify_explicit_user_memory(statement)
+            ),
+            worthiness_scorer=_FailOnSalience(),
+            privacy_classifier=_NoPII(),
+        )
+        result = await evaluator.evaluate(
+            text=statement, tenant_id="tenant-1", user_id="user-1",
+        )
+        assert result.admitted_count == 0, statement
+
+
+@pytest.mark.asyncio
+async def test_person_names_in_ordinary_artist_preferences_can_be_confidential():
+    class _NameOnlyPII:
+        def extract_safe_metadata(self, value):
+            return {"contains_pii": True, "pii_types": ["name"]}
+
+    statement = "My favorite film director is Ava DuVernay."
+    evaluator = MemoryFormationEvaluator(
+        signal_pipeline=_SingleSignalPipeline(classify_explicit_user_memory(statement)),
+        worthiness_scorer=_FailOnSalience(),
+        privacy_classifier=_NameOnlyPII(),
+    )
+    result = await evaluator.evaluate(
+        text=statement, tenant_id="tenant-1", user_id="user-1",
+    )
+    assert result.admitted_count == 1
+    assert result.admitted[0].signal.metadata["sensitivity_class"] == "confidential"
+
+
+def test_negated_favorite_with_discourse_marker_is_not_asserted():
+    for statement in (
+        "My favorite genre is no longer reggae.",
+        "My favorite genre is never jazz.",
+        "My favorite color is not green.",
+    ):
+        assert extract_favorite_assertion(statement) is None
