@@ -252,7 +252,10 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                     "semantic_class": "preference",
                     "category": "preference",
                     "attribute": favorite.attribute,
-                    "domain": favorite.domain,
+                    # The attribute already identifies the preference domain.
+                    # Do not insert an additional semantic-scope qualifier:
+                    # pre-MI06 favorite_color facts have no "domain" field.
+                    "preference_domain": favorite.domain,
                     "normalized_value": favorite.value,
                     "assertion_modality": favorite.modality,
                     "explicit_correction": favorite.explicit_correction,
