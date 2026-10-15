@@ -48,6 +48,11 @@ def _endpoint(setting: str, default: str, expected_host: str) -> str:
 async def fetch_weather_observation(query: str) -> dict[str, Any]:
     """Return observed/forecast values with explicit source and valid time."""
     location = _location_from_weather_query(query)
+    aliases = get_config_value("weather.open_meteo.location_aliases", {"nyc": "New York City"})
+    if isinstance(aliases, dict):
+        alias = aliases.get(location.lower())
+        if isinstance(alias, str) and alias.strip():
+            location = alias.strip()
     geocode_url = _endpoint(
         "weather.open_meteo.geocoding_url",
         "https://geocoding-api.open-meteo.com/v1/search",
