@@ -103,12 +103,17 @@ def _provenance_issue(
         return "unverifiable_evidence"
     if payload.get("content") != row.value["text"]:
         return "evidence_text_mismatch"
+    # Older formation paths may omit normalized_value; they projected the
+    # original signal text as the value. Never certify a different value solely
+    # because the evidence text happens to match.
     expected_value = semantics.get("normalized_value")
-    if expected_value is not None and expected_value != row.value.get("value"):
+    if expected_value is None:
+        expected_value = payload["content"]
+    if expected_value != row.value.get("value"):
         return "evidence_value_mismatch"
     for field in (
-        "preference_key", "domain", "facet", "project_id", "task_id",
-        "task_type", "location", "cardinality",
+        "preference_key", "scope", "domain", "facet", "context",
+        "project_id", "task_id", "task_type", "location", "cardinality",
     ):
         if field in row.value and row.value[field] != semantics.get(field):
             return "evidence_scope_mismatch"
