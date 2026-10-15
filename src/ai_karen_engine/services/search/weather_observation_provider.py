@@ -16,16 +16,16 @@ from ai_karen_engine.config.config_manager import get_config_value
 
 def _location_from_weather_query(query: str) -> str:
     match = re.search(
-        r"\\b(?:weather(?:\\s+like)?|forecast|temperature)"
-        r"(?:\\s+(?:today|tomorrow|tonight|right\\s+now|this\\s+(?:morning|afternoon|evening)))?"
-        r"\\s+(?:in|for|at)\\s+"
+        r"\b(?:weather(?:\s+like)?|forecast|temperature)"
+        r"(?:\s+(?:today|tomorrow|tonight|right\s+now|this\s+(?:morning|afternoon|evening)))?"
+        r"\s+(?:in|for|at)\s+"
         r"(?P<city>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})",
         query, re.IGNORECASE,
     )
     if not match:
         match = re.search(
-            r"\\b(?:in|for)\\s+(?P<city>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})"
-            r"\\s+(?:weather|forecast)\\b", query, re.IGNORECASE,
+            r"\b(?:in|for)\s+(?P<city>[A-Za-z][A-Za-z0-9 ,.'-]{0,110})"
+            r"\s+(?:weather|forecast)\b", query, re.IGNORECASE,
         )
     if not match:
         raise ValueError("Explicit location required for live weather")
