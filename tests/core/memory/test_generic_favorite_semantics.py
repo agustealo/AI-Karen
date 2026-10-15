@@ -100,6 +100,12 @@ def test_third_person_quotes_negation_and_past_speculation_not_asserted(statemen
      "favorite_song", "asserted", "this week"),
     ("My favorite meal today is breakfast.",
      "favorite_meal", "asserted", "today"),
+    ("My favorite meal is breakfast today.",
+     "favorite_meal", "asserted", "today"),
+    ("My favorite genre is perhaps reggae.",
+     "favorite_genre", "uncertain", None),
+    ("My favorite song is Sunshine right now.",
+     "favorite_song", "asserted", "right now"),
 ])
 def test_tentative_and_time_bounded_facts_are_not_unrestricted_ltm(
     statement, attribute, modality, period,
