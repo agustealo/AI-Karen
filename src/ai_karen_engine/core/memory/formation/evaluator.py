@@ -116,9 +116,29 @@ class MemoryFormationEvaluator:
             if str(item).strip()
         }
         explicit = bool(signal.metadata.get("explicit_user_statement"))
-        is_profile_fact = signal.signal_type in {"identity_fact", "profile_fact"}
+        is_profile_fact = signal.signal_type in {
+            "identity_fact", "profile_fact", "preference",
+        }
+        # These are privacy classifications, not favorite-category detectors.
+        # Open-vocabulary extraction must never turn passwords, credentials or
+        # especially sensitive personal attributes into automatic memory.
+        # A separate, explicit product consent path is required.
+        sensitive_preference_domains = frozenset({
+            "password", "passphrase", "secret key", "api key", "access token",
+            "private key", "recovery code", "seed phrase", "pin", "pin code",
+            "social security number", "medical condition", "medical diagnosis",
+            "medication", "religion", "political party", "sexual orientation",
+            "ethnicity", "criminal history",
+        })
+        sensitive_preference = (
+            signal.signal_type == "preference"
+            and str(signal.metadata.get("domain") or "").casefold()
+            in sensitive_preference_domains
+        )
 
-        if pii_types:
+        if sensitive_preference:
+            sensitivity = MemorySensitivity.PROHIBITED
+        elif pii_types:
             profile_safe_name = (
                 pii_types.issubset({"name"})
                 and explicit
