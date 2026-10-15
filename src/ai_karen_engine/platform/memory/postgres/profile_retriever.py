@@ -162,6 +162,23 @@ class PostgresProfileRecallRetriever:
                 "event_id": str(row.event_id),
                 "category": row.category,
                 "attribute": row.attribute,
+                # These are source projection annotations, not authorization.
+                # RuntimePolicy still owns evidence-use permission.
+                "cardinality": (
+                    value.get("cardinality", "singleton")
+                    if isinstance(value, dict) else "singleton"
+                ),
+                "semantic_scope": (
+                    {
+                        key: value[key]
+                        for key in (
+                            "scope", "domain", "facet", "project_id",
+                            "task_id", "task_type", "location",
+                        )
+                        if key in value
+                    }
+                    if isinstance(value, dict) else {}
+                ),
                 "valid_from": row.valid_from.isoformat() if row.valid_from else None,
                 "valid_to": row.valid_to.isoformat() if row.valid_to else None,
                 "semantic_similarity": 0.55,
