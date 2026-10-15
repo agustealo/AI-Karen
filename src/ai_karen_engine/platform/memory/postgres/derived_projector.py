@@ -8,11 +8,12 @@ memory is allowed to be durable.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from ai_karen_engine.core.memory.projections import ProjectionManager
 from ai_karen_engine.core.memory.signals import MemorySignal
@@ -348,6 +349,27 @@ class PostgresDerivedMemoryProjector:
         source_ref: str | None,
         metadata: dict[str, Any],
     ) -> None:
+        # Row locks cannot serialize the first insert when no current row
+        # exists. Lock the tenant/user/category/attribute projection lane for
+        # this PostgreSQL transaction before checking replay or current state.
+        category = str(
+            metadata.get("category")
+            or ("identity" if signal.signal_type == "identity_fact" else "preference")
+        )
+        attribute = str(
+            metadata.get("attribute")
+            or ("identity_fact" if signal.signal_type == "identity_fact" else "user_preference")
+        )
+        lock_id = self._profile_projection_lock_id(
+            tenant_id=str(tenant_uuid),
+            user_id=str(user_uuid),
+            category=category,
+            attribute=attribute,
+        )
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": lock_id},
+        )
         existing_event = (
             await session.execute(
                 select(ProfileFact.fact_id)
@@ -358,18 +380,6 @@ class PostgresDerivedMemoryProjector:
         if existing_event is not None:
             return
 
-        category = str(
-            metadata.get("category")
-            or ("identity" if signal.signal_type == "identity_fact" else "preference")
-        )
-        attribute = str(
-            metadata.get("attribute")
-            or (
-                "identity_fact"
-                if signal.signal_type == "identity_fact"
-                else "user_preference"
-            )
-        )
         normalized_value = metadata.get("normalized_value")
         value: dict[str, Any] = {
             "value": normalized_value if normalized_value is not None else signal.text,
@@ -448,6 +458,24 @@ class PostgresDerivedMemoryProjector:
                 valid_to=self._datetime(metadata.get("valid_to")),
                 supersedes=supersedes,
             )
+        )
+
+    @staticmethod
+    def _profile_projection_lock_id(
+        *, tenant_id: str, user_id: str, category: str, attribute: str,
+    ) -> int:
+        """Stable signed 64-bit transaction lock ID, scoped to a profile lane.
+
+        Use deterministic UTF-8 hashing rather than Python's per-process hash.
+        No user data is persisted by this key. A collision only serializes
+        unrelated lanes, never crosses tenant data boundaries.
+        """
+        payload = "\\x1f".join((
+            tenant_id, user_id, category.strip().casefold(),
+            attribute.strip().casefold(),
+        )).encode("utf-8")
+        return int.from_bytes(
+            hashlib.sha256(payload).digest()[:8], "big", signed=True,
         )
 
     @staticmethod
