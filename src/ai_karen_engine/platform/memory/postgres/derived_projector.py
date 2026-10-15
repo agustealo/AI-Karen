@@ -15,7 +15,11 @@ from typing import Any
 
 from sqlalchemy import select, text
 
-from ai_karen_engine.core.memory.semantic_contract import merge_memory_metadata
+from ai_karen_engine.core.memory.semantic_contract import (
+    merge_memory_metadata,
+    profile_projection_key,
+    profile_projection_slot,
+)
 from ai_karen_engine.core.memory.projections import ProjectionManager
 from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.core.memory.temporal import resolve_temporal_text
@@ -400,16 +404,26 @@ class PostgresDerivedMemoryProjector:
                 .with_for_update()
             )
         ).scalars().all()
-        current = next(
-            (
-                row for row in candidate_rows
-                if self._same_profile_identity(
-                    existing=row.value,
-                    incoming=value,
-                )
-            ),
-            None,
+        # Validate the incoming cardinality even when this user's profile has
+        # no historical rows. Never let an unsupported cardinality silently
+        # create an ungoverned unique projection slot.
+        projection_key = profile_projection_key(
+            tenant_id=str(tenant_uuid),
+            user_id=str(user_uuid),
+            category=category,
+            attribute=attribute,
+            value=value,
+            source_event_id=str(event_uuid),
         )
+        matches = [
+            row for row in candidate_rows
+            if self._same_profile_identity(existing=row.value, incoming=value)
+        ]
+        if len(matches) > 1:
+            # Historical duplicate-current data requires evidence-aware
+            # reconciliation, not an arbitrary "latest row wins" mutation.
+            raise ValueError("multiple current profile facts share a logical slot")
+        current = matches[0] if matches else None
 
         valid_from = self._datetime(metadata.get("valid_from")) or datetime.utcnow()
         # New evidence retains its own event consent. Only a matching logical
@@ -428,6 +442,7 @@ class PostgresDerivedMemoryProjector:
                 category=category,
                 attribute=attribute,
                 value=value,
+                projection_key=projection_key,
                 confidence=confidence,
                 source_type=source_type,
                 source_ref=source_ref,
@@ -459,37 +474,19 @@ class PostgresDerivedMemoryProjector:
     def _same_profile_identity(
         *, existing: Any, incoming: dict[str, Any],
     ) -> bool:
-        """Compare logical projection slots, never rendered preference text.
-
-        Missing cardinality is treated as the legacy singleton representation
-        for backward compatibility. SET members are distinguished by value.
-        Qualified facts never expire unrelated contexts or project choices.
-        """
+        """Compare projection slots via the canonical core identity adapter."""
+        # Fail closed on malformed *incoming* semantics even if a legacy row is
+        # present. Invalid historical rows are preserved for reconciliation.
+        incoming_slot = profile_projection_slot(incoming)
+        if incoming_slot is None:
+            return False
         if not isinstance(existing, dict):
             return False
-        dimensions = (
-            "preference_key", "scope", "domain", "facet", "project_id",
-            "task_id", "task_type", "location",
-        )
-        def normalized(value: Any) -> str:
-            return str(value).strip().casefold() if value is not None else ""
-
-        if any(normalized(existing.get(key)) != normalized(incoming.get(key))
-               for key in dimensions):
+        try:
+            previous_slot = profile_projection_slot(existing)
+        except ValueError:
             return False
-        old_cardinality = normalized(existing.get("cardinality")) or "singleton"
-        new_cardinality = normalized(incoming.get("cardinality")) or "singleton"
-        if old_cardinality != new_cardinality:
-            return False
-        if new_cardinality in {"set", "temporal_series", "event"}:
-            # Each distinct set member is its own slot; events and temporal
-            # entries are never automatically replaced by a newer event.
-            if new_cardinality != "set":
-                return False
-            return normalized(existing.get("value")) == normalized(incoming.get("value"))
-        if new_cardinality not in {"singleton", "scoped_singleton"}:
-            raise ValueError("unsupported profile fact cardinality")
-        return True
+        return previous_slot is not None and previous_slot == incoming_slot
 
     async def _project_goal(
         self,
