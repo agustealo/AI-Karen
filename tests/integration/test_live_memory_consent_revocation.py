@@ -71,6 +71,8 @@ async def test_later_scope_revocation_and_restoration_gate_every_recall_source()
                         "vault": {"consent_scope": scope},
                     },
                 ))
+                # Flush the FK parent before adding the assertion or projection.
+                await session.flush()
                 session.add(MemoryAssertion(
                     event_id=event_id, tenant_id=tenant_id, user_id=user_id,
                     content=f"My favorite artist is {artist}",
