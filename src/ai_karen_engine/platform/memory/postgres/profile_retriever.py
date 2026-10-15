@@ -19,6 +19,8 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
+from .consent_filter import recallable_memory_event
+
 from .ledger_models import MemoryEvent, ProfileFact
 
 
@@ -46,10 +48,9 @@ class PostgresProfileRecallRetriever:
                 .where(
                     ProfileFact.tenant_id == tenant_uuid,
                     ProfileFact.user_id == user_uuid,
-                    MemoryEvent.tenant_id == tenant_uuid,
-                    MemoryEvent.user_id == user_uuid,
-                    MemoryEvent.consent_state == "granted",
-                    or_(MemoryEvent.valid_to.is_(None), MemoryEvent.valid_to > now),
+                    recallable_memory_event(
+                        tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                    ),
                     # Superseded or expired facts must never compete with the active value.
                     # Temporary facts remain eligible until their explicit validity window closes.
                     or_(ProfileFact.valid_to.is_(None), ProfileFact.valid_to > now),
