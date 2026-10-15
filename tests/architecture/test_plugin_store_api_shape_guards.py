@@ -52,3 +52,15 @@ def test_failed_search_does_not_reuse_previous_plugin_list() -> None:
     assert "plugins: []" in search_action
     assert "searchResponse: null" in search_action
     assert "Failed to search plugins" in search_action
+
+
+def test_plugin_search_ignores_superseded_success_and_failure() -> None:
+    store = STORE.read_text(encoding="utf-8")
+    action = store.split("  searchPlugins: async () => {", 1)[1].split(
+        "  refreshPlugins: async () => {", 1
+    )[0]
+    assert "const requestId = ++latestPluginSearchRequestId;" in action
+    assert "const params = { ...get().searchParams };" in action
+    assert action.count("if (requestId !== latestPluginSearchRequestId) return;") == 2
+    assert "plugins: response.plugins" in action
+    assert "plugins: []" in action
