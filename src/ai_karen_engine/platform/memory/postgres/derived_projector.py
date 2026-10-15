@@ -386,6 +386,9 @@ class PostgresDerivedMemoryProjector:
             "conversation_id",
             "session_id",
             "stability",
+            "facet",
+            "location",
+            "cardinality",
         ):
             if metadata.get(key) is not None:
                 value[key] = metadata.get(key)
@@ -394,7 +397,9 @@ class PostgresDerivedMemoryProjector:
         if signal.entities:
             value["entities"] = list(signal.entities)
 
-        current = (
+        # Evidence events remain intact. ProfileFact is only a rebuildable
+        # current-state projection and must not expire unrelated scoped facts.
+        candidate_rows = (
             await session.execute(
                 select(ProfileFact)
                 .where(
@@ -405,17 +410,23 @@ class PostgresDerivedMemoryProjector:
                     ProfileFact.valid_to.is_(None),
                 )
                 .order_by(ProfileFact.updated_at.desc())
-                .limit(1)
+                .with_for_update()
             )
-        ).scalar_one_or_none()
+        ).scalars().all()
+        current = next(
+            (
+                row for row in candidate_rows
+                if self._same_profile_identity(
+                    existing=row.value,
+                    incoming=value,
+                )
+            ),
+            None,
+        )
 
         valid_from = self._datetime(metadata.get("valid_from")) or datetime.utcnow()
-        # Every independently committed memory event has its own consent and
-        # deletion lifecycle. Reusing the previous profile row for an identical
-        # value would strand this new statement behind the old event's consent.
-        # Same-event replay is already idempotently guarded by existing_event.
-        # A new event must supersede the prior projection, even for equal values.
-
+        # New evidence retains its own event consent. Only a matching logical
+        # slot can be superseded; SET members and distinct contexts coexist.
         supersedes = None
         if current is not None:
             current.valid_to = valid_from
@@ -438,6 +449,42 @@ class PostgresDerivedMemoryProjector:
                 supersedes=supersedes,
             )
         )
+
+    @staticmethod
+    def _same_profile_identity(
+        *, existing: Any, incoming: dict[str, Any],
+    ) -> bool:
+        """Compare logical projection slots, never rendered preference text.
+
+        Missing cardinality is treated as the legacy singleton representation
+        for backward compatibility. SET members are distinguished by value.
+        Qualified facts never expire unrelated contexts or project choices.
+        """
+        if not isinstance(existing, dict):
+            return False
+        dimensions = (
+            "preference_key", "scope", "domain", "facet", "project_id",
+            "task_id", "task_type", "location",
+        )
+        def normalized(value: Any) -> str:
+            return str(value).strip().casefold() if value is not None else ""
+
+        if any(normalized(existing.get(key)) != normalized(incoming.get(key))
+               for key in dimensions):
+            return False
+        old_cardinality = normalized(existing.get("cardinality")) or "singleton"
+        new_cardinality = normalized(incoming.get("cardinality")) or "singleton"
+        if old_cardinality != new_cardinality:
+            return False
+        if new_cardinality in {"set", "temporal_series", "event"}:
+            # Each distinct set member is its own slot; events and temporal
+            # entries are never automatically replaced by a newer event.
+            if new_cardinality != "set":
+                return False
+            return normalized(existing.get("value")) == normalized(incoming.get("value"))
+        if new_cardinality not in {"singleton", "scoped_singleton"}:
+            raise ValueError("unsupported profile fact cardinality")
+        return True
 
     async def _project_goal(
         self,
