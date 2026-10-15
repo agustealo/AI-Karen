@@ -49,7 +49,7 @@ class MemorySignalExtractor:
                 )
             )
 
-        if "goal" not in explicit_types and "prospective_event" not in explicit_types:
+        if not explicit_types.intersection({"goal", "prospective_event", "preference"}):
             signals.extend(self._extract_preferences(parsed))
 
         return self._dedupe(signals)
