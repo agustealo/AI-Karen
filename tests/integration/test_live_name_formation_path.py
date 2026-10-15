@@ -21,7 +21,7 @@ from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
 
 
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
         reason="Only runs against isolated CI PostgreSQL with the opt-in flag",
@@ -163,3 +163,125 @@ async def test_explicit_name_chat_reaches_fresh_conversation_recall():
                 MemoryEvent.tenant_id == tenant,
                 MemoryEvent.user_id == user,
             ))
+
+async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response():
+    """Natural favorite-color language must persist and answer from governed memory."""
+    tenant, user = uuid.uuid4(), uuid.uuid4()
+    color = "black"
+    session_a, session_b = str(uuid.uuid4()), str(uuid.uuid4())
+    conversation_a, conversation_b = str(uuid.uuid4()), str(uuid.uuid4())
+    factory = lambda: async_transaction_scope(tenant_id=str(tenant))
+    formation = MemoryFormationService(
+        vault_factory=lambda _tenant: PostgresNeuroVault(session_factory=factory),
+        derived_projector=PostgresDerivedMemoryProjector(
+            projection_manager=_OutsidePostgresProjection(),
+        ),
+    )
+    retriever = PostgresProfileRecallRetriever()
+
+    try:
+        write_result = await formation.process_interaction(
+            text="I love the color black, I think its my favorite color.",
+            tenant_id=str(tenant),
+            user_id=str(user),
+            source_type="chat_user",
+            source_ref=conversation_a,
+            session_id=session_a,
+            conversation_id=conversation_a,
+            actor_id=str(user),
+            request_id=str(uuid.uuid4()),
+            correlation_id=str(uuid.uuid4()),
+            policy_context={
+                "memory_write_authorized": True,
+                "allowed_capabilities": ["memory.write"],
+                "authorized_tenant_id": str(tenant),
+                "authorized_user_id": str(user),
+                "authorized_session_id": session_a,
+            },
+        )
+        assert write_result["persisted"] > 0, write_result
+        assert write_result.get("projection_failures", 0) == 0, write_result
+
+        query = SimpleNamespace(
+            text="What's my favorite color?",
+            tenant_id=str(tenant),
+            user_id=str(user),
+            session_id=session_b,
+            conversation_id=conversation_b,
+            top_k=5,
+        )
+        found = await retriever.recall(query)
+        assert any(
+            f"favorite_color: {color}" == item.content for item in found
+        ), [item.content for item in found]
+
+        from ai_karen_engine.core.context.contracts import (
+            ContextEvidence,
+            EvidenceScope,
+            EvidenceSource,
+        )
+        from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+        from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+        scoped_evidence = [
+            ContextEvidence(
+                evidence_id=item.id,
+                source=EvidenceSource.MEMORY,
+                content=item.content,
+                scope=EvidenceScope(tenant_id=str(tenant), user_id=str(user)),
+            )
+            for item in found
+        ]
+        decision = ExecutionDecision(
+            intent="memory.recall",
+            policy_constraints={"personal_evidence_attribute": "favorite_color"},
+        )
+        decision.cognitive_context = SimpleNamespace(
+            tenant_id=str(tenant),
+            user_id=str(user),
+            authorized_sources=["memory"],
+            denied_sources=[],
+            unresolved_sources=[],
+            evidence=scoped_evidence,
+        )
+
+        answer, provenance = ChatRuntime._grounded_personal_response(
+            decision,
+            tenant_id=str(tenant),
+            user_id=str(user),
+        )
+        assert answer == "Your favorite color is black."
+        assert provenance["response_source"] == "authorized_memory_evidence"
+        assert provenance["actual_provider"] is None
+        assert provenance["evidence_sufficiency"] == "supported"
+
+        assert await retriever.recall(
+            SimpleNamespace(
+                text=query.text,
+                tenant_id=str(tenant),
+                user_id=str(uuid.uuid4()),
+                top_k=5,
+                session_id=session_b,
+                conversation_id=conversation_b,
+            )
+        ) == []
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            event_ids = select(MemoryEvent.event_id).where(
+                MemoryEvent.tenant_id == tenant,
+                MemoryEvent.user_id == user,
+            )
+            for model in (
+                ProfileFact,
+                MemoryEpisode,
+                ProjectionStatus,
+                MemoryAssertion,
+            ):
+                await session.execute(delete(model).where(model.event_id.in_(event_ids)))
+            await session.execute(
+                delete(MemoryEvent).where(
+                    MemoryEvent.tenant_id == tenant,
+                    MemoryEvent.user_id == user,
+                )
+            )
+
