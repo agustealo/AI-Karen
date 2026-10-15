@@ -20,8 +20,6 @@ _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("favorite_color", (
         r"(?:what(?:\s+is|'s|s)?|which)\s+(?:is\s+)?my\s+"
         r"(?:fav(?:ou?rite)?\s+)?colou?r",
-        r"(?:what(?:\s+is|'s|s)?|which)\s+(?:is\s+)?my\s+"
-        r"fav(?:ou?rite)?\s+colou?r",
     )),
     ("preferred_name", (
         rf"(?:what(?:\s+is|'s|s)|hats|hat's|remember)\s+{_GAP}my\s+{_GAP}name",
