@@ -170,3 +170,34 @@ def test_broad_identity_summary_can_use_same_user_conversation():
     assert "Zeus" in answer
     assert "John" not in answer
     assert meta["response_source"] == "authorized_conversation_evidence"
+
+
+def test_reverse_favorite_is_user_attributed_without_inventing_a_save():
+    answer, meta = response("favorite_film_director", ctx(
+        ("user", "Ava DuVernay is my favorite film director."),
+        ("assistant", "You definitely love everyone."),
+    ))
+    assert "Ava DuVernay" in answer
+    assert meta["response_source"] == "authorized_conversation_evidence"
+
+
+def test_hedged_temporary_and_quoted_favorites_are_not_asserted_as_permanent():
+    for statement in (
+        "I think my favorite music genre is reggae.",
+        "My favorite music genre this week is reggae.",
+        'She said "my favorite music genre is reggae".',
+    ):
+        result = evaluate_conversation_personal_evidence(
+            ctx(("user", statement)), tenant_id="tenant", user_id="user",
+            attribute="favorite_music_genre",
+        )
+        assert result.status is EvidenceSufficiencyStatus.MISSING, statement
+
+
+def test_favorite_query_is_not_equated_to_an_unrelated_domain():
+    answer, meta = response("favorite_music_genre", ctx(
+        ("user", "My favorite song is Sunshine."),
+        ("user", "What's my favorite music genre?"),
+    ))
+    assert meta["evidence_sufficiency"] == "missing"
+    assert "Sunshine" not in answer
