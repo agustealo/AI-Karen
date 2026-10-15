@@ -21,6 +21,10 @@ from ai_karen_engine.core.memory.episodic import (
     EpisodeObservation,
     EventSegmenter,
 )
+from ai_karen_engine.core.memory.semantic_contract import (
+    RUNTIME_METADATA_KEYS,
+    merge_memory_metadata,
+)
 from ai_karen_engine.core.memory.protocols import VaultContext, VaultPort
 from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.core.memory.types import (
@@ -160,17 +164,33 @@ class MemoryFormationService:
         for admitted_signal in evaluation.admitted:
             signal = admitted_signal.signal
             score = admitted_signal.score
-            entry = self._entry_from_signal(
-                signal=signal,
-                score=score,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                source_type=source_type,
-                source_ref=source_ref,
-                metadata=merged_metadata,
-                session_id=session_id,
-                conversation_id=conversation_id,
-            )
+            try:
+                entry = self._entry_from_signal(
+                    signal=signal,
+                    score=score,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    source_type=source_type,
+                    source_ref=source_ref,
+                    metadata=merged_metadata,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                )
+            except ValueError:
+                # A conflicting metadata namespace must never reach NeuroVault;
+                # failing later in the projector would already have committed it.
+                persistence_failures += 1
+                errors.append("formation:metadata_boundary")
+                logger.warning(
+                    "memory.formation.metadata_rejected",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "request_id": request_id,
+                        "correlation_id": correlation_id,
+                    },
+                )
+                continue
             try:
                 receipt = await vault.persist(entry, context=context)
             except PermissionError as exc:
@@ -404,8 +424,23 @@ class MemoryFormationService:
         conversation_id: str | None,
     ) -> MemoryEntry:
         memory_type = MemoryFormationService._memory_type(signal.signal_type)
-        custom = MemoryFormationService._json_safe(dict(signal.metadata or {}))
-        custom.update(MemoryFormationService._json_safe(metadata))
+        signal_semantics = MemoryFormationService._json_safe(
+            dict(signal.metadata or {})
+        )
+        request_metadata = MemoryFormationService._json_safe(metadata)
+        custom = merge_memory_metadata(
+            signal_metadata=signal_semantics,
+            runtime_metadata=request_metadata,
+        )
+        # Preserve complete evidence semantics independently of the legacy
+        # flattened fields. In particular, signal.scope is an access scope,
+        # while a semantic "scope" qualifier may name a genre or project.
+        custom["signal_semantics"] = signal_semantics
+        custom["runtime_context"] = {
+            key: request_metadata[key]
+            for key in RUNTIME_METADATA_KEYS
+            if key in request_metadata
+        }
         custom.update(
             {
                 "source_type": source_type,

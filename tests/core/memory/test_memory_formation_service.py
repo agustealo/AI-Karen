@@ -458,3 +458,73 @@ async def test_session_only_self_description_is_not_admitted_for_durable_memory(
         text="I Jamaican", tenant_id="tenant-a", user_id="user-1"
     )
     assert evaluation.admitted_count == 0
+
+
+@pytest.mark.asyncio
+async def test_semantic_metadata_conflict_cannot_reach_neurovault():
+    signal = MemorySignal(
+        text="Black is my favorite color",
+        signal_type="preference",
+        confidence=0.98,
+        metadata={
+            "explicit_user_statement": True,
+            "category": "preference",
+            "attribute": "favorite_color",
+            "normalized_value": "black",
+            "cardinality": "singleton",
+        },
+    )
+    vault = _Vault()
+    projector = _Projector()
+    service = _service(vault, projector, signal)
+
+    result = await service.process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        metadata={"cardinality": "set"},
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["persisted"] == 0
+    assert "formation:metadata_boundary" in result["errors"]
+    assert vault.calls == []
+    assert projector.calls == []
+
+
+@pytest.mark.asyncio
+async def test_durable_semantics_keep_contextual_scope_separate_from_access_scope():
+    signal = MemorySignal(
+        text="Bob Marley is my favorite reggae artist",
+        signal_type="preference",
+        confidence=0.98,
+        scope="user",
+        metadata={
+            "explicit_user_statement": True,
+            "category": "preference",
+            "attribute": "favorite_artist",
+            "normalized_value": "Bob Marley",
+            "cardinality": "scoped_singleton",
+            "scope": "genre:reggae",
+            "facet": "artist",
+        },
+    )
+    vault = _Vault()
+    projector = _Projector()
+    service = _service(vault, projector, signal)
+
+    result = await service.process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        metadata={"request_id": "request-1"},
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["persisted"] == 1
+    custom = vault.calls[0][0].metadata.custom
+    assert custom["signal_semantics"]["scope"] == "genre:reggae"
+    assert custom["signal_semantics"]["cardinality"] == "scoped_singleton"
+    assert custom["scope"] == "user"
+    assert custom["runtime_context"]["request_id"] == "request-1"
+    assert projector.calls[0]["signal"].metadata["scope"] == "genre:reggae"

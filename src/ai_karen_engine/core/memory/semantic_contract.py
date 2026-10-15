@@ -244,9 +244,84 @@ class SemanticAssertion:
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+# Transport metadata is compatibility state, not semantic assertion authority.
+# Keep one boundary policy shared by formation (before vault writes) and
+# projection (after successful governed commits).
+RUNTIME_METADATA_KEYS = frozenset({
+    "request_id", "correlation_id", "tenant_id", "user_id",
+    "session_id", "conversation_id", "memory_actor",
+})
+SEMANTIC_METADATA_KEYS = frozenset({
+    "category", "attribute", "normalized_value", "semantic_class",
+    "preference_key", "domain", "facet", "scope", "stability",
+    "polarity", "retention_scope", "explicit_user_statement",
+    "relationship_type", "goal_type", "event_type", "project_id",
+    "task_id", "task_type", "location", "cardinality",
+    "subject", "predicate", "object", "modality", "temporality",
+    "fact_key", "scope_key", "schema_version", "sensitivity",
+    "consent_state", "propagation_allowed",
+})
+RESERVED_MEMORY_METADATA_KEYS = frozenset({
+    "signal_semantics", "runtime_context",
+})
+# Legacy lifecycle transport hints have not yet moved to typed formation
+# contracts. They are not permitted to set identity or belief cardinality.
+LEGACY_RUNTIME_SEMANTIC_FIELDS = frozenset({
+    "goal_type", "event_type", "scope",
+})
+
+
+def merge_memory_metadata(
+    *,
+    signal_metadata: Mapping[str, Any] | None,
+    runtime_metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge legacy metadata without crossing semantic/transport ownership.
+
+    This compatibility adapter never interprets semantic facts or grants a
+    persistence policy. A disagreeing shared key fails closed before NeuroVault
+    commits, and a projected replay uses exactly the same validation.
+    """
+    if signal_metadata is not None and not isinstance(signal_metadata, Mapping):
+        raise ValueError("signal metadata must be a mapping")
+    if runtime_metadata is not None and not isinstance(runtime_metadata, Mapping):
+        raise ValueError("runtime metadata must be a mapping")
+    semantic = dict(signal_metadata or {})
+    runtime = dict(runtime_metadata or {})
+    if any(not isinstance(key, str) for key in (*semantic, *runtime)):
+        raise ValueError("memory metadata keys must be strings")
+    if RESERVED_MEMORY_METADATA_KEYS.intersection(semantic) or (
+        RESERVED_MEMORY_METADATA_KEYS.intersection(runtime)
+    ):
+        raise ValueError("reserved memory metadata namespace supplied")
+
+    for key in (SEMANTIC_METADATA_KEYS - LEGACY_RUNTIME_SEMANTIC_FIELDS):
+        if key in runtime and key not in semantic:
+            raise ValueError(f"untrusted semantic projection metadata: {key}")
+
+    for key in semantic.keys() & runtime.keys():
+        if semantic[key] != runtime[key]:
+            namespace = "runtime" if key in RUNTIME_METADATA_KEYS else "semantic"
+            raise ValueError(f"conflicting {namespace} projection metadata: {key}")
+
+    # A signal cannot claim transport identity when the runtime has not
+    # authenticated/provided it. Matching duplicates are retained only as a
+    # backward-compatible read of the same authoritative value.
+    for key in RUNTIME_METADATA_KEYS:
+        if key in semantic and key not in runtime:
+            raise ValueError(f"untrusted runtime projection metadata: {key}")
+
+    merged = dict(runtime)
+    merged.update(semantic)
+    return merged
+
+
 __all__ = [
     "SCHEMA_VERSION", "SubjectKind", "AssertionModality", "FactCardinality",
     "MemoryOperation", "SemanticSubject", "SemanticPredicate",
     "SemanticObject", "SemanticQualifiers", "SemanticTemporality",
     "SemanticConfidence", "SemanticProvenance", "SemanticAssertion",
+    "SEMANTIC_METADATA_KEYS", "RUNTIME_METADATA_KEYS",
+    "RESERVED_MEMORY_METADATA_KEYS", "LEGACY_RUNTIME_SEMANTIC_FIELDS",
+    "merge_memory_metadata",
 ]

@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 
+from ai_karen_engine.core.memory.semantic_contract import merge_memory_metadata
 from ai_karen_engine.core.memory.projections import ProjectionManager
 from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.core.memory.temporal import resolve_temporal_text
@@ -118,35 +119,11 @@ class PostgresDerivedMemoryProjector:
         signal_metadata: dict[str, Any] | None,
         runtime_metadata: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """Keep extracted semantics and authoritative request context independent.
-
-        Semantic classifications belong to the extractor. Transport identity
-        belongs to the runtime. Neither input may silently redefine the other.
-        """
-        semantic = dict(signal_metadata or {})
-        runtime = dict(runtime_metadata or {})
-        runtime_owned = frozenset({
-            "request_id", "correlation_id", "tenant_id", "user_id",
-            "session_id", "conversation_id", "memory_actor",
-        })
-        semantic_owned = frozenset({
-            "category", "attribute", "normalized_value", "semantic_class",
-            "preference_key", "domain", "scope", "stability", "polarity",
-            "retention_scope", "explicit_user_statement",
-            "relationship_type", "goal_type", "event_type",
-        })
-        for key in semantic_owned:
-            if key in semantic and key in runtime and semantic[key] != runtime[key]:
-                raise ValueError(f"conflicting semantic projection metadata: {key}")
-        for key in runtime_owned:
-            if key in semantic and key in runtime and semantic[key] != runtime[key]:
-                raise ValueError(f"conflicting runtime projection metadata: {key}")
-        merged = dict(runtime)
-        merged.update(semantic)
-        for key in runtime_owned:
-            if key in runtime:
-                merged[key] = runtime[key]
-        return merged
+        """Adapt legacy projection call sites through the core memory contract."""
+        return merge_memory_metadata(
+            signal_metadata=signal_metadata,
+            runtime_metadata=runtime_metadata,
+        )
 
     async def _project_relational_views(
         self,
