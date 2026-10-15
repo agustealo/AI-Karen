@@ -2666,7 +2666,13 @@ class ChatRuntime:
             if decision.intent == "memory.recall" else None
         )
         md.extra["personal_recall_grounded"] = (
-            normalized.get("response_source") == "authorized_memory_evidence"
+            normalized.get("response_source") in {
+                "authorized_memory_evidence", "authorized_conversation_evidence",
+            }
+        )
+        md.extra["personal_recall_evidence_source"] = (
+            normalized.get("response_source")
+            if md.extra["personal_recall_grounded"] else None
         )
 
         if memory_meta:
