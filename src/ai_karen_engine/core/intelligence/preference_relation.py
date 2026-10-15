@@ -126,11 +126,19 @@ def extract_favorite_assertion(text: str) -> FavoriteAssertion | None:
         if _NEGATIVE.match(value):
             continue
         value = _LEADING.sub("", value).strip()
-        # An uncertainty marker inside a reverse-form value describes
-        # modality, not the object.
-        value_hedged = bool(re.match(r"^i\s+(?:think|guess|feel|suspect)\s+", value, re.I))
+        # Modifiers belong to assertion modality and validity, not its value.
+        value_hedged = bool(re.match(
+            r"^(?:i\s+(?:think|guess|feel|suspect)|maybe|perhaps|possibly|probably)\s+",
+            value, re.I,
+        ))
         if value_hedged:
-            value = re.sub(r"^i\s+(?:think|guess|feel|suspect)\s+", "", value, flags=re.I)
+            value = re.sub(
+                r"^(?:i\s+(?:think|guess|feel|suspect)|maybe|perhaps|possibly|probably)\s+",
+                "", value, flags=re.I,
+            )
+        trailing_period = re.search(rf"\s+({_PERIOD})$", value, re.I)
+        if trailing_period:
+            value = value[:trailing_period.start()].strip()
         if not value or _NEGATIVE.match(value):
             continue
         if value.casefold() in {"it", "its", "this", "that", "they", "them", "my", "your"}:
@@ -142,7 +150,10 @@ def extract_favorite_assertion(text: str) -> FavoriteAssertion | None:
         if len(value) > 120:
             continue
 
-        temporal = match.groupdict().get("period")
+        temporal = (
+            match.groupdict().get("period")
+            or (trailing_period.group(1) if trailing_period else None)
+        )
         if temporal:
             temporal = " ".join(temporal.casefold().split())
         # A deictic "I think it's my favorite" remains uncertain, even
