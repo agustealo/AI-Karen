@@ -89,3 +89,17 @@ def test_scoped_qualifiers_survive_without_collision():
     assert result["facet"] == "reggae"
     assert result["scope"] == "genre:reggae"
     assert result["conversation_id"] == "conv-1"
+
+
+@pytest.mark.parametrize("key", [
+    "category", "attribute", "normalized_value", "semantic_class",
+    "cardinality", "facet", "fact_key", "subject", "modality",
+    "retention_scope", "consent_state",
+])
+def test_runtime_cannot_invent_unextracted_semantic_assertion(key):
+    with pytest.raises(ValueError, match="untrusted semantic"):
+        merge({}, {key: "runtime-forged"})
+
+
+def test_legacy_goal_transport_hint_is_accepted_for_compatibility():
+    assert merge({}, {"goal_type": "explicit"})["goal_type"] == "explicit"
