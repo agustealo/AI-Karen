@@ -493,9 +493,28 @@ class DirectCapabilityExecutor:
         attempts: List[Dict[str, Any]],
     ) -> DirectCapabilityResult:
         text = self._render(intent, query, payload)
+        # Search adapters may return article records under "results" rather
+        # than "sources". Preserve source provenance for response/UI consumers
+        # without inventing URLs, timestamps, or synthetic citations.
         sources = [
             item for item in list(payload.get("sources") or []) if isinstance(item, dict)
         ]
+        if intent == "search.general":
+            seen_urls = {
+                str(item.get("url") or "").strip()
+                for item in sources
+                if str(item.get("url") or "").strip()
+            }
+            for item in payload.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url.startswith(("http://", "https://")) or url in seen_urls:
+                    continue
+                if not str(item.get("snippet") or item.get("content") or "").strip():
+                    continue
+                sources.append(dict(item))
+                seen_urls.add(url)
         citations = [
             item
             for item in list(payload.get("citations") or [])
