@@ -28,6 +28,8 @@ interface PluginStoreState {
   clearError: () => void;
 }
 
+let latestPluginSearchRequestId = 0;
+
 export const usePluginStore = create<PluginStoreState>((set, get) => ({
   plugins: [],
   loading: false,
@@ -53,17 +55,20 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   },
 
   searchPlugins: async () => {
+    const requestId = ++latestPluginSearchRequestId;
+    const params = { ...get().searchParams };
     set({ loading: true, error: null });
     try {
-      const response = await pluginStoreService.searchPlugins(get().searchParams);
+      const response = await pluginStoreService.searchPlugins(params);
+      if (requestId !== latestPluginSearchRequestId) return;
       set({
         plugins: response.plugins,
         searchResponse: response,
         loading: false,
       });
     } catch (error) {
-      // Do not display a previous search or installed state as current when
-      // the backend has not supplied a valid response for this request.
+      if (requestId !== latestPluginSearchRequestId) return;
+      // Never allow a stale failure to erase a newer successful response.
       set({
         plugins: [],
         searchResponse: null,
