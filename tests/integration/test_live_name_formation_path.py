@@ -14,7 +14,7 @@ from ai_karen_engine.core.memory.formation.service import MemoryFormationService
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.platform.memory.postgres.derived_projector import PostgresDerivedMemoryProjector
 from ai_karen_engine.platform.memory.postgres.ledger_models import (
-    MemoryAssertion, MemoryEpisode, MemoryEvent, ProfileFact, ProjectionStatus,
+    ConsentScope, MemoryAssertion, MemoryEpisode, MemoryEvent, ProfileFact, ProjectionStatus,
 )
 from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresProfileRecallRetriever
 from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
@@ -210,10 +210,16 @@ async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response(
             conversation_id=conversation_b,
             top_k=5,
         )
-        found = await retriever.recall(query)
-        assert any(
-            f"favorite_color: {color}" == item.content for item in found
-        ), [item.content for item in found]
+        for wording in (
+            "What's my favorite color?",
+            "what my fav color?",
+            "Whats my fav color?",
+        ):
+            query.text = wording
+            found = await retriever.recall(query)
+            assert any(
+                f"favorite_color: {color}" == item.content for item in found
+            ), (wording, [item.content for item in found])
 
         from ai_karen_engine.core.context.contracts import (
             ContextEvidence,
@@ -265,8 +271,21 @@ async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response(
                 conversation_id=conversation_b,
             )
         ) == []
+
+        # Revoking the current consent scope must close recall immediately,
+        # even if an older event still has consent_state='granted'.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                tenant_id=tenant, user_id=user,
+                scope_name="memory.write", is_granted=False,
+            ))
+        assert await retriever.recall(query) == []
     finally:
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.tenant_id == tenant,
+                ConsentScope.user_id == user,
+            ))
             event_ids = select(MemoryEvent.event_id).where(
                 MemoryEvent.tenant_id == tenant,
                 MemoryEvent.user_id == user,
