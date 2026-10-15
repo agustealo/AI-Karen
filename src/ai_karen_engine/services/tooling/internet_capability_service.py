@@ -332,6 +332,49 @@ class InternetCapabilityService:
         try:
             await self._authorize(execution_context, authorized_plan)
 
+            if mode == "weather":
+                from ..search.weather_observation_provider import fetch_weather_observation
+                try:
+                    observation = await fetch_weather_observation(request.query)
+                    return {
+                        "query": request.query,
+                        "mode": "weather",
+                        "status": "ok",
+                        "extractedData": observation,
+                        "sources": [{"url": observation["source_url"], "title": "Open-Meteo forecast",
+                                     "snippet": "Live forecast data for " + observation["location"]}],
+                        "results": [],
+                        "citations": [{"url": observation["source_url"], "title": "Open-Meteo"}],
+                        "provider": "open_meteo",
+                        "metadata": {
+                            "provider": "open_meteo",
+                            "degraded": False,
+                            "correlation_id": execution_context.correlation_id,
+                            "request_id": execution_context.request_id,
+                        },
+                    }
+                except Exception as exc:
+                    logger.warning(
+                        "internet_capability.weather_unavailable",
+                        extra={
+                            "correlation_id": execution_context.correlation_id,
+                            "request_id": execution_context.request_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    return {
+                        "query": request.query, "mode": "weather", "status": "error",
+                        "results": [], "sources": [], "citations": [],
+                        "extractedData": None, "provider": "open_meteo",
+                        "error": "Live weather provider did not return a usable forecast",
+                        "metadata": {
+                            "provider": "open_meteo", "degraded": True,
+                            "error_type": type(exc).__name__,
+                            "correlation_id": execution_context.correlation_id,
+                            "request_id": execution_context.request_id,
+                        },
+                    }
+
             budget = execution_context.budget or (authorized_plan.budget if authorized_plan else None)
             effective_timeout = self._effective_timeout(request, budget)
             effective_max_urls = self._effective_max_urls(strategy, request, budget)
