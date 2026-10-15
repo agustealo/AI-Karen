@@ -38,7 +38,7 @@ _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("birthplace", (
         rf"where\s+{_GAP}was\s+i\s+born(?:\s+at)?",
-        rf"(?:what(?:\s+is|'s|s))\s+{_GAP}my\s+birthplace",
+        rf"(?:what(?:\s+is|'s|s)|tell\s+me)\s+{_GAP}my\s+birthplace",
     )),
     ("residence_location", (rf"where\s+{_GAP}do\s+i\s+{_GAP}live", rf"where\s+{_GAP}am\s+i\s+based")),
     ("work_location", (rf"where\s+{_GAP}do\s+i\s+{_GAP}work", rf"(?:what(?:\s+is|'s|s))\s+{_GAP}my\s+workplace")),
