@@ -55,8 +55,47 @@ jobs:
                   )
           asyncio.run(prepare())
           PY
+      - name: Apply and verify profile fact tenant RLS on isolated database
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          from pathlib import Path
+          import asyncpg
+
+          async def prepare():
+              connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+              try:
+                  sql = Path("supabase/migrations/20261015020000_25_profile_fact_tenant_rls.sql").read_text()
+                  await connection.execute(sql)
+                  checks = await connection.fetchrow("""
+                      SELECT relrowsecurity, relforcerowsecurity
+                      FROM pg_class WHERE oid = 'public.profile_fact'::regclass
+                  """)
+                  assert checks["relrowsecurity"] and checks["relforcerowsecurity"]
+                  policy = await connection.fetchval("""
+                      SELECT count(*) FROM pg_policies
+                      WHERE schemaname = 'public' AND tablename = 'profile_fact'
+                        AND policyname = 'profile_fact_tenant_isolation'
+                  """)
+                  assert policy == 1
+                  # CI-only least-privilege role for actual cross-tenant read proof.
+                  await connection.execute("CREATE ROLE karen_ci_memory_reader NOLOGIN")
+                  await connection.execute(
+                      "GRANT USAGE ON SCHEMA public TO karen_ci_memory_reader"
+                  )
+                  await connection.execute(
+                      "GRANT SELECT ON public.profile_fact TO karen_ci_memory_reader"
+                  )
+              finally:
+                  await connection.close()
+
+          asyncio.run(prepare())
+          PY
       - name: Prove live name recall, tenant isolation, and consent revocation
         run: |
           pytest tests/integration/test_live_profile_memory_roundtrip.py -q -rs
           pytest tests/integration/test_live_name_formation_path.py -q -rs
           pytest tests/integration/test_live_profile_projection_identity.py -q -rs
+          pytest tests/core/memory/test_profile_reconciliation_policy.py -q -rs
+          pytest tests/integration/test_live_profile_reconciliation.py -q -rs
