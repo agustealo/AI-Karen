@@ -759,7 +759,21 @@ class DirectCapabilityExecutor:
                 source_url = str(item.get("url") or "").strip()
                 if not excerpt or not source_url.startswith(("https://", "http://")):
                     continue
-                passages.append(f"{excerpt}\nSource: {source_url}")
+                headline = str(item.get("title") or item.get("headline") or "").strip()[:200]
+                published = str(
+                    item.get("published_at")
+                    or item.get("published")
+                    or item.get("publication_date")
+                    or item.get("publishedAt")
+                    or ""
+                ).strip()[:80]
+                details = []
+                if headline:
+                    details.append(f"Headline: {headline}")
+                if published:
+                    details.append(f"Published (provider-reported): {published}")
+                details.extend((excerpt, f"Source: {source_url}"))
+                passages.append("\n".join(details))
             if passages:
                 prefix = (
                     "Live weather evidence (retrieved excerpts, not a generated forecast):"
