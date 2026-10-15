@@ -95,6 +95,7 @@ async def fetch_weather_observation(query: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "location": label, "observed_at": observed_at,
         "timezone": data.get("timezone") or first.get("timezone"),
+        "temperature": f"{temperature} °F",
         "temperature_f": temperature,
         "provider": "open_meteo", "source_url": forecast_url,
     }
@@ -110,4 +111,8 @@ async def fetch_weather_observation(query: str) -> dict[str, Any]:
         values = daily.get(key)
         if isinstance(values, list) and values and isinstance(values[0], (int, float)):
             result[output] = values[0]
+    if "high_f" in result:
+        result["high"] = f'{result["high_f"]} °F'
+    if "low_f" in result:
+        result["low"] = f'{result["low_f"]} °F'
     return result
