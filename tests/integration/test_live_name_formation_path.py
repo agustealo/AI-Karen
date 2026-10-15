@@ -181,7 +181,8 @@ async def test_explicit_favorite_color_chat_reaches_fresh_conversation_response(
 
     try:
         write_result = await formation.process_interaction(
-            text="I love the color black, I think its my favorite color.",
+            # Explicit favorite assertion, not an uncertain "I think" hypothesis.
+            text="No! I just love black, it is my favorite color.",
             tenant_id=str(tenant),
             user_id=str(user),
             source_type="chat_user",
