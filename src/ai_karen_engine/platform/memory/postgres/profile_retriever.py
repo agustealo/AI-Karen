@@ -20,7 +20,6 @@ from ai_karen_engine.core.memory.types import (
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 from .consent_filter import recallable_memory_event
-
 from .ledger_models import MemoryEvent, ProfileFact
 
 
@@ -28,9 +27,17 @@ class PostgresProfileRecallRetriever:
     """Return current profile facts as scoped NeuroRecall candidates."""
 
     async def recall(self, query: MemoryQuery) -> list[MemoryEntry]:
-        activation = decide_activation_mode(query=query.text or "", has_profile=True)
-        if activation.mode.value not in {"profile", "deep"} and not self._looks_like_profile_query(query.text or ""):
-            return []
+        # CORTEX/Intelligence has already resolved typed profile predicates.
+        # Do not let NeuroRecall's older lexical activation heuristics discard
+        # semantically resolved queries with abbreviations or natural phrasing.
+        preferred_attribute = self._preferred_attribute(query.text or "")
+        if preferred_attribute is None:
+            activation = decide_activation_mode(query=query.text or "", has_profile=True)
+            if (
+                activation.mode.value not in {"profile", "deep"}
+                and not self._looks_like_profile_query(query.text or "")
+            ):
+                return []
 
         try:
             tenant_uuid = uuid.UUID(str(query.tenant_id or ""))
@@ -38,7 +45,6 @@ class PostgresProfileRecallRetriever:
         except ValueError:
             return []
 
-        preferred_attribute = self._preferred_attribute(query.text or "")
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         top_k = min(max(int(query.top_k or 10), 1), 50)
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
@@ -51,6 +57,7 @@ class PostgresProfileRecallRetriever:
                     recallable_memory_event(
                         tenant_id=tenant_uuid, user_id=user_uuid, now=now,
                     ),
+                    or_(ProfileFact.valid_from.is_(None), ProfileFact.valid_from <= now),
                     # Superseded or expired facts must never compete with the active value.
                     # Temporary facts remain eligible until their explicit validity window closes.
                     or_(ProfileFact.valid_to.is_(None), ProfileFact.valid_to > now),
