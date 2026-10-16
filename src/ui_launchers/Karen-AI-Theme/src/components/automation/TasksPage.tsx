@@ -42,6 +42,7 @@ type Task = {
   id: string;
   name: string;
   description?: string;
+  acceptanceCriteria?: string;
   instructions?: string;
   agent?: string;
   subAgents?: SubAgent[];
@@ -86,6 +87,7 @@ export default function TasksPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [taskName, setTaskName] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
+  const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
 
   const fetchLiveData = useCallback(async () => {
     if (!isAuthenticated) {
@@ -261,6 +263,7 @@ export default function TasksPage() {
       await apiClient.post('/api/tasks/', {
         name: taskName.trim(),
         description: taskDescription.trim(),
+        acceptanceCriteria: acceptanceCriteria.trim(),
         primaryAgent: newPrimaryAgent,
         primaryAgentInstructions: newPrimaryAgentInstructions,
         taskType: taskName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
@@ -268,6 +271,7 @@ export default function TasksPage() {
       });
       setTaskName("");
       setTaskDescription("");
+      setAcceptanceCriteria("");
       setNewPrimaryAgent("");
       setNewPrimaryAgentInstructions("");
       setNewSubAgents([]);
@@ -371,6 +375,11 @@ export default function TasksPage() {
                       {task.status === "ReviewRequired" ? "Awaiting verification" : task.status === "LegacyUnverified" ? "Historical, unverified" : task.status === "Success" ? "Human-verified" : task.status}
                     </Badge>
                 </div>
+                {task.acceptanceCriteria && (
+                  <p className="whitespace-pre-wrap break-words">
+                    Acceptance criteria: {task.acceptanceCriteria}
+                  </p>
+                )}
                 {task.status === "ReviewRequired" && task.executionId && (
                   <div className="rounded-lg border p-3 space-y-2">
                     <p className="font-semibold text-foreground">Result awaiting your review</p>
@@ -428,6 +437,15 @@ export default function TasksPage() {
                     onChange={(e) => setTaskDescription(e.target.value)}
                     rows={4}
                   />
+               </div>
+               <div className="space-y-1.5">
+                 <Label htmlFor="task-acceptance-criteria">Acceptance criteria (for human verification)</Label>
+                 <Textarea id="task-acceptance-criteria" maxLength={4000}
+                   placeholder="What must be true before you consider this task completed?"
+                   value={acceptanceCriteria}
+                   onChange={(e) => setAcceptanceCriteria(e.target.value)}
+                   rows={3}
+                 />
                </div>
                <div className="space-y-1.5">
                    <Label htmlFor="task-primary-agent">Assign Primary Agent</Label>
