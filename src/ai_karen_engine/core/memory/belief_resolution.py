@@ -118,7 +118,8 @@ def is_trusted_profile_correction(
     """
     if (
         signal_metadata.get("source") not in {
-            "explicit_semantic_rule", "explicit_general_fact_rule"
+            "explicit_semantic_rule", "explicit_general_fact_rule",
+            "explicit_open_relation"
         }
         or signal_metadata.get("explicit_user_statement") is not True
     ):
