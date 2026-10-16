@@ -160,6 +160,10 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         assert terminal is not None
         assert terminal["status"] == "ReviewRequired"
         assert terminal["executionId"] == lease_3
+        assert await repo.mark_task_running(
+            task_id, str(tenant), claim_token=str(uuid.uuid4()),
+            lease_seconds=60,
+        ) is None, "A pending review cannot be overwritten by a new run"
         assert await repo.review_task(
             task_id, str(tenant), user_id=str(uuid.uuid4()),
             execution_id=lease_3, decision="approve", note="wrong reviewer",
