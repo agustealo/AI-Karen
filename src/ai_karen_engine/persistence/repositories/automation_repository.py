@@ -34,6 +34,7 @@ def _task_row(row: Any) -> Dict[str, Any]:
         "name": data["name"],
         "description": data["description"],
         "acceptanceCriteria": data.get("acceptance_criteria") or "",
+        "verificationContract": dict(data.get("verification_contract") or {}),
         "primaryAgent": data["primary_agent"],
         "primaryAgentInstructions": data["primary_agent_instructions"],
         "taskType": data["task_type"],
@@ -119,12 +120,13 @@ class SqlAutomationRepository:
                     INSERT INTO public.automation_tasks (
                         task_id, tenant_id, created_by, name, description,
                         primary_agent, primary_agent_instructions, task_type, sub_agents,
-                        acceptance_criteria
+                        acceptance_criteria, verification_contract
                     ) VALUES (
                         :task_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
                         :name, :description, :primary_agent,
                         :primary_agent_instructions, :task_type,
-                        CAST(:sub_agents AS jsonb), :acceptance_criteria
+                        CAST(:sub_agents AS jsonb), :acceptance_criteria,
+                        CAST(:verification_contract AS jsonb)
                     )
                     RETURNING *
                     """
@@ -140,6 +142,7 @@ class SqlAutomationRepository:
                     "task_type": record["taskType"],
                     "sub_agents": json.dumps(record.get("subAgents") or []),
                     "acceptance_criteria": record.get("acceptanceCriteria") or "",
+                    "verification_contract": json.dumps(record.get("verificationContract") or {}),
                 },
             )
             return _task_row(result.mappings().one())
@@ -394,7 +397,11 @@ class SqlAutomationRepository:
                       AND (
                           :decision = 'reject'
                           OR (
-                              (result_receipt->>'answer_truncated') = 'false'
+                              (
+                                  verification_contract = '{}'::jsonb
+                                  OR result_receipt #>> '{machine_verification,status}' = 'passed'
+                              )
+                              AND (result_receipt->>'answer_truncated') = 'false'
                               AND (result_receipt->>'source_refs_truncated') = 'false'
                               AND length(COALESCE(result_receipt->>'answer_text', '')) > 0
                               AND COALESCE((result_receipt->>'artifact_count')::integer, 1) = 0

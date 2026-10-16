@@ -73,7 +73,7 @@ async def test_task_execution_delegates_to_chat_runtime_with_trusted_identity(mo
     assert request.preferred_model is None
     assert request.metadata["source"] == "saved_task"
     assert request.metadata["task_definition_id"] == "task-1"
-    assert request.metadata["prompt_contract"] == "task-definition.v1"
+    assert request.metadata["prompt_contract"] == "task-definition.v2"
     assert request.metadata["requested_agents"] == [
         "research-agent",
         "verification-agent",
