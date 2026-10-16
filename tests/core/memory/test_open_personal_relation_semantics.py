@@ -50,13 +50,20 @@ def test_unseen_relations_share_a_canonical_attribute(
 
 
 def test_known_favorites_and_identity_do_not_duplicate_into_open_relation():
-    for statement in ("My name is Orlando.", "My favorite music genre is reggae."):
+    for statement in (
+        "My name is Orlando.",
+        "My favorite music genre is reggae.",
+        "My wife is Ana.",
+    ):
         signals = classify_explicit_user_memory(statement)
         assert signals
         assert not any(
             signal.metadata.get("source") == "explicit_open_relation"
             for signal in signals
         )
+    relationship = classify_explicit_user_memory("My wife is Ana.")
+    assert len([signal for signal in relationship if signal.signal_type == "profile_fact"]) == 1
+    assert relationship[0].metadata["attribute"] == "relationship.wife"
     assert requested_profile_attribute("What is my name?") == "preferred_name"
     assert requested_profile_attribute("What is my favorite music genre?") == "favorite_music_genre"
 
