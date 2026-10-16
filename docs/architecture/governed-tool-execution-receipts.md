@@ -46,6 +46,13 @@ timestamp, and metadata:
 - `execution_scope=tool_runtime_acknowledgment`
 - `independently_verified=false`
 
+Governed calls set the canonical `ToolInput.governed_execution=True`,
+and `ToolService` (the existing owner of caching) bypasses both cache reads
+and cache writes for them. This is essential: a prior cached successful
+response is **not proof the action executed again**. If a tool adapter still
+returns `metadata.cached=true`, the bridge records failure
+`cached_tool_result_not_execution`, never a fresh success.
+
 A result is considered acknowledged success only when the canonical tool
 runtime reports literal `success=True`, no error and the exact issued
 request ID. Unrecognized, contradictory or failed responses are recorded
@@ -93,6 +100,9 @@ settled; do not invent task-to-run links.
 - `tests/services/automation/test_task_tool_receipts.py`: owner-only
   exact-attempt task lookup and scoped history, missing-link behavior,
   stale attempts and honest API error codes.
+- `tests/services/test_governed_tool_cache_contract.py`: ordinary read
+  cache behavior remains, but governed executions always invoke the actual
+  tool even with identical parameters.
 - `tests/integration/test_live_automation_task_claims.py`: isolated
   PostgreSQL append and SQL/RLS-scoped reads for tenant, user and run.
 - Automation Authority Gate, live PostgreSQL, Main Quality, Chat System
