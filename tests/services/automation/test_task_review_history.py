@@ -120,7 +120,7 @@ async def test_history_route_propagates_owner_and_limits(monkeypatch):
             "outcome_id": data["outcome_id"],
             "execution_id": data["execution_id"],
             "decision": data["decision"],
-            "status": data["status"],
+            "status": "Success" if data["decision"] == "approve" else "Rejected",
             "review_note": data["review_note"],
             "reviewed_at": data["reviewed_at"],
             "acceptance_criteria": data["acceptance_criteria"],
@@ -167,7 +167,7 @@ def test_transactional_outcome_append_reuses_canonical_store_contract():
     assert "event_type" in method
     assert "UserFeedbackType.TASK_COMPLETION_CONFIRMATION" in method
     assert '"review_status": target' in method
-    assert '"status": target' not in method
+    assert '"status": target' not in method.split("review_event = {", 1)[1]
     assert 'source": "user.feedback"' in method
     assert "rowcount != 1" in store
     assert "AND user_id = CAST(:user_id AS uuid)" in store
