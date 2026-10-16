@@ -59,7 +59,7 @@ export function observeChatSseBody(
           trailingText += decoder.decode();
           // This is the *backend* transport marker, not a fabricated model
           // completion. Every canonical FastAPI SSE outcome ends with it.
-          if (!/data:\s*\[DONE\]\s*$/.test(trailingText)) {
+          if (!/(?:^|\r?\n)data:[ \t]*\[DONE\]\r?\n\r?\n$/.test(trailingText)) {
             if (!signal?.aborted) {
               emitFailure(controller, 'CHAT_STREAM_UPSTREAM_TERMINATED');
             }
