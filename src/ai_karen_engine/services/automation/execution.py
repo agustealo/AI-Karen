@@ -22,6 +22,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
 )
 from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
+from ai_karen_engine.core.runtime.task_output_verification import assess_structured_output
 from ai_karen_engine.core.runtime.task_execution import execute_task_definition
 from ai_karen_engine.persistence.repositories.automation_repository import (
     SqlAutomationRepository,
@@ -241,6 +242,12 @@ async def review_saved_task(
         raise AutomationReviewConflict("The selected task attempt is not reviewable")
     if decision == "approve":
         receipt = task.get("resultReceipt") or {}
+        if task.get("verificationContract") and (
+            (receipt.get("machine_verification") or {}).get("status") != "passed"
+        ):
+            raise AutomationReviewConflict(
+                "Declared machine output check has not passed"
+            )
         if (
             not receipt.get("answer_text")
             or receipt.get("answer_truncated") is not False
@@ -373,7 +380,15 @@ async def execute_saved_task(
             else "runtime_execution_failed"
         ),
         runtime_task_id=result.metadata.correlation_id,
-        result_receipt=_runtime_result_receipt(result),
+        result_receipt={
+            **_runtime_result_receipt(result),
+            "machine_verification": assess_structured_output(
+                task.get("verificationContract"),
+                result.structured_content,
+                runtime_status=result.status.value,
+                degraded=bool(result.metadata.degraded_mode),
+            ),
+        },
     )
     if completed is None:
         raise AutomationTaskClaimLost(
