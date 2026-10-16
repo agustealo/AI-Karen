@@ -14,6 +14,7 @@ import re
 from ai_karen_engine.core.intelligence.profile_attribute import (normalize_personal_query, requested_profile_attribute, is_profile_summary_request)
 from ai_karen_engine.core.intelligence.correction_intent import is_explicit_self_correction
 from ai_karen_engine.core.intelligence.preference_relation import extract_favorite_assertion
+from ai_karen_engine.core.intelligence.personal_relation import extract_personal_relation
 
 from .general_fact_classifier import classify_general_user_facts
 from .signal_models import MemorySignal
@@ -452,6 +453,37 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
             break
 
     signals.extend(classify_general_user_facts(normalized))
+
+    # One relation grammar covers unfamiliar attributes without adding a
+    # bespoke category rule. Existing specialized identity/preference signals
+    # always retain their established semantics and projection identities.
+    relation = extract_personal_relation(normalized)
+    if relation is not None:
+        durable = (
+            relation.modality == "asserted"
+            and relation.temporal_scope is None
+        )
+        signals.append(MemorySignal(
+            text=relation.evidence_text,
+            signal_type="profile_fact",
+            confidence=0.96 if durable else 0.65,
+            scope="user",
+            metadata={
+                "source": "explicit_open_relation",
+                "explicit_user_statement": True,
+                "semantic_class": "personal_relation",
+                "category": "personal_relation",
+                "attribute": relation.attribute,
+                "relation_predicate": relation.predicate,
+                "normalized_value": relation.value,
+                "assertion_modality": relation.modality,
+                "explicit_correction": relation.explicit_correction,
+                "temporal_scope": relation.temporal_scope,
+                "evidence_text": relation.evidence_text,
+                "retention_scope": "user_profile" if durable else "session",
+                "stability": "long_term" if durable else "temporary_or_uncertain",
+            },
+        ))
     return _dedupe(signals)
 
 
