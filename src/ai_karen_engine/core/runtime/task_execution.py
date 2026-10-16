@@ -22,7 +22,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionResult,
 )
 
-TASK_EXECUTION_PROMPT_VERSION = "task-definition.v1"
+TASK_EXECUTION_PROMPT_VERSION = "task-definition.v2"
 
 
 def _task_message(task: Mapping[str, Any]) -> str:
@@ -39,6 +39,15 @@ def _task_message(task: Mapping[str, Any]) -> str:
     acceptance_criteria = str(task.get("acceptanceCriteria") or "").strip()
     if acceptance_criteria:
         parts.append(f"User acceptance criteria for later human review: {acceptance_criteria}")
+
+    verification_contract = task.get("verificationContract") or {}
+    if verification_contract:
+        parts.append(
+            "If your runtime supports structured output, produce an actual "
+            "structured_content object conforming to this creator-defined "
+            "schema. A textual claim that the schema passed is not evidence: "
+            + json.dumps(verification_contract.get("schema"), sort_keys=True)
+        )
 
     primary_instructions = str(task.get("primaryAgentInstructions") or "").strip()
     if primary_instructions:
