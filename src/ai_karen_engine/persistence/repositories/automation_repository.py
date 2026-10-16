@@ -7,6 +7,7 @@ registries. Schema creation is migration-owned.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
+from ai_karen_engine.core.runtime.outcome.contracts import UserFeedbackType, UserOutcome
+from ai_karen_engine.core.runtime.outcome.store import PostgresOutcomeStore
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 _CRON_LEASE_SECONDS = 900
@@ -417,7 +420,49 @@ class SqlAutomationRepository:
                 },
             )
             row = result.mappings().one_or_none()
-            return _task_row(row) if row else None
+            if row is None:
+                return None
+
+            # The event and status change share one PostgreSQL transaction.
+            # On missing evidence schema, FK violation or duplicate event ID,
+            # an exception rolls back the UPDATE. Never announce fake success.
+            data = dict(row)
+            receipt_json = json.dumps(
+                data.get("result_receipt") or {},
+                sort_keys=True, default=str, ensure_ascii=False,
+            )
+            review_event = {
+                **UserOutcome(
+                    feedback_type=UserFeedbackType.TASK_COMPLETION_CONFIRMATION,
+                ).to_dict(),
+                "outcome_id": f"out_task_review_{attempt.replace('-', '')}",
+                "source": "user.feedback",
+                "trajectory_id": f"task:{task_id}",
+                "task_id": task_id,
+                "execution_id": attempt,
+                "tenant_id": tenant_id,
+                "user_id": reviewer,
+                "decision": decision,
+                "review_status": target,
+                "review_note": note,
+                "reviewed_at": data["reviewed_at"].isoformat(),
+                "recorded_at": data["reviewed_at"],
+                "correlation_id": data.get("runtime_task_id"),
+                "acceptance_criteria": data.get("acceptance_criteria") or "",
+                "result_receipt": data.get("result_receipt") or {},
+                "receipt_sha256": hashlib.sha256(
+                    receipt_json.encode("utf-8")
+                ).hexdigest(),
+                "metadata": {
+                    "event_type": "automation.task.review",
+                    "human_attestation": True,
+                    "independently_verified": False,
+                },
+            }
+            await PostgresOutcomeStore.append_in_transaction(
+                session, review_event,
+            )
+            return _task_row(row)
 
     async def task_summary(self, tenant_id: str) -> Dict[str, Any]:
         async with async_transaction_scope(tenant_id) as session:

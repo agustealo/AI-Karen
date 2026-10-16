@@ -21,6 +21,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionResult,
     ChatExecutionStatus,
 )
+from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
 from ai_karen_engine.core.runtime.task_execution import execute_task_definition
 from ai_karen_engine.persistence.repositories.automation_repository import (
     SqlAutomationRepository,
@@ -163,6 +164,46 @@ def _runtime_result_receipt(result: ChatExecutionResult) -> Dict[str, Any]:
         "citation_count": len(result.citations),
         "independently_verified": False,
     }
+
+
+async def list_saved_task_reviews(
+    task_id: str,
+    *,
+    user: UserData,
+    limit: int = 50,
+    repository: Optional[SqlAutomationRepository] = None,
+) -> list[Dict[str, Any]]:
+    """Read durable review receipts only for the authenticated task creator."""
+    tenant_id = str(user.tenant_id or "").strip()
+    user_id = str(user.user_id or "").strip()
+    if not tenant_id or tenant_id == "default" or not user_id:
+        raise AutomationReviewForbidden("Authenticated identity is required")
+    repo = repository or get_automation_repository()
+    task = await repo.get_task(task_id, tenant_id, created_by=user_id)
+    if task is None or str(task.get("created_by") or "") != user_id:
+        raise AutomationTargetNotFound("Task not found")
+    events = await get_outcome_store().list_task_reviews_async(
+        task_id, tenant_id=tenant_id, user_id=user_id, limit=limit,
+    )
+    # The list contract deliberately excludes the answer, tenant metadata
+    # and raw event payload, and does not delegate an unscoped store query.
+    return [
+        {
+            "outcome_id": event["outcome_id"],
+            "execution_id": event["execution_id"],
+            "decision": event["decision"],
+            "status": "Success" if event["decision"] == "approve" else "Rejected",
+            "review_note": event.get("review_note") or "",
+            "reviewed_at": event["reviewed_at"],
+            "acceptance_criteria": event.get("acceptance_criteria") or "",
+            "receipt_sha256": event["receipt_sha256"],
+            "result_receipt": event.get("result_receipt") or {},
+            "correlation_id": event.get("correlation_id"),
+            "human_attestation": True,
+            "independently_verified": False,
+        }
+        for event in events
+    ]
 
 
 async def review_saved_task(
@@ -399,6 +440,7 @@ __all__ = [
     "AutomationReviewConflict",
     "AutomationReviewForbidden",
     "review_saved_task",
+    "list_saved_task_reviews",
     "AutomationTaskClaimLost",
     "SavedTaskExecution",
     "execute_automation_target",

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
@@ -27,6 +28,7 @@ from ai_karen_engine.services.automation.execution import (
     AutomationReviewForbidden,
     execute_saved_task,
     review_saved_task,
+    list_saved_task_reviews,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,21 @@ class TaskReviewRequest(BaseModel):
     execution_id: str = Field(..., min_length=36, max_length=36)
     decision: Literal["approve", "reject"]
     note: str = Field("", max_length=2000)
+
+
+class TaskReviewHistoryResponse(BaseModel):
+    outcome_id: str
+    execution_id: str
+    decision: Literal["approve", "reject"]
+    status: str
+    review_note: str
+    reviewed_at: datetime
+    acceptance_criteria: str
+    receipt_sha256: str
+    result_receipt: Dict[str, Any] = Field(default_factory=dict)
+    correlation_id: Optional[str] = None
+    human_attestation: bool
+    independently_verified: bool
 
 
 class TaskDefinitionResponse(TaskDefinitionRequest):
@@ -163,6 +180,27 @@ async def delete_task(
         return {"message": f"Task {task_id} deleted successfully"}
     except AutomationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Task not found") from exc
+
+
+@router.get("/{task_id}/reviews", response_model=List[TaskReviewHistoryResponse])
+async def get_task_reviews(
+    task_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    user: UserData = Depends(get_current_user),
+):
+    try:
+        records = await list_saved_task_reviews(
+            task_id, user=user, limit=limit,
+        )
+        return [TaskReviewHistoryResponse(**record) for record in records]
+    except AutomationTargetNotFound as exc:
+        raise HTTPException(status_code=404, detail="Task not found") from exc
+    except AutomationReviewForbidden as exc:
+        raise HTTPException(status_code=403, detail="Task history denied") from exc
+    except OutcomeStoreError as exc:
+        raise HTTPException(
+            status_code=503, detail="Task review history unavailable",
+        ) from exc
 
 
 @router.post("/{task_id}/review", response_model=TaskDefinitionResponse)

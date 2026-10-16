@@ -35,6 +35,12 @@ class OutcomeStore(ABC):
 
         await asyncio.to_thread(self.save_outcome, payload)
 
+    async def list_task_reviews_async(
+        self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Owner-scoped task review history, never a tenant-wide fallback."""
+        raise OutcomeStoreError("Task review history is not available")
+
     @abstractmethod
     def get_for_trajectory(
         self,
@@ -84,6 +90,28 @@ class InMemoryOutcomeStore(OutcomeStore):
         if tenant_id is not None:
             records = [record for record in records if record.get("tenant_id") == tenant_id]
         return [dict(record) for record in records]
+
+    async def list_task_reviews_async(
+        self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not tenant_id or not user_id:
+            raise OutcomeStoreError("Tenant and user required")
+        events = [
+            dict(item)
+            for item in self.get_for_trajectory(
+                f"task:{task_id}", tenant_id=tenant_id,
+            )
+            if item.get("user_id") == user_id
+            and item.get("source") == "user.feedback"
+            and item.get("feedback_type") == "task_completion_confirmation"
+            and item.get("task_id") == task_id
+        ]
+        return sorted(
+            events, key=lambda item: (
+                str(item.get("recorded_at") or ""),
+                str(item.get("outcome_id") or ""),
+            ), reverse=True,
+        )[:max(1, min(int(limit), 100))]
 
     def list_for_tenant(
         self,
@@ -231,6 +259,74 @@ class PostgresOutcomeStore(OutcomeStore):
                 },
             )
             raise OutcomeStoreError("Outcome persistence failed") from exc
+
+    @staticmethod
+    async def append_in_transaction(session: Any, payload: dict[str, Any]) -> None:
+        """Append through the canonical outcome schema in a caller-owned transaction.
+
+        Used only when another authoritative state change must commit or roll
+        back alongside its outcome event. This method never starts a second
+        transaction, and duplicate deterministic receipt IDs fail closed.
+        """
+        tenant, source = PostgresOutcomeStore._validated_identity(payload)
+        result = await session.execute(
+            PostgresOutcomeStore._insert_statement(),
+            PostgresOutcomeStore._insert_params(
+                payload, tenant_id=tenant, source=source,
+            ),
+        )
+        if result.rowcount != 1:
+            raise OutcomeStoreError("Outcome event was not appended")
+
+    async def list_task_reviews_async(
+        self,
+        task_id: str,
+        *,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return only authenticated-owner reviews for a task trajectory."""
+        tenant = self._require_tenant(tenant_id)
+        if not user_id:
+            raise OutcomeStoreError("User identity required for task review history")
+        bounded = max(1, min(int(limit), 100))
+        try:
+            async with async_transaction_scope(tenant) as session:
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND trajectory_id = :trajectory_id
+                          AND source = 'user.feedback'
+                          AND payload->>'feedback_type' = 'task_completion_confirmation'
+                          AND payload->>'task_id' = :task_id
+                        ORDER BY recorded_at DESC, outcome_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant,
+                        "user_id": user_id,
+                        "trajectory_id": f"task:{task_id}",
+                        "task_id": task_id,
+                        "limit": bounded,
+                    },
+                )
+                return [
+                    self._payload_from_row(row["payload"])
+                    for row in result.mappings().all()
+                ]
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.task_review_read_failed",
+                extra={"tenant_id": tenant, "user_id": user_id, "task_id": task_id},
+            )
+            raise OutcomeStoreError("Task review history unavailable") from exc
 
     async def save_outcome_async(self, payload: dict[str, Any]) -> None:
         """Persist through SQLAlchemy's async engine on async runtime paths."""
