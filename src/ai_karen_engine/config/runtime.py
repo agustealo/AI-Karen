@@ -152,6 +152,13 @@ class TimeoutSettings:
 
 
 @dataclass
+class TaskVerificationSettings:
+    """Bounded reviewer-visible text stored on canonical saved tasks."""
+
+    max_answer_chars: int = 65536
+
+
+@dataclass
 class FeatureFlags:
     """Runtime feature flags."""
 
@@ -202,6 +209,7 @@ class RuntimeSettings:
     providers: ProviderFlags = field(default_factory=ProviderFlags)
     endpoints: ServiceEndpoints = field(default_factory=ServiceEndpoints)
     timeouts: TimeoutSettings = field(default_factory=TimeoutSettings)
+    task_verification: TaskVerificationSettings = field(default_factory=TaskVerificationSettings)
     features: FeatureFlags = field(default_factory=FeatureFlags)
     security: SecuritySettings = field(default_factory=SecuritySettings)
 
@@ -363,6 +371,10 @@ class RuntimeSettings:
         if env_request_timeout:
             self.timeouts.request_timeout = as_int(env_request_timeout, self.timeouts.request_timeout)
 
+        env_review_max = env("KARI_TASK_REVIEW_MAX_ANSWER_CHARS")
+        if env_review_max is not None:
+            self.task_verification.max_answer_chars = as_int(env_review_max, -1)
+
         env_task_lease = env("KARI_SAVED_TASK_CLAIM_LEASE_SECONDS")
         if env_task_lease is not None:
             self.timeouts.saved_task_claim_lease_seconds = as_int(
@@ -454,6 +466,9 @@ class RuntimeSettings:
 
         if self.llm.max_retries < 0:
             issues.append("LLM max_retries must not be negative")
+
+        if not 2400 <= self.task_verification.max_answer_chars <= 262144:
+            issues.append("Task review answer limit must be between 2400 and 262144 characters")
 
         if self.timeouts.saved_task_claim_lease_seconds < 30:
             issues.append("Saved task claim lease must be at least 30 seconds")
@@ -547,6 +562,7 @@ __all__ = [
     "ProviderFlags",
     "ServiceEndpoints",
     "TimeoutSettings",
+    "TaskVerificationSettings",
     "FeatureFlags",
     "SecuritySettings",
     "RuntimeSettings",
