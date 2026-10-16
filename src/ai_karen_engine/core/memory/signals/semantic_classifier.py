@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 from ai_karen_engine.core.intelligence.profile_attribute import (normalize_personal_query, requested_profile_attribute, is_profile_summary_request)
+from ai_karen_engine.core.intelligence.preference_relation import extract_favorite_assertion
 
 from .general_fact_classifier import classify_general_user_facts
 from .signal_models import MemorySignal
@@ -19,23 +20,6 @@ from .signal_models import MemorySignal
 
 _NAME = re.compile(
     r"(?i)\b(?:my name is|call me)\s+([A-Za-z][A-Za-z' -]{0,60}?)(?=[.!?,;]|$)"
-)
-_FAVORITE_COLOR = re.compile(
-    r"(?i)\bmy favou?rite colou?r is\s+([A-Za-z][A-Za-z -]{0,30}?)(?=[.!?,;]|$)"
-)
-_COLOR_IS_FAVORITE = re.compile(
-    r"(?i)\b(?:actually\s+)?([A-Za-z][A-Za-z -]{0,30}?)\s+is\s+"
-    r"my favou?rite colou?r(?:\s+now)?(?=[.!?,;]|$)"
-)
-_FAVORITE_COLOR_HEDGED = re.compile(
-    r"(?i)\b(?:i\s+(?:really\s+)?(?:love|like|adore)\s+(?:the\s+colou?r\s+)?"
-    r"(?P<color>[a-z]+))\s*[,;.]?\s*"
-    r"(?:i\s+(?:think|guess|feel)\s+(?:it(?:'s|s| is)|that(?:'s| is))\s+"
-    r"my\s+favou?rite\s+colou?r)\b"
-)
-_COLOR_IS_FAVORITE_EMPHATIC = re.compile(
-    r"(?i)\b(?P<color>[a-z]+)\s*[,;.]?\s*"
-    r"(?:it\s+is|it's)\s+my\s+favou?rite\s+colou?r\b"
 )
 _GOAL_PATTERNS = (
     re.compile(r"(?i)\bmy goal is\s+(.+?)(?=[.!?]|$)"),
@@ -252,33 +236,41 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                 )
             )
 
-    color_match = (
-        _FAVORITE_COLOR.search(normalized)
-        or _COLOR_IS_FAVORITE.search(normalized)
-        or _FAVORITE_COLOR_HEDGED.search(normalized)
-        or _COLOR_IS_FAVORITE_EMPHATIC.search(normalized)
-    )
-    if color_match:
-        value = _clean_value(color_match.group(1)).casefold()
-        if value:
-            signals.append(
-                MemorySignal(
-                    text=f"My favorite color is {value}",
-                    signal_type="preference",
-                    confidence=0.98,
-                    scope="user",
-                    metadata={
-                        "source": "explicit_semantic_rule",
-                        "explicit_user_statement": True,
-                        "semantic_class": "preference",
-                        "category": "preference",
-                        "attribute": "favorite_color",
-                        "normalized_value": value,
-                        "retention_scope": "user_profile",
-                        "stability": "long_term",
-                    },
-                )
+    favorite = extract_favorite_assertion(normalized)
+    if favorite is not None:
+        asserted = favorite.modality == "asserted"
+        durable = asserted and favorite.temporal_scope is None
+        signals.append(
+            MemorySignal(
+                text=f"My favorite {favorite.domain} is {favorite.value}",
+                signal_type="preference",
+                confidence=0.98 if asserted else 0.70,
+                scope="user",
+                metadata={
+                    "source": "explicit_semantic_rule",
+                    "explicit_user_statement": True,
+                    "semantic_class": "preference",
+                    "category": "preference",
+                    "attribute": favorite.attribute,
+                    # The attribute already identifies the preference domain.
+                    # Do not insert an additional semantic-scope qualifier:
+                    # pre-MI06 favorite_color facts have no "domain" field.
+                    "preference_domain": favorite.domain,
+                    "normalized_value": favorite.value,
+                    "assertion_modality": favorite.modality,
+                    "explicit_correction": favorite.explicit_correction,
+                    "evidence_text": favorite.evidence_text,
+                    # Without a validity window, temporal and uncertain
+                    # candidates cannot become unqualified durable facts.
+                    "retention_scope": "user_profile" if durable else "session",
+                    "stability": (
+                        "long_term" if durable
+                        else "temporary" if favorite.temporal_scope else "uncertain"
+                    ),
+                    "temporal_scope": favorite.temporal_scope,
+                },
             )
+        )
 
     if _INTERVIEW_CANCELLED.search(normalized):
         signals.append(

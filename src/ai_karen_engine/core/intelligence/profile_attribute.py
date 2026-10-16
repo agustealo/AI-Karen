@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import re
 
+from .preference_relation import requested_favorite_attribute
+
 
 def normalize_personal_query(text: str) -> str:
     """Canonicalize typography and whitespace, not vocabulary or tone."""
@@ -17,10 +19,6 @@ def normalize_personal_query(text: str) -> str:
 # No prohibited-word vocabulary is maintained here.
 _GAP = r"(?:[\w'-]+\s+){0,5}"
 _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("favorite_color", (
-        r"(?:what(?:\s+is|'s|s)?|which)\s+(?:is\s+)?my\s+"
-        r"(?:fav(?:ou?rite)?\s+)?colou?r",
-    )),
     ("preferred_name", (
         rf"(?:what(?:\s+is|'s|s)|hats|hat's|remember)\s+{_GAP}my\s+{_GAP}name",
         r"my\s+name\s+is\s+(?:what|who)",
@@ -40,7 +38,7 @@ _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("birthplace", (
         rf"where\s+{_GAP}was\s+i\s+born(?:\s+at)?",
-        rf"(?:what(?:\s+is|'s|s))\s+{_GAP}my\s+birthplace",
+        rf"(?:what(?:\s+is|'s|s)|tell\s+me)\s+{_GAP}my\s+birthplace",
     )),
     ("residence_location", (rf"where\s+{_GAP}do\s+i\s+{_GAP}live", rf"where\s+{_GAP}am\s+i\s+based")),
     ("work_location", (rf"where\s+{_GAP}do\s+i\s+{_GAP}work", rf"(?:what(?:\s+is|'s|s))\s+{_GAP}my\s+workplace")),
@@ -63,6 +61,9 @@ def requested_profile_attribute(text: str) -> str | None:
     """Resolve one unambiguous attribute, independent of expressive wording."""
     if is_profile_summary_request(text):
         return None
+    favorite = requested_favorite_attribute(text)
+    if favorite:
+        return favorite
     question = normalize_personal_query(text).strip(" ?.!")
     matches = {
         attribute for attribute, patterns in _ATTRIBUTE_QUESTIONS

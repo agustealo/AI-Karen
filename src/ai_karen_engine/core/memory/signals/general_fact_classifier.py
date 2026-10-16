@@ -121,7 +121,14 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
     signals: list[MemorySignal] = []
 
     self_description = _SELF_DESCRIPTION.search(normalized)
-    if self_description:
+    # "Where am I from?" contains the fragment "I from", but that is not
+    # an explicit self-description. Admit only a user-owned clause boundary.
+    if self_description and (
+        self_description.start() == 0
+        or normalized[:self_description.start()].rstrip().endswith(
+            (",", ".", ";", "!", "?")
+        )
+    ):
         description = _clean(self_description.group("description"))
         # Do not infer a national origin from a demonym-shaped adjective, and
         # do not commit unconstrained personal identity claims to long-term

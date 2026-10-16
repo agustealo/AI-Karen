@@ -22,7 +22,13 @@ def test_favorite_color_conversation_is_typed_preference(utterance: str) -> None
     ]
     assert len(favorites) == 1
     assert favorites[0].metadata["normalized_value"] == "black"
-    assert favorites[0].metadata["retention_scope"] == "user_profile"
+    uncertain = "I think" in utterance
+    assert favorites[0].metadata["retention_scope"] == (
+        "session" if uncertain else "user_profile"
+    )
+    assert favorites[0].metadata["assertion_modality"] == (
+        "uncertain" if uncertain else "asserted"
+    )
     assert favorites[0].metadata["semantic_class"] == "preference"
     assert not any(s.metadata.get("semantic_class") == "race" for s in signals)
 
