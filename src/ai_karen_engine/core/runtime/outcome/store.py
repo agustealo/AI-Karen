@@ -121,6 +121,8 @@ class InMemoryOutcomeStore(OutcomeStore):
             and record.get("source") == "runtime.execution"
             and (record.get("metadata") or {}).get("event_type")
             == "agent.tool.execution"
+            and (record.get("metadata") or {}).get("receipt_version")
+            == "governed-tool.v1"
         ]
         return sorted(
             events,
@@ -342,6 +344,7 @@ class PostgresOutcomeStore(OutcomeStore):
                           AND trajectory_id = :trajectory_id
                           AND source = 'runtime.execution'
                           AND payload->'metadata'->>'event_type' = 'agent.tool.execution'
+                          AND payload->'metadata'->>'receipt_version' = 'governed-tool.v1'
                         ORDER BY recorded_at DESC, outcome_id DESC
                         LIMIT :limit
                         """
