@@ -83,6 +83,7 @@ class AutomationDefinitionService:
             "id": f"task_{uuid.uuid4().hex[:12]}",
             "name": str(payload.get("name") or "").strip(),
             "description": str(payload.get("description") or "").strip(),
+            "acceptanceCriteria": str(payload.get("acceptanceCriteria") or "").strip(),
             "primaryAgent": primary_agent,
             "primaryAgentInstructions": str(
                 payload.get("primaryAgentInstructions") or ""
@@ -95,6 +96,8 @@ class AutomationDefinitionService:
         }
         if not record["name"] or not record["description"]:
             raise AutomationDefinitionError("Task name and description are required")
+        if len(record["acceptanceCriteria"]) > 4000:
+            raise AutomationDefinitionError("Acceptance criteria must not exceed 4000 characters")
         return await self._repository.create_task(
             tenant_id=str(user.tenant_id),
             created_by=str(user.user_id),
