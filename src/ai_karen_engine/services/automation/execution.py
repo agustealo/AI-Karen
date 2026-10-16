@@ -37,6 +37,14 @@ class AutomationExecutionError(RuntimeError):
     """Automation target reached runtime but did not complete successfully."""
 
 
+class AutomationReviewConflict(AutomationExecutionError):
+    """Review has already happened or the requested attempt is no longer current."""
+
+
+class AutomationReviewForbidden(PermissionError):
+    """Only the authenticated task creator can attest to completion."""
+
+
 class AutomationTaskBusy(AutomationExecutionError):
     """A task already has a live owner or an unreconciled legacy owner."""
 
@@ -95,6 +103,85 @@ async def resolve_scheduled_principal(
         is_active=True,
         is_verified=bool(account.is_verified),
     )
+
+
+def _runtime_result_receipt(result: ChatExecutionResult) -> Dict[str, Any]:
+    """Capture observable runtime output, never model claims of goal completion."""
+    answer = result.answer or ""
+    metadata = result.metadata
+
+    def _ref(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        return value[:160] if value.strip() else None
+
+    return {
+        "runtime_status": result.status.value,
+        "correlation_id": _ref(metadata.correlation_id),
+        "response_id": _ref(metadata.response_id),
+        "assistant_message_id": _ref(metadata.assistant_message_id),
+        "conversation_id": _ref(metadata.conversation_id),
+        "response_source": _ref(metadata.response_source),
+        "actual_provider": _ref(metadata.actual_provider),
+        "actual_model": _ref(metadata.actual_model),
+        "degraded_mode": bool(metadata.degraded_mode),
+        "answer_preview": answer[:2400],
+        "answer_truncated": len(answer) > 2400,
+        "artifact_count": len(result.artifacts),
+        "source_count": len(result.sources),
+        "citation_count": len(result.citations),
+        "independently_verified": False,
+    }
+
+
+async def review_saved_task(
+    task_id: str,
+    *,
+    user: UserData,
+    execution_id: str,
+    decision: str,
+    note: str = "",
+    repository: Optional[SqlAutomationRepository] = None,
+) -> Dict[str, Any]:
+    """Human verification, guarded by current attempt identity and task owner."""
+    tenant_id = str(user.tenant_id or "").strip()
+    user_id = str(user.user_id or "").strip()
+    if not tenant_id or tenant_id == "default" or not user_id:
+        raise AutomationReviewForbidden("Authenticated identity is required")
+    if decision not in {"approve", "reject"}:
+        raise ValueError("Review decision must be approve or reject")
+    if len(note) > 2000:
+        raise ValueError("Review note is too long")
+    try:
+        normalized_attempt = str(uuid.UUID(execution_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Review execution_id must be a UUID") from exc
+    repo = repository or get_automation_repository()
+    task = await repo.get_task(task_id, tenant_id)
+    if task is None:
+        raise AutomationTargetNotFound("Task not found")
+    if str(task.get("created_by") or "") != user_id:
+        raise AutomationReviewForbidden("Only the task creator can review outcomes")
+    if (
+        task.get("status") != "ReviewRequired"
+        or str(task.get("executionId") or "") != normalized_attempt
+    ):
+        raise AutomationReviewConflict("The selected task attempt is not reviewable")
+    reviewed = await repo.review_task(
+        task_id, tenant_id, user_id=user_id, execution_id=normalized_attempt,
+        decision=decision, note=note,
+    )
+    if reviewed is None:
+        raise AutomationReviewConflict("The task attempt was already reviewed or replaced")
+    logger.info(
+        "automation.task.review_decided",
+        extra={
+            "task_id": task_id, "tenant_id": tenant_id, "user_id": user_id,
+            "execution_id": normalized_attempt, "decision": decision,
+            "status": reviewed["status"],
+        },
+    )
+    return reviewed
 
 
 async def execute_saved_task(
@@ -188,13 +275,14 @@ async def execute_saved_task(
     completed = await repo.complete_task(
         task_id, tenant_id,
         claim_token=claim_token,
-        status="Success" if successful else "Failed",
+        status="ReviewRequired" if successful else "Failed",
         last_error=(
             None if successful else
             "runtime_gate" if result.status == ChatExecutionStatus.GATE
             else "runtime_execution_failed"
         ),
         runtime_task_id=result.metadata.correlation_id,
+        result_receipt=_runtime_result_receipt(result),
     )
     if completed is None:
         raise AutomationTaskClaimLost(
@@ -236,7 +324,8 @@ async def execute_automation_target(
             "target_type": "Task",
             "target_id": target_id,
             "runtime_task_id": outcome.result.metadata.correlation_id,
-            "status": "Success",
+            "status": outcome.task["status"],
+            "execution_id": outcome.task.get("executionId"),
         }
 
     if job_type in {"Job", "Sequence"}:
@@ -257,6 +346,9 @@ __all__ = [
     "AutomationPrincipalUnavailable",
     "AutomationTargetNotFound",
     "AutomationTaskBusy",
+    "AutomationReviewConflict",
+    "AutomationReviewForbidden",
+    "review_saved_task",
     "AutomationTaskClaimLost",
     "SavedTaskExecution",
     "execute_automation_target",
