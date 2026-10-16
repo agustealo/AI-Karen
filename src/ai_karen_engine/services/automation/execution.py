@@ -167,6 +167,59 @@ def _runtime_result_receipt(result: ChatExecutionResult) -> Dict[str, Any]:
     }
 
 
+async def list_saved_task_tool_receipts(
+    task_id: str,
+    *,
+    user: UserData,
+    execution_id: str,
+    limit: int = 50,
+    repository: Optional[SqlAutomationRepository] = None,
+) -> list[Dict[str, Any]]:
+    """Inspect exact-attempt Medusa bridge receipts, never model-origin proof."""
+    tenant_id = str(user.tenant_id or "").strip()
+    user_id = str(user.user_id or "").strip()
+    if not tenant_id or tenant_id == "default" or not user_id:
+        raise AutomationReviewForbidden("Authenticated identity is required")
+    try:
+        attempt = str(uuid.UUID(execution_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Task execution_id must be a UUID") from exc
+
+    repo = repository or get_automation_repository()
+    task = await repo.get_task(task_id, tenant_id, created_by=user_id)
+    if task is None or str(task.get("created_by") or "") != user_id:
+        raise AutomationTargetNotFound("Task not found")
+    if str(task.get("executionId") or "") != attempt:
+        raise AutomationReviewConflict("Selected task attempt is no longer current")
+    request_id = (task.get("resultReceipt") or {}).get("execution_request_id")
+    if not isinstance(request_id, str) or not request_id:
+        # Historic/legacy attempts lack this link. No invented correlations.
+        return []
+    events = await get_outcome_store().list_governed_tool_receipts_async(
+        trajectory_id=request_id, tenant_id=tenant_id,
+        user_id=user_id, limit=limit,
+    )
+    return [
+        {
+            "receipt_id": event["outcome_id"],
+            "tool_call_id": (event.get("metadata") or {}).get("tool_call_id"),
+            "tool_name": (event.get("metadata") or {}).get("tool_name"),
+            "tool_version": (event.get("metadata") or {}).get("tool_version"),
+            "agent_id": (event.get("metadata") or {}).get("agent_id"),
+            "step_id": (event.get("metadata") or {}).get("step_id"),
+            "policy_decision_id": (event.get("metadata") or {}).get("policy_decision_id"),
+            "success": event.get("tool_success") is True
+                       and event.get("status") == "success",
+            "error_type": (event.get("metadata") or {}).get("error_type"),
+            "result_sha256": (event.get("metadata") or {}).get("result_sha256"),
+            "recorded_at": event.get("recorded_at"),
+            "execution_scope": "tool_runtime_acknowledgment",
+            "independently_verified": False,
+        }
+        for event in events
+    ]
+
+
 async def list_saved_task_reviews(
     task_id: str,
     *,
@@ -382,6 +435,7 @@ async def execute_saved_task(
         runtime_task_id=result.metadata.correlation_id,
         result_receipt={
             **_runtime_result_receipt(result),
+            "execution_request_id": resolved_request_id,
             "machine_verification": assess_structured_output(
                 task.get("verificationContract"),
                 result.structured_content,
@@ -456,6 +510,7 @@ __all__ = [
     "AutomationReviewForbidden",
     "review_saved_task",
     "list_saved_task_reviews",
+    "list_saved_task_tool_receipts",
     "AutomationTaskClaimLost",
     "SavedTaskExecution",
     "execute_automation_target",
