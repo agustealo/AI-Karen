@@ -30,6 +30,7 @@ from ai_karen_engine.services.automation.execution import (
     execute_saved_task,
     review_saved_task,
     list_saved_task_reviews,
+    list_saved_task_tool_receipts,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,22 @@ class TaskReviewRequest(BaseModel):
     execution_id: str = Field(..., min_length=36, max_length=36)
     decision: Literal["approve", "reject"]
     note: str = Field("", max_length=2000)
+
+
+class GovernedToolReceiptResponse(BaseModel):
+    receipt_id: str
+    tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    tool_version: Optional[str] = None
+    agent_id: Optional[str] = None
+    step_id: Optional[str] = None
+    policy_decision_id: Optional[str] = None
+    success: bool
+    error_type: Optional[str] = None
+    result_sha256: Optional[str] = None
+    recorded_at: Optional[datetime] = None
+    execution_scope: Literal["tool_runtime_acknowledgment"]
+    independently_verified: Literal[False]
 
 
 class TaskReviewHistoryResponse(BaseModel):
@@ -185,6 +202,34 @@ async def delete_task(
         return {"message": f"Task {task_id} deleted successfully"}
     except AutomationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Task not found") from exc
+
+
+@router.get("/{task_id}/tool-receipts", response_model=List[GovernedToolReceiptResponse])
+async def get_task_tool_receipts(
+    task_id: str,
+    execution_id: str = Query(..., min_length=36, max_length=36),
+    limit: int = Query(50, ge=1, le=100),
+    user: UserData = Depends(get_current_user),
+):
+    try:
+        rows = await list_saved_task_tool_receipts(
+            task_id, user=user, execution_id=execution_id, limit=limit,
+        )
+        return [GovernedToolReceiptResponse(**row) for row in rows]
+    except AutomationTargetNotFound as exc:
+        raise HTTPException(status_code=404, detail="Task not found") from exc
+    except AutomationReviewForbidden as exc:
+        raise HTTPException(status_code=403, detail="Task receipt access denied") from exc
+    except AutomationReviewConflict as exc:
+        raise HTTPException(
+            status_code=409, detail="The task execution has changed",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OutcomeStoreError as exc:
+        raise HTTPException(
+            status_code=503, detail="Governed tool receipts unavailable",
+        ) from exc
 
 
 @router.get("/{task_id}/reviews", response_model=List[TaskReviewHistoryResponse])
