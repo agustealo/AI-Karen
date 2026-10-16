@@ -157,3 +157,48 @@ def test_runtime_supplied_correction_flag_is_not_authority():
         },
         merged_metadata={"explicit_correction": True},
     )
+
+
+@pytest.mark.parametrize(
+    ("utterance", "signal_type", "attribute", "expected"),
+    [
+        ("Actually my name is Alex.", "identity_fact", "preferred_name", True),
+        ("Correction: I work at Ford.", "profile_fact", "employer", True),
+        ("To correct myself, I live in Detroit.", "profile_fact", "residence_location", True),
+        ("My name is Alex.", "identity_fact", "preferred_name", False),
+        ("I work at Ford.", "profile_fact", "employer", False),
+    ],
+)
+def test_domain_neutral_self_correction_governs_classified_claims(
+    utterance, signal_type, attribute, expected,
+):
+    from ai_karen_engine.core.memory.signals.semantic_classifier import (
+        classify_explicit_user_memory,
+    )
+
+    signals = [
+        candidate
+        for candidate in classify_explicit_user_memory(utterance)
+        if candidate.signal_type == signal_type
+        and candidate.metadata.get("attribute") == attribute
+    ]
+    assert len(signals) == 1
+    assert (signals[0].metadata.get("explicit_correction") is True) is expected
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Actually she said my name is Alex.",
+        "I was wrong about what someone else said.",
+        "Correction: they work at Ford.",
+        "Actually, what is my employer?",
+        "My favorite genre is reggae.",
+    ],
+)
+def test_correction_grammar_never_grants_authority_to_ambiguous_discourse(utterance):
+    from ai_karen_engine.core.intelligence.correction_intent import (
+        is_explicit_self_correction,
+    )
+
+    assert not is_explicit_self_correction(utterance)
