@@ -231,7 +231,7 @@ async def test_invalid_tenant_identity_fails_before_side_effect(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_outage_must_not_return_success_or_retry(monkeypatch):
     class BrokenStore(InMemoryOutcomeStore):
-        async def save_outcome_async(self, payload):
+        async def save_unique_outcome_async(self, payload):
             raise OutcomeStoreError("Database unavailable")
     tool, _ = setup(monkeypatch, store=BrokenStore())
     with pytest.raises(OutcomeStoreError, match="Database unavailable"):
@@ -284,3 +284,33 @@ async def test_researcher_must_propagate_audit_outage_after_possible_side_effect
             {"query": "Perform governed research"},
             {}, execution=ctx,
         )
+
+
+@pytest.mark.asyncio
+async def test_strict_receipt_append_rejects_duplicate_instead_of_fake_success(monkeypatch):
+    from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
+    memory = InMemoryOutcomeStore()
+    recorder = OutcomeRecorder(store=memory)
+    call = str(uuid.uuid4())
+    fields = {
+        "tool_call_id": call,
+        "trajectory_id": TRAJECTORY,
+        "correlation_id": "corr-1",
+        "session_id": "sess-1",
+        "tenant_id": TENANT,
+        "user_id": USER,
+        "policy_decision_id": "policy-42",
+        "tool_name": "web_search",
+        "tool_version": "2.1",
+        "agent_id": "researcher",
+        "step_id": "step-1",
+        "success": True,
+    }
+    first = await recorder.record_governed_tool_outcome_async(**fields)
+    assert first["outcome_id"].startswith("out_tool_")
+    with pytest.raises(OutcomeStoreError, match="Duplicate"):
+        await recorder.record_governed_tool_outcome_async(**fields)
+    records = await memory.list_governed_tool_receipts_async(
+        trajectory_id=TRAJECTORY, tenant_id=TENANT, user_id=USER,
+    )
+    assert len(records) == 1
