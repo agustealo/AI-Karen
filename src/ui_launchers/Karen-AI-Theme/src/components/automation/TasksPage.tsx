@@ -60,7 +60,11 @@ type Task = {
   resultReceipt?: {
     runtime_status?: string;
     answer_preview?: string;
+    answer_text?: string;
     answer_truncated?: boolean;
+    attachment_count?: number;
+    source_refs_truncated?: boolean;
+    sources?: Array<{title?: string | null; url?: string | null}>;
     artifact_count?: number;
     source_count?: number;
     citation_count?: number;
@@ -224,6 +228,21 @@ export default function TasksPage() {
       setErrorMsg("This execution does not have a reviewable result.");
       return;
     }
+    const receipt = task.resultReceipt;
+    if (
+      decision === "approve" &&
+      (
+        !receipt?.answer_text ||
+        receipt.answer_truncated ||
+        receipt.source_refs_truncated ||
+        (receipt.artifact_count ?? 0) > 0 ||
+        (receipt.attachment_count ?? 0) > 0 ||
+        (receipt.sources?.length ?? 0) !== (receipt.source_count ?? 0)
+      )
+    ) {
+      setErrorMsg("This result lacks complete, reviewer-accessible evidence. Reject it and request a new output.");
+      return;
+    }
     const description = decision === "approve"
       ? "Confirm that you reviewed the actual result and accept this task as completed?"
       : "Reject this result as not meeting the task objective?";
@@ -384,20 +403,51 @@ export default function TasksPage() {
                   <div className="rounded-lg border p-3 space-y-2">
                     <p className="font-semibold text-foreground">Result awaiting your review</p>
                     <p className="whitespace-pre-wrap break-words text-foreground">
-                      {task.resultReceipt?.answer_preview || "No answer preview was recorded."}
+                      {task.resultReceipt?.answer_text || "No answer text was recorded."}
                     </p>
                     {task.resultReceipt?.answer_truncated && (
-                      <p>The preview is truncated. Review the full runtime response before approval.</p>
+                      <p>The captured text is truncated. Completion cannot be approved from incomplete evidence.</p>
                     )}
                     <p>
                       Execution: {task.executionId} · Sources: {task.resultReceipt?.source_count ?? 0} ·
-                      Artifacts: {task.resultReceipt?.artifact_count ?? 0}
+                      Artifacts: {task.resultReceipt?.artifact_count ?? 0} ·
+                      Attachments: {task.resultReceipt?.attachment_count ?? 0}
                     </p>
+                    {(task.resultReceipt?.sources ?? []).length > 0 && (
+                      <div className="space-y-1">
+                        <p className="font-semibold">Reported sources (not independently verified)</p>
+                        {(task.resultReceipt?.sources ?? []).map((source, index) => (
+                          <p key={`${source.url ?? source.title ?? "source"}-${index}`} className="break-all">
+                            {source.url ? (
+                              <a className="underline" href={source.url} target="_blank" rel="noopener noreferrer">
+                                {source.title || source.url}
+                              </a>
+                            ) : (source.title || "Unresolved source")}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {((task.resultReceipt?.artifact_count ?? 0) > 0 ||
+                      (task.resultReceipt?.attachment_count ?? 0) > 0 ||
+                      task.resultReceipt?.source_refs_truncated) && (
+                      <p className="text-destructive">
+                        This task includes inaccessible work products or incomplete sources. Approval is blocked.
+                        You may reject the result and request a reviewer-accessible output.
+                      </p>
+                    )}
                     {task.resultReceipt?.degraded_mode && (
                       <p className="text-destructive">The runtime reported degraded execution.</p>
                     )}
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={() => handleReviewTask(task, "approve")}>
+                      <Button size="sm" onClick={() => handleReviewTask(task, "approve")}
+                        disabled={
+                          !task.resultReceipt?.answer_text ||
+                          !!task.resultReceipt?.answer_truncated ||
+                          !!task.resultReceipt?.source_refs_truncated ||
+                          (task.resultReceipt?.artifact_count ?? 0) > 0 ||
+                          (task.resultReceipt?.attachment_count ?? 0) > 0 ||
+                          (task.resultReceipt?.sources?.length ?? 0) !== (task.resultReceipt?.source_count ?? 0)
+                        }>
                         Verify completion
                       </Button>
                       <Button variant="outline" size="sm" onClick={() => handleReviewTask(task, "reject")}>
