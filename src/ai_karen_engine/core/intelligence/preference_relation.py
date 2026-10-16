@@ -139,6 +139,9 @@ def extract_favorite_assertion(text: str) -> FavoriteAssertion | None:
         trailing_period = re.search(rf"\s+({_PERIOD})$", value, re.I)
         if trailing_period:
             value = value[:trailing_period.start()].strip()
+        # "now" is an explicit correction cue, not part of the favorite's
+        # name. Apply to all favorite domains, not just the legacy color path.
+        value = re.sub(r"\s+now$", "", value, flags=re.I).strip()
         if not value or _NEGATIVE.match(value):
             continue
         if value.casefold() in {"it", "its", "this", "that", "they", "them", "my", "your"}:
