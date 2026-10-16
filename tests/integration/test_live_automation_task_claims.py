@@ -115,6 +115,13 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         loser = lease_2 if winner == lease_1 else lease_1
 
         assert await repo.get_task(task_id, str(foreign_tenant)) is None
+        assert await repo.get_task(
+            task_id, str(tenant), created_by=str(uuid.uuid4()),
+        ) is None, "Same tenant does not authorize reading another creator's task"
+        assert await repo.mark_task_running(
+            task_id, str(tenant), claim_token=str(uuid.uuid4()),
+            lease_seconds=60, created_by=str(uuid.uuid4()),
+        ) is None, "A same-tenant nonowner must not steal execution"
         assert await repo.renew_task_claim(
             task_id, str(tenant), claim_token=loser, lease_seconds=60,
         ) is False
