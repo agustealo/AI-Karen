@@ -217,3 +217,129 @@ def test_grounded_memory_response_uses_original_relation_without_internal_prefix
     assert "personal relation." not in reply.casefold()
     assert metadata["response_source"] == "authorized_memory_evidence"
     assert metadata["actual_provider"] is None
+
+
+@pytest.mark.parametrize("statement", (
+    "My reading ritual is tea according to her.",
+    "My reading ritual is tea as she said.",
+    "My reading ritual is tea from what they told me.",
+))
+def test_unpunctuated_third_party_attribution_does_not_create_self_facts(statement):
+    assert extract_personal_relation(statement) is None
+    assert not any(
+        s.metadata.get("source") == "explicit_open_relation"
+        for s in classify_explicit_user_memory(statement)
+    )
+
+
+@pytest.mark.parametrize("statement", (
+    "My reading ritual is tea for now.",
+    "My reading ritual is tea until Friday.",
+    "My reading ritual is tea while I'm on vacation.",
+))
+@pytest.mark.asyncio
+async def test_explicit_time_boundaries_never_create_indefinite_profile_facts(statement):
+    assertion = extract_personal_relation(statement)
+    assert assertion is not None
+    assert assertion.temporal_scope is not None
+    found = [
+        s for s in classify_explicit_user_memory(statement)
+        if s.metadata.get("source") == "explicit_open_relation"
+    ]
+    assert len(found) == 1
+    assert found[0].metadata["retention_scope"] == "session"
+    assert (await _evaluate(statement)).admitted_count == 0
+
+
+@pytest.mark.asyncio
+async def test_sensitive_payload_hidden_in_an_ordinary_relation_value_is_blocked():
+    for statement in (
+        "My preferred reminder is password hunter2.",
+        "My regular notebook entry is medical diagnosis private.",
+        "My reading ritual is API key sk-secret-value.",
+        "My preferred summary is bank account number 12345678.",
+    ):
+        result = await _evaluate(statement)
+        assert result.admitted_count == 0, statement
+
+
+def test_canonical_name_and_birthplace_identity_cannot_fork():
+    assert not any(
+        s.metadata.get("source") == "explicit_open_relation"
+        for s in classify_explicit_user_memory("My preferred name is Alice.")
+    )
+    assert requested_profile_attribute("What is my preferred name?") == "preferred_name"
+    assert requested_profile_attribute("What is my place of birth?") == "birthplace"
+    assert requested_profile_attribute("What is my birthplace?") == "birthplace"
+
+
+def test_open_relation_correction_reaches_the_existing_belief_authority():
+    from ai_karen_engine.core.memory.belief_resolution import (
+        is_trusted_profile_correction,
+    )
+
+    old, new = (
+        classify_explicit_user_memory("My reading ritual is tea."),
+        classify_explicit_user_memory("Actually my reading ritual is coffee."),
+    )
+    signal = next(
+        s for s in new if s.metadata.get("source") == "explicit_open_relation"
+    )
+    assert signal.metadata["explicit_correction"] is True
+    assert not is_trusted_profile_correction(
+        source_type="chat", signal_metadata=old[0].metadata,
+        merged_metadata={"explicit_correction": True},
+    )
+    assert is_trusted_profile_correction(
+        source_type="chat", signal_metadata=signal.metadata,
+        merged_metadata={"explicit_correction": True},
+    )
+    assert not is_trusted_profile_correction(
+        source_type="chat", signal_metadata=signal.metadata,
+        merged_metadata={},
+    )
+
+
+def test_undurable_asserted_relation_can_be_recalled_only_as_conversation_evidence():
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.context.contracts import (
+        ContextEvidence, ContextRequirements, EvidenceScope, EvidenceSource,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    conversation = ContextEvidence(
+        evidence_id="u1", source=EvidenceSource.CONVERSATION,
+        content="My weekend breakfast is oatmeal.",
+        scope=EvidenceScope(
+            tenant_id="tenant", user_id="user", conversation_id="conversation",
+        ), metadata={"role": "user"},
+    )
+    context = SimpleNamespace(
+        tenant_id="tenant", user_id="user", evidence=[conversation],
+        requirements=ContextRequirements(
+            request_id="req", correlation_id="corr",
+            tenant_id="tenant", user_id="user",
+            conversation_id="conversation",
+        ),
+        authorized_sources=["conversation"], denied_sources=[],
+        unresolved_sources=[],
+    )
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={
+            "personal_evidence_attribute": "personal_relation.weekend_breakfast"
+        },
+    )
+    decision.cognitive_context = context
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "oatmeal" in answer
+    assert "weekend breakfast" in answer
+    assert "personal relation" not in answer
+    assert "in this conversation" in answer
+    assert meta["response_source"] == "authorized_conversation_evidence"
+    assert meta["evidence_reason"] == "authorized_conversation_assertion_not_durable"
+    assert meta["actual_provider"] is None
