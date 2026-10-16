@@ -363,6 +363,8 @@ class IntelligenceRuntime:
         source_event_id: str,
         source_message_id: str,
         observed_at: "datetime",
+        prompt_id: str,
+        prompt_version: str,
     ) -> "ModelCandidateReview":
         """Interpret model output for review, NEVER for automatic persistence.
 
@@ -382,6 +384,8 @@ class IntelligenceRuntime:
             source_event_id=source_event_id,
             source_message_id=source_message_id,
             observed_at=observed_at,
+            prompt_id=prompt_id,
+            prompt_version=prompt_version,
         )
 
     async def embed(self, texts: list[str]) -> list[list[float] | None]:
