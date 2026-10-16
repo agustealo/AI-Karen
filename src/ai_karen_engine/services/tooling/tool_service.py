@@ -185,9 +185,21 @@ class BaseTool(ABC):
             
         except Exception as e:
             execution_time = time.time() - start_time
-            error_message = str(e)
-            
-            logger.error(f"Tool {self.metadata.name} execution failed: {error_message}")
+            # Governed execution errors must not emit provider text that may
+            # contain credentials or secret-bearing request data.
+            if tool_input.governed_execution:
+                error_message = f"Tool execution failed ({type(e).__name__})"
+                logger.error(
+                    "tool.governed_execution_failed",
+                    extra={
+                        "tool": self.metadata.name,
+                        "request_id": tool_input.request_id,
+                        "error_type": type(e).__name__,
+                    },
+                )
+            else:
+                error_message = str(e)
+                logger.error(f"Tool {self.metadata.name} execution failed: {error_message}")
             
             return ToolOutput(
                 success=False,
@@ -712,14 +724,28 @@ class ToolService:
             return result
             
         except Exception as e:
-            logger.error(f"Tool service execution error: {e}")
+            if tool_input.governed_execution:
+                logger.error(
+                    "tool.governed_service_failed",
+                    extra={
+                        "tool": tool_input.tool_name,
+                        "request_id": tool_input.request_id,
+                        "error_type": type(e).__name__,
+                    },
+                )
+            else:
+                logger.error(f"Tool service execution error: {e}")
             self.metrics["executions_total"] += 1
             self.metrics["executions_failed"] += 1
             
             return ToolOutput(
                 success=False,
                 result=None,
-                error=f"Tool service error: {str(e)}",
+                error=(
+                    f"Tool service failed ({type(e).__name__})"
+                    if tool_input.governed_execution
+                    else f"Tool service error: {str(e)}"
+                ),
                 execution_time=0.0,
                 request_id=tool_input.request_id
             )
