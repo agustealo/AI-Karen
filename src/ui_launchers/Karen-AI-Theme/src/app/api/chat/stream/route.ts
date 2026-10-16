@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBackendBaseUrl, sanitizeHeaders } from '../../_lib/backend-proxy';
+import { observeChatSseBody } from '../../_lib/sse-stream-integrity';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -93,8 +94,35 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Never relabel an HTTP 200 JSON/HTML diagnostic as successful SSE.
+    // Auth gateways and old upstreams can respond 200 without chat events.
+    const upstreamContentType = upstream.headers.get('content-type') || '';
+    const upstreamCorrelationId = upstream.headers.get('x-correlation-id') || '';
+    if (!/^text\/event-stream(?:\s*;|\s*$)/i.test(upstreamContentType)) {
+      console.error('[ChatStreamProxy] unexpected_upstream_content_type', {
+        correlation_id: upstreamCorrelationId,
+        content_type: upstreamContentType.slice(0, 100),
+      });
+      await upstream.body?.cancel().catch(() => undefined);
+      return NextResponse.json(
+        {
+          detail: 'The backend did not return a chat event stream.',
+          error_code: 'CHAT_STREAM_UPSTREAM_NOT_SSE',
+          correlation_id: upstreamCorrelationId || undefined,
+        },
+        { status: 502 },
+      );
+    }
+
     if (!upstream.body) {
-      return new NextResponse('No response body from upstream', { status: 502 });
+      return NextResponse.json(
+        {
+          detail: 'The backend returned no chat stream body.',
+          error_code: 'CHAT_STREAM_UPSTREAM_NO_BODY',
+          correlation_id: upstreamCorrelationId || undefined,
+        },
+        { status: 502 },
+      );
     }
 
     const responseHeaders = new Headers();
@@ -113,10 +141,17 @@ export async function POST(request: NextRequest) {
       responseHeaders.set('X-Response-Id', responseId);
     }
 
-    return new NextResponse(upstream.body, {
-      status: upstream.status,
-      headers: responseHeaders,
-    });
+    return new NextResponse(
+      observeChatSseBody(
+        upstream.body,
+        upstreamCorrelationId,
+        request.signal,
+      ),
+      {
+        status: upstream.status,
+        headers: responseHeaders,
+      },
+    );
   } catch (error) {
     const formattedError = formatProxyError(error);
     console.error(

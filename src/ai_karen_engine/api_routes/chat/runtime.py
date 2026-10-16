@@ -26,6 +26,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
     ChatExecutionStatus,
     ChatStreamChunk,
+    ChatStreamEventType,
 )
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     runtime_response_http_status,
@@ -262,34 +263,64 @@ def _stream_execution_request(
 
 
 async def _sse(runtime_request: ChatExecutionRequest):
-    """Translate canonical runtime events into SSE, including early exceptions.
+    """Transport-only framing and fail-closed terminal integrity.
 
-    An upstream runtime error must never turn into HTTP 200 with an empty body.
-    The route reports a safe correlated error; Runtime remains the sole owner
-    of provider selection, fallbacks, and generation.
+    Runtime owns execution and model truth. Ingress emits an immediate,
+    authenticated transport comment before potentially slow context and model
+    preparation, then transparently forwards every runtime event. A graceful
+    runtime return without a terminal event cannot become silent HTTP 200.
     """
+    correlation_id = runtime_request.context.correlation_id
+    terminal_seen = False
+
+    # SSE comment flushes headers/first bytes without pretending the model
+    # advanced. The browser ignores comments, so its shorter progress-status
+    # silence timeout is not activated during provider warmup.
+    yield ": stream_connected\n\n"
+
     try:
         async for chunk in get_chat_runtime().execute_stream(runtime_request):
+            if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
+                terminal_seen = True
             yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
     except Exception as exc:
         logger.exception(
             "Chat SSE runtime failed",
             extra={
-                "correlation_id": runtime_request.context.correlation_id,
+                "correlation_id": correlation_id,
                 "error_type": type(exc).__name__,
             },
         )
         error_event = ChatStreamChunk(
-            type="error",
+            type=ChatStreamEventType.ERROR,
             content="Chat streaming failed before completion.",
-            correlation_id=runtime_request.context.correlation_id,
+            correlation_id=correlation_id,
             metadata={
                 "error_code": "CHAT_STREAM_RUNTIME_EXCEPTION",
                 "error_type": type(exc).__name__,
-                "correlation_id": runtime_request.context.correlation_id,
+                "correlation_id": correlation_id,
             },
         )
         yield f"data: {json.dumps(error_event.to_sse_payload())}\n\n"
+        terminal_seen = True
+
+    if not terminal_seen:
+        logger.error(
+            "Chat runtime returned without terminal SSE event",
+            extra={"correlation_id": correlation_id, "error_code": "CHAT_SSE_MISSING_TERMINAL"},
+        )
+        error_event = ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content="The chat runtime stopped before completing its response.",
+            correlation_id=correlation_id,
+            metadata={
+                "error_code": "CHAT_SSE_MISSING_TERMINAL",
+                "error_type": "MissingTerminalEvent",
+                "correlation_id": correlation_id,
+            },
+        )
+        yield f"data: {json.dumps(error_event.to_sse_payload())}\n\n"
+
     yield "data: [DONE]\n\n"
 
 

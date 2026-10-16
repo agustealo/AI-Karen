@@ -68,6 +68,17 @@ describe('canonical chat SSE terminal events', () => {
     expect(callbacks.onError.mock.calls[0][0]).toContain('incomplete SSE event');
   });
 
+  it('ignores initial SSE transport comments without starting a progress status', async () => {
+    await consume(
+      ': stream_connected\n\n' +
+      'data: {"type":"content","content":"Hello"}\n\n' +
+      'data: {"type":"complete","content":""}\n\n',
+    );
+    expect(callbacks.onContent).toHaveBeenCalledWith('Hello');
+    expect(callbacks.onComplete).toHaveBeenCalledOnce();
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+
   it('preserves successful backend content and true terminal completion', async () => {
     await consume(
       'data: {"type":"content","content":"Hello"}\n\n' +
