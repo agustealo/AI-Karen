@@ -1224,6 +1224,41 @@ class ChatRuntime:
         ).strip()
         if decision.intent != "memory.recall":
             return None
+        issue = decision.policy_constraints.get("personal_evidence_query_issue")
+        if issue in {"historical", "unresolved_scope"}:
+            explanation = (
+                "I can't verify the historical value from the current profile. "
+                "Historical evidence needs a separately verified time range."
+                if issue == "historical" else
+                "I can't identify which saved project or task that refers to. "
+                "I need an exact project or task reference before using scoped facts."
+            )
+            return explanation, {
+                "evidence_sufficiency": "ambiguous",
+                "evidence_reason": issue,
+                "evidence_count": 0,
+                "response_source": "governed_query_interpretation",
+                "actual_provider": None, "actual_model": None,
+            }
+        raw_scope = decision.policy_constraints.get("personal_evidence_query_scope") or {}
+        if (
+            not isinstance(raw_scope, dict)
+            or len(raw_scope) > 1
+            or any(
+                key not in {"project_id", "task_id"}
+                or not isinstance(value, str)
+                or not value or len(value) > 64
+                for key, value in raw_scope.items()
+            )
+        ):
+            return "I couldn't verify the requested memory context.", {
+                "evidence_sufficiency": "ambiguous",
+                "evidence_reason": "invalid_query_scope",
+                "evidence_count": 0,
+                "response_source": "governed_query_interpretation",
+                "actual_provider": None, "actual_model": None,
+            }
+        query_scope = tuple(sorted(raw_scope.items()))
         if not attribute:
             # A broad identity question may use only independently verified
             # profile facts. Never infer origin from birthplace/upbringing,
@@ -1285,17 +1320,28 @@ class ChatRuntime:
             tenant_id=tenant_id,
             user_id=user_id,
             attribute=attribute,
+            query_scope=query_scope,
         )
         from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+        from ai_karen_engine.core.runtime.evidence_sufficiency import (
+            EvidenceSufficiency,
+        )
 
-        recent = evaluate_conversation_personal_evidence(
-            decision.cognitive_context,
-            tenant_id=tenant_id, user_id=user_id, attribute=attribute,
-            cardinality=(
-                FactCardinality.SET
-                if result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
-                else FactCardinality.SINGLETON
-            ),
+        recent = (
+            EvidenceSufficiency(
+                EvidenceSufficiencyStatus.MISSING, attribute,
+                reason="scoped_conversation_not_verified",
+            )
+            if query_scope
+            else evaluate_conversation_personal_evidence(
+                decision.cognitive_context,
+                tenant_id=tenant_id, user_id=user_id, attribute=attribute,
+                cardinality=(
+                    FactCardinality.SET
+                    if result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+                    else FactCardinality.SINGLETON
+                ),
+            )
         )
         if (
             result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
@@ -1378,11 +1424,18 @@ class ChatRuntime:
             "actual_provider": None,
             "actual_model": None,
         }
+        scope_prefix = (
+            f"For {query_scope[0][0].removesuffix('_id')} {query_scope[0][1]}, "
+            if query_scope else ""
+        )
         if result.status is EvidenceSufficiencyStatus.SUPPORTED:
-            return f"Your {attribute.replace('_', ' ')} is {result.value}.", metadata
+            return (
+                f"{scope_prefix}your {attribute.replace('_', ' ')} is {result.value}."
+                if query_scope else f"Your {attribute.replace('_', ' ')} is {result.value}."
+            ), metadata
         if result.status is EvidenceSufficiencyStatus.SUPPORTED_SET:
             return (
-                f"I have these verified saved values for your {attribute.replace('_', ' ')}: "
+                f"{scope_prefix}I have these verified saved values for your {attribute.replace('_', ' ')}: "
                 f"{', '.join(result.values)}.",
                 {
                     **metadata,

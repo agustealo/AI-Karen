@@ -6,9 +6,11 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, func, or_, select
 
-from ai_karen_engine.core.intelligence.profile_attribute import requested_profile_attribute
+from ai_karen_engine.core.intelligence.profile_attribute import (
+    requested_profile_attribute, requested_profile_query,
+)
 from ai_karen_engine.core.memory.neuro import decide_activation_mode
 from ai_karen_engine.core.memory.types import (
     MemoryEntry,
@@ -30,7 +32,12 @@ class PostgresProfileRecallRetriever:
         # CORTEX/Intelligence has already resolved typed profile predicates.
         # Do not let NeuroRecall's older lexical activation heuristics discard
         # semantically resolved queries with abbreviations or natural phrasing.
-        preferred_attribute = self._preferred_attribute(query.text or "")
+        intent = requested_profile_query(query.text or "")
+        preferred_attribute = intent.attribute or self._preferred_attribute(query.text or "")
+        if intent.unsupported_context:
+            # The current profile projection cannot answer historical or
+            # unresolved named-context questions. Never return global rows.
+            return []
         if preferred_attribute is None:
             activation = decide_activation_mode(query=query.text or "", has_profile=True)
             if (
@@ -72,6 +79,14 @@ class PostgresProfileRecallRetriever:
                 )
                 .limit(top_k)
             )
+            if intent.qualifiers:
+                # Narrow before LIMIT: a global high-ranked profile fact must
+                # not crowd a project/task-specific answer out of recall.
+                stmt = stmt.where(ProfileFact.attribute == preferred_attribute)
+                for key, expected in intent.qualifiers:
+                    stmt = stmt.where(
+                        func.lower(ProfileFact.value[key].astext) == expected
+                    )
             rows = (await session.execute(stmt)).scalars().all()
 
         return [self._entry(row, query) for row in rows]

@@ -41,7 +41,28 @@ def build_context_requirements(
                 metadata=(
                     {"semantic_role": "location.current", "retrieval_query": "Where am I currently?"}
                     if preliminary.intent == "search.weather"
-                    else {}
+                    else (
+                        {"retrieval_query": next(
+                            (
+                                str(message.get("content") or "")
+                                for message in reversed(request.messages)
+                                if message.get("role") == "user"
+                            ),
+                            "",
+                        )}
+                        if (
+                            preliminary.intent == "memory.recall"
+                            and (
+                                preliminary.policy_constraints.get(
+                                    "personal_evidence_query_scope"
+                                )
+                                or preliminary.policy_constraints.get(
+                                    "personal_evidence_query_issue"
+                                )
+                            )
+                        )
+                        else {}
+                    )
                 ),
             )
         )

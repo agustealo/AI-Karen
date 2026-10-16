@@ -48,6 +48,7 @@ def evaluate_personal_evidence(
     attribute: str | None,
     now: datetime | None = None,
     cardinality: FactCardinality | None = None,
+    query_scope: tuple[tuple[str, str], ...] = (),
 ) -> EvidenceSufficiency:
     """Return a fact only if authorized, attributable, current and unopposed.
 
@@ -70,6 +71,23 @@ def evaluate_personal_evidence(
             EvidenceSufficiencyStatus.MISSING, attribute, reason="memory_not_authorized_or_resolved"
         )
 
+    # Query scope is supplied by CORTEX's typed interpretation, not by
+    # source/model metadata. Only exact project/task identities are supported.
+    if (
+        not isinstance(query_scope, tuple)
+        or len(query_scope) > 1
+        or any(
+            not isinstance(part, tuple) or len(part) != 2
+            or part[0] not in {"project_id", "task_id"}
+            or not isinstance(part[1], str)
+            or not part[1] or len(part[1]) > 64
+            for part in query_scope
+        )
+    ):
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.AMBIGUOUS, attribute,
+            reason="invalid_query_scope",
+        )
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
@@ -77,6 +95,7 @@ def evaluate_personal_evidence(
     live: list[tuple[str, str, EvidenceFactSemantics | None]] = []
     expired_ids: list[str] = []
     conflict_ids: list[str] = []
+    excluded_scoped_ids: list[str] = []
 
     for evidence in context.evidence:
         if (
@@ -89,6 +108,30 @@ def evaluate_personal_evidence(
             continue
         value = evidence.content[len(prefix):].strip()
         if not value or len(value) > 120 or "\n" in value:
+            continue
+        semantics = getattr(evidence, "fact_semantics", None)
+        projected = semantics if isinstance(semantics, EvidenceFactSemantics) else None
+        qualifiers = dict(projected.semantic_scope) if projected else {}
+        context_keys = {"project_id", "task_id", "task_type", "location", "scope"}
+        source_context = {
+            key: val for key, val in qualifiers.items()
+            if key in context_keys and val not in {"global", "user"}
+        }
+        if query_scope:
+            # Only evidence independently typed by the governed profile
+            # projection may satisfy a scoped question. No free-text matching.
+            if (
+                not projected
+                or any(qualifiers.get(key) != value for key, value in query_scope)
+                or any(key not in dict(query_scope) for key in source_context)
+            ):
+                excluded_scoped_ids.append(evidence.evidence_id)
+                continue
+        elif (
+            source_context
+            or (projected and projected.cardinality is FactCardinality.SCOPED_SINGLETON)
+        ):
+            excluded_scoped_ids.append(evidence.evidence_id)
             continue
         expired = False
         for deadline in (evidence.temporal.expires_at, evidence.temporal.effective_until):
@@ -107,11 +150,7 @@ def evaluate_personal_evidence(
         }:
             conflict_ids.append(evidence.evidence_id)
             continue
-        semantics = getattr(evidence, "fact_semantics", None)
-        live.append((
-            evidence.evidence_id, value,
-            semantics if isinstance(semantics, EvidenceFactSemantics) else None,
-        ))
+        live.append((evidence.evidence_id, value, projected))
 
     if conflict_ids:
         return EvidenceSufficiency(
@@ -144,10 +183,12 @@ def evaluate_personal_evidence(
                 # preferences or scoped singletons.
                 scope = dict(projected[0].semantic_scope)
                 if (
-                    cardinality is FactCardinality.SCOPED_SINGLETON
-                    or any(
-                        scope.get(key) and scope[key] not in {"global", "user"}
-                        for key in ("scope", "project_id", "task_id", "task_type", "location")
+                    not query_scope and (
+                        cardinality is FactCardinality.SCOPED_SINGLETON
+                        or any(
+                            scope.get(key) and scope[key] not in {"global", "user"}
+                            for key in ("scope", "project_id", "task_id", "task_type", "location")
+                        )
                     )
                 ):
                     return EvidenceSufficiency(
@@ -178,6 +219,18 @@ def evaluate_personal_evidence(
             value=live[0][1],
             evidence_ids=tuple(item[0] for item in live),
             reason="authorized_memory_evidence",
+        )
+    if excluded_scoped_ids:
+        return EvidenceSufficiency(
+            (
+                EvidenceSufficiencyStatus.MISSING if query_scope
+                else EvidenceSufficiencyStatus.AMBIGUOUS
+            ), attribute,
+            evidence_ids=tuple(excluded_scoped_ids),
+            reason=(
+                "no_matching_scoped_evidence" if query_scope
+                else "scoped_fact_requires_query_scope"
+            ),
         )
     if expired_ids:
         return EvidenceSufficiency(

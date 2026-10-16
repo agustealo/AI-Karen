@@ -6,6 +6,7 @@ infers a fact, or bypasses tenant/consent/validity checks.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from .preference_relation import requested_favorite_attribute
 
@@ -101,4 +102,70 @@ def referenced_profile_attribute(
     return None
 
 
-__all__ = ["normalize_personal_query", "requested_profile_attribute", "referenced_profile_attribute", "is_profile_summary_request"]
+@dataclass(frozen=True, slots=True)
+class ProfileQueryIntent:
+    """CORTEX/Intelligence-owned meaning of a personal recall question.
+
+    A qualifier names an exact persisted projection ID, never a guessed
+    project-name-to-ID relationship. Unsupported temporal/contextual requests
+    must not be silently rewritten into a global/current profile question.
+    """
+
+    attribute: str | None
+    qualifiers: tuple[tuple[str, str], ...] = ()
+    unsupported_context: str | None = None
+
+
+_EXPLICIT_PROFILE_SCOPE = re.compile(
+    r"^(?P<base>.+?)\s+(?:for|in)\s+(?P<kind>project|task)\s+"
+    r"(?P<identity>[a-z0-9][a-z0-9_-]{0,63})$"
+)
+_HISTORICAL_PROFILE_SUFFIX = re.compile(
+    r"\s+(?:last\s+(?:year|month|week)|yesterday|previously|in\s+(?:19|20)\d{2})$"
+)
+_CONTEXTUAL_PROFILE_SUFFIX = re.compile(r"\s+(?:for|in|on)\s+\S.+$")
+
+
+def requested_profile_query(text: str) -> ProfileQueryIntent:
+    """Interpret exact ID scope while explicitly refusing ambiguous references.
+
+    This is a narrow deterministic contract. Free-form named project
+    disambiguation and historical recall require governed source resolution;
+    neither can be fabricated by a chat request or an inference heuristic.
+    """
+    query = normalize_personal_query(text).strip(" ?.!")
+    if not query or is_profile_summary_request(query):
+        return ProfileQueryIntent(None)
+
+    historical = _HISTORICAL_PROFILE_SUFFIX.search(query)
+    if historical:
+        base = query[:historical.start()]
+        attribute = requested_profile_attribute(base)
+        return ProfileQueryIntent(
+            attribute=attribute,
+            unsupported_context="historical" if attribute else None,
+        )
+
+    scoped = _EXPLICIT_PROFILE_SCOPE.fullmatch(query)
+    if scoped:
+        attribute = requested_profile_attribute(scoped.group("base"))
+        if attribute:
+            key = "project_id" if scoped.group("kind") == "project" else "task_id"
+            return ProfileQueryIntent(
+                attribute=attribute,
+                qualifiers=((key, scoped.group("identity")),),
+            )
+
+    residual = _CONTEXTUAL_PROFILE_SUFFIX.search(query)
+    if residual:
+        base = query[:residual.start()]
+        attribute = requested_profile_attribute(base)
+        if attribute:
+            return ProfileQueryIntent(
+                attribute=attribute, unsupported_context="unresolved_scope",
+            )
+
+    return ProfileQueryIntent(requested_profile_attribute(query))
+
+
+__all__ = ["normalize_personal_query", "requested_profile_attribute", "referenced_profile_attribute", "is_profile_summary_request", "ProfileQueryIntent", "requested_profile_query"]

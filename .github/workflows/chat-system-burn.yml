@@ -83,6 +83,9 @@ jobs:
       - name: Burn trusted SET cardinality and scoped personal recall
         run: pytest tests/core/runtime/test_personal_evidence_cardinality.py tests/core/runtime/test_runtime_evidence_resolution.py -q
 
+      - name: Prove CORTEX governed contextual personal query semantics
+        run: pytest tests/core/runtime/test_governed_profile_query_scope.py tests/core/intelligence/test_profile_attribute_interpretation.py -q
+
       - name: Verify upbringing and inverted name recall
         run: pytest tests/core/runtime/test_upbringing_and_inverted_name_recall.py -q
 
