@@ -203,6 +203,8 @@ async def test_policy_bound_session_accepts_correct_context_and_blocks_replay(mo
     )
     result = await invoke(authorized=bound, execution=matching)
     assert result["success"] is True
+    assert tool.calls[0].session_id == "authenticated-session-a"
+    assert tool.calls[0].user_context["session_id"] == "authenticated-session-a"
     assert len(tool.calls) == 1
     assert len(await memory.list_governed_tool_receipts_async(
         trajectory_id=TRAJECTORY, tenant_id=TENANT, user_id=USER,
