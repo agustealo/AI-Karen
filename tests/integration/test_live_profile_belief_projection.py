@@ -18,7 +18,7 @@ from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresP
 
 
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
         reason="isolated migrated PostgreSQL memory test database required",
