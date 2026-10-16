@@ -210,13 +210,17 @@ class ToolBridge:
                     tool_name=tool_name,
                     parameters=parameters,
                     user_id=user_id,
-                    session_id=trajectory_id,
+                    session_id=(
+                        execution.session_id if execution and execution.session_id
+                        else trajectory_id
+                    ),
                     request_id=tool_call_id,
                     governed_execution=True,
                     user_context={
                         "tenant_id": tenant_id,
                         "user_id": user_id,
                         "policy_decision_id": policy_decision_id,
+                        "session_id": execution.session_id if execution else None,
                         "correlation_id": correlation_id,
                         "trajectory_id": trajectory_id,
                         "agent_id": agent_id,
@@ -257,6 +261,7 @@ class ToolBridge:
             tool_call_id=tool_call_id,
             trajectory_id=trajectory_id,
             correlation_id=correlation_id,
+            session_id=execution.session_id if execution else None,
             tenant_id=tenant_id,
             user_id=user_id,
             policy_decision_id=policy_decision_id,
