@@ -84,6 +84,7 @@ class ToolInput(BaseModel):
     user_id: Optional[str] = None
     session_id: Optional[str] = None
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    governed_execution: bool = False
 
 
 class ToolOutput(BaseModel):
@@ -662,7 +663,7 @@ class ToolService:
         """
         try:
             # Check cache first
-            if self.enable_caching:
+            if self.enable_caching and not tool_input.governed_execution:
                 cached_result = self._get_cached_result(tool_input)
                 if cached_result:
                     self.metrics["executions_cached"] += 1
@@ -693,7 +694,7 @@ class ToolService:
             result = await tool.execute(tool_input)
             
             # Cache successful results
-            if self.enable_caching and result.success:
+            if self.enable_caching and result.success and not tool_input.governed_execution:
                 self._cache_result(tool_input, result)
             
             # Update metrics
