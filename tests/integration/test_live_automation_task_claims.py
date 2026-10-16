@@ -410,9 +410,10 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             task_id, str(tenant), user_id=str(user), execution_id=lease_5,
             decision="approve", note="I approve despite schema violation",
         ) is None
-        assert await repo.get_task(
+        pending_schema_review = await repo.get_task(
             task_id, str(tenant), created_by=str(user),
-        )["status"] == "ReviewRequired"
+        )
+        assert pending_schema_review["status"] == "ReviewRequired"
         assert await repo.review_task(
             task_id, str(tenant), user_id=str(user), execution_id=lease_5,
             decision="reject", note="Machine schema not satisfied",
