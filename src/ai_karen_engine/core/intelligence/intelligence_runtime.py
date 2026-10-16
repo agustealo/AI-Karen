@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.intelligence.model_memory_candidates import (
+        ModelCandidateReview,
+    )
 
 from ai_karen_engine.core.intelligence.contracts import (
     IntelligenceAnalysisResult,
@@ -346,6 +352,41 @@ class IntelligenceRuntime:
         result.latency_ms = (time.time() - start) * 1000.0
         result.degraded = not signals and not predictions
         return result
+
+    @staticmethod
+    def review_model_memory_candidate_output(
+        *,
+        raw_output: str,
+        source_text: str,
+        tenant_id: str,
+        user_id: str,
+        source_event_id: str,
+        source_message_id: str,
+        observed_at: "datetime",
+        prompt_id: str,
+        prompt_version: str,
+    ) -> "ModelCandidateReview":
+        """Interpret model output for review, NEVER for automatic persistence.
+
+        CORTEX decides whether extraction is eligible; Runtime owns executing
+        a registered provider/prompt. This Intelligence method only validates
+        the untrusted result against the authenticated source message.
+        """
+        from ai_karen_engine.core.intelligence.model_memory_candidates import (
+            review_model_memory_candidates,
+        )
+
+        return review_model_memory_candidates(
+            raw_output=raw_output,
+            source_text=source_text,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source_event_id=source_event_id,
+            source_message_id=source_message_id,
+            observed_at=observed_at,
+            prompt_id=prompt_id,
+            prompt_version=prompt_version,
+        )
 
     async def embed(self, texts: list[str]) -> list[list[float] | None]:
         await self.initialize()

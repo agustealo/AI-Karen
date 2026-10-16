@@ -89,6 +89,7 @@ class PromptRegistry:
         
         self._load_registry()
         self._ensure_builtin_prompts()
+        self._ensure_builtin_memory_candidate_prompt()
     
     @staticmethod
     def _storage_key(prompt_id: str, version: PromptVersion) -> str:
@@ -296,6 +297,78 @@ class PromptRegistry:
         self._version_index.setdefault(prompt.prompt_id, {})[version] = storage_key
         self._active_versions[prompt.prompt_id] = version
         self._sync_default_flags(prompt.prompt_id)
+
+    def _ensure_builtin_memory_candidate_prompt(self) -> None:
+        """Register a non-authoritative, versioned semantic extraction contract.
+
+        Raw model output is NEVER an authorized memory. The separate semantic
+        candidate evidence gate validates spans and typed provenance.
+        """
+        prompt_id = "karen.memory.semantic_candidates"
+        if prompt_id in self._version_index:
+            return
+        candidate_schema = {
+            "type": "object",
+            "required": ["candidates"],
+            "additionalProperties": False,
+            "properties": {
+                "candidates": {
+                    "type": "array", "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "evidence_text", "span_start", "span_end",
+                            "relation", "value",
+                        ],
+                        "additionalProperties": False,
+                        "properties": {
+                            "evidence_text": {"type": "string"},
+                            "span_start": {"type": "integer", "minimum": 0},
+                            "span_end": {"type": "integer", "minimum": 1},
+                            "relation": {"type": "string"},
+                            "value": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        }
+        prompt = PromptDefinition(
+            prompt_id=prompt_id,
+            version="v1.0.0",
+            name="Personal Semantic Evidence Candidates",
+            description=(
+                "Non-authoritative, evidence-bound personal relation candidates "
+                "for runtime review. Never persist a model candidate directly."
+            ),
+            system_instructions=(
+                "Return only JSON matching the provided schema. Extract at most "
+                "three directly asserted first-person personal relationships from "
+                "the user message. Never infer a fact, subject, value, scope, "
+                "time, correction, authorization, or consent. Ignore quoted "
+                "speech, other people's statements, negations, hypotheticals, "
+                "uncertainty, and temporary claims. Only use an exact contiguous "
+                "quote from the supplied user text with zero-based Python string "
+                "indices [span_start, span_end). The relation and value must "
+                "both occur verbatim in that quote. Return {\"candidates\": []} "
+                "when source-grounded interpretation is uncertain. Your output "
+                "is a proposal only and never authorizes memory persistence."
+            ),
+            output_schema=candidate_schema,
+            token_budget=2048,
+            status=PromptLifecycleStatus.ACTIVE,
+            is_default=True,
+            metadata={
+                "source": "builtin", "owner": "prompt_runtime",
+                "purpose": "untrusted_memory_candidate_extraction",
+                "persistence_authority": "none",
+            },
+        )
+        version = prompt.parsed_version
+        key = self._storage_key(prompt_id, version)
+        self._prompts[key] = prompt
+        self._version_index.setdefault(prompt_id, {})[version] = key
+        self._active_versions[prompt_id] = version
+        self._sync_default_flags(prompt_id)
 
     def _save_registry(self):
         """Save prompts to registry storage."""

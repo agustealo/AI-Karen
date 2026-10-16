@@ -68,6 +68,9 @@ jobs:
       - name: Burn generic personal preference formation and queries
         run: pytest tests/core/memory/test_generic_favorite_semantics.py tests/core/memory/test_favorite_color_memory_classification.py tests/core/intelligence/test_profile_attribute_interpretation.py tests/core/memory/test_semantic_memory_classifier.py tests/core/memory/test_open_personal_relation_semantics.py -q
 
+      - name: Prove model-generated memory candidate evidence boundary
+        run: pytest tests/core/intelligence/test_model_memory_candidate_evidence.py -q
+
       - name: Burn governed belief-state projection contract
         run: pytest tests/core/memory/test_belief_resolution.py tests/core/memory/test_profile_belief_projection.py tests/core/memory/test_profile_projection_identity.py -q
 
