@@ -2,6 +2,7 @@
 
 # Focused runtime/auth/memory contract surface used by CI proofs.
 numpy
+jsonschema
 SQLAlchemy[asyncio]
 asyncpg
 psycopg[binary]
