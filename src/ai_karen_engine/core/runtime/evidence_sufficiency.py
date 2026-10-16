@@ -264,6 +264,14 @@ def evaluate_conversation_personal_evidence(
         default=0,
     )
     current_facts = facts[last_correction:]
+    if cardinality is FactCardinality.SET and any(fact[2] for fact in facts):
+        # A direct correction can replace or narrow a set, not merely add a
+        # compatible value. Only governed belief projection may settle this.
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.AMBIGUOUS, attribute,
+            evidence_ids=tuple(fid for fid, _, _ in facts),
+            reason="set_correction_requires_reconciliation",
+        )
     if cardinality is FactCardinality.SET:
         distinct: dict[str, str] = {}
         for _fid, value, _correction in current_facts:
