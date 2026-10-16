@@ -39,9 +39,64 @@ class BeliefResolution:
     affected_fact_keys: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class ProfileBeliefEvidence:
+    """Adapter for a committed, user-scoped ProfileFact projection.
+
+    The persisted projection key supplies exact scope/cardinality identity.
+    Source event ID and value are taken from committed evidence, not invented
+    semantic provenance or a fabricated SemanticAssertion.
+    """
+
+    tenant_id: str
+    user_id: str
+    category: str
+    attribute: str
+    projection_key: str
+    scope_key: str
+    source_event_id: str
+    value: str
+    cardinality: FactCardinality
+    modality: AssertionModality = AssertionModality.ASSERTED
+
+    @property
+    def fact_key(self) -> str:
+        return self.projection_key
+
+
+BeliefCandidate = SemanticAssertion | ProfileBeliefEvidence
+
+
+def _source_event_id(item: BeliefCandidate) -> str:
+    return (
+        item.source_event_id if isinstance(item, ProfileBeliefEvidence)
+        else item.provenance.source_event_id
+    )
+
+
+def _relation(item: BeliefCandidate) -> tuple[str, ...]:
+    if isinstance(item, ProfileBeliefEvidence):
+        return ("profile", item.category.casefold(), item.attribute.casefold())
+    return (
+        "semantic", item.subject.kind.value,
+        item.subject.entity_id or item.user_id,
+        item.predicate.namespace, item.predicate.relation,
+    )
+
+
+def _scope(item: BeliefCandidate) -> object:
+    return item.scope_key if isinstance(item, ProfileBeliefEvidence) else item.qualifiers.scope()
+
+
+def _object(item: BeliefCandidate) -> tuple[str, str]:
+    if isinstance(item, ProfileBeliefEvidence):
+        return ("profile_scalar", item.value.casefold())
+    return (item.object.type, item.object.canonical_value.casefold())
+
+
 def resolve_belief(
-    incoming: SemanticAssertion,
-    current: Sequence[SemanticAssertion],
+    incoming: BeliefCandidate,
+    current: Sequence[BeliefCandidate],
     *,
     explicit_correction: bool = False,
 ) -> BeliefResolution:
@@ -55,7 +110,7 @@ def resolve_belief(
             operation=MemoryOperation.QUARANTINE,
             reason=BeliefResolutionReason.NON_ASSERTED_EVIDENCE,
             fact_key=incoming.fact_key,
-            source_event_ids=(incoming.provenance.source_event_id,),
+            source_event_ids=(_source_event_id(incoming),),
         )
 
     for item in current:
@@ -68,8 +123,8 @@ def resolve_belief(
         and item.modality is AssertionModality.ASSERTED
     ]
     source_ids = tuple(dict.fromkeys(
-        [incoming.provenance.source_event_id] +
-        [item.provenance.source_event_id for item in matches]
+        [_source_event_id(incoming)] +
+        [_source_event_id(item) for item in matches]
     ))
 
     if incoming.cardinality in (
@@ -91,15 +146,13 @@ def resolve_belief(
 
     if not matches:
         if incoming.cardinality is FactCardinality.SET and any(
-            item.subject == incoming.subject
-            and item.predicate == incoming.predicate
-            and item.qualifiers.scope() == incoming.qualifiers.scope()
+            _relation(item) == _relation(incoming)
+            and _scope(item) == _scope(incoming)
             for item in current
         ):
             reason = BeliefResolutionReason.COEXISTING_MEMBER
         elif any(
-            item.subject == incoming.subject
-            and item.predicate == incoming.predicate
+            _relation(item) == _relation(incoming)
             for item in current
         ):
             reason = BeliefResolutionReason.DISTINCT_CONTEXT
@@ -109,12 +162,7 @@ def resolve_belief(
             MemoryOperation.CREATE, reason, incoming.fact_key, source_ids,
         )
 
-    same_value = all(
-        item.object.type == incoming.object.type
-        and item.object.canonical_value.casefold()
-        == incoming.object.canonical_value.casefold()
-        for item in matches
-    )
+    same_value = all(_object(item) == _object(incoming) for item in matches)
     if same_value:
         return BeliefResolution(
             MemoryOperation.REINFORCE,
@@ -153,5 +201,6 @@ def resolve_belief(
 __all__ = [
     "BeliefResolution",
     "BeliefResolutionReason",
+    "ProfileBeliefEvidence",
     "resolve_belief",
 ]
