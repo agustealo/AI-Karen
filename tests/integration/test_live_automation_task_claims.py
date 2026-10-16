@@ -156,6 +156,15 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             task_id, str(tenant),
             claim_token=lease_3, status="ReviewRequired", last_error=None,
             runtime_task_id="correlation-verified",
+            result_receipt={
+                "answer_text": "Full reviewer-readable result",
+                "answer_truncated": False,
+                "artifact_count": 0,
+                "attachment_count": 0,
+                "source_refs_truncated": False,
+                "source_count": 0,
+                "sources": [],
+            },
         )
         assert terminal is not None
         assert terminal["status"] == "ReviewRequired"
