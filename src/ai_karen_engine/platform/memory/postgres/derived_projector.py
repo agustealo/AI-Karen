@@ -368,6 +368,22 @@ class PostgresDerivedMemoryProjector:
         ).scalar_one_or_none()
         if existing_event is not None:
             return
+        # A reinforcement or quarantined contradiction has no new ProfileFact.
+        # Without a durable receipt, replay after a later correction could
+        # reapply historical evidence to an unrelated *new* current value.
+        # Persist this receipt atomically with each relational transition.
+        prior_decision = (
+            await session.execute(
+                select(ProjectionStatus.projection_id)
+                .where(
+                    ProjectionStatus.event_id == event_uuid,
+                    ProjectionStatus.target_store == "profile_belief",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if prior_decision is not None:
+            return
 
         normalized_value = metadata.get("normalized_value")
         value: dict[str, Any] = {
@@ -469,6 +485,10 @@ class PostgresDerivedMemoryProjector:
         if resolution.operation is MemoryOperation.REINFORCE:
             # Repeated evidence is durable in NeuroVault but must not replace
             # the original current profile or forge a correction chain.
+            session.add(ProjectionStatus(
+                event_id=event_uuid, target_store="profile_belief",
+                status="completed",
+            ))
             return
         if resolution.operation is MemoryOperation.QUARANTINE:
             if current is not None:
@@ -481,6 +501,10 @@ class PostgresDerivedMemoryProjector:
                     "disputed_by_event_id": str(event_uuid),
                 }
                 current.updated_at = datetime.utcnow()
+            session.add(ProjectionStatus(
+                event_id=event_uuid, target_store="profile_belief",
+                status="completed",
+            ))
             return
         if resolution.operation not in {
             MemoryOperation.CREATE, MemoryOperation.SUPERSEDE,
@@ -496,6 +520,10 @@ class PostgresDerivedMemoryProjector:
             current.updated_at = datetime.utcnow()
             supersedes = current.fact_id
 
+        session.add(ProjectionStatus(
+            event_id=event_uuid, target_store="profile_belief",
+            status="completed",
+        ))
         session.add(
             ProfileFact(
                 event_id=event_uuid,
