@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -109,6 +110,29 @@ def _runtime_result_receipt(result: ChatExecutionResult) -> Dict[str, Any]:
     """Capture observable runtime output, never model claims of goal completion."""
     answer = result.answer or ""
     metadata = result.metadata
+    max_chars = get_runtime_settings().task_verification.max_answer_chars
+    if not 2400 <= max_chars <= 262144:
+        raise AutomationExecutionError("Task verification answer limit is invalid")
+
+    def _source_ref(value: Any) -> Dict[str, Optional[str]]:
+        if not isinstance(value, dict):
+            return {"title": None, "url": None}
+        title = value.get("title") or value.get("name")
+        title = title[:240] if isinstance(title, str) else None
+        url = value.get("url")
+        if isinstance(url, str):
+            parsed = urlsplit(url)
+            if (
+                parsed.scheme not in {"https", "http"}
+                or not parsed.hostname
+                or len(url) > 1600
+                or parsed.username
+                or parsed.password
+            ):
+                url = None
+        else:
+            url = None
+        return {"title": title, "url": url}
 
     def _ref(value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -126,9 +150,13 @@ def _runtime_result_receipt(result: ChatExecutionResult) -> Dict[str, Any]:
         "actual_model": _ref(metadata.actual_model),
         "degraded_mode": bool(metadata.degraded_mode),
         "answer_preview": answer[:2400],
-        "answer_truncated": len(answer) > 2400,
+        "answer_text": answer[:max_chars],
+        "answer_truncated": len(answer) > max_chars,
         "artifact_count": len(result.artifacts),
+        "attachment_count": len(result.attachments),
         "source_count": len(result.sources),
+        "source_refs_truncated": len(result.sources) > 20,
+        "sources": [_source_ref(item) for item in result.sources[:20]],
         "citation_count": len(result.citations),
         "independently_verified": False,
     }
@@ -167,6 +195,19 @@ async def review_saved_task(
         or str(task.get("executionId") or "") != normalized_attempt
     ):
         raise AutomationReviewConflict("The selected task attempt is not reviewable")
+    if decision == "approve":
+        receipt = task.get("resultReceipt") or {}
+        if (
+            not receipt.get("answer_text")
+            or receipt.get("answer_truncated") is not False
+            or receipt.get("source_refs_truncated") is not False
+            or int(receipt.get("artifact_count") or 0) > 0
+            or int(receipt.get("attachment_count") or 0) > 0
+            or len(receipt.get("sources") or []) != int(receipt.get("source_count") or 0)
+        ):
+            raise AutomationReviewConflict(
+                "Complete reviewer-accessible output is required for approval"
+            )
     reviewed = await repo.review_task(
         task_id, tenant_id, user_id=user_id, execution_id=normalized_attempt,
         decision=decision, note=note,
