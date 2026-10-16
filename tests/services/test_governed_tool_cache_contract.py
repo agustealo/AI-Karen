@@ -63,3 +63,51 @@ async def test_governed_execution_bypasses_existing_success_cache(monkeypatch):
     assert governed_again.success and governed_again.result["counter"] == 3
     assert not (governed_again.metadata or {}).get("cached")
     assert tool.count == 3
+
+
+
+@pytest.mark.asyncio
+async def test_governed_tool_errors_never_log_private_provider_diagnostics(monkeypatch, caplog):
+    monkeypatch.setattr(tooling.ToolService, "_bootstrap_builtin_tools", lambda self: None)
+    secret = "provider-private-api-key-should-not-appear"
+
+    class ExplodingTool(tooling.BaseTool):
+        def _create_metadata(self):
+            return tooling.ToolMetadata(
+                name="exploding", description="Exploding governed test tool",
+                category=tooling.ToolCategory.CORE,
+            )
+
+        async def _execute(self, parameters, context=None):
+            raise RuntimeError(secret)
+
+    class Registry:
+        def get_tool(self, name):
+            return ExplodingTool() if name == "exploding" else None
+
+    service = tooling.ToolService(registry=Registry())
+    with caplog.at_level("ERROR"):
+        output = await service.execute_tool(tooling.ToolInput(
+            tool_name="exploding", request_id="sensitive-call",
+            governed_execution=True,
+        ))
+    assert output.success is False
+    assert "RuntimeError" in str(output.error)
+    assert secret not in str(output)
+    assert secret not in caplog.text
+
+    class BrokenRegistry:
+        def get_tool(self, name):
+            raise RuntimeError(secret)
+
+    broken = tooling.ToolService(registry=BrokenRegistry())
+    caplog.clear()
+    with caplog.at_level("ERROR"):
+        failed = await broken.execute_tool(tooling.ToolInput(
+            tool_name="exploding", request_id="service-failure",
+            governed_execution=True,
+        ))
+    assert failed.success is False
+    assert "RuntimeError" in str(failed.error)
+    assert secret not in str(failed)
+    assert secret not in caplog.text
