@@ -217,3 +217,32 @@ async def test_forged_model_events_are_not_governed_tool_receipts(monkeypatch):
     assert await memory.list_governed_tool_receipts_async(
         trajectory_id=TRAJECTORY, tenant_id=TENANT, user_id=USER,
     ) == []
+
+
+@pytest.mark.asyncio
+async def test_researcher_must_propagate_audit_outage_after_possible_side_effect(monkeypatch):
+    from ai_karen_engine.agent_medusa.contracts.specialist_execution import (
+        SpecialistExecutionContext,
+    )
+    from ai_karen_engine.agent_medusa.specialists.researcher_specialist import (
+        ResearcherSpecialist,
+    )
+
+    async def audit_failure(*args, **kwargs):
+        raise OutcomeStoreError("Tool may have acted; PostgreSQL write failed")
+
+    monkeypatch.setattr(bridges.ToolBridge, "execute", audit_failure)
+    ctx = SpecialistExecutionContext(
+        authorized_plan=plan(),
+        tenant_id=TENANT,
+        user_id=USER,
+        policy_decision_id="policy-42",
+        trajectory_id=TRAJECTORY,
+        correlation_id="corr-tool",
+        step_id="step-1",
+    )
+    with pytest.raises(OutcomeStoreError, match="may have acted"):
+        await ResearcherSpecialist()._process(
+            {"query": "Perform governed research"},
+            {}, execution=ctx,
+        )
