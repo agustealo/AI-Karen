@@ -4,6 +4,7 @@ from .specialist_base import SpecialistBase
 from ..contracts.subagent_contract import SubagentContract, AgentCapability
 from ..contracts.specialist_execution import SpecialistExecutionContext
 from ..specialists.bridges import GenerationBridge, ToolBridge, resolve_prompt_text
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,17 @@ class ResearcherSpecialist(SpecialistBase):
                 )
                 if result.get("success"):
                     tool_results.append({"tool": tool_name, "result": result.get("result")})
+            except OutcomeStoreError:
+                # A tool may have performed an external side effect before the
+                # audit write failed. Never turn that uncertainty into a
+                # normal-looking research answer or schedule a blind retry.
+                self.logger.error("researcher.governed_tool_receipt_unavailable")
+                raise
             except Exception as e:
-                self.logger.warning(f"Researcher tool execution failed: {e}")
+                self.logger.warning(
+                    "Researcher tool execution failed",
+                    extra={"tool": tool_name, "error_type": type(e).__name__},
+                )
 
         if tool_results:
             import json
