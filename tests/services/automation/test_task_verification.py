@@ -61,8 +61,8 @@ class ReviewRepository:
         }
         self.decisions = []
 
-    async def get_task(self, task_id, tenant_id):
-        if task_id != "task-1" or tenant_id != TENANT:
+    async def get_task(self, task_id, tenant_id, *, created_by=None):
+        if task_id != "task-1" or tenant_id != TENANT or (created_by and created_by != OWNER):
             return None
         return dict(self.current)
 
@@ -84,7 +84,7 @@ class ReviewRepository:
 @pytest.mark.asyncio
 async def test_only_authenticated_creator_can_verify_current_attempt():
     repo = ReviewRepository()
-    with pytest.raises(execution.AutomationReviewForbidden):
+    with pytest.raises(execution.AutomationTargetNotFound):
         await execution.review_saved_task(
             "task-1", user=user(OTHER), execution_id=ATTEMPT,
             decision="approve", repository=repo,
@@ -217,6 +217,7 @@ def test_database_schema_never_grandfathers_old_model_success():
     assert "WHERE status = 'Success' AND reviewed_at IS NULL" in migration
     assert "automation_tasks_verified_receipt_check" in migration
     assert "AND created_by = CAST(:reviewer AS uuid)" in repository
+    assert "created_by = CAST(:created_by AS uuid)" in repository
     assert "AND status = 'ReviewRequired'" in repository
     assert "AND execution_id = CAST(:execution_id AS uuid)" in repository
     assert "result_receipt = CAST(:result_receipt AS jsonb)" in repository
