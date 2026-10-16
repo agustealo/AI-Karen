@@ -85,6 +85,7 @@ class TaskReviewHistoryResponse(BaseModel):
     reviewed_at: datetime
     acceptance_criteria: str
     receipt_sha256: str
+    result_receipt: Dict[str, Any] = Field(default_factory=dict)
     correlation_id: Optional[str] = None
     human_attestation: bool
     independently_verified: bool
