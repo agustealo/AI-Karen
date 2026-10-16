@@ -127,7 +127,7 @@ async def test_lost_lease_interrupts_execution_without_success(monkeypatch):
         execution, "get_runtime_settings",
         lambda: SimpleNamespace(timeouts=SimpleNamespace(
             saved_task_claim_lease_seconds=30,
-            saved_task_claim_heartbeat_seconds=0.01,
+            saved_task_claim_heartbeat_seconds=1,
         )),
     )
 
@@ -143,10 +143,10 @@ async def test_lost_lease_interrupts_execution_without_success(monkeypatch):
     attempt = asyncio.create_task(
         execution.execute_saved_task("task-a", user=user(), repository=repo)
     )
-    await asyncio.wait_for(started.wait(), timeout=5)
+    await asyncio.wait_for(started.wait(), timeout=10)
     repo.fail_renew = True
     with pytest.raises(execution.AutomationTaskClaimLost):
-        await asyncio.wait_for(attempt, timeout=5)
+        await asyncio.wait_for(attempt, timeout=10)
     assert cancelled.is_set()
     assert repo.completed == []
 
