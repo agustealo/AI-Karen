@@ -251,3 +251,13 @@ def test_saved_set_agrees_with_multiple_authenticated_conversation_members():
     assert "Prince" not in answer
     assert meta["evidence_sufficiency"] == "ambiguous"
     assert meta["evidence_reason"] == "saved_set_and_conversation_need_reconciliation"
+
+    # Even a correction to an existing member might narrow or replace the
+    # collection; do not serve old SET contents as current truth.
+    evidence_items[-1].content = "Actually my favorite artist is Bob Marley."
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="t1", user_id="u1",
+    )
+    assert "Nina Simone" not in answer
+    assert meta["evidence_sufficiency"] == "ambiguous"
+    assert meta["evidence_reason"] == "set_correction_requires_reconciliation"
