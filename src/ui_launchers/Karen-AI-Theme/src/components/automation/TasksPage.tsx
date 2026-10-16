@@ -87,6 +87,14 @@ type ReviewHistoryEntry = {
   review_note: string;
   acceptance_criteria: string;
   receipt_sha256: string;
+  result_receipt?: {
+    answer_text?: string;
+    answer_truncated?: boolean;
+    runtime_status?: string;
+    source_count?: number;
+    artifact_count?: number;
+    attachment_count?: number;
+  };
   correlation_id?: string | null;
   human_attestation: boolean;
   independently_verified: boolean;
