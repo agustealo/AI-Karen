@@ -120,9 +120,12 @@ class CortexExecutionDecider:
         )
         from ai_karen_engine.core.intelligence.profile_attribute import (
             referenced_profile_attribute,
+            requested_profile_query,
         )
-        resolved_discourse_attribute = referenced_profile_attribute(
-            user_content, request.messages
+        profile_query = requested_profile_query(user_content)
+        resolved_discourse_attribute = (
+            profile_query.attribute
+            or referenced_profile_attribute(user_content, request.messages)
         )
         personal_recall_query = (
             is_personal_memory_recall_query(user_content)
@@ -216,6 +219,8 @@ class CortexExecutionDecider:
 
         policy_constraints = dict(meta.get("policy_constraints") or {})
         policy_constraints.pop("personal_evidence_attribute", None)
+        policy_constraints.pop("personal_evidence_query_scope", None)
+        policy_constraints.pop("personal_evidence_query_issue", None)
         # The intelligence-owned resolver is deterministic and remains available
         # when ML analysis degrades or does not populate the semantic envelope.
         from ai_karen_engine.core.intelligence.profile_attribute import (
@@ -227,6 +232,15 @@ class CortexExecutionDecider:
         )
         if personal_recall_query and semantic_attribute:
             policy_constraints["personal_evidence_attribute"] = semantic_attribute
+            if profile_query.attribute == semantic_attribute:
+                if profile_query.qualifiers:
+                    policy_constraints["personal_evidence_query_scope"] = dict(
+                        profile_query.qualifiers
+                    )
+                if profile_query.unsupported_context:
+                    policy_constraints["personal_evidence_query_issue"] = (
+                        profile_query.unsupported_context
+                    )
         policy_constraints.update(
             {
                 "memory_write_requested": memory_write_requested,
