@@ -58,6 +58,7 @@ def tool_event(*, outcome_id="receipt-a", user=OWNER, tenant=TENANT,
         "recorded_at": "2026-10-16T10:00:00+00:00",
         "metadata": {
             "event_type": "agent.tool.execution",
+            "receipt_version": "governed-tool.v1",
             "tool_call_id": "call-a",
             "tool_name": "web_search",
             "tool_version": "v2",
