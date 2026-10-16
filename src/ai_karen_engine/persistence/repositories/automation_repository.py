@@ -207,7 +207,7 @@ class SqlAutomationRepository:
                     UPDATE public.automation_tasks
                     SET status = 'Running',
                         claim_token = CAST(:claim_token AS uuid),
-                        claim_expires_at = now() + make_interval(secs => :lease_seconds),
+                        claim_expires_at = clock_timestamp() + make_interval(secs => :lease_seconds),
                         runtime_task_id = NULL,
                         last_run_at = now(),
                         last_error = NULL,
@@ -219,7 +219,7 @@ class SqlAutomationRepository:
                           status <> 'Running'
                           OR (
                               claim_token IS NOT NULL
-                              AND claim_expires_at <= now()
+                              AND claim_expires_at <= clock_timestamp()
                           )
                       )
                     RETURNING *
@@ -252,13 +252,13 @@ class SqlAutomationRepository:
                 text(
                     """
                     UPDATE public.automation_tasks
-                    SET claim_expires_at = now() + make_interval(secs => :lease_seconds),
+                    SET claim_expires_at = clock_timestamp() + make_interval(secs => :lease_seconds),
                         updated_at = now()
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
                       AND status = 'Running'
                       AND claim_token = CAST(:claim_token AS uuid)
-                      AND claim_expires_at > now()
+                      AND claim_expires_at > clock_timestamp()
                     RETURNING task_id
                     """
                 ),
@@ -300,7 +300,7 @@ class SqlAutomationRepository:
                       AND tenant_id = CAST(:tenant_id AS uuid)
                       AND status = 'Running'
                       AND claim_token = CAST(:claim_token AS uuid)
-                      AND claim_expires_at > now()
+                      AND claim_expires_at > clock_timestamp()
                     RETURNING *
                     """
                 ),
