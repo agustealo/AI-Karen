@@ -183,36 +183,108 @@ class SqlAutomationRepository:
             )
             return result.scalar_one_or_none() is not None
 
-    async def mark_task_running(self, task_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    async def mark_task_running(
+        self,
+        task_id: str,
+        tenant_id: str,
+        *,
+        claim_token: str,
+        lease_seconds: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically acquire the task; refuse a live or unfenced legacy owner.
+
+        Concurrent UPDATEs serialize on the PostgreSQL row. The later caller
+        sees the committed Running claim and gets no row. Claim tokens are
+        never returned by the public task row projection.
+        """
+        if lease_seconds <= 0:
+            raise ValueError("Task lease_seconds must be positive")
+        token = str(uuid.UUID(claim_token))
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
                 text(
                     """
                     UPDATE public.automation_tasks
                     SET status = 'Running',
+                        claim_token = CAST(:claim_token AS uuid),
+                        claim_expires_at = now() + make_interval(secs => :lease_seconds),
+                        runtime_task_id = NULL,
                         last_run_at = now(),
                         last_error = NULL,
                         run_count = run_count + 1,
                         updated_at = now()
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND (
+                          status <> 'Running'
+                          OR (
+                              claim_token IS NOT NULL
+                              AND claim_expires_at <= now()
+                          )
+                      )
                     RETURNING *
                     """
                 ),
-                {"task_id": task_id, "tenant_id": tenant_id},
+                {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "claim_token": token,
+                    "lease_seconds": lease_seconds,
+                },
             )
             row = result.mappings().one_or_none()
             return _task_row(row) if row else None
+
+    async def renew_task_claim(
+        self,
+        task_id: str,
+        tenant_id: str,
+        *,
+        claim_token: str,
+        lease_seconds: int,
+    ) -> bool:
+        """Renew only a still-live ownership token within its tenant."""
+        if lease_seconds <= 0:
+            raise ValueError("Task lease_seconds must be positive")
+        token = str(uuid.UUID(claim_token))
+        async with async_transaction_scope(tenant_id) as session:
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.automation_tasks
+                    SET claim_expires_at = now() + make_interval(secs => :lease_seconds),
+                        updated_at = now()
+                    WHERE task_id = :task_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND status = 'Running'
+                      AND claim_token = CAST(:claim_token AS uuid)
+                      AND claim_expires_at > now()
+                    RETURNING task_id
+                    """
+                ),
+                {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "claim_token": token,
+                    "lease_seconds": lease_seconds,
+                },
+            )
+            return result.scalar_one_or_none() is not None
 
     async def complete_task(
         self,
         task_id: str,
         tenant_id: str,
         *,
+        claim_token: str,
         status: str,
         last_error: Optional[str],
         runtime_task_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
+        """Fence terminal updates against lost leases and stale completions."""
+        if status not in {"Success", "Failed"}:
+            raise ValueError("Terminal task status must be Success or Failed")
+        token = str(uuid.UUID(claim_token))
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
                 text(
@@ -220,16 +292,22 @@ class SqlAutomationRepository:
                     UPDATE public.automation_tasks
                     SET status = :status,
                         last_error = :last_error,
-                        runtime_task_id = COALESCE(:runtime_task_id, runtime_task_id),
+                        runtime_task_id = :runtime_task_id,
+                        claim_token = NULL,
+                        claim_expires_at = NULL,
                         updated_at = now()
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND status = 'Running'
+                      AND claim_token = CAST(:claim_token AS uuid)
+                      AND claim_expires_at > now()
                     RETURNING *
                     """
                 ),
                 {
                     "task_id": task_id,
                     "tenant_id": tenant_id,
+                    "claim_token": token,
                     "status": status,
                     "last_error": last_error,
                     "runtime_task_id": runtime_task_id,
