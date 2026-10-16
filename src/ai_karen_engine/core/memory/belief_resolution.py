@@ -39,6 +39,111 @@ class BeliefResolution:
     affected_fact_keys: tuple[str, ...] = ()
 
 
+
+@dataclass(frozen=True, slots=True)
+class ProfileProjectionEvidence:
+    """Canonical profile-slot adapter, not a fabricated SemanticAssertion.
+
+    Projection rows lack the complete typed assertion provenance contract.
+    Only use real scoped event IDs, the verified slot key and actual values.
+    """
+
+    tenant_id: str
+    user_id: str
+    fact_key: str
+    value: str
+    source_event_id: str
+    cardinality: FactCardinality = FactCardinality.SINGLETON
+    modality: AssertionModality = AssertionModality.ASSERTED
+
+
+def _resolve_competing_values(
+    *,
+    fact_key: str,
+    incoming_value: tuple[str, str],
+    current_values: Sequence[tuple[str, str]],
+    cardinality: FactCardinality,
+    source_ids: tuple[str, ...],
+    explicit_correction: bool,
+) -> BeliefResolution:
+    """One conflict policy shared by semantic and legacy profile projections."""
+    same_value = all(
+        kind == incoming_value[0]
+        and value.casefold() == incoming_value[1].casefold()
+        for kind, value in current_values
+    )
+    if same_value:
+        return BeliefResolution(
+            MemoryOperation.REINFORCE,
+            BeliefResolutionReason.REINFORCEMENT,
+            fact_key,
+            source_ids,
+        )
+    if cardinality is FactCardinality.SET:
+        return BeliefResolution(
+            MemoryOperation.QUARANTINE,
+            BeliefResolutionReason.UNRESOLVED_CONFLICT,
+            fact_key,
+            source_ids,
+        )
+    if explicit_correction:
+        return BeliefResolution(
+            MemoryOperation.SUPERSEDE,
+            BeliefResolutionReason.SINGLETON_CORRECTION,
+            fact_key,
+            source_ids,
+            affected_fact_keys=(fact_key,),
+        )
+    return BeliefResolution(
+        MemoryOperation.QUARANTINE,
+        BeliefResolutionReason.UNRESOLVED_CONFLICT,
+        fact_key,
+        source_ids,
+    )
+
+
+def resolve_profile_projection(
+    incoming: ProfileProjectionEvidence,
+    current: Sequence[ProfileProjectionEvidence],
+    *,
+    explicit_correction: bool = False,
+) -> BeliefResolution:
+    """Apply existing belief authority to the evidence available in SQL views.
+
+    The caller identifies matching profile slots with profile_projection_key;
+    this function cannot decide consent, admission or execute any SQL.
+    """
+    if incoming.modality is not AssertionModality.ASSERTED:
+        return BeliefResolution(
+            MemoryOperation.QUARANTINE,
+            BeliefResolutionReason.NON_ASSERTED_EVIDENCE,
+            incoming.fact_key,
+            (incoming.source_event_id,),
+        )
+    for item in current:
+        if item.tenant_id != incoming.tenant_id or item.user_id != incoming.user_id:
+            raise ValueError("cross-scope belief comparison is forbidden")
+        if item.fact_key != incoming.fact_key:
+            raise ValueError("profile projection comparison must share a verified slot")
+        if item.cardinality != incoming.cardinality:
+            raise ValueError("profile projection cardinality mismatch")
+    source_ids = tuple(dict.fromkeys(
+        [incoming.source_event_id, *(item.source_event_id for item in current)]
+    ))
+    if not current:
+        return BeliefResolution(
+            MemoryOperation.CREATE, BeliefResolutionReason.NEW_IDENTITY,
+            incoming.fact_key, source_ids,
+        )
+    return _resolve_competing_values(
+        fact_key=incoming.fact_key,
+        incoming_value=("string", incoming.value),
+        current_values=[("string", item.value) for item in current],
+        cardinality=incoming.cardinality,
+        source_ids=source_ids,
+        explicit_correction=explicit_correction,
+    )
+
 def resolve_belief(
     incoming: SemanticAssertion,
     current: Sequence[SemanticAssertion],
@@ -109,44 +214,15 @@ def resolve_belief(
             MemoryOperation.CREATE, reason, incoming.fact_key, source_ids,
         )
 
-    same_value = all(
-        item.object.type == incoming.object.type
-        and item.object.canonical_value.casefold()
-        == incoming.object.canonical_value.casefold()
-        for item in matches
-    )
-    if same_value:
-        return BeliefResolution(
-            MemoryOperation.REINFORCE,
-            BeliefResolutionReason.REINFORCEMENT,
-            incoming.fact_key,
-            source_ids,
-        )
-
-    if incoming.cardinality is FactCardinality.SET:
-        # A SET member includes its value in fact_key; reaching this branch
-        # means a hash collision or incompatible assertion contract.
-        return BeliefResolution(
-            MemoryOperation.QUARANTINE,
-            BeliefResolutionReason.UNRESOLVED_CONFLICT,
-            incoming.fact_key,
-            source_ids,
-        )
-
-    if explicit_correction:
-        return BeliefResolution(
-            MemoryOperation.SUPERSEDE,
-            BeliefResolutionReason.SINGLETON_CORRECTION,
-            incoming.fact_key,
-            source_ids,
-            affected_fact_keys=(incoming.fact_key,),
-        )
-
-    return BeliefResolution(
-        MemoryOperation.QUARANTINE,
-        BeliefResolutionReason.UNRESOLVED_CONFLICT,
-        incoming.fact_key,
-        source_ids,
+    return _resolve_competing_values(
+        fact_key=incoming.fact_key,
+        incoming_value=(incoming.object.type, incoming.object.canonical_value),
+        current_values=[
+            (item.object.type, item.object.canonical_value) for item in matches
+        ],
+        cardinality=incoming.cardinality,
+        source_ids=source_ids,
+        explicit_correction=explicit_correction,
     )
 
 
@@ -154,4 +230,6 @@ __all__ = [
     "BeliefResolution",
     "BeliefResolutionReason",
     "resolve_belief",
+    "ProfileProjectionEvidence",
+    "resolve_profile_projection",
 ]
