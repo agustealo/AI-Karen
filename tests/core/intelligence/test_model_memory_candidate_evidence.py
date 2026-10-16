@@ -115,6 +115,9 @@ def test_envelopes_fail_closed(invalid):
     "I might organize ideas with sticky notes.",
     "I do not organize ideas with sticky notes.",
     "For now I organize ideas with sticky notes.",
+    "Until Friday I organize ideas with sticky notes.",
+    "Today I organize ideas with sticky notes.",
+    "While I am traveling I organize ideas with sticky notes.",
 ))
 def test_clipped_quote_does_not_override_unsafe_wider_source_context(source):
     quote = QUOTE if QUOTE in source else source
@@ -129,6 +132,20 @@ def test_safe_and_unsafe_siblings_do_not_contaminate_one_another():
     output = review([candidate(), candidate(value="invented")])
     assert len(output.candidates) == 1
     assert output.rejected == ("source_span_or_semantics_unverified",)
+
+
+def test_question_and_predicate_value_overlap_do_not_create_memory_truth():
+    question = "I organize ideas with sticky notes?"
+    inspected = review([candidate(
+        source=question, quote=question,
+    )], source=question)
+    assert inspected.candidates == ()
+
+    inspected = review([candidate(
+        relation="organize ideas", value="ideas",
+    )])
+    assert inspected.candidates == ()
+    assert inspected.rejected == ("source_span_or_semantics_unverified",)
 
 
 def test_same_evidence_cannot_be_repeated_as_independent_memory():
