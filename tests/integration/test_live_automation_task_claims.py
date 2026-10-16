@@ -104,10 +104,10 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         lease_1, lease_2, lease_3 = (str(uuid.uuid4()) for _ in range(3))
         outcomes = await asyncio.gather(
             repo.mark_task_running(
-                task_id, str(tenant), claim_token=lease_1, lease_seconds=60,
+                task_id, str(tenant), claim_token=lease_1, lease_seconds=60, created_by=str(user),
             ),
             repo.mark_task_running(
-                task_id, str(tenant), claim_token=lease_2, lease_seconds=60,
+                task_id, str(tenant), claim_token=lease_2, lease_seconds=60, created_by=str(user),
             ),
         )
         assert sum(result is not None for result in outcomes) == 1
@@ -144,7 +144,7 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             task_id, str(tenant), claim_token=winner, lease_seconds=60,
         ) is False
         recovered = await repo.mark_task_running(
-            task_id, str(tenant), claim_token=lease_3, lease_seconds=60,
+            task_id, str(tenant), claim_token=lease_3, lease_seconds=60, created_by=str(user),
         )
         assert recovered is not None
         assert recovered["runCount"] == 2
@@ -171,7 +171,7 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         assert terminal["executionId"] == lease_3
         assert await repo.mark_task_running(
             task_id, str(tenant), claim_token=str(uuid.uuid4()),
-            lease_seconds=60,
+            lease_seconds=60, created_by=str(user),
         ) is None, "A pending review cannot be overwritten by a new run"
         assert await repo.review_task(
             task_id, str(tenant), user_id=str(uuid.uuid4()),
@@ -201,7 +201,7 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         )
         assert await repo.mark_task_running(
             task_id, str(tenant), claim_token=str(uuid.uuid4()),
-            lease_seconds=60,
+            lease_seconds=60, created_by=str(user),
         ) is None
     finally:
         await connection.execute("DROP TABLE IF EXISTS public.automation_tasks")
