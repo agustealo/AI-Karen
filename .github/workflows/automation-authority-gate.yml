@@ -54,7 +54,7 @@ jobs:
         run: pytest tests/services/automation/test_execution.py -q
 
       - name: Prove atomic saved task checkout and fenced execution
-        run: pytest tests/services/automation/test_task_claim_ownership.py tests/services/automation/test_task_verification.py tests/services/automation/test_task_output_verification.py tests/services/automation/test_task_review_history.py tests/services/automation/test_task_tool_receipts.py tests/agent_medusa/test_governed_tool_receipts.py tests/api/test_task_definition_routes.py -q
+        run: pytest tests/services/automation/test_task_claim_ownership.py tests/services/automation/test_task_verification.py tests/services/automation/test_task_output_verification.py tests/services/automation/test_task_review_history.py tests/services/automation/test_task_tool_receipts.py tests/agent_medusa/test_governed_tool_receipts.py tests/services/test_governed_tool_cache_contract.py tests/api/test_task_definition_routes.py -q
 
       - name: Prove queue lease heartbeat
         run: pytest tests/services/automation/test_queue_lease.py -q
