@@ -36,6 +36,10 @@ def _task_message(task: Mapping[str, Any]) -> str:
         f"Task description: {str(task.get('description') or '').strip()}",
     ]
 
+    acceptance_criteria = str(task.get("acceptanceCriteria") or "").strip()
+    if acceptance_criteria:
+        parts.append(f"User acceptance criteria for later human review: {acceptance_criteria}")
+
     primary_instructions = str(task.get("primaryAgentInstructions") or "").strip()
     if primary_instructions:
         parts.append(f"Task instructions: {primary_instructions}")
