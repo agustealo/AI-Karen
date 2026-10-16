@@ -314,3 +314,40 @@ async def test_strict_receipt_append_rejects_duplicate_instead_of_fake_success(m
         trajectory_id=TRAJECTORY, tenant_id=TENANT, user_id=USER,
     )
     assert len(records) == 1
+
+
+
+def test_medusa_wave_refuses_to_aggregate_missing_receipts_as_partial_success():
+    from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import (
+        MedusaCoordinator,
+    )
+
+    # Ordinary specialist errors remain eligible for partial DAG aggregation.
+    MedusaCoordinator._require_durable_tool_receipts([
+        {"research": "available"}, RuntimeError("ordinary specialist failure"),
+    ])
+
+    # An external action may already have happened: the same result wave must
+    # abort instead of silently producing a partial answer from sibling steps.
+    unavailable = OutcomeStoreError("private PostgreSQL diagnostic")
+    with pytest.raises(OutcomeStoreError) as raised:
+        MedusaCoordinator._require_durable_tool_receipts([
+            {"research": "available"}, unavailable,
+        ])
+    assert raised.value is unavailable
+
+
+def test_post_side_effect_audit_outage_is_not_recoverable_or_retryable():
+    from ai_karen_engine.agent_medusa.contracts.runtime_response import ResponseStatus
+    from ai_karen_engine.agent_medusa.contracts.safe_error import to_safe_response
+
+    response = to_safe_response(
+        OutcomeStoreError("private database diagnostic"),
+        correlation_id="corr-governed-reconciliation",
+    )
+    assert response.status is ResponseStatus.ERROR
+    assert response.metadata["recoverable"] is False
+    assert response.metadata["reconciliation_required"] is True
+    assert response.metadata["error_code"] == "dependency_error"
+    assert "Verify the destination before retrying" in response.content
+    assert "private database diagnostic" not in response.content
