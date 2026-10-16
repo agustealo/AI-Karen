@@ -133,7 +133,7 @@ def test_legacy_goal_type_has_sunset_and_expired_aliases_are_retired() -> None:
     mapping = {shim.legacy_symbol: shim for shim in COGNITIVE_COMPATIBILITY_SHIMS}
     goal = "ai_karen_engine.core.personalization.contracts.UserGoalStatus"
     assert mapping[goal].canonical_symbol.endswith("personalization.goals.contracts.GoalState")
-    assert mapping[goal].remove_after == date(2026, 10, 15)
+    assert mapping[goal].remove_after == date(2026, 10, 22)
     assert "stored UserGoal/UserModel contracts" in mapping[goal].reason
     assert "ai_karen_engine.core.cortex.behavior.contracts.VerificationDepth" not in mapping
     assert "ai_karen_engine.core.reasoning.meta.contracts.VerificationNeedAssessment" not in mapping
