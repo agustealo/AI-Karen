@@ -247,7 +247,7 @@ class OutcomeRecorder:
                 "result_sha256": result_sha256,
             },
         }
-        await self._store.save_outcome_async(payload)
+        await self._store.save_unique_outcome_async(payload)
         return payload
 
     def record_user_outcome(
