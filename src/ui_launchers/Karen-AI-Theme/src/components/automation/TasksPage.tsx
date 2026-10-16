@@ -388,7 +388,7 @@ export default function TasksPage() {
                       <p className="text-destructive">The runtime reported degraded execution.</p>
                     )}
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={() => handleReviewTask(task, "approve")} disabled={!!task.resultReceipt?.answer_truncated}>
+                      <Button size="sm" onClick={() => handleReviewTask(task, "approve")}>
                         Verify completion
                       </Button>
                       <Button variant="outline" size="sm" onClick={() => handleReviewTask(task, "reject")}>
