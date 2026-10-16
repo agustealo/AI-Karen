@@ -43,7 +43,7 @@ def review_payload(*, outcome_id="out_review_1", owner=OWNER, tenant=TENANT, tas
         "trajectory_id": f"task:{task}",
         "execution_id": ATTEMPT,
         "decision": "approve",
-        "status": "Success",
+        "review_status": "Success",
         "review_note": "Reviewed",
         "reviewed_at": "2026-10-16T03:00:00+00:00",
         "recorded_at": "2026-10-16T03:00:00+00:00",
@@ -165,6 +165,9 @@ def test_transactional_outcome_append_reuses_canonical_store_contract():
     assert method.index("await PostgresOutcomeStore.append_in_transaction(") < method.index("return _task_row(row)")
     assert '"result_receipt": data.get("result_receipt") or {}' in method
     assert "event_type" in method
+    assert "UserFeedbackType.TASK_COMPLETION_CONFIRMATION" in method
+    assert '"review_status": target' in method
+    assert '"status": target' not in method
     assert 'source": "user.feedback"' in method
     assert "rowcount != 1" in store
     assert "AND user_id = CAST(:user_id AS uuid)" in store
