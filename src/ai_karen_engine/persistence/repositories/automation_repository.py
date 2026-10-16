@@ -41,6 +41,11 @@ def _task_row(row: Any) -> Dict[str, Any]:
         "lastError": data.get("last_error"),
         "runCount": int(data.get("run_count") or 0),
         "runtimeTaskId": data.get("runtime_task_id"),
+        "executionId": str(data["execution_id"]) if data.get("execution_id") else None,
+        "resultReceipt": dict(data.get("result_receipt") or {}),
+        "reviewedAt": data["reviewed_at"].isoformat() if data.get("reviewed_at") else None,
+        "reviewedBy": str(data["reviewed_by"]) if data.get("reviewed_by") else None,
+        "reviewNote": data.get("review_note"),
         "created_by": str(data["created_by"]),
         "tenant_id": str(data["tenant_id"]),
     }
@@ -209,6 +214,11 @@ class SqlAutomationRepository:
                         claim_token = CAST(:claim_token AS uuid),
                         claim_expires_at = clock_timestamp() + make_interval(secs => :lease_seconds),
                         runtime_task_id = NULL,
+                        execution_id = CAST(:claim_token AS uuid),
+                        result_receipt = '{}'::jsonb,
+                        reviewed_at = NULL,
+                        reviewed_by = NULL,
+                        review_note = NULL,
                         last_run_at = now(),
                         last_error = NULL,
                         run_count = run_count + 1,
@@ -280,10 +290,11 @@ class SqlAutomationRepository:
         status: str,
         last_error: Optional[str],
         runtime_task_id: Optional[str] = None,
+        result_receipt: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Fence terminal updates against lost leases and stale completions."""
-        if status not in {"Success", "Failed"}:
-            raise ValueError("Terminal task status must be Success or Failed")
+        """Record runtime execution; only a reviewer may mark goal Success."""
+        if status not in {"ReviewRequired", "Failed"}:
+            raise ValueError("Execution outcome must be ReviewRequired or Failed")
         token = str(uuid.UUID(claim_token))
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
@@ -293,6 +304,7 @@ class SqlAutomationRepository:
                     SET status = :status,
                         last_error = :last_error,
                         runtime_task_id = :runtime_task_id,
+                        result_receipt = CAST(:result_receipt AS jsonb),
                         claim_token = NULL,
                         claim_expires_at = NULL,
                         updated_at = now()
@@ -311,6 +323,58 @@ class SqlAutomationRepository:
                     "status": status,
                     "last_error": last_error,
                     "runtime_task_id": runtime_task_id,
+                    "result_receipt": json.dumps(result_receipt or {}),
+                },
+            )
+            row = result.mappings().one_or_none()
+            return _task_row(row) if row else None
+
+    async def review_task(
+        self,
+        task_id: str,
+        tenant_id: str,
+        *,
+        user_id: str,
+        execution_id: str,
+        decision: str,
+        note: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically review only the current, completed attempt by its owner.
+
+        Tenant-scoped compare-and-swap prevents double review and stale tabs
+        from approving the wrong execution. Review never re-enters ChatRuntime.
+        """
+        if decision not in {"approve", "reject"}:
+            raise ValueError("Invalid task review decision")
+        attempt = str(uuid.UUID(execution_id))
+        reviewer = str(uuid.UUID(user_id))
+        target = "Success" if decision == "approve" else "Rejected"
+        async with async_transaction_scope(tenant_id) as session:
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.automation_tasks
+                    SET status = :status,
+                        reviewed_at = clock_timestamp(),
+                        reviewed_by = CAST(:reviewer AS uuid),
+                        review_note = :note,
+                        updated_at = clock_timestamp()
+                    WHERE task_id = :task_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:reviewer AS uuid)
+                      AND status = 'ReviewRequired'
+                      AND execution_id = CAST(:execution_id AS uuid)
+                      AND claim_token IS NULL
+                    RETURNING *
+                    """
+                ),
+                {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "reviewer": reviewer,
+                    "execution_id": attempt,
+                    "status": target,
+                    "note": note,
                 },
             )
             row = result.mappings().one_or_none()
