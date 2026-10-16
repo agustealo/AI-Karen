@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import apiClient from '../../src/lib/api';
 
-type EventDetails = { error_code?: string; correlation_id?: string; malformed_events?: number };
-
 function streamResponse(payload: string) {
   const chunks = [new TextEncoder().encode(payload)];
   return {
@@ -22,7 +20,7 @@ function streamResponse(payload: string) {
 
 describe('canonical chat SSE terminal events', () => {
   const callbacks = {
-    onError: vi.fn<(message: string, metadata?: EventDetails) => void>(),
+    onError: vi.fn<(message: string, metadata?: Record<string, unknown>) => void>(),
     onComplete: vi.fn(),
     onContent: vi.fn(),
     onDone: vi.fn(),
