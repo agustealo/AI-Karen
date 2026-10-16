@@ -190,6 +190,9 @@ def test_domain_neutral_self_correction_governs_classified_claims(
     "utterance",
     [
         "Actually she said my name is Alex.",
+        "Actually my manager said I live in Detroit.",
+        "Actually I said my name is Alex.",
+        'Actually "my name is Alex" is the quote.',
         "I was wrong about what someone else said.",
         "Correction: they work at Ford.",
         "Actually, what is my employer?",
