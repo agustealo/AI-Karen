@@ -55,6 +55,22 @@ type Task = {
   lastError?: string | null;
   runCount?: number;
   runtimeTaskId?: string | null;
+  executionId?: string | null;
+  resultReceipt?: {
+    runtime_status?: string;
+    answer_preview?: string;
+    answer_truncated?: boolean;
+    artifact_count?: number;
+    source_count?: number;
+    citation_count?: number;
+    degraded_mode?: boolean;
+    response_id?: string | null;
+    correlation_id?: string | null;
+    independently_verified?: boolean;
+  };
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewNote?: string | null;
 };
 
 /**
@@ -201,6 +217,28 @@ export default function TasksPage() {
     }
   };
 
+  const handleReviewTask = async (task: Task, decision: "approve" | "reject") => {
+    if (!isAuthenticated || task.status !== "ReviewRequired" || !task.executionId) {
+      setErrorMsg("This execution does not have a reviewable result.");
+      return;
+    }
+    const description = decision === "approve"
+      ? "Confirm that you reviewed the actual result and accept this task as completed?"
+      : "Reject this result as not meeting the task objective?";
+    if (!window.confirm(description)) return;
+    try {
+      const { apiClient } = await import("@/lib/api");
+      await apiClient.post(`/api/tasks/${encodeURIComponent(task.id)}/review`, {
+        execution_id: task.executionId,
+        decision,
+        note: "",
+      });
+      await fetchLiveData();
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Unable to review task.");
+    }
+  };
+
   const handleCreateTask = async () => {
     if (!isAuthenticated) {
       setErrorMsg("Sign in to manage tasks.");
@@ -329,8 +367,36 @@ export default function TasksPage() {
                 </div>
                 <div className="flex items-center justify-between pt-1">
                     <span>Last Run: {task.lastRun || "Never"}</span>
-                    <Badge variant={task.status === "Success" ? "default" : (task.status === "Pending" ? "secondary" : (task.status === "Running" ? "outline" : "destructive"))}>{task.status}</Badge>
+                    <Badge variant={task.status === "Success" ? "default" : (task.status === "Pending" || task.status === "ReviewRequired" || task.status === "LegacyUnverified" ? "secondary" : (task.status === "Running" ? "outline" : "destructive"))}>
+                      {task.status === "ReviewRequired" ? "Awaiting verification" : task.status === "LegacyUnverified" ? "Historical, unverified" : task.status === "Success" ? "Human-verified" : task.status}
+                    </Badge>
                 </div>
+                {task.status === "ReviewRequired" && task.executionId && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <p className="font-semibold text-foreground">Result awaiting your review</p>
+                    <p className="whitespace-pre-wrap break-words text-foreground">
+                      {task.resultReceipt?.answer_preview || "No answer preview was recorded."}
+                    </p>
+                    {task.resultReceipt?.answer_truncated && (
+                      <p>The preview is truncated. Review the full runtime response before approval.</p>
+                    )}
+                    <p>
+                      Execution: {task.executionId} · Sources: {task.resultReceipt?.source_count ?? 0} ·
+                      Artifacts: {task.resultReceipt?.artifact_count ?? 0}
+                    </p>
+                    {task.resultReceipt?.degraded_mode && (
+                      <p className="text-destructive">The runtime reported degraded execution.</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => handleReviewTask(task, "approve")} disabled={!!task.resultReceipt?.answer_truncated}>
+                        Verify completion
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => handleReviewTask(task, "reject")}>
+                        Reject result
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {task.lastError && (
                   <div className="text-[11px] text-destructive">
                     Last error: {task.lastError}
