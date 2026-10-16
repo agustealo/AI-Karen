@@ -70,9 +70,9 @@ describe('canonical chat SSE terminal events', () => {
 
   it('ignores initial SSE transport comments without starting a progress status', async () => {
     await consume(
-      ': stream_connected\\n\\n' +
-      'data: {"type":"content","content":"Hello"}\\n\\n' +
-      'data: {"type":"complete","content":""}\\n\\n',
+      ': stream_connected\n\n' +
+      'data: {"type":"content","content":"Hello"}\n\n' +
+      'data: {"type":"complete","content":""}\n\n',
     );
     expect(callbacks.onContent).toHaveBeenCalledWith('Hello');
     expect(callbacks.onComplete).toHaveBeenCalledOnce();
