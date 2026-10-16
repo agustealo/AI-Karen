@@ -190,7 +190,7 @@ def evaluate_conversation_personal_evidence(
     from ai_karen_engine.core.memory.signals.semantic_classifier import (
         classify_explicit_user_memory,
     )
-    facts: list[tuple[str, str]] = []
+    facts: list[tuple[str, str, bool]] = []
     for item in context.evidence:
         if (
             item.source is not EvidenceSource.CONVERSATION
@@ -220,20 +220,36 @@ def evaluate_conversation_personal_evidence(
                 and signal.metadata.get("retention_scope") != "session"
                 and isinstance(value, str) and 0 < len(value.strip()) <= 120
             ):
-                facts.append((item.evidence_id, value.strip()))
+                facts.append((
+                    item.evidence_id,
+                    value.strip(),
+                    signal.metadata.get("explicit_correction") is True
+                    and signal.metadata.get("source") in {
+                        "explicit_semantic_rule", "explicit_general_fact_rule",
+                    },
+                ))
     if not facts:
         return EvidenceSufficiency(
             EvidenceSufficiencyStatus.MISSING, attribute,
             reason="no_user_assertion_in_conversation",
         )
-    if len({value.casefold() for _, value in facts}) > 1:
+    # Only a directly classified, explicit self-correction may supersede
+    # older conversation assertions. Recency alone is not reconciliation.
+    # Preserve the raw conversation; this merely selects sufficient evidence.
+    last_correction = max(
+        (index for index, fact in enumerate(facts) if fact[2]),
+        default=0,
+    )
+    current_facts = facts[last_correction:]
+    if len({value.casefold() for _, value, _ in current_facts}) > 1:
         return EvidenceSufficiency(
             EvidenceSufficiencyStatus.CONTRADICTORY, attribute,
-            evidence_ids=tuple(fid for fid, _ in facts),
+            evidence_ids=tuple(fid for fid, _, _ in current_facts),
             reason="unresolved_conversation_conflict",
         )
     return EvidenceSufficiency(
-        EvidenceSufficiencyStatus.SUPPORTED, attribute, value=facts[-1][1],
-        evidence_ids=tuple(fid for fid, _ in facts),
+        EvidenceSufficiencyStatus.SUPPORTED, attribute,
+        value=current_facts[-1][1],
+        evidence_ids=tuple(fid for fid, _, _ in current_facts),
         reason="authorized_conversation_assertion_not_durable",
     )
