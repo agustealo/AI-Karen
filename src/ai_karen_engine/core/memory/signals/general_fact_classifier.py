@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from ai_karen_engine.core.intelligence.correction_intent import is_explicit_self_correction
+
 from .signal_models import MemorySignal
 
 
@@ -401,6 +403,16 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
                     },
                 )
             )
+
+    # A correction belongs to the user-authored utterance, not to a fixed
+    # profile attribute or a transport-supplied overwrite flag.
+    if is_explicit_self_correction(normalized):
+        for signal in signals:
+            if (
+                signal.signal_type == "profile_fact"
+                and signal.metadata.get("explicit_user_statement") is True
+            ):
+                signal.metadata["explicit_correction"] = True
 
     return _dedupe(signals)
 

@@ -28,7 +28,10 @@ COGNITIVE_COMPATIBILITY_SHIMS: tuple[CompatibilityShim, ...] = (
             "active stored UserGoal/UserModel contracts and GoalStore lifecycle still "
             "consume UserGoalStatus; migrate persistence readers before removal"
         ),
-        remove_after=date(2026, 10, 15),
+        # Time-boxed exception: active persisted readers have not yet been
+        # migrated. See docs/architecture/goal-state-compatibility-retirement.md.
+        # The expiry invariant stays enabled; do not remove this gate.
+        remove_after=date(2026, 10, 22),
     ),
 )
 

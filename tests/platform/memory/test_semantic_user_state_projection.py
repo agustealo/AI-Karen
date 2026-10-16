@@ -161,7 +161,7 @@ async def test_general_profile_fact_projects_to_canonical_profile(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_new_preference_supersedes_previous_current_fact(monkeypatch):
+async def test_new_preference_without_explicit_correction_is_quarantined(monkeypatch):
     old = ProfileFact(
         fact_id=UUID("00000000-0000-0000-0000-000000000020"),
         event_id=UUID("00000000-0000-0000-0000-000000000021"),
@@ -213,10 +213,9 @@ async def test_new_preference_supersedes_previous_current_fact(monkeypatch):
     )
 
     facts = [item for item in session.added if isinstance(item, ProfileFact)]
-    assert len(facts) == 1
-    assert facts[0].value["value"] == "orange"
-    assert facts[0].supersedes == old.fact_id
-    assert old.valid_to is not None
+    assert facts == []
+    assert old.valid_to is None
+    assert old.value["value"] == "green"
 
 
 @pytest.mark.asyncio
@@ -522,7 +521,7 @@ def test_each_semantic_projection_also_keeps_episode_lineage():
 
 
 @pytest.mark.asyncio
-async def test_location_correction_supersedes_only_same_attribute(monkeypatch):
+async def test_new_location_without_explicit_correction_preserves_current(monkeypatch):
     previous = ProfileFact(
         fact_id=UUID("00000000-0000-0000-0000-000000000060"),
         event_id=UUID("00000000-0000-0000-0000-000000000061"),
@@ -564,7 +563,104 @@ async def test_location_correction_supersedes_only_same_attribute(monkeypatch):
         },
     )
     facts = [value for value in session.added if isinstance(value, ProfileFact)]
-    assert len(facts) == 1
-    assert facts[0].value["value"] == "Jamaica"
-    assert facts[0].supersedes == previous.fact_id
-    assert previous.valid_to is not None
+    assert facts == []
+    assert previous.valid_to is None
+    assert previous.value["value"] == "Detroit"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_type", "rule_source", "explicit", "expected_update"),
+    [
+        ("profile_correction", "explicit_general_fact_rule", False, True),
+        ("profile_correction", "explicit_semantic_rule", False, True),
+        ("chat_user", "explicit_semantic_rule", True, True),
+        ("chat_user", "explicit_general_fact_rule", False, False),
+        ("profile_correction", "untrusted_model", False, False),
+    ],
+)
+async def test_profile_projector_correction_ingresses_preserve_authored_truth(
+    monkeypatch, source_type, rule_source, explicit, expected_update,
+):
+    previous = ProfileFact(
+        fact_id=UUID("00000000-0000-0000-0000-000000000091"),
+        event_id=UUID("00000000-0000-0000-0000-000000000092"),
+        tenant_id=TENANT,
+        user_id=USER,
+        category="work",
+        attribute="employer",
+        value={"value": "Old Company", "semantic_class": "work"},
+        confidence=0.97,
+        source_type="chat_user",
+        valid_from=datetime.utcnow(),
+    )
+    session = _Session([None, [previous]])
+    monkeypatch.setattr(projector_module, "async_transaction_scope", _scope(session))
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+    evidence = {
+        "source": rule_source,
+        "explicit_user_statement": True,
+        "explicit_correction": explicit,
+        "category": "work",
+        "attribute": "employer",
+        "normalized_value": "New Company",
+        "semantic_class": "work",
+    }
+    await projector._project_profile_fact(
+        session=session,
+        tenant_uuid=TENANT,
+        user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="Actually I work at New Company now",
+            signal_type="profile_fact",
+            confidence=0.98,
+            metadata=evidence,
+        ),
+        confidence=0.98,
+        source_type=source_type,
+        source_ref=None,
+        metadata=dict(evidence),
+    )
+    facts = [row for row in session.added if isinstance(row, ProfileFact)]
+    assert len(facts) == int(expected_update)
+    assert (previous.valid_to is not None) is expected_update
+    if expected_update:
+        assert facts[0].value["value"] == "New Company"
+        assert facts[0].value["belief_operation"] == "supersede"
+        assert facts[0].supersedes == previous.fact_id
+
+
+@pytest.mark.asyncio
+async def test_new_profile_correction_cannot_override_nonasserted_modality(monkeypatch):
+    previous = ProfileFact(
+        fact_id=UUID("00000000-0000-0000-0000-000000000093"),
+        event_id=UUID("00000000-0000-0000-0000-000000000094"),
+        tenant_id=TENANT, user_id=USER,
+        category="preference", attribute="favorite_genre",
+        value={"value": "reggae"}, confidence=0.98,
+        source_type="chat_user", valid_from=datetime.utcnow(),
+    )
+    session = _Session([None, [previous]])
+    projector = PostgresDerivedMemoryProjector(_ProjectionManager())
+    semantic = {
+        "source": "explicit_semantic_rule",
+        "explicit_user_statement": True,
+        "assertion_modality": "uncertain",
+        "category": "preference",
+        "attribute": "favorite_genre",
+        "normalized_value": "jazz",
+    }
+    await projector._project_profile_fact(
+        session=session, tenant_uuid=TENANT, user_uuid=USER,
+        event_uuid=EVENT,
+        signal=MemorySignal(
+            text="Perhaps my favorite genre is jazz",
+            signal_type="preference", confidence=0.70,
+            metadata=semantic,
+        ),
+        confidence=0.70, source_type="profile_correction",
+        source_ref=None, metadata=dict(semantic),
+    )
+    assert not any(isinstance(row, ProfileFact) for row in session.added)
+    assert previous.valid_to is None

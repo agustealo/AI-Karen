@@ -68,6 +68,12 @@ jobs:
       - name: Burn generic personal preference formation and queries
         run: pytest tests/core/memory/test_generic_favorite_semantics.py tests/core/memory/test_favorite_color_memory_classification.py tests/core/intelligence/test_profile_attribute_interpretation.py tests/core/memory/test_semantic_memory_classifier.py -q
 
+      - name: Burn governed belief-state projection contract
+        run: pytest tests/core/memory/test_belief_resolution.py tests/core/memory/test_profile_belief_projection.py tests/core/memory/test_profile_projection_identity.py -q
+
+      - name: Prove authenticated correction ingress preserves user evidence
+        run: pytest tests/api_routes/test_profile_correction_ingress.py tests/platform/memory/test_semantic_user_state_projection.py -q
+
       - name: Burn authorized conversation personal-fact grounding
         run: pytest tests/core/runtime/test_conversation_personal_sufficiency.py -q
 

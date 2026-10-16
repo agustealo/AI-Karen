@@ -97,6 +97,7 @@ jobs:
           pytest tests/integration/test_live_profile_memory_roundtrip.py -q -rs
           pytest tests/integration/test_live_name_formation_path.py -q -rs
           pytest tests/integration/test_live_profile_projection_identity.py -q -rs
+          pytest tests/integration/test_live_profile_belief_projection.py -q -rs
           pytest tests/core/memory/test_profile_reconciliation_policy.py -q -rs
           pytest tests/integration/test_live_profile_reconciliation.py -q -rs
           pytest tests/integration/test_live_memory_consent_revocation.py -q -rs

@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field
 
 from ai_karen_engine.api_routes.shared.schemas import ErrorHandler
-from ai_karen_engine.auth.rbac_middleware import check_scope
+from ai_karen_engine.auth.rbac_middleware import check_scope, get_current_user
 from ai_karen_engine.core.memory.memory_runtime_manager import (
     get_memory_control_service,
     get_memory_manager,
@@ -367,6 +367,17 @@ async def set_shadow_mode(request: Request, body: ShadowModeRequest):
 async def submit_profile_correction(request: Request, body: ProfileCorrectionRequest):
     correlation_id = get_correlation_id(request)
     await _authorize(request, "memory:write")
+    # This route delegates a belief-changing action. A caller with a general
+    # memory:write scope cannot choose a different tenant or user in the body.
+    principal = await get_current_user(request)
+    if (
+        str(principal.get("user_id") or "") != body.user_id
+        or str(principal.get("tenant_id") or "") != body.tenant_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Profile corrections require the authenticated user and tenant",
+        )
     if not _feature_flags().is_enabled(
         "memory_profile_corrections_enabled", body.tenant_id, body.user_id
     ):
@@ -375,11 +386,10 @@ async def submit_profile_correction(request: Request, body: ProfileCorrectionReq
             status="disabled",
             result={"status": "skipped", "reason": "Memory profile corrections are disabled"},
         )
-    source_text = body.correction_text
-    if body.profile_area:
-        source_text = f"{body.profile_area}: {source_text}"
+    # Pass the exact assertion to the canonical classifier. profile_area is
+    # transport context, not part of the user's correction evidence.
     result = await _memory_manager().process_interaction(
-        text=source_text,
+        text=body.correction_text,
         tenant_id=body.tenant_id,
         user_id=body.user_id,
         source_type="profile_correction",
