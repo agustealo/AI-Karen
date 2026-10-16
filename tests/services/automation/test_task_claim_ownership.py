@@ -29,7 +29,9 @@ class ClaimRepository:
         self.reject_completion = False
 
     async def get_task(self, task_id, tenant_id, *, created_by=None):
-        if tenant_id != "tenant-a" or task_id != "task-a":
+        if tenant_id != "tenant-a" or task_id != "task-a" or (
+            created_by is not None and created_by != "user-a"
+        ):
             return None
         return {"id": task_id, "status": "Running" if self.running else "Pending"}
 
@@ -246,3 +248,20 @@ def test_invalid_task_lease_configuration_fails_closed():
     settings.timeouts.saved_task_claim_lease_seconds = 30
     settings.timeouts.saved_task_claim_heartbeat_seconds = 15
     assert any("Saved task heartbeat" in value for value in settings.validate())
+
+
+@pytest.mark.asyncio
+async def test_same_tenant_other_creator_cannot_claim_or_execute(monkeypatch):
+    repo = ClaimRepository()
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("another user's task reached ChatRuntime")
+
+    monkeypatch.setattr(execution, "execute_task_definition", forbidden)
+    with pytest.raises(execution.AutomationTargetNotFound):
+        await execution.execute_saved_task(
+            "task-a",
+            user=UserData(user_id="user-b", tenant_id="tenant-a"),
+            repository=repo,
+        )
+    assert repo.run_count == 0
