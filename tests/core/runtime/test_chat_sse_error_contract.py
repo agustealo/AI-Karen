@@ -38,7 +38,7 @@ async def test_early_exception_yields_safe_correlated_sse_error():
     ):
         chunks = [item async for item in _sse(_request())]
     assert len(chunks) == 3
-    assert json.loads(chunks[0][6:])["type"] == "status"
+    assert chunks[0] == ": stream_connected\n\n"
     assert chunks[-1] == "data: [DONE]\n\n"
     payload = json.loads(chunks[1][6:])
     assert payload["type"] == "error"
@@ -63,8 +63,8 @@ async def test_successful_runtime_stream_passes_content_and_terminal_verbatim():
         return_value=SimpleNamespace(execute_stream=succeeds),
     ):
         chunks = [item async for item in _sse(_request())]
-    assert [json.loads(item[6:])["type"] for item in chunks[:-1]] == [
-        "status", "content", "complete",
+    assert [json.loads(item[6:])["type"] for item in chunks[1:-1]] == [
+        "content", "complete",
     ]
     assert chunks[-1] == "data: [DONE]\n\n"
 
@@ -83,9 +83,9 @@ async def test_runtime_gracefully_returns_without_terminal_is_diagnosed():
     ):
         chunks = [item async for item in _sse(_request())]
 
-    payloads = [json.loads(part[6:]) for part in chunks[:-1]]
+    payloads = [json.loads(part[6:]) for part in chunks[1:-1]]
     assert [part["type"] for part in payloads] == [
-        "status", "status", "error",
+        "status", "error",
     ]
     assert payloads[-1]["metadata"]["error_code"] == "CHAT_SSE_MISSING_TERMINAL"
     assert payloads[-1]["metadata"]["correlation_id"] == "correlation-1"
@@ -108,7 +108,7 @@ async def test_explicit_upstream_error_does_not_create_duplicate_terminal_error(
     ):
         chunks = [item async for item in _sse(_request())]
 
-    payloads = [json.loads(part[6:]) for part in chunks[:-1]]
-    assert [part["type"] for part in payloads] == ["status", "error"]
-    assert payloads[1]["metadata"]["error_code"] == "MODEL_UNAVAILABLE"
+    payloads = [json.loads(part[6:]) for part in chunks[1:-1]]
+    assert [part["type"] for part in payloads] == ["error"]
+    assert payloads[0]["metadata"]["error_code"] == "MODEL_UNAVAILABLE"
     assert chunks[-1] == "data: [DONE]\n\n"
