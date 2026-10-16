@@ -213,7 +213,7 @@ def review_model_memory_candidates(
 
     accepted: list[ModelMemoryCandidate] = []
     rejected: list[str] = []
-    seen: set[tuple[str, str, int, int]] = set()
+    seen: set[str] = set()
 
     for item in items:
         span = _verified_span(item, source_text)
@@ -221,11 +221,6 @@ def review_model_memory_candidates(
             rejected.append("source_span_or_semantics_unverified")
             continue
         quote, relation, value, start, end = span
-        identity = (relation, value.casefold(), start, end)
-        if identity in seen:
-            rejected.append("duplicate_candidate")
-            continue
-        seen.add(identity)
         try:
             assertion = SemanticAssertion(
                 tenant_id=tenant_id,
@@ -256,15 +251,22 @@ def review_model_memory_candidates(
                     evidence_span_end=end,
                     extractor="model_semantic_candidate",
                     extractor_version="v1.0.0",
-                    prompt_contract_version=PROMPT_VERSION,
+                    prompt_contract_version=prompt_version,
                 ),
             )
         except ValueError:
             rejected.append("semantic_contract_invalid")
             continue
+        identity = assertion.fact_key
+        if identity in seen:
+            rejected.append("duplicate_candidate")
+            continue
+        seen.add(identity)
         accepted.append(ModelMemoryCandidate(assertion=assertion))
 
-    return ModelCandidateReview(tuple(accepted), tuple(rejected))
+    return ModelCandidateReview(
+        tuple(accepted), tuple(rejected), prompt_id, prompt_version,
+    )
 
 
 __all__ = [
