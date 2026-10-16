@@ -35,6 +35,12 @@ class OutcomeStore(ABC):
 
         await asyncio.to_thread(self.save_outcome, payload)
 
+    async def list_task_reviews_async(
+        self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Owner-scoped task review history, never a tenant-wide fallback."""
+        raise OutcomeStoreError("Task review history is not available")
+
     @abstractmethod
     def get_for_trajectory(
         self,
@@ -84,6 +90,28 @@ class InMemoryOutcomeStore(OutcomeStore):
         if tenant_id is not None:
             records = [record for record in records if record.get("tenant_id") == tenant_id]
         return [dict(record) for record in records]
+
+    async def list_task_reviews_async(
+        self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not tenant_id or not user_id:
+            raise OutcomeStoreError("Tenant and user required")
+        events = [
+            dict(item)
+            for item in self.get_for_trajectory(
+                f"task:{task_id}", tenant_id=tenant_id,
+            )
+            if item.get("user_id") == user_id
+            and item.get("source") == "user.feedback"
+            and item.get("feedback_type") == "task_completion_confirmation"
+            and item.get("task_id") == task_id
+        ]
+        return sorted(
+            events, key=lambda item: (
+                str(item.get("recorded_at") or ""),
+                str(item.get("outcome_id") or ""),
+            ), reverse=True,
+        )[:max(1, min(int(limit), 100))]
 
     def list_for_tenant(
         self,
