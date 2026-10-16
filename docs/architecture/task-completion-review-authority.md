@@ -31,6 +31,10 @@ The 2026-10-16 migration reclassifies old, unreviewed `Success` records as
 original last-run metadata but cannot be retrospectively approved without a
 new execution and real review.
 
+A pending `ReviewRequired` attempt blocks new worker claims, including cron
+re-execution. The owner must accept or reject it first, so a scheduled run
+cannot overwrite the evidence awaiting review.
+
 Only the authenticated creator, in the correct tenant, may approve or reject.
 Every review must match the **current** execution UUID and `ReviewRequired`
 state; a compare-and-swap SQL UPDATE prevents double approvals, stale browser
