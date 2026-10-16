@@ -609,6 +609,8 @@ class ChatRuntime:
         generation_error: Optional[Exception] = None
         recovered_error_type: Optional[str] = None
         stream_error_emitted = False
+        stream_error_code = "CHAT_STREAM_ERROR"
+        stream_error_type = "UpstreamStreamError"
 
         grounded = self._grounded_personal_response(
             decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
@@ -690,6 +692,27 @@ class ChatRuntime:
                     streamed_text += chunk.content
                 if chunk.type == ChatStreamEventType.ERROR:
                     stream_error_emitted = True
+                    chunk_metadata = (
+                        chunk.metadata if isinstance(chunk.metadata, dict) else {}
+                    )
+                    raw_code = chunk_metadata.get("error_code")
+                    raw_type = chunk_metadata.get("error_type")
+                    if (
+                        isinstance(raw_code, str)
+                        and 1 <= len(raw_code) <= 64
+                        and raw_code.isascii()
+                        and raw_code.isupper()
+                        and raw_code.replace("_", "").isalnum()
+                    ):
+                        stream_error_code = raw_code
+                    if (
+                        isinstance(raw_type, str)
+                        and 1 <= len(raw_type) <= 64
+                        and raw_type.isascii()
+                        and raw_type[0].isalpha()
+                        and raw_type.replace("_", "").isalnum()
+                    ):
+                        stream_error_type = raw_type
                 if chunk.type == ChatStreamEventType.COMPLETE:
                     continue
                 yield self._enrich_chunk(
@@ -839,10 +862,16 @@ class ChatRuntime:
             )
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
-                error_type=type(generation_error).__name__,
+                error_type=(
+                    stream_error_type if stream_error_emitted
+                    else "EmptyGeneration"
+                ),
                 status="error",
                 metadata={
-                    "error_code": "CHAT_EMPTY_STREAM",
+                    "error_code": (
+                        stream_error_code if stream_error_emitted
+                        else "CHAT_EMPTY_STREAM"
+                    ),
                     "correlation_id": ctx.correlation_id,
                     "requested_provider": request.preferred_provider,
                     "requested_model": request.preferred_model,
@@ -945,6 +974,8 @@ class ChatRuntime:
             error=(
                 f"fallback:{recovered_error_type}"
                 if recovered_error_type and generation_error is None
+                else stream_error_type
+                if stream_error_emitted
                 else type(generation_error).__name__
                 if generation_error
                 else None
@@ -976,6 +1007,12 @@ class ChatRuntime:
             memory_persistence_failed=memory_persistence_failed,
             transcript_persistence_failed=transcript_persistence_failed,
         )
+        if stream_error_emitted:
+            terminal_metadata["error_code"] = stream_error_code
+            terminal_metadata["error_type"] = stream_error_type
+        elif provider_meta.get("degradation_reason") == "empty_stream_output":
+            terminal_metadata["error_code"] = "CHAT_EMPTY_STREAM"
+            terminal_metadata["error_type"] = "EmptyGeneration"
         terminal_metadata["trajectory_id"] = trajectory.trajectory_id
         terminal_metadata["capability_receipt"] = self._build_capability_receipt(
             decision,
