@@ -460,6 +460,7 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             tool_call_id=tool_call_id,
             trajectory_id=tool_run,
             correlation_id=f"corr-{uuid.uuid4().hex}",
+            session_id="test-authenticated-session",
             tenant_id=str(tenant),
             user_id=str(user),
             policy_decision_id="policy-approved",
