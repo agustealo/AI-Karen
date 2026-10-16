@@ -192,7 +192,7 @@ async def list_saved_task_reviews(
             "outcome_id": event["outcome_id"],
             "execution_id": event["execution_id"],
             "decision": event["decision"],
-            "status": event["status"],
+            "status": "Success" if event["decision"] == "approve" else "Rejected",
             "review_note": event.get("review_note") or "",
             "reviewed_at": event["reviewed_at"],
             "acceptance_criteria": event.get("acceptance_criteria") or "",
