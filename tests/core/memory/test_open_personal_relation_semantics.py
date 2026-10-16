@@ -175,3 +175,38 @@ async def test_sensitive_open_relations_are_refused_even_if_pii_detector_misses(
 async def test_unverified_relations_are_excluded_from_durable_formation(statement):
     result = await _evaluate(statement)
     assert result.admitted_count == 0
+
+
+def test_grounded_memory_response_uses_original_relation_without_internal_prefix():
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.context.contracts import (
+        ContextEvidence, EvidenceScope, EvidenceSource,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    evidence = ContextEvidence(
+        evidence_id="verified-1", source=EvidenceSource.MEMORY,
+        content="personal_relation.reading_ritual: green tea at sunrise",
+        scope=EvidenceScope(tenant_id="tenant", user_id="user"),
+    )
+    context = SimpleNamespace(
+        tenant_id="tenant", user_id="user", evidence=[evidence],
+        authorized_sources=["memory"], denied_sources=[], unresolved_sources=[],
+    )
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={
+            "personal_evidence_attribute": "personal_relation.reading_ritual",
+        },
+    )
+    decision.cognitive_context = context
+    reply, metadata = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "reading ritual" in reply
+    assert "green tea at sunrise" in reply
+    assert "personal relation." not in reply.casefold()
+    assert metadata["response_source"] == "authorized_memory_evidence"
+    assert metadata["actual_provider"] is None
