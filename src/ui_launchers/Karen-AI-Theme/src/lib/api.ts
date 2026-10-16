@@ -808,6 +808,7 @@ class ApiClient {
     let lastStatusEventTime = Date.now();
     let totalBytes = 0;
     let streamAbortReason: string | null = null;
+    let malformedEvents = 0;
     const streamController = new AbortController();
     let externalAbortListener: (() => void) | null = null;
 
@@ -952,6 +953,18 @@ class ApiClient {
 
     const decoder = new TextDecoder();
     let buffer = '';
+    const streamCorrelationId = response.headers.get('x-correlation-id') || undefined;
+    const reportIncompleteStream = (reason: string) => {
+      callbacks?.onError?.(reason, {
+        error_code: 'CHAT_STREAM_INCOMPLETE',
+        error_type: 'IncompleteStream',
+        correlation_id: streamCorrelationId,
+        chunks_received: chunksReceived,
+        content_chunks_received: contentChunksReceived,
+        status_events_received: statusEventsReceived,
+        malformed_events: malformedEvents,
+      });
+    };
 
     setupTimeouts();
 
@@ -976,12 +989,13 @@ class ApiClient {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
 
-          const payload = trimmed.slice(6);
+          const payload = trimmed.slice(5).trimStart();
           if (payload === '[DONE]') {
-            cleanup();
-            callbacks?.onDone?.();
+            // A DONE sentinel without a terminal complete/error/approval
+            // event is a truncated stream, not a successful model answer.
+            reportIncompleteStream('Stream closed before the runtime sent a completion event');
             return;
           }
 
@@ -989,6 +1003,7 @@ class ApiClient {
           try {
             parsed = JSON.parse(payload);
           } catch {
+            malformedEvents++;
             continue;
           }
 
@@ -1069,6 +1084,13 @@ class ApiClient {
           }
         }
       }
+      // The stream may close on a proxy disconnect, or after a partial SSE
+      // record. A clean read() EOF is not proof of successful generation.
+      reportIncompleteStream(
+        buffer.trim()
+          ? 'Stream ended with an incomplete SSE event'
+          : 'Stream ended without a runtime completion event',
+      );
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError' && streamAbortReason) {
         // Timeout/stall aborts are surfaced via onError callback above.
