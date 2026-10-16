@@ -211,6 +211,7 @@ class ToolBridge:
                     user_id=user_id,
                     session_id=trajectory_id,
                     request_id=tool_call_id,
+                    governed_execution=True,
                     user_context={
                         "tenant_id": tenant_id,
                         "user_id": user_id,
@@ -233,6 +234,7 @@ class ToolBridge:
             and result is not None
             and getattr(result, "success", None) is True
             and not getattr(result, "error", None)
+            and not (getattr(result, "metadata", None) or {}).get("cached")
             and getattr(result, "request_id", None) == tool_call_id
         )
         result_sha256 = None
@@ -264,6 +266,7 @@ class ToolBridge:
             success=success,
             error_type=error_type or (
                 "tool_reported_error" if getattr(result, "error", None)
+                else "cached_tool_result_not_execution" if (getattr(result, "metadata", None) or {}).get("cached")
                 else "tool_result_unacknowledged" if not success
                 else None
             ),
