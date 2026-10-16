@@ -54,6 +54,7 @@ class FakeRepository:
         status,
         last_error,
         runtime_task_id=None,
+        result_receipt=None,
     ):
         record = {
             "id": task_id,
@@ -89,7 +90,8 @@ async def test_saved_task_execution_persists_runtime_identity(monkeypatch):
         repository=repo,
     )
 
-    assert outcome.task["status"] == "Success"
+    assert outcome.task["status"] == "ReviewRequired"
+    assert repo.completed[-1]["status"] == "ReviewRequired"
     assert repo.completed[-1]["runtimeTaskId"] == "corr-a"
 
 
