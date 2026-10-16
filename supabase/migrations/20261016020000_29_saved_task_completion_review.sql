@@ -4,6 +4,7 @@
 BEGIN;
 
 ALTER TABLE public.automation_tasks
+    ADD COLUMN IF NOT EXISTS acceptance_criteria text NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS execution_id uuid,
     ADD COLUMN IF NOT EXISTS result_receipt jsonb NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS reviewed_at timestamptz,
