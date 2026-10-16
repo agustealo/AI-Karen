@@ -47,7 +47,7 @@ export function observeChatSseBody(
       },
     };
     controller.enqueue(
-      encoder.encode(`data: ${JSON.stringify(errorPayload)}\n\n`),
+      encoder.encode(`\n\ndata: ${JSON.stringify(errorPayload)}\n\n`),
     );
   };
 
