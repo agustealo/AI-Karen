@@ -35,6 +35,13 @@ A pending `ReviewRequired` attempt blocks new worker claims, including cron
 re-execution. The owner must accept or reject it first, so a scheduled run
 cannot overwrite the evidence awaiting review.
 
+The task creator is also the read, delete, manual-execution and scheduled
+Task-definition owner. SQL predicates enforce `created_by` for atomic claims
+and deletion; user-facing get/list are scoped to the creator. A different
+principal in the same tenant cannot execute a task or inspect its full
+runtime answer. Existing schedules owned by another user fail closed rather
+than impersonating the creator.
+
 Only the authenticated creator, in the correct tenant, may approve or reject.
 Every review must match the **current** execution UUID and `ReviewRequired`
 state; a compare-and-swap SQL UPDATE prevents double approvals, stale browser
