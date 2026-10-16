@@ -881,7 +881,12 @@ class ChatRuntime:
         ]
 
         memory_persistence_failed = False
-        if decision.memory_write_allowed and streamed_text and not self._is_explicit_save_turn(request):
+        if (
+            decision.memory_write_allowed
+            and streamed_text.strip()
+            and generation_error is None
+            and not self._is_explicit_save_turn(request)
+        ):
             persistence_started = time.perf_counter()
             await self._persist_memory(
                 request,
