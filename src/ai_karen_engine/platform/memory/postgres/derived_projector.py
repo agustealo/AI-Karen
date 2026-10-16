@@ -9,13 +9,21 @@ memory is allowed to be durable.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select, text
 
+from ai_karen_engine.core.memory.belief_resolution import (
+    ProfileBeliefEvidence,
+    resolve_belief,
+)
 from ai_karen_engine.core.memory.semantic_contract import (
+    AssertionModality,
+    FactCardinality,
+    MemoryOperation,
     merge_memory_metadata,
     profile_projection_key,
     profile_projection_slot,
@@ -383,6 +391,10 @@ class PostgresDerivedMemoryProjector:
         ):
             if metadata.get(key) is not None:
                 value[key] = metadata.get(key)
+        # Assertion modality is extracted by the canonical intelligence
+        # layer; runtime metadata is forbidden to manufacture this field.
+        if metadata.get("assertion_modality") is not None:
+            value["assertion_modality"] = metadata["assertion_modality"]
         if signal.keywords:
             value["keywords"] = list(signal.keywords)
         if signal.entities:
@@ -425,11 +437,61 @@ class PostgresDerivedMemoryProjector:
             raise ValueError("multiple current profile facts share a logical slot")
         current = matches[0] if matches else None
 
+        # Existing pure belief resolver is the single authority for deciding
+        # how *committed* facts change the rebuildable current projection.
+        incoming = self._profile_belief_evidence(
+            tenant_id=str(tenant_uuid), user_id=str(user_uuid),
+            category=category, attribute=attribute,
+            event_id=str(event_uuid), projection_key=projection_key,
+            value=value,
+        )
+        comparisons = [
+            self._profile_belief_evidence(
+                tenant_id=str(tenant_uuid), user_id=str(user_uuid),
+                category=category, attribute=attribute,
+                event_id=str(row.event_id),
+                projection_key=(
+                    row.projection_key
+                    or profile_projection_key(
+                        tenant_id=str(tenant_uuid), user_id=str(user_uuid),
+                        category=category, attribute=attribute,
+                        value=row.value, source_event_id=str(row.event_id),
+                    )
+                ),
+                value=row.value,
+            )
+            for row in candidate_rows
+        ]
+        resolution = resolve_belief(
+            incoming, comparisons,
+            explicit_correction=(metadata.get("explicit_correction") is True),
+        )
+        if resolution.operation is MemoryOperation.REINFORCE:
+            # Repeated evidence is durable in NeuroVault but must not replace
+            # the original current profile or forge a correction chain.
+            return
+        if resolution.operation is MemoryOperation.QUARANTINE:
+            if current is not None:
+                # The ledger retains both assertions. The current view is
+                # marked disputed so NeuroRecall cannot claim an uncontested
+                # favorite from the old row or the new conflicting event.
+                current.value = {
+                    **current.value,
+                    "belief_status": "disputed",
+                    "disputed_by_event_id": str(event_uuid),
+                }
+                current.updated_at = datetime.utcnow()
+            return
+        if resolution.operation not in {
+            MemoryOperation.CREATE, MemoryOperation.SUPERSEDE,
+        }:
+            raise ValueError("unsupported profile belief resolution operation")
+
         valid_from = self._datetime(metadata.get("valid_from")) or datetime.utcnow()
-        # New evidence retains its own event consent. Only a matching logical
-        # slot can be superseded; SET members and distinct contexts coexist.
         supersedes = None
-        if current is not None:
+        if resolution.operation is MemoryOperation.SUPERSEDE:
+            if current is None:
+                raise ValueError("correction requires an existing profile fact")
             current.valid_to = valid_from
             current.updated_at = datetime.utcnow()
             supersedes = current.fact_id
@@ -450,6 +512,45 @@ class PostgresDerivedMemoryProjector:
                 valid_to=self._datetime(metadata.get("valid_to")),
                 supersedes=supersedes,
             )
+        )
+
+    @staticmethod
+    def _profile_belief_evidence(
+        *, tenant_id: str, user_id: str, category: str,
+        attribute: str, event_id: str, projection_key: str,
+        value: dict[str, Any],
+    ) -> ProfileBeliefEvidence:
+        """Adapt persisted profile slot evidence without inventing provenance.
+
+        The projection identity and event ID are already governed by NeuroVault.
+        Malformed cardinality/modality/value fails projection closed.
+        """
+        slot = profile_projection_slot(value, source_event_id=event_id)
+        if slot is None:
+            raise ValueError("profile belief requires a valid projection slot")
+        raw_value = value.get("value")
+        if not isinstance(raw_value, (str, int, float)) or isinstance(raw_value, bool):
+            raise ValueError("profile belief requires a scalar normalized value")
+        try:
+            cardinality = FactCardinality(
+                value.get("cardinality") or FactCardinality.SINGLETON.value
+            )
+            modality = AssertionModality(
+                value.get("assertion_modality") or AssertionModality.ASSERTED.value
+            )
+        except (ValueError, TypeError) as exc:
+            raise ValueError("unsupported profile belief semantics") from exc
+        # Set membership identifies individual facts; remove its member only
+        # from the context used to describe why independent SET items coexist.
+        scope = dict(slot)
+        scope.pop("member", None)
+        return ProfileBeliefEvidence(
+            tenant_id=tenant_id, user_id=user_id,
+            category=category, attribute=attribute,
+            projection_key=projection_key,
+            scope_key=json.dumps(scope, sort_keys=True, separators=(",", ":")),
+            source_event_id=event_id, value=str(raw_value),
+            cardinality=cardinality, modality=modality,
         )
 
     @staticmethod
