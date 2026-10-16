@@ -55,6 +55,10 @@ class TaskDefinitionRequest(BaseModel):
         "", max_length=4000,
         description="User-defined acceptance criteria for the human completion review",
     )
+    verificationContract: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional structured-output.v1 machine-check schema (output structure only)",
+    )
     primaryAgent: str = Field(
         ..., description="Primary agent responsible for the outcome"
     )
