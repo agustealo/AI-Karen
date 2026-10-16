@@ -823,10 +823,10 @@ class ChatRuntime:
                 )
                 sequence += 1
 
-        # An empty content stream is not a successful assistant message.
-        # Report the upstream failure with a stable code and correlation ID;
-        # never manufacture content, persist a fake turn, or mask the failure.
-        if not streamed_text.strip() and generation_error is None:
+        # A stream that emitted ERROR is failed even if partial text arrived.
+        # An empty stream is also not a successful assistant message. Neither
+        # failure may be promoted to a durable transcript or memory write.
+        if (stream_error_emitted or not streamed_text.strip()) and generation_error is None:
             generation_error = RuntimeError(
                 "stream_reported_error" if stream_error_emitted
                 else "stream_completed_without_assistant_content"
