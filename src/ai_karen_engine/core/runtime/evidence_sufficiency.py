@@ -12,7 +12,8 @@ from enum import Enum
 from ai_karen_engine.core.memory.semantic_contract import FactCardinality
 
 from ai_karen_engine.core.context.contracts import (
-    CognitiveContext, EvidenceContradictionStatus, EvidenceSource,
+    CognitiveContext, EvidenceContradictionStatus, EvidenceFactSemantics,
+    EvidenceSource,
 )
 
 
@@ -46,7 +47,7 @@ def evaluate_personal_evidence(
     user_id: str,
     attribute: str | None,
     now: datetime | None = None,
-    cardinality: FactCardinality = FactCardinality.SINGLETON,
+    cardinality: FactCardinality | None = None,
 ) -> EvidenceSufficiency:
     """Return a fact only if authorized, attributable, current and unopposed.
 
@@ -73,7 +74,7 @@ def evaluate_personal_evidence(
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     prefix = f"{attribute}: "
-    live: list[tuple[str, str]] = []
+    live: list[tuple[str, str, EvidenceFactSemantics | None]] = []
     expired_ids: list[str] = []
     conflict_ids: list[str] = []
 
@@ -106,7 +107,11 @@ def evaluate_personal_evidence(
         }:
             conflict_ids.append(evidence.evidence_id)
             continue
-        live.append((evidence.evidence_id, value))
+        semantics = getattr(evidence, "fact_semantics", None)
+        live.append((
+            evidence.evidence_id, value,
+            semantics if isinstance(semantics, EvidenceFactSemantics) else None,
+        ))
 
     if conflict_ids:
         return EvidenceSufficiency(
@@ -114,9 +119,29 @@ def evaluate_personal_evidence(
             evidence_ids=tuple(conflict_ids), reason="flagged_contradiction",
         )
     if live:
+        if cardinality is None:
+            # Only typed, source-validated profile projections can teach
+            # runtime about SET or scoped cardinality. Ordinary snippets
+            # and legacy rows retain the conservative singleton behavior.
+            projected = [item[2] for item in live if item[2] is not None]
+            if projected:
+                if (
+                    len(projected) != len(live)
+                    or any(item.attribute != attribute for item in projected)
+                    or len({item.cardinality for item in projected}) != 1
+                    or len({item.semantic_scope for item in projected}) != 1
+                ):
+                    return EvidenceSufficiency(
+                        EvidenceSufficiencyStatus.AMBIGUOUS, attribute,
+                        evidence_ids=tuple(item[0] for item in live),
+                        reason="mixed_or_unverified_profile_semantics",
+                    )
+                cardinality = projected[0].cardinality
+            else:
+                cardinality = FactCardinality.SINGLETON
         if cardinality is FactCardinality.SET:
             distinct: dict[str, str] = {}
-            for _evidence_id, value in live:
+            for _evidence_id, value, _semantics in live:
                 distinct.setdefault(value.casefold(), value)
             return EvidenceSufficiency(
                 EvidenceSufficiencyStatus.SUPPORTED_SET, attribute,
@@ -124,7 +149,7 @@ def evaluate_personal_evidence(
                 values=tuple(distinct.values()),
                 reason="authorized_set_memory_evidence",
             )
-        values = {value.casefold() for _, value in live}
+        values = {value.casefold() for _, value, _semantics in live}
         if len(values) > 1:
             return EvidenceSufficiency(
                 EvidenceSufficiencyStatus.CONTRADICTORY, attribute,
