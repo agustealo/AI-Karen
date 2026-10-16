@@ -54,6 +54,9 @@ class PostgresProfileRecallRetriever:
                 .where(
                     ProfileFact.tenant_id == tenant_uuid,
                     ProfileFact.user_id == user_uuid,
+                    # A contradictory, uncorrected assertion cannot leave an
+                    # apparently verified singleton visible to NeuroRecall.
+                    ProfileFact.value["belief_status"].astext.is_distinct_from("disputed"),
                     recallable_memory_event(
                         tenant_id=tenant_uuid, user_id=user_uuid, now=now,
                     ),
