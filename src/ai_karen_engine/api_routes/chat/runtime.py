@@ -266,20 +266,17 @@ async def _sse(runtime_request: ChatExecutionRequest):
     """Transport-only framing and fail-closed terminal integrity.
 
     Runtime owns execution and model truth. Ingress emits an immediate,
-    authenticated transport status before potentially slow context and model
+    authenticated transport comment before potentially slow context and model
     preparation, then transparently forwards every runtime event. A graceful
     runtime return without a terminal event cannot become silent HTTP 200.
     """
     correlation_id = runtime_request.context.correlation_id
     terminal_seen = False
 
-    initial = ChatStreamChunk(
-        type=ChatStreamEventType.STATUS,
-        content="Preparing chat runtime...",
-        correlation_id=correlation_id,
-        metadata={"stage": "stream_connected", "correlation_id": correlation_id},
-    )
-    yield f"data: {json.dumps(initial.to_sse_payload())}\n\n"
+    # SSE comment flushes headers/first bytes without pretending the model
+    # advanced. The browser ignores comments, so its shorter progress-status
+    # silence timeout is not activated during provider warmup.
+    yield ": stream_connected\n\n"
 
     try:
         async for chunk in get_chat_runtime().execute_stream(runtime_request):
