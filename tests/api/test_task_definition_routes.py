@@ -107,7 +107,7 @@ async def test_execute_task_preserves_ingress_identity(monkeypatch):
             metadata=ChatRuntimeMetadata(correlation_id=correlation_id),
         )
         record = _record(task_id)
-        record["status"] = "Success"
+        record["status"] = "ReviewRequired"
         record["runtimeTaskId"] = correlation_id
         return SavedTaskExecution(task=record, result=result)
 
@@ -121,7 +121,8 @@ async def test_execute_task_preserves_ingress_identity(monkeypatch):
 
     assert response["runtime_task_id"] == "correlation-ingress-1"
     assert response["response"] == "real runtime result"
-    assert response["status"] == "Success"
+    assert response["status"] == "ReviewRequired"
+    assert "review required" in response["message"].lower()
 
 
 @pytest.mark.asyncio
