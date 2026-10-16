@@ -15,7 +15,14 @@ from typing import Any
 
 from sqlalchemy import select, text
 
+from ai_karen_engine.core.memory.belief_resolution import (
+    ProfileProjectionEvidence,
+    resolve_profile_projection,
+)
 from ai_karen_engine.core.memory.semantic_contract import (
+    AssertionModality,
+    FactCardinality,
+    MemoryOperation,
     merge_memory_metadata,
     profile_projection_key,
     profile_projection_slot,
@@ -424,12 +431,67 @@ class PostgresDerivedMemoryProjector:
             # reconciliation, not an arbitrary "latest row wins" mutation.
             raise ValueError("multiple current profile facts share a logical slot")
         current = matches[0] if matches else None
+        cardinality = FactCardinality(
+            value.get("cardinality") or FactCardinality.SINGLETON.value
+        )
+        incoming_value = value["value"]
+        if not isinstance(incoming_value, str):
+            # No fabricated value conversion for opaque projected objects.
+            raise ValueError("profile belief value must be normalized text")
+        modality = AssertionModality(
+            metadata.get("assertion_modality", AssertionModality.ASSERTED.value)
+        )
+        incoming_evidence = ProfileProjectionEvidence(
+            tenant_id=str(tenant_uuid), user_id=str(user_uuid),
+            fact_key=projection_key, value=incoming_value,
+            source_event_id=str(event_uuid), cardinality=cardinality,
+            modality=modality,
+        )
+        existing_evidence = []
+        if current is not None:
+            old_value = current.value.get("value")
+            if not isinstance(old_value, str):
+                raise ValueError("existing profile belief value must be text")
+            existing_evidence.append(ProfileProjectionEvidence(
+                tenant_id=str(current.tenant_id),
+                user_id=str(current.user_id),
+                fact_key=projection_key, value=old_value,
+                source_event_id=str(current.event_id),
+                cardinality=FactCardinality(
+                    current.value.get("cardinality")
+                    or FactCardinality.SINGLETON.value
+                ),
+            ))
+        resolution = resolve_profile_projection(
+            incoming_evidence, existing_evidence,
+            # Corrections must be identified by the canonical classifier on
+            # direct user input, never by runtime metadata or recency.
+            explicit_correction=(
+                metadata.get("explicit_correction") is True
+                and signal.metadata.get("explicit_correction") is True
+                and signal.metadata.get("source") == "explicit_semantic_rule"
+                and source_type in {"chat_user", "chat"}
+            ),
+        )
+        if resolution.operation is MemoryOperation.QUARANTINE:
+            # NeuroVault has already committed the immutable source event.
+            # Never silently promote disputed or tentative evidence into the
+            # current profile view. Retrieval keeps seeing the last supported
+            # value, while the new evidence remains available for review.
+            return
+        if resolution.operation not in {
+            MemoryOperation.CREATE, MemoryOperation.REINFORCE,
+            MemoryOperation.SUPERSEDE,
+        }:
+            raise ValueError("unexpected profile belief resolution")
+        value["belief_operation"] = resolution.operation.value
+        value["belief_reason"] = resolution.reason.value
 
         valid_from = self._datetime(metadata.get("valid_from")) or datetime.utcnow()
-        # New evidence retains its own event consent. Only a matching logical
-        # slot can be superseded; SET members and distinct contexts coexist.
         supersedes = None
         if current is not None:
+            # A reinforcement rotates *projection provenance* to the latest
+            # consented source event. It does not claim the belief changed.
             current.valid_to = valid_from
             current.updated_at = datetime.utcnow()
             supersedes = current.fact_id
