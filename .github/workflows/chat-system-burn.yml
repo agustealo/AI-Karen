@@ -66,7 +66,7 @@ jobs:
         run: pytest tests/core/runtime/test_discourse_profile_reference.py -q
 
       - name: Burn generic personal preference formation and queries
-        run: pytest tests/core/memory/test_generic_favorite_semantics.py tests/core/memory/test_favorite_color_memory_classification.py tests/core/intelligence/test_profile_attribute_interpretation.py tests/core/memory/test_semantic_memory_classifier.py -q
+        run: pytest tests/core/memory/test_generic_favorite_semantics.py tests/core/memory/test_favorite_color_memory_classification.py tests/core/intelligence/test_profile_attribute_interpretation.py tests/core/memory/test_semantic_memory_classifier.py tests/core/memory/test_open_personal_relation_semantics.py -q
 
       - name: Burn governed belief-state projection contract
         run: pytest tests/core/memory/test_belief_resolution.py tests/core/memory/test_profile_belief_projection.py tests/core/memory/test_profile_projection_identity.py -q
