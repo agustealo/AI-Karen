@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 
 from .preference_relation import requested_favorite_attribute
+from .personal_relation import requested_personal_relation_attribute
 
 
 def normalize_personal_query(text: str) -> str:
@@ -70,7 +71,13 @@ def requested_profile_attribute(text: str) -> str | None:
         attribute for attribute, patterns in _ATTRIBUTE_QUESTIONS
         if any(re.search(rf"\b{pattern}\b", question) for pattern in patterns)
     }
-    return next(iter(matches)) if len(matches) == 1 else None
+    if len(matches) == 1:
+        return next(iter(matches))
+    if matches:
+        return None
+    # Unknown personal relations use one identity grammar, not a catalog of
+    # individual categories; never override the existing canonical predicates.
+    return requested_personal_relation_attribute(question)
 
 
 def referenced_profile_attribute(
