@@ -57,7 +57,7 @@ class ClaimRepository:
 
     async def complete_task(
         self, task_id, tenant_id, *, claim_token, status,
-        last_error, runtime_task_id=None,
+        last_error, runtime_task_id=None, result_receipt=None,
     ):
         if (
             not self.running or self.owner != claim_token
@@ -114,7 +114,7 @@ async def test_only_one_live_worker_can_execute_a_saved_task(monkeypatch):
     finally:
         release.set()
     completed = await first
-    assert completed.task["status"] == "Success"
+    assert completed.task["status"] == "ReviewRequired"
     assert len(repo.completed) == 1
     assert repo.owner is None
 
