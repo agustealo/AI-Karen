@@ -188,7 +188,7 @@ async def review_saved_task(
     except (TypeError, ValueError, AttributeError) as exc:
         raise ValueError("Review execution_id must be a UUID") from exc
     repo = repository or get_automation_repository()
-    task = await repo.get_task(task_id, tenant_id)
+    task = await repo.get_task(task_id, tenant_id, created_by=user_id)
     if task is None:
         raise AutomationTargetNotFound("Task not found")
     if str(task.get("created_by") or "") != user_id:
@@ -253,13 +253,19 @@ async def execute_saved_task(
     ):
         raise AutomationExecutionError("Invalid saved task claim configuration")
 
+    # Caller must own the task before acquiring an execution lease.
+    # The SQL claim repeats this authorization condition atomically.
+    owned = await repo.get_task(task_id, tenant_id, created_by=user_id)
+    if owned is None:
+        raise AutomationTargetNotFound("Task not found")
     claim_token = str(uuid.uuid4())
     task = await repo.mark_task_running(
         task_id, tenant_id,
         claim_token=claim_token, lease_seconds=lease_seconds,
+        created_by=user_id,
     )
     if task is None:
-        if await repo.get_task(task_id, tenant_id) is None:
+        if await repo.get_task(task_id, tenant_id, created_by=user_id) is None:
             raise AutomationTargetNotFound("Task not found")
         raise AutomationTaskBusy("Task has an active or unreconciled execution claim")
 
