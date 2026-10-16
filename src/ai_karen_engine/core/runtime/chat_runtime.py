@@ -1286,9 +1286,16 @@ class ChatRuntime:
             user_id=user_id,
             attribute=attribute,
         )
+        from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
         recent = evaluate_conversation_personal_evidence(
             decision.cognitive_context,
             tenant_id=tenant_id, user_id=user_id, attribute=attribute,
+            cardinality=(
+                FactCardinality.SET
+                if result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+                else FactCardinality.SINGLETON
+            ),
         )
         if recent.status is EvidenceSufficiencyStatus.CONTRADICTORY:
             return "You gave conflicting information in this conversation, so I can't verify a single answer.", {
@@ -1301,10 +1308,20 @@ class ChatRuntime:
             }
         if (
             result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
-            and recent.status is EvidenceSufficiencyStatus.SUPPORTED
-            and recent.value.casefold() not in {
-                value.casefold() for value in result.values
+            and recent.status in {
+                EvidenceSufficiencyStatus.SUPPORTED,
+                EvidenceSufficiencyStatus.SUPPORTED_SET,
             }
+            and not (
+                {
+                    value.casefold() for value in (
+                        recent.values
+                        if recent.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+                        else (recent.value,)
+                    )
+                }
+                <= {value.casefold() for value in result.values}
+            )
         ):
             return "Your saved preferences and this conversation mention different values, so I can't confirm the complete current set.", {
                 "evidence_sufficiency": "ambiguous",
