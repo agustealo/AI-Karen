@@ -37,10 +37,10 @@ async def test_early_exception_yields_safe_correlated_sse_error():
         return_value=SimpleNamespace(execute_stream=fails),
     ):
         chunks = [item async for item in _sse(_request())]
-    assert len(chunks) == 2
-    assert chunks[1] == "data: [DONE]\n\n"
-    assert chunks[0].startswith("data: ")
-    payload = json.loads(chunks[0][6:])
+    assert len(chunks) == 3
+    assert json.loads(chunks[0][6:])["type"] == "status"
+    assert chunks[-1] == "data: [DONE]\\n\\n"
+    payload = json.loads(chunks[1][6:])
     assert payload["type"] == "error"
     assert payload["metadata"]["error_code"] == "CHAT_STREAM_RUNTIME_EXCEPTION"
     assert payload["metadata"]["error_type"] == "RuntimeError"
@@ -64,6 +64,51 @@ async def test_successful_runtime_stream_passes_content_and_terminal_verbatim():
     ):
         chunks = [item async for item in _sse(_request())]
     assert [json.loads(item[6:])["type"] for item in chunks[:-1]] == [
-        "content", "complete",
+        "status", "content", "complete",
     ]
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+
+@pytest.mark.asyncio
+async def test_runtime_gracefully_returns_without_terminal_is_diagnosed():
+    async def status_only(_request):
+        yield ChatStreamChunk(
+            type="status", content="Preparing", correlation_id="correlation-1",
+        )
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=status_only),
+    ):
+        chunks = [item async for item in _sse(_request())]
+
+    payloads = [json.loads(part[6:]) for part in chunks[:-1]]
+    assert [part["type"] for part in payloads] == [
+        "status", "status", "error",
+    ]
+    assert payloads[-1]["metadata"]["error_code"] == "CHAT_SSE_MISSING_TERMINAL"
+    assert payloads[-1]["metadata"]["correlation_id"] == "correlation-1"
+    assert chunks[-1] == "data: [DONE]\\n\\n"
+
+
+@pytest.mark.asyncio
+async def test_explicit_upstream_error_does_not_create_duplicate_terminal_error():
+    async def upstream_failure(_request):
+        yield ChatStreamChunk(
+            type="error",
+            content="Model unavailable",
+            correlation_id="correlation-1",
+            metadata={"error_code": "MODEL_UNAVAILABLE"},
+        )
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=upstream_failure),
+    ):
+        chunks = [item async for item in _sse(_request())]
+
+    payloads = [json.loads(part[6:]) for part in chunks[:-1]]
+    assert [part["type"] for part in payloads] == ["status", "error"]
+    assert payloads[1]["metadata"]["error_code"] == "MODEL_UNAVAILABLE"
+    assert chunks[-1] == "data: [DONE]\\n\\n"
