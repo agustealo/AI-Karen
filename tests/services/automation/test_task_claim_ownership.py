@@ -228,13 +228,13 @@ def test_sql_claims_are_atomic_scoped_and_fenced():
     )[0]
     assert "UPDATE public.automation_tasks" in mark
     assert "status <> 'Running'" in mark
-    assert "claim_expires_at <= now()" in mark
+    assert "claim_expires_at <= clock_timestamp()" in mark
     assert "claim_token IS NOT NULL" in mark
     assert "run_count = run_count + 1" in mark
     for statement in (renew, finish):
         assert "tenant_id = CAST(:tenant_id AS uuid)" in statement
         assert "claim_token = CAST(:claim_token AS uuid)" in statement
-        assert "claim_expires_at > now()" in statement
+        assert "claim_expires_at > clock_timestamp()" in statement
     assert "claim_token = NULL" in finish
     assert "claim_expires_at = NULL" in finish
 
