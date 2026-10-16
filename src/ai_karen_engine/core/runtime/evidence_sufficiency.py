@@ -293,7 +293,16 @@ def evaluate_conversation_personal_evidence(
                 signal.metadata.get("attribute") == attribute
                 and signal.metadata.get("explicit_user_statement") is True
                 and signal.metadata.get("assertion_modality", "asserted") == "asserted"
-                and signal.metadata.get("retention_scope") != "session"
+                and (
+                    signal.metadata.get("retention_scope") != "session"
+                    or (
+                        # A clear but not provably durable first-person
+                        # relation is still admissible as *conversation*
+                        # evidence. It is not a successful long-term save.
+                        signal.metadata.get("source") == "explicit_open_relation"
+                        and not signal.metadata.get("temporal_scope")
+                    )
+                )
                 and isinstance(value, str) and 0 < len(value.strip()) <= 120
             ):
                 facts.append((
@@ -302,6 +311,7 @@ def evaluate_conversation_personal_evidence(
                     signal.metadata.get("explicit_correction") is True
                     and signal.metadata.get("source") in {
                         "explicit_semantic_rule", "explicit_general_fact_rule",
+                        "explicit_open_relation",
                     },
                 ))
     if not facts:
