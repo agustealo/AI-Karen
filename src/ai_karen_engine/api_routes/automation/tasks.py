@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -23,7 +23,10 @@ from ai_karen_engine.services.automation.execution import (
     AutomationTaskBusy,
     AutomationTaskClaimLost,
     AutomationTargetNotFound,
+    AutomationReviewConflict,
+    AutomationReviewForbidden,
     execute_saved_task,
+    review_saved_task,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,10 @@ class TaskDefinitionRequest(BaseModel):
     description: str = Field(
         ..., description="Detailed description of what the task does"
     )
+    acceptanceCriteria: str = Field(
+        "", max_length=4000,
+        description="User-defined acceptance criteria for the human completion review",
+    )
     primaryAgent: str = Field(
         ..., description="Primary agent responsible for the outcome"
     )
@@ -61,6 +68,12 @@ class TaskDefinitionRequest(BaseModel):
     )
 
 
+class TaskReviewRequest(BaseModel):
+    execution_id: str = Field(..., min_length=36, max_length=36)
+    decision: Literal["approve", "reject"]
+    note: str = Field("", max_length=2000)
+
+
 class TaskDefinitionResponse(TaskDefinitionRequest):
     id: str
     lastRun: Optional[str] = None
@@ -70,6 +83,11 @@ class TaskDefinitionResponse(TaskDefinitionRequest):
     lastError: Optional[str] = None
     runCount: int = 0
     runtimeTaskId: Optional[str] = None
+    executionId: Optional[str] = None
+    resultReceipt: Dict[str, Any] = Field(default_factory=dict)
+    reviewedAt: Optional[str] = None
+    reviewedBy: Optional[str] = None
+    reviewNote: Optional[str] = None
 
 
 async def get_tasks_summary(tenant_id: str) -> dict:
@@ -147,6 +165,35 @@ async def delete_task(
         raise HTTPException(status_code=404, detail="Task not found") from exc
 
 
+@router.post("/{task_id}/review", response_model=TaskDefinitionResponse)
+async def review_task(
+    task_id: str,
+    body: TaskReviewRequest,
+    user: UserData = Depends(get_current_user),
+):
+    try:
+        return TaskDefinitionResponse(
+            **await review_saved_task(
+                task_id,
+                user=user,
+                execution_id=body.execution_id,
+                decision=body.decision,
+                note=body.note,
+            )
+        )
+    except AutomationTargetNotFound as exc:
+        raise HTTPException(status_code=404, detail="Task not found") from exc
+    except AutomationReviewForbidden as exc:
+        raise HTTPException(status_code=403, detail="Task review denied") from exc
+    except AutomationReviewConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Task attempt was already reviewed or replaced",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/{task_id}/execute")
 async def execute_task(
     task_id: str,
@@ -204,10 +251,12 @@ async def execute_task(
         raise HTTPException(status_code=500, detail="Task execution failed") from exc
 
     return {
-        "message": f"Task {task_id} executed successfully",
+        "message": "Task execution finished; human completion review required",
         "task_id": task_id,
         "runtime_task_id": outcome.result.metadata.correlation_id,
         "status": outcome.task["status"],
+        "execution_id": outcome.task.get("executionId"),
+        "result_receipt": outcome.task.get("resultReceipt", {}),
         "agent_id": outcome.task.get("primaryAgent"),
         "response": outcome.result.answer,
         "runtime_metadata": outcome.result.metadata.to_dict(),

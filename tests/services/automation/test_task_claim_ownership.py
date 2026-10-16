@@ -28,13 +28,15 @@ class ClaimRepository:
         self.fail_renew = False
         self.reject_completion = False
 
-    async def get_task(self, task_id, tenant_id):
-        if tenant_id != "tenant-a" or task_id != "task-a":
+    async def get_task(self, task_id, tenant_id, *, created_by=None):
+        if tenant_id != "tenant-a" or task_id != "task-a" or (
+            created_by is not None and created_by != "user-a"
+        ):
             return None
         return {"id": task_id, "status": "Running" if self.running else "Pending"}
 
     async def mark_task_running(
-        self, task_id, tenant_id, *, claim_token, lease_seconds,
+        self, task_id, tenant_id, *, claim_token, lease_seconds, created_by,
     ):
         if await self.get_task(task_id, tenant_id) is None or self.running:
             return None
@@ -57,7 +59,7 @@ class ClaimRepository:
 
     async def complete_task(
         self, task_id, tenant_id, *, claim_token, status,
-        last_error, runtime_task_id=None,
+        last_error, runtime_task_id=None, result_receipt=None,
     ):
         if (
             not self.running or self.owner != claim_token
@@ -114,7 +116,7 @@ async def test_only_one_live_worker_can_execute_a_saved_task(monkeypatch):
     finally:
         release.set()
     completed = await first
-    assert completed.task["status"] == "Success"
+    assert completed.task["status"] == "ReviewRequired"
     assert len(repo.completed) == 1
     assert repo.owner is None
 
@@ -227,7 +229,8 @@ def test_sql_claims_are_atomic_scoped_and_fenced():
         "    async def task_summary(", 1
     )[0]
     assert "UPDATE public.automation_tasks" in mark
-    assert "status <> 'Running'" in mark
+    assert "status NOT IN ('Running', 'ReviewRequired')" in mark
+    assert "created_by = CAST(:created_by AS uuid)" in mark
     assert "claim_expires_at <= clock_timestamp()" in mark
     assert "claim_token IS NOT NULL" in mark
     assert "run_count = run_count + 1" in mark
@@ -246,3 +249,20 @@ def test_invalid_task_lease_configuration_fails_closed():
     settings.timeouts.saved_task_claim_lease_seconds = 30
     settings.timeouts.saved_task_claim_heartbeat_seconds = 15
     assert any("Saved task heartbeat" in value for value in settings.validate())
+
+
+@pytest.mark.asyncio
+async def test_same_tenant_other_creator_cannot_claim_or_execute(monkeypatch):
+    repo = ClaimRepository()
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("another user's task reached ChatRuntime")
+
+    monkeypatch.setattr(execution, "execute_task_definition", forbidden)
+    with pytest.raises(execution.AutomationTargetNotFound):
+        await execution.execute_saved_task(
+            "task-a",
+            user=UserData(user_id="user-b", tenant_id="tenant-a"),
+            repository=repo,
+        )
+    assert repo.run_count == 0

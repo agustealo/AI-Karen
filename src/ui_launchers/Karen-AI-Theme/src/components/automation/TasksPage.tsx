@@ -42,6 +42,7 @@ type Task = {
   id: string;
   name: string;
   description?: string;
+  acceptanceCriteria?: string;
   instructions?: string;
   agent?: string;
   subAgents?: SubAgent[];
@@ -55,6 +56,26 @@ type Task = {
   lastError?: string | null;
   runCount?: number;
   runtimeTaskId?: string | null;
+  executionId?: string | null;
+  resultReceipt?: {
+    runtime_status?: string;
+    answer_preview?: string;
+    answer_text?: string;
+    answer_truncated?: boolean;
+    attachment_count?: number;
+    source_refs_truncated?: boolean;
+    sources?: Array<{title?: string | null; url?: string | null}>;
+    artifact_count?: number;
+    source_count?: number;
+    citation_count?: number;
+    degraded_mode?: boolean;
+    response_id?: string | null;
+    correlation_id?: string | null;
+    independently_verified?: boolean;
+  };
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewNote?: string | null;
 };
 
 /**
@@ -70,6 +91,7 @@ export default function TasksPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [taskName, setTaskName] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
+  const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
 
   const fetchLiveData = useCallback(async () => {
     if (!isAuthenticated) {
@@ -201,6 +223,43 @@ export default function TasksPage() {
     }
   };
 
+  const handleReviewTask = async (task: Task, decision: "approve" | "reject") => {
+    if (!isAuthenticated || task.status !== "ReviewRequired" || !task.executionId) {
+      setErrorMsg("This execution does not have a reviewable result.");
+      return;
+    }
+    const receipt = task.resultReceipt;
+    if (
+      decision === "approve" &&
+      (
+        !receipt?.answer_text ||
+        receipt.answer_truncated ||
+        receipt.source_refs_truncated ||
+        (receipt.artifact_count ?? 0) > 0 ||
+        (receipt.attachment_count ?? 0) > 0 ||
+        (receipt.sources?.length ?? 0) !== (receipt.source_count ?? 0)
+      )
+    ) {
+      setErrorMsg("This result lacks complete, reviewer-accessible evidence. Reject it and request a new output.");
+      return;
+    }
+    const description = decision === "approve"
+      ? "Confirm that you reviewed the actual result and accept this task as completed?"
+      : "Reject this result as not meeting the task objective?";
+    if (!window.confirm(description)) return;
+    try {
+      const { apiClient } = await import("@/lib/api");
+      await apiClient.post(`/api/tasks/${encodeURIComponent(task.id)}/review`, {
+        execution_id: task.executionId,
+        decision,
+        note: "",
+      });
+      await fetchLiveData();
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Unable to review task.");
+    }
+  };
+
   const handleCreateTask = async () => {
     if (!isAuthenticated) {
       setErrorMsg("Sign in to manage tasks.");
@@ -223,6 +282,7 @@ export default function TasksPage() {
       await apiClient.post('/api/tasks/', {
         name: taskName.trim(),
         description: taskDescription.trim(),
+        acceptanceCriteria: acceptanceCriteria.trim(),
         primaryAgent: newPrimaryAgent,
         primaryAgentInstructions: newPrimaryAgentInstructions,
         taskType: taskName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
@@ -230,6 +290,7 @@ export default function TasksPage() {
       });
       setTaskName("");
       setTaskDescription("");
+      setAcceptanceCriteria("");
       setNewPrimaryAgent("");
       setNewPrimaryAgentInstructions("");
       setNewSubAgents([]);
@@ -329,8 +390,72 @@ export default function TasksPage() {
                 </div>
                 <div className="flex items-center justify-between pt-1">
                     <span>Last Run: {task.lastRun || "Never"}</span>
-                    <Badge variant={task.status === "Success" ? "default" : (task.status === "Pending" ? "secondary" : (task.status === "Running" ? "outline" : "destructive"))}>{task.status}</Badge>
+                    <Badge variant={task.status === "Success" ? "default" : (task.status === "Pending" || task.status === "ReviewRequired" || task.status === "LegacyUnverified" ? "secondary" : (task.status === "Running" ? "outline" : "destructive"))}>
+                      {task.status === "ReviewRequired" ? "Awaiting verification" : task.status === "LegacyUnverified" ? "Historical, unverified" : task.status === "Success" ? "Human-verified" : task.status}
+                    </Badge>
                 </div>
+                {task.acceptanceCriteria && (
+                  <p className="whitespace-pre-wrap break-words">
+                    Acceptance criteria: {task.acceptanceCriteria}
+                  </p>
+                )}
+                {task.status === "ReviewRequired" && task.executionId && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <p className="font-semibold text-foreground">Result awaiting your review</p>
+                    <p className="whitespace-pre-wrap break-words text-foreground">
+                      {task.resultReceipt?.answer_text || "No answer text was recorded."}
+                    </p>
+                    {task.resultReceipt?.answer_truncated && (
+                      <p>The captured text is truncated. Completion cannot be approved from incomplete evidence.</p>
+                    )}
+                    <p>
+                      Execution: {task.executionId} · Sources: {task.resultReceipt?.source_count ?? 0} ·
+                      Artifacts: {task.resultReceipt?.artifact_count ?? 0} ·
+                      Attachments: {task.resultReceipt?.attachment_count ?? 0}
+                    </p>
+                    {(task.resultReceipt?.sources ?? []).length > 0 && (
+                      <div className="space-y-1">
+                        <p className="font-semibold">Reported sources (not independently verified)</p>
+                        {(task.resultReceipt?.sources ?? []).map((source, index) => (
+                          <p key={`${source.url ?? source.title ?? "source"}-${index}`} className="break-all">
+                            {source.url ? (
+                              <a className="underline" href={source.url} target="_blank" rel="noopener noreferrer">
+                                {source.title || source.url}
+                              </a>
+                            ) : (source.title || "Unresolved source")}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {((task.resultReceipt?.artifact_count ?? 0) > 0 ||
+                      (task.resultReceipt?.attachment_count ?? 0) > 0 ||
+                      task.resultReceipt?.source_refs_truncated) && (
+                      <p className="text-destructive">
+                        This task includes inaccessible work products or incomplete sources. Approval is blocked.
+                        You may reject the result and request a reviewer-accessible output.
+                      </p>
+                    )}
+                    {task.resultReceipt?.degraded_mode && (
+                      <p className="text-destructive">The runtime reported degraded execution.</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => handleReviewTask(task, "approve")}
+                        disabled={
+                          !task.resultReceipt?.answer_text ||
+                          !!task.resultReceipt?.answer_truncated ||
+                          !!task.resultReceipt?.source_refs_truncated ||
+                          (task.resultReceipt?.artifact_count ?? 0) > 0 ||
+                          (task.resultReceipt?.attachment_count ?? 0) > 0 ||
+                          (task.resultReceipt?.sources?.length ?? 0) !== (task.resultReceipt?.source_count ?? 0)
+                        }>
+                        Verify completion
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => handleReviewTask(task, "reject")}>
+                        Reject result
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {task.lastError && (
                   <div className="text-[11px] text-destructive">
                     Last error: {task.lastError}
@@ -362,6 +487,15 @@ export default function TasksPage() {
                     onChange={(e) => setTaskDescription(e.target.value)}
                     rows={4}
                   />
+               </div>
+               <div className="space-y-1.5">
+                 <Label htmlFor="task-acceptance-criteria">Acceptance criteria (for human verification)</Label>
+                 <Textarea id="task-acceptance-criteria" maxLength={4000}
+                   placeholder="What must be true before you consider this task completed?"
+                   value={acceptanceCriteria}
+                   onChange={(e) => setAcceptanceCriteria(e.target.value)}
+                   rows={3}
+                 />
                </div>
                <div className="space-y-1.5">
                    <Label htmlFor="task-primary-agent">Assign Primary Agent</Label>
