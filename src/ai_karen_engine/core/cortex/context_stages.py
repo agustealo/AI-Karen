@@ -52,8 +52,13 @@ def build_context_requirements(
                         )}
                         if (
                             preliminary.intent == "memory.recall"
-                            and preliminary.policy_constraints.get(
-                                "personal_evidence_query_scope"
+                            and (
+                                preliminary.policy_constraints.get(
+                                    "personal_evidence_query_scope"
+                                )
+                                or preliminary.policy_constraints.get(
+                                    "personal_evidence_query_issue"
+                                )
                             )
                         )
                         else {}
