@@ -608,6 +608,7 @@ class ChatRuntime:
         provider_meta: Dict[str, Any] = {}
         generation_error: Optional[Exception] = None
         recovered_error_type: Optional[str] = None
+        stream_error_emitted = False
 
         grounded = self._grounded_personal_response(
             decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
@@ -687,6 +688,8 @@ class ChatRuntime:
             async for chunk in gen:
                 if chunk.type == "content":
                     streamed_text += chunk.content
+                if chunk.type == ChatStreamEventType.ERROR:
+                    stream_error_emitted = True
                 if chunk.type == ChatStreamEventType.COMPLETE:
                     continue
                 yield self._enrich_chunk(
@@ -811,6 +814,58 @@ class ChatRuntime:
                             "runtime_engine": provider_meta.get("runtime_engine"),
                             "fallback_level": provider_meta.get("fallback_level", 0),
                             "degradation_reason": "all_execution_paths_failed",
+                        },
+                    ),
+                    sequence,
+                    request_id,
+                    response_id,
+                    conversation_id,
+                )
+                sequence += 1
+
+        # An empty content stream is not a successful assistant message.
+        # Report the upstream failure with a stable code and correlation ID;
+        # never manufacture content, persist a fake turn, or mask the failure.
+        if not streamed_text.strip() and generation_error is None:
+            generation_error = RuntimeError(
+                "stream_reported_error" if stream_error_emitted
+                else "stream_completed_without_assistant_content"
+            )
+            provider_meta["generation_error"] = True
+            provider_meta["degraded_mode"] = True
+            provider_meta["degradation_reason"] = (
+                "stream_reported_error" if stream_error_emitted
+                else "empty_stream_output"
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type=type(generation_error).__name__,
+                status="error",
+                metadata={
+                    "error_code": "CHAT_EMPTY_STREAM",
+                    "correlation_id": ctx.correlation_id,
+                    "requested_provider": request.preferred_provider,
+                    "requested_model": request.preferred_model,
+                    "actual_provider": provider_meta.get("actual_provider"),
+                    "actual_model": provider_meta.get("actual_model"),
+                },
+            )
+            if not stream_error_emitted:
+                yield self._enrich_chunk(
+                    ChatStreamChunk(
+                        type=ChatStreamEventType.ERROR,
+                        content="The selected runtime produced no assistant response.",
+                        correlation_id=ctx.correlation_id,
+                        metadata={
+                            "error_code": "CHAT_EMPTY_STREAM",
+                            "error_type": "EmptyGeneration",
+                            "correlation_id": ctx.correlation_id,
+                            "requested_provider": request.preferred_provider,
+                            "requested_model": request.preferred_model,
+                            "actual_provider": provider_meta.get("actual_provider"),
+                            "actual_model": provider_meta.get("actual_model"),
+                            "runtime_engine": provider_meta.get("runtime_engine"),
+                            "degradation_reason": "empty_stream_output",
                         },
                     ),
                     sequence,
