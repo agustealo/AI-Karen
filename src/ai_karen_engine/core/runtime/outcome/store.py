@@ -35,6 +35,10 @@ class OutcomeStore(ABC):
 
         await asyncio.to_thread(self.save_outcome, payload)
 
+    async def save_unique_outcome_async(self, payload: dict[str, Any]) -> None:
+        """Strict append required for governed action receipts."""
+        raise OutcomeStoreError("Strict append-only outcome persistence unavailable")
+
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
@@ -89,6 +93,14 @@ class InMemoryOutcomeStore(OutcomeStore):
         if trajectory_id:
             self._trajectory_index.setdefault(str(trajectory_id), []).append(idx)
         self._tenant_index.setdefault(str(tenant_id), []).append(idx)
+
+    async def save_unique_outcome_async(self, payload: dict[str, Any]) -> None:
+        identifier = str(payload.get("outcome_id") or "").strip()
+        if not identifier or any(
+            item.get("outcome_id") == identifier for item in self._records
+        ):
+            raise OutcomeStoreError("Duplicate or missing governed outcome identifier")
+        self.save_outcome(payload)
 
     def get_for_trajectory(
         self,
@@ -301,6 +313,25 @@ class PostgresOutcomeStore(OutcomeStore):
                 },
             )
             raise OutcomeStoreError("Outcome persistence failed") from exc
+
+    async def save_unique_outcome_async(self, payload: dict[str, Any]) -> None:
+        """Commit exactly one new row or fail; never accept silent conflict."""
+        tenant, _ = self._validated_identity(payload)
+        try:
+            async with async_transaction_scope(tenant) as session:
+                await self.append_in_transaction(session, payload)
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.strict_append_failed",
+                extra={
+                    "outcome_id": payload.get("outcome_id"),
+                    "tenant_id": tenant,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise OutcomeStoreError("Governed outcome was not durably appended") from exc
 
     @staticmethod
     async def append_in_transaction(session: Any, payload: dict[str, Any]) -> None:
