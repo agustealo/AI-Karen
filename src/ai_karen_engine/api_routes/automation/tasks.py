@@ -20,6 +20,8 @@ from ai_karen_engine.services.automation.definitions import (
 )
 from ai_karen_engine.services.automation.execution import (
     AutomationExecutionError,
+    AutomationTaskBusy,
+    AutomationTaskClaimLost,
     AutomationTargetNotFound,
     execute_saved_task,
 )
@@ -174,6 +176,16 @@ async def execute_task(
         raise
     except AutomationTargetNotFound as exc:
         raise HTTPException(status_code=404, detail="Task not found") from exc
+    except AutomationTaskBusy as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Task already has a running or unreconciled execution",
+        ) from exc
+    except AutomationTaskClaimLost as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Task execution ownership expired; result was not committed",
+        ) from exc
     except AutomationExecutionError as exc:
         raise HTTPException(
             status_code=503, detail="Task execution was not completed"

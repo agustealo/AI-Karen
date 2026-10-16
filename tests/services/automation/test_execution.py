@@ -18,8 +18,12 @@ from ai_karen_engine.services.auth.auth_service import UserStatus
 class FakeRepository:
     def __init__(self):
         self.completed = []
+        self.claims = []
 
-    async def mark_task_running(self, task_id, tenant_id):
+    async def mark_task_running(
+        self, task_id, tenant_id, *, claim_token, lease_seconds,
+    ):
+        self.claims.append((task_id, tenant_id, claim_token, lease_seconds))
         if task_id == "missing":
             return None
         return {
@@ -33,11 +37,20 @@ class FakeRepository:
             "tenant_id": tenant_id,
         }
 
+    async def get_task(self, task_id, tenant_id):
+        return None if task_id == "missing" else {"id": task_id}
+
+    async def renew_task_claim(
+        self, task_id, tenant_id, *, claim_token, lease_seconds,
+    ):
+        return True
+
     async def complete_task(
         self,
         task_id,
         tenant_id,
         *,
+        claim_token,
         status,
         last_error,
         runtime_task_id=None,
