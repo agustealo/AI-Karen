@@ -12,6 +12,7 @@ from sqlalchemy import text
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.platform.memory.postgres.ledger_models import Base
 from ai_karen_engine.persistence.repositories.automation_repository import SqlAutomationRepository
+from ai_karen_engine.core.runtime.outcome.store import PostgresOutcomeStore
 
 
 pytestmark = [
@@ -42,7 +43,10 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
     exists = await connection.fetchval(
         "SELECT to_regclass('public.automation_tasks') IS NOT NULL"
     )
-    if exists:
+    existing_outcomes = await connection.fetchval(
+        "SELECT to_regclass('public.outcome_records') IS NOT NULL"
+    )
+    if exists or existing_outcomes:
         await connection.close()
         pytest.skip("Refusing destructive test DDL on existing automation schema")
     try:
@@ -69,6 +73,48 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             """
         )
         await connection.execute(migration)
+        # Isolated CI mirror of the pre-existing canonical outcome_records
+        # migration. Do not create schema dynamically in application code.
+        await connection.execute(
+            """
+            CREATE TABLE public.outcome_records (
+                outcome_id text PRIMARY KEY,
+                trajectory_id text,
+                decision_observation_id text,
+                request_id text,
+                correlation_id text,
+                message_id text,
+                conversation_id text,
+                session_id text,
+                tenant_id uuid NOT NULL,
+                user_id uuid,
+                source text NOT NULL,
+                recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+                payload jsonb NOT NULL,
+                CONSTRAINT outcome_records_source_check
+                    CHECK (source IN ('runtime.execution', 'user.feedback'))
+            )
+            """
+        )
+        await connection.execute(
+            """
+            ALTER TABLE public.outcome_records ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.outcome_records FORCE ROW LEVEL SECURITY;
+            CREATE POLICY outcome_records_tenant_scope
+              ON public.outcome_records FOR ALL
+              USING (
+                tenant_id = NULLIF(
+                  current_setting('app.current_tenant_id', true), ''
+                )::uuid
+              )
+              WITH CHECK (
+                tenant_id = NULLIF(
+                  current_setting('app.current_tenant_id', true), ''
+                )::uuid
+              )
+            """
+        )
+
         review_migration = (
             root / "supabase/migrations/"
             "20261016020000_29_saved_task_completion_review.sql"
@@ -219,6 +265,33 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
                 {"task_id": task_id, "tenant_id": str(tenant)},
             )
 
+        # Force canonical outcome persistence to fail. The review UPDATE
+        # must roll back, leaving the same attempt reviewable.
+        await connection.execute(
+            """
+            ALTER TABLE public.outcome_records
+            ADD CONSTRAINT forbid_task_feedback
+            CHECK (source <> 'user.feedback')
+            """
+        )
+        with pytest.raises(Exception):
+            await repo.review_task(
+                task_id, str(tenant), user_id=str(user), execution_id=lease_3,
+                decision="approve", note="Cannot commit without evidence",
+            )
+        still_pending = await repo.get_task(
+            task_id, str(tenant), created_by=str(user),
+        )
+        assert still_pending is not None
+        assert still_pending["status"] == "ReviewRequired"
+        assert still_pending["reviewedAt"] is None
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.outcome_records"
+        ) == 0
+        await connection.execute(
+            "ALTER TABLE public.outcome_records DROP CONSTRAINT forbid_task_feedback"
+        )
+
         reviewed = await repo.review_task(
             task_id, str(tenant), user_id=str(user), execution_id=lease_3,
             decision="approve", note="Verified the recorded result",
@@ -226,11 +299,69 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         assert reviewed is not None
         assert reviewed["status"] == "Success"
         assert reviewed["reviewedBy"] == str(user)
+        store = PostgresOutcomeStore()
+        prior = await store.list_task_reviews_async(
+            task_id, tenant_id=str(tenant), user_id=str(user),
+        )
+        assert len(prior) == 1
+        assert prior[0]["decision"] == "approve"
+        assert prior[0]["execution_id"] == lease_3
+        assert prior[0]["result_receipt"]["answer_text"] == "Full reviewer-readable result"
+        assert prior[0]["receipt_sha256"]
+        assert await store.list_task_reviews_async(
+            task_id, tenant_id=str(foreign_tenant), user_id=str(user),
+        ) == []
+        assert await store.list_task_reviews_async(
+            task_id, tenant_id=str(tenant), user_id=str(uuid.uuid4()),
+        ) == []
         assert await repo.review_task(
             task_id, str(tenant), user_id=str(user), execution_id=lease_3,
             decision="approve", note="second approval",
         ) is None
         assert terminal["runtimeTaskId"] == "correlation-verified"
+
+        # A reviewed task can run again. The original snapshot remains
+        # append-only and readable by the same authenticated creator.
+        lease_4 = str(uuid.uuid4())
+        repeated = await repo.mark_task_running(
+            task_id, str(tenant), claim_token=lease_4,
+            lease_seconds=60, created_by=str(user),
+        )
+        assert repeated is not None
+        assert repeated["runCount"] == 3
+        rerun = await repo.complete_task(
+            task_id, str(tenant), claim_token=lease_4,
+            status="ReviewRequired", last_error=None,
+            result_receipt={
+                "answer_text": "Second output, intentionally rejected",
+                "answer_truncated": False,
+                "artifact_count": 0,
+                "attachment_count": 0,
+                "source_refs_truncated": False,
+                "source_count": 0,
+                "sources": [],
+            },
+        )
+        assert rerun and rerun["status"] == "ReviewRequired"
+        rejected = await repo.review_task(
+            task_id, str(tenant), user_id=str(user),
+            execution_id=lease_4, decision="reject",
+            note="Didn't meet original criteria",
+        )
+        assert rejected and rejected["status"] == "Rejected"
+        history = await store.list_task_reviews_async(
+            task_id, tenant_id=str(tenant), user_id=str(user),
+        )
+        assert len(history) == 2
+        assert {x["decision"] for x in history} == {"approve", "reject"}
+        original = next(x for x in history if x["decision"] == "approve")
+        assert original["result_receipt"]["answer_text"] == "Full reviewer-readable result"
+        assert next(x for x in history if x["decision"] == "reject")[
+            "result_receipt"
+        ]["answer_text"] == "Second output, intentionally rejected"
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.outcome_records"
+        ) == 2
 
         # A legacy Running record with no ownership is NOT silently stolen.
         await connection.execute(
@@ -246,5 +377,6 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             lease_seconds=60, created_by=str(user),
         ) is None
     finally:
+        await connection.execute("DROP TABLE IF EXISTS public.outcome_records")
         await connection.execute("DROP TABLE IF EXISTS public.automation_tasks")
         await connection.close()
