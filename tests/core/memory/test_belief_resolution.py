@@ -7,6 +7,7 @@ import pytest
 
 from ai_karen_engine.core.memory.belief_resolution import (
     BeliefResolutionReason,
+    ProfileBeliefEvidence,
     resolve_belief,
 )
 from ai_karen_engine.core.memory.semantic_contract import (
@@ -113,3 +114,59 @@ def test_input_assertions_remain_unchanged():
     resolve_belief(new, (previous,), explicit_correction=True)
     assert previous.fact_key == before
     assert previous.object.canonical_value == "black"
+
+
+def projected(value="black", *, event="event-1", key="slot", tenant="tenant",
+              category="preference", attribute="favorite_color",
+              scope='{"cardinality":"singleton","qualifiers":{}}',
+              modality=AssertionModality.ASSERTED,
+              cardinality=FactCardinality.SINGLETON):
+    return ProfileBeliefEvidence(
+        tenant_id=tenant, user_id="user", category=category,
+        attribute=attribute, projection_key=key, scope_key=scope,
+        source_event_id=event, value=value, cardinality=cardinality,
+        modality=modality,
+    )
+
+
+def test_projected_profile_reinforces_without_fabricating_semantic_provenance():
+    current = projected()
+    repeated = projected("BLACK", event="event-2")
+    result = resolve_belief(repeated, (current,))
+    assert result.operation is MemoryOperation.REINFORCE
+    assert result.source_event_ids == ("event-2", "event-1")
+
+
+def test_profile_correction_vs_unresolved_disagreement_uses_shared_resolver():
+    first = projected()
+    changed = projected("green", event="event-2")
+    unconfirmed = resolve_belief(changed, (first,))
+    assert unconfirmed.operation is MemoryOperation.QUARANTINE
+    confirmed = resolve_belief(changed, (first,), explicit_correction=True)
+    assert confirmed.operation is MemoryOperation.SUPERSEDE
+    assert confirmed.affected_fact_keys == ("slot",)
+
+
+def test_profile_set_members_and_contexts_remain_distinct():
+    a = projected("Bob Marley", event="e1", key="member-a",
+                  cardinality=FactCardinality.SET,
+                  scope='{"cardinality":"set","qualifiers":{"domain":"music"}}')
+    b = projected("Nina Simone", event="e2", key="member-b",
+                  cardinality=FactCardinality.SET,
+                  scope=a.scope_key)
+    result = resolve_belief(b, (a,))
+    assert result.operation is MemoryOperation.CREATE
+    assert result.reason is BeliefResolutionReason.COEXISTING_MEMBER
+    distinct = projected("jazz", event="e3", key="another-scope")
+    assert resolve_belief(distinct, (a,)).operation is MemoryOperation.CREATE
+
+
+def test_profile_nonassertion_and_cross_scope_are_rejected():
+    prior = projected()
+    uncertain = projected("green", event="event-2",
+                          modality=AssertionModality.UNCERTAIN)
+    assert resolve_belief(
+        uncertain, (prior,), explicit_correction=True,
+    ).operation is MemoryOperation.QUARANTINE
+    with pytest.raises(ValueError, match="cross-scope"):
+        resolve_belief(projected("green", tenant="other"), (prior,))
