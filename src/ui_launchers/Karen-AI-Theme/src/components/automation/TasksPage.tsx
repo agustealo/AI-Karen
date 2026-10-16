@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import useAuth from "@/lib/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -111,6 +111,7 @@ export default function TasksPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isAgentsLoading, setIsAgentsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const historyRequestId = useRef(0);
   const [openHistoryTask, setOpenHistoryTask] = useState<string | null>(null);
   const [reviewHistory, setReviewHistory] = useState<ReviewHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState("");
@@ -131,6 +132,7 @@ export default function TasksPage() {
 
     setIsLoading(true);
     setIsAgentsLoading(true);
+    historyRequestId.current += 1;
     setOpenHistoryTask(null);
     setReviewHistory([]);
     setHistoryError("");
@@ -253,6 +255,8 @@ export default function TasksPage() {
   };
 
   const handleShowHistory = async (taskId: string) => {
+    // Fence stale responses from another task or a completed refresh.
+    const currentRequestId = ++historyRequestId.current;
     if (openHistoryTask === taskId) {
       setOpenHistoryTask(null);
       return;
@@ -266,11 +270,17 @@ export default function TasksPage() {
       const records = await apiClient.get<ReviewHistoryEntry[]>(
         `/api/tasks/${encodeURIComponent(taskId)}/reviews?limit=50`,
       );
-      setReviewHistory(records);
+      if (currentRequestId === historyRequestId.current) {
+        setReviewHistory(records);
+      }
     } catch (err: unknown) {
-      setHistoryError(err instanceof Error ? err.message : "Task review history is unavailable.");
+      if (currentRequestId === historyRequestId.current) {
+        setHistoryError(err instanceof Error ? err.message : "Task review history is unavailable.");
+      }
     } finally {
-      setHistoryLoading(false);
+      if (currentRequestId === historyRequestId.current) {
+        setHistoryLoading(false);
+      }
     }
   };
 
