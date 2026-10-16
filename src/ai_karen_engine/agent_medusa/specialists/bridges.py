@@ -158,6 +158,7 @@ class ToolBridge:
         if not authorized_plan.matches_execution_scope(
             user_id=user_id,
             tenant_id=tenant_id,
+            session_id=execution.session_id if execution is not None else None,
             policy_decision_id=policy_decision_id,
         ):
             raise PermissionError("Authorized execution plan belongs to another principal")
