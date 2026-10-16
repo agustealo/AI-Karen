@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
+from ai_karen_engine.core.runtime.outcome.contracts import UserFeedbackType, UserOutcome
 from ai_karen_engine.core.runtime.outcome.store import PostgresOutcomeStore
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
@@ -431,16 +432,18 @@ class SqlAutomationRepository:
                 sort_keys=True, default=str, ensure_ascii=False,
             )
             review_event = {
+                **UserOutcome(
+                    feedback_type=UserFeedbackType.TASK_COMPLETION_CONFIRMATION,
+                ).to_dict(),
                 "outcome_id": f"out_task_review_{attempt.replace('-', '')}",
                 "source": "user.feedback",
-                "feedback_type": "task_completion_confirmation",
                 "trajectory_id": f"task:{task_id}",
                 "task_id": task_id,
                 "execution_id": attempt,
                 "tenant_id": tenant_id,
                 "user_id": reviewer,
                 "decision": decision,
-                "status": target,
+                "review_status": target,
                 "review_note": note,
                 "reviewed_at": data["reviewed_at"].isoformat(),
                 "recorded_at": data["reviewed_at"],
