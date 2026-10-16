@@ -1407,7 +1407,7 @@ class ChatRuntime:
             and recent.status is EvidenceSufficiencyStatus.SUPPORTED
         ):
             return (
-                f"You told me in this conversation that your {attribute.replace('_', ' ')} is {recent.value}.",
+                f"You told me in this conversation that your {attribute.removeprefix('personal_relation.').replace('_', ' ')} is {recent.value}.",
                 {
                     "evidence_sufficiency": "supported",
                     "evidence_reason": recent.reason,
