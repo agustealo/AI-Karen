@@ -372,6 +372,19 @@ class SqlAutomationRepository:
                       AND status = 'ReviewRequired'
                       AND execution_id = CAST(:execution_id AS uuid)
                       AND claim_token IS NULL
+                      AND (
+                          :decision = 'reject'
+                          OR (
+                              (result_receipt->>'answer_truncated') = 'false'
+                              AND (result_receipt->>'source_refs_truncated') = 'false'
+                              AND length(COALESCE(result_receipt->>'answer_text', '')) > 0
+                              AND COALESCE((result_receipt->>'artifact_count')::integer, 1) = 0
+                              AND COALESCE((result_receipt->>'attachment_count')::integer, 1) = 0
+                              AND jsonb_typeof(result_receipt->'sources') = 'array'
+                              AND jsonb_array_length(result_receipt->'sources') =
+                                  COALESCE((result_receipt->>'source_count')::integer, -1)
+                          )
+                      )
                     RETURNING *
                     """
                 ),
@@ -381,6 +394,7 @@ class SqlAutomationRepository:
                     "reviewer": reviewer,
                     "execution_id": attempt,
                     "status": target,
+                    "decision": decision,
                     "note": note,
                 },
             )
