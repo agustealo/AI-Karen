@@ -151,7 +151,10 @@ class SqlAutomationRepository:
                     SELECT * FROM public.automation_tasks
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
-                      AND (:created_by IS NULL OR created_by = CAST(:created_by AS uuid))
+                      AND (
+                          CAST(:created_by AS uuid) IS NULL
+                          OR created_by = CAST(:created_by AS uuid)
+                      )
                     """
                 ),
                 {"task_id": task_id, "tenant_id": tenant_id, "created_by": created_by},
