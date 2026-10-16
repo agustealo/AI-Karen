@@ -141,7 +141,9 @@ class SqlAutomationRepository:
             )
             return _task_row(result.mappings().one())
 
-    async def get_task(self, task_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    async def get_task(
+        self, task_id: str, tenant_id: str, *, created_by: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
                 text(
@@ -149,9 +151,10 @@ class SqlAutomationRepository:
                     SELECT * FROM public.automation_tasks
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND (:created_by IS NULL OR created_by = CAST(:created_by AS uuid))
                     """
                 ),
-                {"task_id": task_id, "tenant_id": tenant_id},
+                {"task_id": task_id, "tenant_id": tenant_id, "created_by": created_by},
             )
             row = result.mappings().one_or_none()
             return _task_row(row) if row else None
@@ -162,9 +165,13 @@ class SqlAutomationRepository:
         *,
         status: Optional[str] = None,
         agent_name: Optional[str] = None,
+        created_by: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         clauses = ["tenant_id = CAST(:tenant_id AS uuid)"]
         params: Dict[str, Any] = {"tenant_id": tenant_id}
+        if created_by is not None:
+            clauses.append("created_by = CAST(:created_by AS uuid)")
+            params["created_by"] = created_by
         if status:
             clauses.append("status = :status")
             params["status"] = status
@@ -180,7 +187,9 @@ class SqlAutomationRepository:
             result = await session.execute(text(query), params)
             return [_task_row(row) for row in result.mappings().all()]
 
-    async def delete_task(self, task_id: str, tenant_id: str) -> bool:
+    async def delete_task(
+        self, task_id: str, tenant_id: str, *, created_by: str
+    ) -> bool:
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
                 text(
@@ -188,10 +197,11 @@ class SqlAutomationRepository:
                     DELETE FROM public.automation_tasks
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     RETURNING task_id
                     """
                 ),
-                {"task_id": task_id, "tenant_id": tenant_id},
+                {"task_id": task_id, "tenant_id": tenant_id, "created_by": created_by},
             )
             return result.scalar_one_or_none() is not None
 
@@ -202,6 +212,7 @@ class SqlAutomationRepository:
         *,
         claim_token: str,
         lease_seconds: int,
+        created_by: str,
     ) -> Optional[Dict[str, Any]]:
         """Atomically acquire the task; refuse a live or unfenced legacy owner.
 
@@ -232,6 +243,7 @@ class SqlAutomationRepository:
                         updated_at = now()
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                       AND (
                           status NOT IN ('Running', 'ReviewRequired')
                           OR (
@@ -247,6 +259,7 @@ class SqlAutomationRepository:
                     "tenant_id": tenant_id,
                     "claim_token": token,
                     "lease_seconds": lease_seconds,
+                    "created_by": created_by,
                 },
             )
             row = result.mappings().one_or_none()
