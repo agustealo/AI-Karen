@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 from ai_karen_engine.core.intelligence.profile_attribute import (normalize_personal_query, requested_profile_attribute, is_profile_summary_request)
+from ai_karen_engine.core.intelligence.correction_intent import is_explicit_self_correction
 from ai_karen_engine.core.intelligence.preference_relation import extract_favorite_assertion
 
 from .general_fact_classifier import classify_general_user_facts
@@ -231,6 +232,7 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                         "category": "identity",
                         "attribute": "preferred_name",
                         "normalized_value": value,
+                        "explicit_correction": is_explicit_self_correction(normalized),
                         "retention_scope": "user_profile",
                     },
                 )
