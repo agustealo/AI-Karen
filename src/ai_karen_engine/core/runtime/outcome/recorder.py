@@ -184,6 +184,72 @@ class OutcomeRecorder:
         await self._persist_async(payload)
         return payload
 
+    async def record_governed_tool_outcome_async(
+        self,
+        *,
+        tool_call_id: str,
+        trajectory_id: str,
+        correlation_id: str,
+        session_id: str | None,
+        tenant_id: str,
+        user_id: str,
+        policy_decision_id: str,
+        tool_name: str,
+        tool_version: str | None,
+        agent_id: str,
+        step_id: str,
+        success: bool,
+        error_type: str | None = None,
+        result_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Durably record a governed bridge observation, never model testimony.
+
+        Unlike conversational outcomes, this cannot use the best-effort
+        _persist_async adapter: losing an audit receipt must be visible to
+        callers and must not be reported as a proven tool execution.
+        """
+        if self._store is None:
+            from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+            raise OutcomeStoreError("Governed tool outcome persistence unavailable")
+        if not all((
+            tool_call_id, trajectory_id, correlation_id, tenant_id, user_id,
+            policy_decision_id, tool_name, agent_id, step_id,
+        )):
+            raise ValueError("Complete governed tool execution identity required")
+        payload: dict[str, Any] = {
+            "outcome_id": f"out_tool_{tool_call_id.replace('-', '')}",
+            "source": "runtime.execution",
+            "trajectory_id": trajectory_id,
+            "request_id": tool_call_id,
+            "correlation_id": correlation_id,
+            "session_id": session_id,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "recorded_at": datetime.now(timezone.utc),
+            **ExecutionOutcome(
+                status=ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE,
+                tool_success=success,
+                response_completed=False,
+            ).to_dict(),
+            "metadata": {
+                "event_type": "agent.tool.execution",
+                "receipt_version": "governed-tool.v1",
+                "execution_scope": "tool_runtime_acknowledgment",
+                "independently_verified": False,
+                "tool_call_id": tool_call_id,
+                "policy_decision_id": policy_decision_id,
+                "tool_name": tool_name,
+                "tool_version": tool_version,
+                "agent_id": agent_id,
+                "step_id": step_id,
+                "error_type": error_type,
+                "result_sha256": result_sha256,
+            },
+        }
+        await self._store.save_unique_outcome_async(payload)
+        return payload
+
     def record_user_outcome(
         self,
         trajectory_id: str | None = None,

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ScrollText, PlusCircle, Trash2, Play, Settings, Bot, Info, Users, FileCog, History } from "lucide-react";
+import { ScrollText, PlusCircle, Trash2, Play, Settings, Bot, Info, Users, FileCog, History, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +59,7 @@ type Task = {
   runtimeTaskId?: string | null;
   executionId?: string | null;
   resultReceipt?: {
+    execution_request_id?: string;
     runtime_status?: string;
     answer_preview?: string;
     answer_text?: string;
@@ -83,6 +84,22 @@ type Task = {
   reviewedAt?: string | null;
   reviewedBy?: string | null;
   reviewNote?: string | null;
+};
+
+type GovernedToolReceipt = {
+  receipt_id: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+  tool_version: string | null;
+  policy_decision_id: string | null;
+  agent_id: string | null;
+  step_id: string | null;
+  success: boolean;
+  error_type: string | null;
+  result_sha256: string | null;
+  recorded_at: string | null;
+  execution_scope: "tool_runtime_acknowledgment";
+  independently_verified: false;
 };
 
 type ReviewHistoryEntry = {
@@ -119,6 +136,11 @@ export default function TasksPage() {
   const [isAgentsLoading, setIsAgentsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const historyRequestId = useRef(0);
+  const toolReceiptRequestId = useRef(0);
+  const [openToolReceiptsTask, setOpenToolReceiptsTask] = useState<string | null>(null);
+  const [toolReceipts, setToolReceipts] = useState<GovernedToolReceipt[]>([]);
+  const [toolReceiptError, setToolReceiptError] = useState("");
+  const [toolReceiptsLoading, setToolReceiptsLoading] = useState(false);
   const [openHistoryTask, setOpenHistoryTask] = useState<string | null>(null);
   const [reviewHistory, setReviewHistory] = useState<ReviewHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState("");
@@ -141,6 +163,10 @@ export default function TasksPage() {
     setIsLoading(true);
     setIsAgentsLoading(true);
     historyRequestId.current += 1;
+    toolReceiptRequestId.current += 1;
+    setOpenToolReceiptsTask(null);
+    setToolReceipts([]);
+    setToolReceiptError("");
     setOpenHistoryTask(null);
     setReviewHistory([]);
     setHistoryError("");
@@ -259,6 +285,35 @@ export default function TasksPage() {
       fetchLiveData();
     } catch (err: unknown) {
       alert("Failed to execute task: " + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleShowToolReceipts = async (task: Task) => {
+    const reqId = ++toolReceiptRequestId.current;
+    if (openToolReceiptsTask === task.id) {
+      setOpenToolReceiptsTask(null);
+      return;
+    }
+    if (!task.executionId) {
+      setToolReceiptError("No completed execution was recorded for this task.");
+      return;
+    }
+    setOpenToolReceiptsTask(task.id);
+    setToolReceipts([]);
+    setToolReceiptError("");
+    setToolReceiptsLoading(true);
+    try {
+      const { apiClient } = await import("@/lib/api");
+      const rows = await apiClient.get<GovernedToolReceipt[]>(
+        `/api/tasks/${encodeURIComponent(task.id)}/tool-receipts?execution_id=${encodeURIComponent(task.executionId)}&limit=50`,
+      );
+      if (reqId === toolReceiptRequestId.current) setToolReceipts(rows);
+    } catch (err: unknown) {
+      if (reqId === toolReceiptRequestId.current) {
+        setToolReceiptError(err instanceof Error ? err.message : "Governed tool receipts unavailable.");
+      }
+    } finally {
+      if (reqId === toolReceiptRequestId.current) setToolReceiptsLoading(false);
     }
   };
 
@@ -450,6 +505,12 @@ export default function TasksPage() {
                           title="Review history" onClick={() => handleShowHistory(task.id)}>
                           <History className="h-4 w-4 text-muted-foreground" />
                         </Button>
+                        <Button variant="ghost" size="icon"
+                          aria-label={`Show governed tool receipts for ${task.name}`}
+                          title="Governed tool receipts" disabled={!task.executionId}
+                          onClick={() => handleShowToolReceipts(task)}>
+                          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => handleDeleteTask(task.id)}>
                             <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
                         </Button>
@@ -598,6 +659,28 @@ export default function TasksPage() {
                           </p>
                           <p className="break-all">Receipt SHA-256: {review.receipt_sha256}</p>
                           <p>Human attestation, not independently verified.</p>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {openToolReceiptsTask === task.id && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <p className="font-semibold text-foreground">Governed tool execution receipts</p>
+                    <p>These are authenticated tool-runtime acknowledgments, not independently confirmed external outcomes.</p>
+                    {toolReceiptsLoading ? <p>Loading backend receipts...</p>
+                      : toolReceiptError ? <p className="text-destructive">{toolReceiptError}</p>
+                      : toolReceipts.length === 0 ? <p>No governed Medusa tool receipts are recorded for this attempt.</p>
+                      : toolReceipts.map(receipt => (
+                        <div key={receipt.receipt_id} className="border-t pt-2 space-y-1">
+                          <p className="font-medium text-foreground">
+                            {receipt.tool_name || "Unnamed tool"}: {receipt.success ? "Runtime acknowledged success" : "Runtime reported failure"}
+                          </p>
+                          <p>Tool version: {receipt.tool_version || "Not reported"} · Agent: {receipt.agent_id || "Unknown"}</p>
+                          <p className="break-all">Step: {receipt.step_id || "Unknown"} · Receipt: {receipt.receipt_id}</p>
+                          <p className="break-all">Policy decision: {receipt.policy_decision_id || "Unknown"}</p>
+                          {receipt.result_sha256 && <p className="break-all">Result digest: {receipt.result_sha256}</p>}
+                          {receipt.recorded_at && <p>{new Date(receipt.recorded_at).toLocaleString()}</p>}
+                          {receipt.error_type && <p className="text-destructive">Error: {receipt.error_type}</p>}
                         </div>
                       ))}
                   </div>

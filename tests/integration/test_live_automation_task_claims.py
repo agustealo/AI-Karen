@@ -14,6 +14,7 @@ from ai_karen_engine.persistence.postgres.transactions import async_transaction_
 from ai_karen_engine.platform.memory.postgres.ledger_models import Base
 from ai_karen_engine.persistence.repositories.automation_repository import SqlAutomationRepository
 from ai_karen_engine.core.runtime.outcome.store import PostgresOutcomeStore
+from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 
 
 pytestmark = [
@@ -449,6 +450,62 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         assert await connection.fetchval(
             "SELECT count(*) FROM public.outcome_records"
         ) == 4
+
+        # MI-12: real PostgreSQL stores governed tool-runtime acknowledgments
+        # in the same canonical outcome table, owner/run/tenant filtered.
+        recorder = OutcomeRecorder(store=PostgresOutcomeStore())
+        tool_call_id = str(uuid.uuid4())
+        tool_run = f"task:{task_id}:request-{uuid.uuid4().hex}"
+        receipt = await recorder.record_governed_tool_outcome_async(
+            tool_call_id=tool_call_id,
+            trajectory_id=tool_run,
+            correlation_id=f"corr-{uuid.uuid4().hex}",
+            session_id="test-authenticated-session",
+            tenant_id=str(tenant),
+            user_id=str(user),
+            policy_decision_id="policy-approved",
+            tool_name="web_search",
+            tool_version="1.0",
+            agent_id="researcher",
+            step_id="step-2",
+            success=True,
+            result_sha256="a" * 64,
+        )
+        assert receipt["source"] == "runtime.execution"
+        # ON CONFLICT DO NOTHING must not masquerade as a durable append.
+        from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+        with pytest.raises(OutcomeStoreError, match="not appended"):
+            await recorder.record_governed_tool_outcome_async(
+                tool_call_id=tool_call_id,
+                trajectory_id=tool_run,
+                correlation_id="retry-correlation",
+                session_id="test-authenticated-session",
+                tenant_id=str(tenant),
+                user_id=str(user),
+                policy_decision_id="policy-approved",
+                tool_name="web_search",
+                tool_version="1.0",
+                agent_id="researcher",
+                step_id="step-2",
+                success=True,
+            )
+        store = PostgresOutcomeStore()
+        recorded_tools = await store.list_governed_tool_receipts_async(
+            trajectory_id=tool_run, tenant_id=str(tenant), user_id=str(user),
+        )
+        assert len(recorded_tools) == 1
+        assert recorded_tools[0]["outcome_id"] == receipt["outcome_id"]
+        assert recorded_tools[0]["metadata"]["policy_decision_id"] == "policy-approved"
+        assert recorded_tools[0]["metadata"]["independently_verified"] is False
+        assert await store.list_governed_tool_receipts_async(
+            trajectory_id=tool_run, tenant_id=str(foreign_tenant), user_id=str(user),
+        ) == []
+        assert await store.list_governed_tool_receipts_async(
+            trajectory_id=tool_run, tenant_id=str(tenant), user_id=str(uuid.uuid4()),
+        ) == []
+        assert await store.list_governed_tool_receipts_async(
+            trajectory_id="other-run", tenant_id=str(tenant), user_id=str(user),
+        ) == []
 
         # A legacy Running record with no ownership is NOT silently stolen.
         await connection.execute(

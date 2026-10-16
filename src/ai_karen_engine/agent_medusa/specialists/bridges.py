@@ -14,10 +14,15 @@ ToolBridge        -> routes every external action through ActionExecutionGate
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 
 from ...core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter, GenerationRequest
+from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
+from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
 
 logger = logging.getLogger(__name__)
 
@@ -135,40 +140,148 @@ class ToolBridge:
         step_id: str,
         execution: Optional["SpecialistExecutionContext"] = None,
     ) -> Dict[str, Any]:
-        # A17: enforce per-call tool budget before executing the action.
+        # Persisted receipts require a real tenant/user and current policy
+        # context before any external side effect can take place.
+        try:
+            tenant_id = str(uuid.UUID(str(tenant_id)))
+            user_id = str(uuid.UUID(str(user_id)))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise PermissionError("Governed tool execution requires UUID tenant and user") from exc
+        if (
+            not policy_decision_id
+            or policy_decision_id != authorized_plan.policy_decision_id
+            or not trajectory_id
+            or not agent_id
+            or not step_id
+        ):
+            raise PermissionError("Governed tool execution identity does not match policy")
+        if not authorized_plan.matches_execution_scope(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=execution.session_id if execution is not None else None,
+            policy_decision_id=policy_decision_id,
+        ):
+            raise PermissionError("Authorized execution plan belongs to another principal")
+        if execution is not None and (
+            execution.tenant_id != tenant_id
+            or execution.user_id != user_id
+            or execution.policy_decision_id != policy_decision_id
+            or execution.trajectory_id != trajectory_id
+            or execution.step_id != step_id
+        ):
+            raise PermissionError("Specialist execution context does not match tool identity")
+
+        # A17: enforce the budget and authorization before any tool invocation.
         if execution is not None and execution.budget_meter is not None:
             if not await execution.budget_meter.consume_tool_call():
                 raise PermissionError("ExecutionBudget exhausted: tool calls")
-        # 1. Gate: no authorization -> no execution.
         if not await self._authorize(tool_name, authorized_plan):
             raise PermissionError(
                 f"Tool '{tool_name}' not authorized by plan {authorized_plan.policy_decision_id}"
             )
 
-        # 2. Execute through the canonical tool runtime.
         from ai_karen_engine.services.tooling.tool_service import get_tool_service, ToolInput
         from ..contracts.events import AgentEvent, AgentEventType
 
         tools = get_tool_service()
+        metadata = tools.get_tool_metadata(tool_name)
+        tool_version = getattr(metadata, "version", None) if metadata else None
+        tool_call_id = str(uuid.uuid4())
+        correlation_id = (
+            execution.correlation_id if execution is not None
+            else trajectory_id
+        )
+        recorder = OutcomeRecorder(store=get_outcome_store())
+
         if execution is not None and execution.event_emitter is not None:
             await execution.event_emitter.emit(AgentEvent(
                 type=AgentEventType.TOOL_CALL_STARTED,
                 agent_id=agent_id,
                 message=f"tool {tool_name} started",
-                correlation_id=trajectory_id,
+                correlation_id=correlation_id,
                 metadata={"tool": tool_name, "step_id": step_id},
             ))
 
-        result = await tools.execute_tool(
-            ToolInput(
-                tool_name=tool_name,
-                parameters=parameters,
-                user_id=user_id,
-                session_id=trajectory_id,
+        result = None
+        error_type = None
+        try:
+            result = await tools.execute_tool(
+                ToolInput(
+                    tool_name=tool_name,
+                    parameters=parameters,
+                    user_id=user_id,
+                    session_id=(
+                        execution.session_id if execution and execution.session_id
+                        else trajectory_id
+                    ),
+                    request_id=tool_call_id,
+                    governed_execution=True,
+                    user_context={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "policy_decision_id": policy_decision_id,
+                        "session_id": execution.session_id if execution else None,
+                        "correlation_id": correlation_id,
+                        "trajectory_id": trajectory_id,
+                        "agent_id": agent_id,
+                        "step_id": step_id,
+                    },
+                )
             )
-        )
+        except Exception as exc:
+            error_type = type(exc).__name__
 
-        success = getattr(result, "success", False)
+        # Acknowledgment is only the canonical tool runtime's observed result;
+        # do not interpret returned model prose, artifact names or tool output
+        # contents as independently confirmed external state.
+        success = (
+            error_type is None
+            and result is not None
+            and getattr(result, "success", None) is True
+            and not getattr(result, "error", None)
+            and not (getattr(result, "metadata", None) or {}).get("cached")
+            and getattr(result, "request_id", None) == tool_call_id
+        )
+        result_sha256 = None
+        if result is not None and getattr(result, "result", None) is not None:
+            try:
+                serialized = json.dumps(
+                    result.result, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                if len(serialized) <= 65536:
+                    result_sha256 = hashlib.sha256(serialized).hexdigest()
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+        # This is a required durable observation. If PostgreSQL is down,
+        # never report a persisted/verified success. A remote side effect may
+        # already have happened; callers must reconcile, not blindly retry.
+        receipt = await recorder.record_governed_tool_outcome_async(
+            tool_call_id=tool_call_id,
+            trajectory_id=trajectory_id,
+            correlation_id=correlation_id,
+            session_id=execution.session_id if execution else None,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            policy_decision_id=policy_decision_id,
+            tool_name=tool_name,
+            tool_version=tool_version,
+            agent_id=agent_id,
+            step_id=step_id,
+            success=success,
+            error_type=error_type or (
+                "tool_reported_error" if getattr(result, "error", None)
+                else "cached_tool_result_not_execution" if (getattr(result, "metadata", None) or {}).get("cached")
+                else "tool_result_unacknowledged" if not success
+                else None
+            ),
+            result_sha256=result_sha256,
+        )
+        if error_type is not None:
+            raise RuntimeError(
+                "Governed tool invocation failed; receipt persisted"
+            )
         # 3. Audit/observability record (emit to telemetry + trajectory).
         logger.info(
             "medusa.tool.executed",
@@ -195,6 +308,7 @@ class ToolBridge:
             "tool": tool_name,
             "success": success,
             "result": getattr(result, "result", None),
+            "receipt_id": receipt["outcome_id"],
         }
 
     @staticmethod

@@ -25,3 +25,4 @@ class SpecialistExecutionContext:
     step_id: str = ""
     budget_meter: Optional[Any] = None
     event_emitter: Optional[Any] = None
+    session_id: Optional[str] = None

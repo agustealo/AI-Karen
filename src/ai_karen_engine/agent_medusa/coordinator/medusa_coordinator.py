@@ -5,6 +5,7 @@ import logging
 from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
+from ...core.runtime.outcome.store import OutcomeStoreError
 from ...core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
@@ -312,6 +313,10 @@ class MedusaCoordinator:
                             step.error = "execution_budget_exhausted"
                     plan.is_complete = True
                     break
+                # A tool may have changed external state even when its audit
+                # receipt failed. Never downgrade that uncertainty to a
+                # partial response merely because sibling agents succeeded.
+                self._require_durable_tool_receipts(results)
                 for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
                         step.status = StepStatus.FAILED
@@ -490,6 +495,7 @@ class MedusaCoordinator:
             user_id=str(request.user_id or "").strip(),
             policy_decision_id=authorized_plan.policy_decision_id,
             trajectory_id=request.request_id,
+            session_id=request.session_id,
             correlation_id=self._correlation_id(request),
             step_id=step.id,
             budget_meter=meter,
@@ -562,6 +568,13 @@ class MedusaCoordinator:
             raise
         finally:
             await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+
+    @staticmethod
+    def _require_durable_tool_receipts(results: List[Any]) -> None:
+        """Keep post-side-effect audit failures out of partial aggregation."""
+        for result in results:
+            if isinstance(result, OutcomeStoreError):
+                raise result
 
     def _correlation_id(self, request: RuntimeRequest) -> str:
         requirements = ExecutionRequirements(**request.execution_requirements)

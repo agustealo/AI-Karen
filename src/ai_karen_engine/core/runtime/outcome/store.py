@@ -35,11 +35,26 @@ class OutcomeStore(ABC):
 
         await asyncio.to_thread(self.save_outcome, payload)
 
+    async def save_unique_outcome_async(self, payload: dict[str, Any]) -> None:
+        """Strict append required for governed action receipts."""
+        raise OutcomeStoreError("Strict append-only outcome persistence unavailable")
+
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Owner-scoped task review history, never a tenant-wide fallback."""
         raise OutcomeStoreError("Task review history is not available")
+
+    async def list_governed_tool_receipts_async(
+        self,
+        *,
+        trajectory_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List tool-runtime receipts only for the exact principal and run."""
+        raise OutcomeStoreError("Governed tool receipts are unavailable")
 
     @abstractmethod
     def get_for_trajectory(
@@ -79,6 +94,14 @@ class InMemoryOutcomeStore(OutcomeStore):
             self._trajectory_index.setdefault(str(trajectory_id), []).append(idx)
         self._tenant_index.setdefault(str(tenant_id), []).append(idx)
 
+    async def save_unique_outcome_async(self, payload: dict[str, Any]) -> None:
+        identifier = str(payload.get("outcome_id") or "").strip()
+        if not identifier or any(
+            item.get("outcome_id") == identifier for item in self._records
+        ):
+            raise OutcomeStoreError("Duplicate or missing governed outcome identifier")
+        self.save_outcome(payload)
+
     def get_for_trajectory(
         self,
         trajectory_id: str,
@@ -90,6 +113,37 @@ class InMemoryOutcomeStore(OutcomeStore):
         if tenant_id is not None:
             records = [record for record in records if record.get("tenant_id") == tenant_id]
         return [dict(record) for record in records]
+
+    async def list_governed_tool_receipts_async(
+        self,
+        *,
+        trajectory_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not trajectory_id or not tenant_id or not user_id:
+            raise OutcomeStoreError("Tool receipt scope is required")
+        events = [
+            record
+            for record in self.get_for_trajectory(
+                trajectory_id, tenant_id=tenant_id,
+            )
+            if record.get("user_id") == user_id
+            and record.get("source") == "runtime.execution"
+            and (record.get("metadata") or {}).get("event_type")
+            == "agent.tool.execution"
+            and (record.get("metadata") or {}).get("receipt_version")
+            == "governed-tool.v1"
+        ]
+        return sorted(
+            events,
+            key=lambda value: (
+                str(value.get("recorded_at") or ""),
+                str(value.get("outcome_id") or ""),
+            ),
+            reverse=True,
+        )[:max(1, min(int(limit), 100))]
 
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
@@ -260,6 +314,25 @@ class PostgresOutcomeStore(OutcomeStore):
             )
             raise OutcomeStoreError("Outcome persistence failed") from exc
 
+    async def save_unique_outcome_async(self, payload: dict[str, Any]) -> None:
+        """Commit exactly one new row or fail; never accept silent conflict."""
+        tenant, _ = self._validated_identity(payload)
+        try:
+            async with async_transaction_scope(tenant) as session:
+                await self.append_in_transaction(session, payload)
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.strict_append_failed",
+                extra={
+                    "outcome_id": payload.get("outcome_id"),
+                    "tenant_id": tenant,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise OutcomeStoreError("Governed outcome was not durably appended") from exc
+
     @staticmethod
     async def append_in_transaction(session: Any, payload: dict[str, Any]) -> None:
         """Append through the canonical outcome schema in a caller-owned transaction.
@@ -277,6 +350,60 @@ class PostgresOutcomeStore(OutcomeStore):
         )
         if result.rowcount != 1:
             raise OutcomeStoreError("Outcome event was not appended")
+
+    async def list_governed_tool_receipts_async(
+        self,
+        *,
+        trajectory_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Tenant/user/run-filtered receipt read, never an unscoped audit listing."""
+        tenant = self._require_tenant(tenant_id)
+        if not trajectory_id or not user_id:
+            raise OutcomeStoreError("Tool receipt scope is required")
+        bounded = max(1, min(int(limit), 100))
+        try:
+            async with async_transaction_scope(tenant) as session:
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND trajectory_id = :trajectory_id
+                          AND source = 'runtime.execution'
+                          AND payload->'metadata'->>'event_type' = 'agent.tool.execution'
+                          AND payload->'metadata'->>'receipt_version' = 'governed-tool.v1'
+                        ORDER BY recorded_at DESC, outcome_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant,
+                        "user_id": user_id,
+                        "trajectory_id": trajectory_id,
+                        "limit": bounded,
+                    },
+                )
+                return [
+                    self._payload_from_row(row["payload"])
+                    for row in result.mappings().all()
+                ]
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.governed_tool_receipts_read_failed",
+                extra={
+                    "tenant_id": tenant,
+                    "user_id": user_id,
+                    "trajectory_id": trajectory_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise OutcomeStoreError("Tool receipts unavailable") from exc
 
     async def list_task_reviews_async(
         self,
