@@ -121,14 +121,17 @@ def _runtime_result_receipt(result: ChatExecutionResult) -> Dict[str, Any]:
         title = title[:240] if isinstance(title, str) else None
         url = value.get("url")
         if isinstance(url, str):
-            parsed = urlsplit(url)
-            if (
-                parsed.scheme not in {"https", "http"}
-                or not parsed.hostname
-                or len(url) > 1600
-                or parsed.username
-                or parsed.password
-            ):
+            try:
+                parsed = urlsplit(url)
+                if (
+                    parsed.scheme not in {"https", "http"}
+                    or not parsed.hostname
+                    or len(url) > 1600
+                    or parsed.username
+                    or parsed.password
+                ):
+                    url = None
+            except ValueError:
                 url = None
         else:
             url = None
