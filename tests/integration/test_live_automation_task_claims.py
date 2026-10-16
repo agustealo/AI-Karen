@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from pathlib import Path
@@ -120,6 +121,11 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             "20261016020000_29_saved_task_completion_review.sql"
         ).read_text(encoding="utf-8")
         await connection.execute(review_migration)
+        verification_migration = (
+            root / "supabase/migrations/"
+            "20261016030000_30_saved_task_structured_output_verification.sql"
+        ).read_text(encoding="utf-8")
+        await connection.execute(verification_migration)
         await connection.execute(
             """
             ALTER TABLE public.automation_tasks ENABLE ROW LEVEL SECURITY;
@@ -362,6 +368,86 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         assert await connection.fetchval(
             "SELECT count(*) FROM public.outcome_records"
         ) == 2
+
+        # A declared machine conformance policy can never be approved by
+        # the user unless the actual runtime-owned checker marked it passed.
+        contract = {
+            "version": "structured-output.v1",
+            "schema": {"type": "object", "required": ["summary"]},
+        }
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(
+                text("""
+                    UPDATE public.automation_tasks
+                    SET verification_contract = CAST(:contract AS jsonb)
+                    WHERE task_id = :task_id
+                """),
+                {"task_id": task_id, "contract": json.dumps(contract)},
+            )
+        lease_5 = str(uuid.uuid4())
+        assert await repo.mark_task_running(
+            task_id, str(tenant), claim_token=lease_5,
+            lease_seconds=60, created_by=str(user),
+        )
+        assert await repo.complete_task(
+            task_id, str(tenant), claim_token=lease_5,
+            status="ReviewRequired", last_error=None,
+            result_receipt={
+                "answer_text": "A model said success",
+                "answer_truncated": False,
+                "artifact_count": 0,
+                "attachment_count": 0,
+                "source_refs_truncated": False,
+                "source_count": 0,
+                "sources": [],
+                "machine_verification": {
+                    "status": "failed",
+                    "reason": "schema_mismatch",
+                },
+            },
+        )
+        assert await repo.review_task(
+            task_id, str(tenant), user_id=str(user), execution_id=lease_5,
+            decision="approve", note="I approve despite schema violation",
+        ) is None
+        assert await repo.get_task(
+            task_id, str(tenant), created_by=str(user),
+        )["status"] == "ReviewRequired"
+        assert await repo.review_task(
+            task_id, str(tenant), user_id=str(user), execution_id=lease_5,
+            decision="reject", note="Machine schema not satisfied",
+        )
+
+        lease_6 = str(uuid.uuid4())
+        assert await repo.mark_task_running(
+            task_id, str(tenant), claim_token=lease_6,
+            lease_seconds=60, created_by=str(user),
+        )
+        assert await repo.complete_task(
+            task_id, str(tenant), claim_token=lease_6,
+            status="ReviewRequired", last_error=None,
+            result_receipt={
+                "answer_text": "Full structured answer",
+                "answer_truncated": False,
+                "artifact_count": 0,
+                "attachment_count": 0,
+                "source_refs_truncated": False,
+                "source_count": 0,
+                "sources": [],
+                "machine_verification": {
+                    "status": "passed",
+                    "contract_version": "structured-output.v1",
+                    "independently_verified": False,
+                },
+            },
+        )
+        assert await repo.review_task(
+            task_id, str(tenant), user_id=str(user), execution_id=lease_6,
+            decision="approve", note="Checked the conforming result",
+        )
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.outcome_records"
+        ) == 4
 
         # A legacy Running record with no ownership is NOT silently stolen.
         await connection.execute(
