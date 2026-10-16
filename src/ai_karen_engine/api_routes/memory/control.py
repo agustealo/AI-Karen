@@ -375,11 +375,10 @@ async def submit_profile_correction(request: Request, body: ProfileCorrectionReq
             status="disabled",
             result={"status": "skipped", "reason": "Memory profile corrections are disabled"},
         )
-    source_text = body.correction_text
-    if body.profile_area:
-        source_text = f"{body.profile_area}: {source_text}"
+    # Pass the exact assertion to the canonical classifier. profile_area is
+    # transport context, not part of the user's correction evidence.
     result = await _memory_manager().process_interaction(
-        text=source_text,
+        text=body.correction_text,
         tenant_id=body.tenant_id,
         user_id=body.user_id,
         source_type="profile_correction",
