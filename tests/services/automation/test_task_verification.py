@@ -48,7 +48,16 @@ class ReviewRepository:
             "created_by": OWNER,
             "executionId": ATTEMPT,
             "status": "ReviewRequired",
-            "resultReceipt": {"answer_preview": "The work is finished, trust me."},
+            "resultReceipt": {
+                "answer_preview": "The work is finished, trust me.",
+                "answer_text": "The work is finished, trust me.",
+                "answer_truncated": False,
+                "source_refs_truncated": False,
+                "artifact_count": 0,
+                "attachment_count": 0,
+                "source_count": 0,
+                "sources": [],
+            },
         }
         self.decisions = []
 
@@ -143,6 +152,7 @@ def test_runtime_receipts_are_observation_not_verification(status):
     assert receipt["runtime_status"] == status.value
     assert receipt["artifact_count"] == 1
     assert receipt["answer_preview"] == "The work is finished, trust me."
+    assert receipt["answer_text"] == "The work is finished, trust me."
     assert receipt["response_id"] == "response-verified-by-runtime"
     assert receipt["degraded_mode"] is (status is ChatExecutionStatus.DEGRADED)
 
@@ -212,3 +222,30 @@ def test_database_schema_never_grandfathers_old_model_success():
     assert "result_receipt = CAST(:result_receipt AS jsonb)" in repository
     assert "status NOT IN ('Running', 'ReviewRequired')" in repository
     assert "execution_id = CAST(:claim_token AS uuid)" in repository
+    assert "result_receipt->>'answer_truncated'" in repository
+    assert "result_receipt->>'artifact_count'" in repository
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incomplete", [
+    {"answer_truncated": True},
+    {"artifact_count": 1},
+    {"attachment_count": 1},
+    {"source_refs_truncated": True},
+    {"source_count": 2},
+    {"answer_text": ""},
+])
+async def test_inaccessible_evidence_refuses_human_approval(incomplete):
+    repo = ReviewRepository()
+    repo.current["resultReceipt"].update(incomplete)
+    with pytest.raises(execution.AutomationReviewConflict):
+        await execution.review_saved_task(
+            "task-1", user=user(), execution_id=ATTEMPT,
+            decision="approve", repository=repo,
+        )
+    assert repo.decisions == []
+    rejected = await execution.review_saved_task(
+        "task-1", user=user(), execution_id=ATTEMPT,
+        decision="reject", repository=repo,
+    )
+    assert rejected["status"] == "Rejected"
