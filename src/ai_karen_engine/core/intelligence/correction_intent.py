@@ -20,12 +20,24 @@ _SELF_AUTHORED_CLAUSE = re.compile(
     re.IGNORECASE,
 )
 
+_REPORTED_SPEECH = re.compile(
+    r"\b(?:he|she|they|someone|my\s+\w+)\s+"
+    r"(?:said|says|thinks|claims|quoted)\b",
+    re.IGNORECASE,
+)
+
 
 def is_explicit_self_correction(text: str) -> bool:
     """True only for clear correction framing of a first-person clause."""
     normalized = " ".join(str(text or "").replace("’", "'").split())
     match = _CORRECTION_PREAMBLE.match(normalized)
-    return bool(match and _SELF_AUTHORED_CLAUSE.match(normalized[match.end():]))
+    if not match or any(quote in normalized for quote in ('"', "“", "”")):
+        return False
+    clause = normalized[match.end():]
+    return bool(
+        _SELF_AUTHORED_CLAUSE.match(clause)
+        and not _REPORTED_SPEECH.search(clause)
+    )
 
 
 __all__ = ["is_explicit_self_correction"]
