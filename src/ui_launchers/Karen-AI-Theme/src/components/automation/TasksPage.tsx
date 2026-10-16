@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ScrollText, PlusCircle, Trash2, Play, Settings, Bot, Info, Users, FileCog } from "lucide-react";
+import { ScrollText, PlusCircle, Trash2, Play, Settings, Bot, Info, Users, FileCog, History } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -78,6 +78,20 @@ type Task = {
   reviewNote?: string | null;
 };
 
+type ReviewHistoryEntry = {
+  outcome_id: string;
+  execution_id: string;
+  decision: "approve" | "reject";
+  status: string;
+  reviewed_at: string;
+  review_note: string;
+  acceptance_criteria: string;
+  receipt_sha256: string;
+  correlation_id?: string | null;
+  human_attestation: boolean;
+  independently_verified: boolean;
+};
+
 /**
  * @file TasksPage.tsx
  * @description Page for defining and managing Tasks for AI agents via /api/tasks.
@@ -89,6 +103,10 @@ export default function TasksPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isAgentsLoading, setIsAgentsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const [openHistoryTask, setOpenHistoryTask] = useState<string | null>(null);
+  const [reviewHistory, setReviewHistory] = useState<ReviewHistoryEntry[]>([]);
+  const [historyError, setHistoryError] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [taskName, setTaskName] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
   const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
@@ -105,6 +123,9 @@ export default function TasksPage() {
 
     setIsLoading(true);
     setIsAgentsLoading(true);
+    setOpenHistoryTask(null);
+    setReviewHistory([]);
+    setHistoryError("");
     setErrorMsg("");
     try {
       const { apiClient } = await import('@/lib/api');
@@ -220,6 +241,28 @@ export default function TasksPage() {
       fetchLiveData();
     } catch (err: unknown) {
       alert("Failed to execute task: " + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleShowHistory = async (taskId: string) => {
+    if (openHistoryTask === taskId) {
+      setOpenHistoryTask(null);
+      return;
+    }
+    setOpenHistoryTask(taskId);
+    setReviewHistory([]);
+    setHistoryError("");
+    setHistoryLoading(true);
+    try {
+      const { apiClient } = await import("@/lib/api");
+      const records = await apiClient.get<ReviewHistoryEntry[]>(
+        `/api/tasks/${encodeURIComponent(taskId)}/reviews?limit=50`,
+      );
+      setReviewHistory(records);
+    } catch (err: unknown) {
+      setHistoryError(err instanceof Error ? err.message : "Task review history is unavailable.");
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -358,6 +401,11 @@ export default function TasksPage() {
                         <Button variant="ghost" size="icon">
                             <Settings className="h-4 w-4 text-muted-foreground" />
                         </Button>
+                        <Button variant="ghost" size="icon"
+                          aria-label={`Show review history for ${task.name}`}
+                          title="Review history" onClick={() => handleShowHistory(task.id)}>
+                          <History className="h-4 w-4 text-muted-foreground" />
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => handleDeleteTask(task.id)}>
                             <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
                         </Button>
@@ -454,6 +502,31 @@ export default function TasksPage() {
                         Reject result
                       </Button>
                     </div>
+                  </div>
+                )}
+                {openHistoryTask === task.id && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <p className="font-semibold text-foreground">Previous human reviews</p>
+                    {historyLoading ? <p>Loading review history...</p>
+                      : historyError ? <p className="text-destructive">{historyError}</p>
+                      : reviewHistory.length === 0 ? <p>No review events recorded.</p>
+                      : reviewHistory.map((review) => (
+                        <div key={review.outcome_id} className="border-t pt-2 space-y-1">
+                          <p className="font-semibold text-foreground">
+                            {review.decision === "approve" ? "Accepted by task creator" : "Rejected by task creator"}
+                          </p>
+                          <p>{new Date(review.reviewed_at).toLocaleString()}</p>
+                          {review.acceptance_criteria && (
+                            <p className="whitespace-pre-wrap">Criteria: {review.acceptance_criteria}</p>
+                          )}
+                          {review.review_note && (
+                            <p className="whitespace-pre-wrap">Review note: {review.review_note}</p>
+                          )}
+                          <p className="break-all">Execution: {review.execution_id}</p>
+                          <p className="break-all">Receipt SHA-256: {review.receipt_sha256}</p>
+                          <p>Human attestation, not independently verified.</p>
+                        </div>
+                      ))}
                   </div>
                 )}
                 {task.lastError && (
