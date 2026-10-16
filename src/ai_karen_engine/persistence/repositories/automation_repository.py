@@ -233,7 +233,7 @@ class SqlAutomationRepository:
                     WHERE task_id = :task_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
                       AND (
-                          status <> 'Running'
+                          status NOT IN ('Running', 'ReviewRequired')
                           OR (
                               claim_token IS NOT NULL
                               AND claim_expires_at <= clock_timestamp()
