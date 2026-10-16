@@ -18,6 +18,7 @@ from sqlalchemy import select, text
 from ai_karen_engine.core.memory.belief_resolution import (
     ProfileProjectionEvidence,
     resolve_profile_projection,
+    is_trusted_profile_correction,
 )
 from ai_karen_engine.core.memory.semantic_contract import (
     AssertionModality,
@@ -466,11 +467,10 @@ class PostgresDerivedMemoryProjector:
             incoming_evidence, existing_evidence,
             # Corrections must be identified by the canonical classifier on
             # direct user input, never by runtime metadata or recency.
-            explicit_correction=(
-                metadata.get("explicit_correction") is True
-                and signal.metadata.get("explicit_correction") is True
-                and signal.metadata.get("source") == "explicit_semantic_rule"
-                and source_type in {"chat_user", "chat"}
+            explicit_correction=is_trusted_profile_correction(
+                source_type=source_type,
+                signal_metadata=signal.metadata,
+                merged_metadata=metadata,
             ),
         )
         if resolution.operation is MemoryOperation.QUARANTINE:
