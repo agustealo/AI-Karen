@@ -8,6 +8,7 @@ import pytest
 from ai_karen_engine.core.memory.belief_resolution import (
     ProfileProjectionEvidence,
     resolve_profile_projection,
+    is_trusted_profile_correction,
 )
 from ai_karen_engine.core.memory.semantic_contract import (
     AssertionModality, FactCardinality, MemoryOperation,
@@ -115,3 +116,44 @@ def test_matching_signed_semantics_cannot_be_replaced_by_transport():
             signal_metadata={"explicit_correction": False},
             runtime_metadata={"explicit_correction": True},
         )
+
+
+@pytest.mark.parametrize(
+    ("source_type", "classifier", "explicit", "expected"),
+    [
+        ("chat_user", "explicit_semantic_rule", True, True),
+        ("chat", "explicit_general_fact_rule", True, True),
+        ("chat_user", "explicit_semantic_rule", False, False),
+        ("profile_correction", "explicit_semantic_rule", False, True),
+        ("profile_correction", "explicit_general_fact_rule", False, True),
+        ("profile_correction", "llm_guess", True, False),
+        ("profile_correction", "explicit_general_fact_rule", False, False),
+        ("system", "explicit_semantic_rule", True, False),
+    ],
+)
+def test_correction_provenance_requires_classified_user_evidence(
+    source_type, classifier, explicit, expected,
+):
+    evidence = {
+        "source": classifier,
+        "explicit_user_statement": True,
+        "explicit_correction": explicit,
+    }
+    if source_type == "profile_correction" and classifier == "explicit_general_fact_rule" and not expected:
+        evidence["explicit_user_statement"] = False
+    assert is_trusted_profile_correction(
+        source_type=source_type,
+        signal_metadata=evidence,
+        merged_metadata=evidence,
+    ) is expected
+
+
+def test_runtime_supplied_correction_flag_is_not_authority():
+    assert not is_trusted_profile_correction(
+        source_type="chat_user",
+        signal_metadata={
+            "source": "explicit_general_fact_rule",
+            "explicit_user_statement": True,
+        },
+        merged_metadata={"explicit_correction": True},
+    )
