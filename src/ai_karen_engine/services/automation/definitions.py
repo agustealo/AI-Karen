@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from croniter import croniter
 
 from ai_karen_engine.agents import get_agent_integration_service
+from ai_karen_engine.core.runtime.task_output_verification import validate_contract
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.persistence.repositories.automation_repository import (
     SqlAutomationRepository,
@@ -84,6 +85,7 @@ class AutomationDefinitionService:
             "name": str(payload.get("name") or "").strip(),
             "description": str(payload.get("description") or "").strip(),
             "acceptanceCriteria": str(payload.get("acceptanceCriteria") or "").strip(),
+            "verificationContract": validate_contract(payload.get("verificationContract")),
             "primaryAgent": primary_agent,
             "primaryAgentInstructions": str(
                 payload.get("primaryAgentInstructions") or ""
