@@ -210,4 +210,5 @@ def test_database_schema_never_grandfathers_old_model_success():
     assert "AND status = 'ReviewRequired'" in repository
     assert "AND execution_id = CAST(:execution_id AS uuid)" in repository
     assert "result_receipt = CAST(:result_receipt AS jsonb)" in repository
+    assert "status NOT IN ('Running', 'ReviewRequired')" in repository
     assert "execution_id = CAST(:claim_token AS uuid)" in repository
