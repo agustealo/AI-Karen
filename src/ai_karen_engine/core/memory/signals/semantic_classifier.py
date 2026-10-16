@@ -458,7 +458,11 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
     # bespoke category rule. Existing specialized identity/preference signals
     # always retain their established semantics and projection identities.
     relation = extract_personal_relation(normalized)
-    if relation is not None:
+    if relation is not None and not any(
+        signal.signal_type in {"identity_fact", "profile_fact", "preference"}
+        and signal.metadata.get("explicit_user_statement") is True
+        for signal in signals
+    ):
         durable = (
             relation.modality == "asserted"
             and relation.temporal_scope is None
