@@ -757,7 +757,8 @@ async def test_status_only_stream_is_explicit_failure_not_successful_empty_answe
     assert failure.metadata["requested_model"] == "llama3"
     assert failure.content == "The selected runtime produced no assistant response."
     assert chunks[-1].metadata["transcript_persistence_status"] == "skipped"
-    assert chunks[-1].metadata["generation_error"] is True
+    assert chunks[-1].metadata["status"] == "error"
+    assert chunks[-1].metadata["failure_category"] == "degraded_runtime"
     assert gateway.calls == []
 
 
@@ -780,7 +781,8 @@ async def test_upstream_stream_error_is_not_replaced_with_second_empty_error():
     assert len(errors) == 1
     assert errors[0].metadata["error_code"] == "MODEL_UNAVAILABLE"
     assert chunks[-1].type == ChatStreamEventType.COMPLETE
-    assert chunks[-1].metadata["generation_error"] is True
+    assert chunks[-1].metadata["status"] == "error"
+    assert chunks[-1].metadata["failure_category"] == "degraded_runtime"
     assert gateway.calls == []
 
 
