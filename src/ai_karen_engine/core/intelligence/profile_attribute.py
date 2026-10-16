@@ -117,13 +117,13 @@ class ProfileQueryIntent:
 
 
 _EXPLICIT_PROFILE_SCOPE = re.compile(
-    r"^(?P<base>.+?)\\s+(?:for|in)\\s+(?P<kind>project|task)\\s+"
+    r"^(?P<base>.+?)\s+(?:for|in)\s+(?P<kind>project|task)\s+"
     r"(?P<identity>[a-z0-9][a-z0-9_-]{0,63})$"
 )
 _HISTORICAL_PROFILE_SUFFIX = re.compile(
-    r"\\s+(?:last\\s+(?:year|month|week)|yesterday|previously|in\\s+(?:19|20)\\d{2})$"
+    r"\s+(?:last\s+(?:year|month|week)|yesterday|previously|in\s+(?:19|20)\d{2})$"
 )
-_CONTEXTUAL_PROFILE_SUFFIX = re.compile(r"\\s+(?:for|in|on)\\s+\\S.+$")
+_CONTEXTUAL_PROFILE_SUFFIX = re.compile(r"\s+(?:for|in|on)\s+\S.+$")
 
 
 def requested_profile_query(text: str) -> ProfileQueryIntent:
