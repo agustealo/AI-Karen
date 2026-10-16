@@ -608,6 +608,9 @@ class ChatRuntime:
         provider_meta: Dict[str, Any] = {}
         generation_error: Optional[Exception] = None
         recovered_error_type: Optional[str] = None
+        stream_error_emitted = False
+        stream_error_code = "CHAT_STREAM_ERROR"
+        stream_error_type = "UpstreamStreamError"
 
         grounded = self._grounded_personal_response(
             decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
@@ -687,6 +690,29 @@ class ChatRuntime:
             async for chunk in gen:
                 if chunk.type == "content":
                     streamed_text += chunk.content
+                if chunk.type == ChatStreamEventType.ERROR:
+                    stream_error_emitted = True
+                    chunk_metadata = (
+                        chunk.metadata if isinstance(chunk.metadata, dict) else {}
+                    )
+                    raw_code = chunk_metadata.get("error_code")
+                    raw_type = chunk_metadata.get("error_type")
+                    if (
+                        isinstance(raw_code, str)
+                        and 1 <= len(raw_code) <= 64
+                        and raw_code.isascii()
+                        and raw_code.isupper()
+                        and raw_code.replace("_", "").isalnum()
+                    ):
+                        stream_error_code = raw_code
+                    if (
+                        isinstance(raw_type, str)
+                        and 1 <= len(raw_type) <= 64
+                        and raw_type.isascii()
+                        and raw_type[0].isalpha()
+                        and raw_type.replace("_", "").isalnum()
+                    ):
+                        stream_error_type = raw_type
                 if chunk.type == ChatStreamEventType.COMPLETE:
                     continue
                 yield self._enrich_chunk(
@@ -820,13 +846,76 @@ class ChatRuntime:
                 )
                 sequence += 1
 
+        # A stream that emitted ERROR is failed even if partial text arrived.
+        # An empty stream is also not a successful assistant message. Neither
+        # failure may be promoted to a durable transcript or memory write.
+        if (stream_error_emitted or not streamed_text.strip()) and generation_error is None:
+            generation_error = RuntimeError(
+                "stream_reported_error" if stream_error_emitted
+                else "stream_completed_without_assistant_content"
+            )
+            provider_meta["generation_error"] = True
+            provider_meta["degraded_mode"] = True
+            provider_meta["degradation_reason"] = (
+                "stream_reported_error" if stream_error_emitted
+                else "empty_stream_output"
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type=(
+                    stream_error_type if stream_error_emitted
+                    else "EmptyGeneration"
+                ),
+                status="error",
+                metadata={
+                    "error_code": (
+                        stream_error_code if stream_error_emitted
+                        else "CHAT_EMPTY_STREAM"
+                    ),
+                    "correlation_id": ctx.correlation_id,
+                    "requested_provider": request.preferred_provider,
+                    "requested_model": request.preferred_model,
+                    "actual_provider": provider_meta.get("actual_provider"),
+                    "actual_model": provider_meta.get("actual_model"),
+                },
+            )
+            if not stream_error_emitted:
+                yield self._enrich_chunk(
+                    ChatStreamChunk(
+                        type=ChatStreamEventType.ERROR,
+                        content="The selected runtime produced no assistant response.",
+                        correlation_id=ctx.correlation_id,
+                        metadata={
+                            "error_code": "CHAT_EMPTY_STREAM",
+                            "error_type": "EmptyGeneration",
+                            "correlation_id": ctx.correlation_id,
+                            "requested_provider": request.preferred_provider,
+                            "requested_model": request.preferred_model,
+                            "actual_provider": provider_meta.get("actual_provider"),
+                            "actual_model": provider_meta.get("actual_model"),
+                            "runtime_engine": provider_meta.get("runtime_engine"),
+                            "degradation_reason": "empty_stream_output",
+                        },
+                    ),
+                    sequence,
+                    request_id,
+                    response_id,
+                    conversation_id,
+                )
+                sequence += 1
+
         provider_meta["execution_spans"] = [
             *runtime_spans,
             *list(provider_meta.get("execution_spans") or []),
         ]
 
         memory_persistence_failed = False
-        if decision.memory_write_allowed and streamed_text and not self._is_explicit_save_turn(request):
+        if (
+            decision.memory_write_allowed
+            and streamed_text.strip()
+            and generation_error is None
+            and not self._is_explicit_save_turn(request)
+        ):
             persistence_started = time.perf_counter()
             await self._persist_memory(
                 request,
@@ -885,6 +974,8 @@ class ChatRuntime:
             error=(
                 f"fallback:{recovered_error_type}"
                 if recovered_error_type and generation_error is None
+                else stream_error_type
+                if stream_error_emitted
                 else type(generation_error).__name__
                 if generation_error
                 else None
@@ -916,6 +1007,12 @@ class ChatRuntime:
             memory_persistence_failed=memory_persistence_failed,
             transcript_persistence_failed=transcript_persistence_failed,
         )
+        if stream_error_emitted:
+            terminal_metadata["error_code"] = stream_error_code
+            terminal_metadata["error_type"] = stream_error_type
+        elif provider_meta.get("degradation_reason") == "empty_stream_output":
+            terminal_metadata["error_code"] = "CHAT_EMPTY_STREAM"
+            terminal_metadata["error_type"] = "EmptyGeneration"
         terminal_metadata["trajectory_id"] = trajectory.trajectory_id
         terminal_metadata["capability_receipt"] = self._build_capability_receipt(
             decision,

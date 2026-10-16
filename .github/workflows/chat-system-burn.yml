@@ -101,6 +101,13 @@ jobs:
       - name: Verify canonical chat ingress and grounded response parity
         run: pytest tests/architecture/test_chat_stream_route_contract.py -q
 
+      - name: Burn empty and prematurely terminated chat SSE failures
+        run: |
+          # These targeted stream regressions have isolated runtime doubles.
+          # Legacy tests in the same file require a separate DB-backed gate.
+          pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k "status_only_stream or upstream_stream_error or whitespace_only_assistant_stream or partial_content_then_error" -q
+          pytest tests/core/runtime/test_chat_sse_error_contract.py tests/architecture/test_stream_error_diagnostic_contract.py -q
+
       - name: Verify personal recall execution provenance
         run: pytest tests/core/runtime/test_personal_recall_provenance_metadata.py -q
 

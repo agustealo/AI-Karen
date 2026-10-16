@@ -1639,11 +1639,16 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
               typeof metadata?.error_type === 'string'
                 ? metadata.error_type.trim()
                 : '';
+            const errorCode =
+              typeof metadata?.error_code === 'string'
+                ? metadata.error_code.trim()
+                : '';
             const correlationId =
               typeof metadata?.correlation_id === 'string'
                 ? metadata.correlation_id.trim()
                 : '';
             const diagnosticParts = [
+              errorCode ? `code=${errorCode}` : '',
               errorType ? `type=${errorType}` : '',
               correlationId ? `correlation=${correlationId}` : '',
             ].filter(Boolean);
@@ -1747,7 +1752,25 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         const fullContent = (completionContent || collectedContent).trim();
 
         if (!fullContent) {
-          throw new Error('Empty response from streaming endpoint');
+          // An HTTP 200 plus a terminal event is not proof a model generated
+          // text. Surface the backend contract violation without inventing a
+          // canned assistant message or claiming a successful model response.
+          const context = completedMetadata || {};
+          const correlationId =
+            typeof context.correlation_id === 'string'
+              ? context.correlation_id
+              : '';
+          const code = typeof context.error_code === 'string'
+            ? context.error_code
+            : 'CHAT_EMPTY_STREAM';
+          const reason = typeof context.degradation_reason === 'string'
+            ? context.degradation_reason
+            : 'no_assistant_content';
+          throw new Error(
+            `Chat runtime returned no assistant content (code=${code}, reason=${reason}` +
+            (correlationId ? `, correlation=${correlationId}` : '') +
+            '). Check provider availability and backend stream diagnostics.',
+          );
         }
 
         // Validate backend metadata completeness

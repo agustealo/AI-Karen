@@ -25,6 +25,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
     ChatExecutionStatus,
+    ChatStreamChunk,
 )
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     runtime_response_http_status,
@@ -261,8 +262,34 @@ def _stream_execution_request(
 
 
 async def _sse(runtime_request: ChatExecutionRequest):
-    async for chunk in get_chat_runtime().execute_stream(runtime_request):
-        yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
+    """Translate canonical runtime events into SSE, including early exceptions.
+
+    An upstream runtime error must never turn into HTTP 200 with an empty body.
+    The route reports a safe correlated error; Runtime remains the sole owner
+    of provider selection, fallbacks, and generation.
+    """
+    try:
+        async for chunk in get_chat_runtime().execute_stream(runtime_request):
+            yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
+    except Exception as exc:
+        logger.exception(
+            "Chat SSE runtime failed",
+            extra={
+                "correlation_id": runtime_request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        error_event = ChatStreamChunk(
+            type="error",
+            content="Chat streaming failed before completion.",
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={
+                "error_code": "CHAT_STREAM_RUNTIME_EXCEPTION",
+                "error_type": type(exc).__name__,
+                "correlation_id": runtime_request.context.correlation_id,
+            },
+        )
+        yield f"data: {json.dumps(error_event.to_sse_payload())}\n\n"
     yield "data: [DONE]\n\n"
 
 
