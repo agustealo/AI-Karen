@@ -798,7 +798,12 @@ async def test_whitespace_only_assistant_stream_does_not_persist_as_model_reply(
             type="content", content="   ", correlation_id="corr-1",
         )
 
-    chunks = await _collect_stream(runtime, request, decision, plan, whitespace)
+    memory_write = AsyncMock()
+    chunks = await _collect_stream(
+        runtime, request, decision, plan, whitespace,
+        persist_memory=memory_write,
+    )
+    memory_write.assert_not_awaited()
     assert [c.type for c in chunks] == [
         ChatStreamEventType.CONTENT,
         ChatStreamEventType.ERROR,
