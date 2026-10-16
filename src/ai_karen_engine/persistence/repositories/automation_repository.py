@@ -396,9 +396,11 @@ class SqlAutomationRepository:
                               AND length(COALESCE(result_receipt->>'answer_text', '')) > 0
                               AND COALESCE((result_receipt->>'artifact_count')::integer, 1) = 0
                               AND COALESCE((result_receipt->>'attachment_count')::integer, 1) = 0
-                              AND jsonb_typeof(result_receipt->'sources') = 'array'
-                              AND jsonb_array_length(result_receipt->'sources') =
-                                  COALESCE((result_receipt->>'source_count')::integer, -1)
+                              AND jsonb_array_length(
+                                  CASE WHEN jsonb_typeof(result_receipt->'sources') = 'array'
+                                  THEN result_receipt->'sources'
+                                  ELSE '[]'::jsonb END
+                              ) = COALESCE((result_receipt->>'source_count')::integer, -1)
                           )
                       )
                     RETURNING *
