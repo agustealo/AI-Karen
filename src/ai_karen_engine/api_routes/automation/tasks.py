@@ -49,6 +49,10 @@ class TaskDefinitionRequest(BaseModel):
     description: str = Field(
         ..., description="Detailed description of what the task does"
     )
+    acceptanceCriteria: str = Field(
+        "", max_length=4000,
+        description="User-defined acceptance criteria for the human completion review",
+    )
     primaryAgent: str = Field(
         ..., description="Primary agent responsible for the outcome"
     )
