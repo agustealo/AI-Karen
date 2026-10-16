@@ -186,3 +186,70 @@ async def test_live_set_members_have_independent_current_slots():
             await session.execute(
                 delete(MemoryEvent).where(MemoryEvent.event_id.in_(events))
             )
+
+
+async def test_live_profile_recall_filters_exact_project_scope_before_limit():
+    """Real PostgreSQL/RLS proof that a global result cannot crowd scoped truth."""
+    from ai_karen_engine.core.memory.types import MemoryQuery
+    from ai_karen_engine.platform.memory.postgres.profile_retriever import (
+        PostgresProfileRecallRetriever,
+    )
+
+    tenant, user = uuid.uuid4(), uuid.uuid4()
+    event_ids = [uuid.uuid4() for _ in range(3)]
+    values = (
+        {"value": "Boston", "cardinality": "singleton"},
+        {"value": "Detroit", "cardinality": "scoped_singleton", "project_id": 42},
+        {"value": "Chicago", "cardinality": "scoped_singleton", "project_id": 99},
+    )
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            for event_id, value in zip(event_ids, values):
+                session.add(MemoryEvent(
+                    event_id=event_id, tenant_id=tenant, user_id=user,
+                    source_type="integration_test", payload_hash=uuid.uuid4().hex,
+                    event_type="assertion", payload={"evidence": str(event_id)},
+                    consent_state="granted",
+                ))
+                session.add(ProfileFact(
+                    event_id=event_id, tenant_id=tenant, user_id=user,
+                    category="identity", attribute="work_location",
+                    value=value, source_type="integration_test",
+                    projection_key=profile_projection_key(
+                        tenant_id=str(tenant), user_id=str(user),
+                        category="identity", attribute="work_location",
+                        value=value, source_event_id=str(event_id),
+                    ),
+                ))
+        query = MemoryQuery(
+            text="Where do I work for project 42?",
+            tenant_id=str(tenant), user_id=str(user), top_k=1,
+        )
+        found = await PostgresProfileRecallRetriever().recall(query)
+        assert len(found) == 1
+        assert found[0].content == "work_location: Detroit"
+        assert found[0].metadata.custom["semantic_scope"]["project_id"] == 42
+
+        missing = await PostgresProfileRecallRetriever().recall(
+            MemoryQuery(
+                text="Where do I work for project 777?",
+                tenant_id=str(tenant), user_id=str(user), top_k=1,
+            )
+        )
+        assert missing == []
+
+        history = await PostgresProfileRecallRetriever().recall(
+            MemoryQuery(
+                text="Where do I work last year?",
+                tenant_id=str(tenant), user_id=str(user), top_k=1,
+            )
+        )
+        assert history == []
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(
+                delete(ProfileFact).where(ProfileFact.event_id.in_(event_ids))
+            )
+            await session.execute(
+                delete(MemoryEvent).where(MemoryEvent.event_id.in_(event_ids))
+            )
