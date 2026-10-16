@@ -304,6 +304,14 @@ async def test_live_open_relation_can_be_recalled_by_the_same_generic_attribute(
             "personal_relation.reading_ritual: green tea at sunrise"
         )
 
+        # Generic query activation must never substitute a neighboring fact
+        # when the requested relationship has no current profile projection.
+        missing_relation = await recall.recall(MemoryQuery(
+            text="What is my lunch ritual?",
+            tenant_id=str(tenant), user_id=str(user), top_k=5,
+        ))
+        assert missing_relation == []
+
         cross_user = await recall.recall(MemoryQuery(
             text="What is my reading ritual?",
             tenant_id=str(tenant), user_id=str(uuid.uuid4()), top_k=5,
