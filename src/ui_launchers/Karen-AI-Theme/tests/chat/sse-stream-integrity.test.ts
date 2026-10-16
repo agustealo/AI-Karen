@@ -103,6 +103,15 @@ describe('Next.js chat SSE transport integrity', () => {
     });
   });
 
+  it('rejects DONE text embedded in an unterminated SSE payload', async () => {
+    const output = await collect(observeChatSseBody(
+      stream('data: {"type":"content","content":"partial data: [DONE]'),
+      'corr-spoof',
+    ));
+    expect(output).toContain('CHAT_STREAM_UPSTREAM_TERMINATED');
+    expect(output).toContain('"correlation_id":"corr-spoof"');
+  });
+
   it('does not treat a bare upstream DONE marker as model-generated text', async () => {
     const output = await collect(observeChatSseBody(
       stream('data: [DONE]\n\n'), 'corr-5',
