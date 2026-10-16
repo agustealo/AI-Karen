@@ -43,6 +43,7 @@ type Task = {
   name: string;
   description?: string;
   acceptanceCriteria?: string;
+  verificationContract?: { version: string; schema: Record<string, unknown> };
   instructions?: string;
   agent?: string;
   subAgents?: SubAgent[];
@@ -72,6 +73,12 @@ type Task = {
     response_id?: string | null;
     correlation_id?: string | null;
     independently_verified?: boolean;
+    machine_verification?: {
+      status?: "passed" | "failed" | "not_configured";
+      reason?: string;
+      contract_sha256?: string;
+      output_sha256?: string;
+    };
   };
   reviewedAt?: string | null;
   reviewedBy?: string | null;
@@ -119,6 +126,7 @@ export default function TasksPage() {
   const [taskName, setTaskName] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
   const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
+  const [verificationSchemaJson, setVerificationSchemaJson] = useState("");
 
   const fetchLiveData = useCallback(async () => {
     if (!isAuthenticated) {
@@ -290,6 +298,11 @@ export default function TasksPage() {
       return;
     }
     const receipt = task.resultReceipt;
+    if (decision === "approve" && task.verificationContract?.version &&
+        receipt?.machine_verification?.status !== "passed") {
+      setErrorMsg("This output did not pass the declared schema. Reject it or rerun the task.");
+      return;
+    }
     if (
       decision === "approve" &&
       (
@@ -339,11 +352,23 @@ export default function TasksPage() {
       return;
     }
     try {
+      let verificationContract: Record<string, unknown> = {};
+      if (verificationSchemaJson.trim()) {
+        const schema: unknown = JSON.parse(verificationSchemaJson);
+        if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+          throw new Error("Verification schema must be a JSON object.");
+        }
+        verificationContract = {
+          version: "structured-output.v1",
+          schema: schema as Record<string, unknown>,
+        };
+      }
       const { apiClient } = await import('@/lib/api');
       await apiClient.post('/api/tasks/', {
         name: taskName.trim(),
         description: taskDescription.trim(),
         acceptanceCriteria: acceptanceCriteria.trim(),
+        verificationContract,
         primaryAgent: newPrimaryAgent,
         primaryAgentInstructions: newPrimaryAgentInstructions,
         taskType: taskName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
@@ -352,6 +377,7 @@ export default function TasksPage() {
       setTaskName("");
       setTaskDescription("");
       setAcceptanceCriteria("");
+      setVerificationSchemaJson("");
       setNewPrimaryAgent("");
       setNewPrimaryAgentInstructions("");
       setNewSubAgents([]);
@@ -465,6 +491,11 @@ export default function TasksPage() {
                     Acceptance criteria: {task.acceptanceCriteria}
                   </p>
                 )}
+                {task.verificationContract?.version && (
+                  <p>Machine output check: {task.resultReceipt?.machine_verification?.status ?? "not run"}.
+                    A passing check verifies structure, not real-world completion.
+                  </p>
+                )}
                 {task.status === "ReviewRequired" && task.executionId && (
                   <div className="rounded-lg border p-3 space-y-2">
                     <p className="font-semibold text-foreground">Result awaiting your review</p>
@@ -501,12 +532,20 @@ export default function TasksPage() {
                         You may reject the result and request a reviewer-accessible output.
                       </p>
                     )}
+                    {task.resultReceipt?.machine_verification?.status === "failed" && (
+                      <p className="text-destructive">
+                        Structured output check failed: {task.resultReceipt.machine_verification.reason || "Unknown cause"}.
+                        Approval is blocked until a new attempt passes.
+                      </p>
+                    )}
                     {task.resultReceipt?.degraded_mode && (
                       <p className="text-destructive">The runtime reported degraded execution.</p>
                     )}
                     <div className="flex gap-2">
                       <Button size="sm" onClick={() => handleReviewTask(task, "approve")}
                         disabled={
+                          (Boolean(task.verificationContract?.version) &&
+                            task.resultReceipt?.machine_verification?.status !== "passed") ||
                           !task.resultReceipt?.answer_text ||
                           !!task.resultReceipt?.answer_truncated ||
                           !!task.resultReceipt?.source_refs_truncated ||
@@ -603,6 +642,18 @@ export default function TasksPage() {
                    onChange={(e) => setAcceptanceCriteria(e.target.value)}
                    rows={3}
                  />
+               </div>
+               <div className="space-y-1.5">
+                 <Label htmlFor="task-machine-schema">Optional machine-checkable JSON output schema</Label>
+                 <Textarea id="task-machine-schema" maxLength={8192}
+                   placeholder='{"type":"object","required":["summary"],"properties":{"summary":{"type":"string"}}}'
+                   value={verificationSchemaJson}
+                   onChange={(e) => setVerificationSchemaJson(e.target.value)}
+                   rows={4}
+                 />
+                 <p className="text-xs text-muted-foreground">
+                   Checks ChatRuntime structured output only. This does not verify real-world completion. Human approval remains required.
+                 </p>
                </div>
                <div className="space-y-1.5">
                    <Label htmlFor="task-primary-agent">Assign Primary Agent</Label>
