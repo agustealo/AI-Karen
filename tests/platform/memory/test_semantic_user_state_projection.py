@@ -161,7 +161,7 @@ async def test_general_profile_fact_projects_to_canonical_profile(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_new_preference_supersedes_previous_current_fact(monkeypatch):
+async def test_new_preference_without_explicit_correction_is_quarantined(monkeypatch):
     old = ProfileFact(
         fact_id=UUID("00000000-0000-0000-0000-000000000020"),
         event_id=UUID("00000000-0000-0000-0000-000000000021"),
@@ -213,10 +213,9 @@ async def test_new_preference_supersedes_previous_current_fact(monkeypatch):
     )
 
     facts = [item for item in session.added if isinstance(item, ProfileFact)]
-    assert len(facts) == 1
-    assert facts[0].value["value"] == "orange"
-    assert facts[0].supersedes == old.fact_id
-    assert old.valid_to is not None
+    assert facts == []
+    assert old.valid_to is None
+    assert old.value["value"] == "green"
 
 
 @pytest.mark.asyncio
@@ -522,7 +521,7 @@ def test_each_semantic_projection_also_keeps_episode_lineage():
 
 
 @pytest.mark.asyncio
-async def test_location_correction_supersedes_only_same_attribute(monkeypatch):
+async def test_new_location_without_explicit_correction_preserves_current(monkeypatch):
     previous = ProfileFact(
         fact_id=UUID("00000000-0000-0000-0000-000000000060"),
         event_id=UUID("00000000-0000-0000-0000-000000000061"),
@@ -564,7 +563,6 @@ async def test_location_correction_supersedes_only_same_attribute(monkeypatch):
         },
     )
     facts = [value for value in session.added if isinstance(value, ProfileFact)]
-    assert len(facts) == 1
-    assert facts[0].value["value"] == "Jamaica"
-    assert facts[0].supersedes == previous.fact_id
-    assert previous.valid_to is not None
+    assert facts == []
+    assert previous.valid_to is None
+    assert previous.value["value"] == "Detroit"
