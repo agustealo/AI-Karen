@@ -142,6 +142,8 @@ class TimeoutSettings:
     db_query_timeout: int = 30
     health_check_interval: int = 30
     agent_timeout_seconds: int = 300
+    saved_task_claim_lease_seconds: int = 900
+    saved_task_claim_heartbeat_seconds: int = 60
     tool_timeout_seconds: int = 30
     web_search_timeout_seconds: int = 60
     extension_timeout_seconds: int = 30
@@ -361,6 +363,17 @@ class RuntimeSettings:
         if env_request_timeout:
             self.timeouts.request_timeout = as_int(env_request_timeout, self.timeouts.request_timeout)
 
+        env_task_lease = env("KARI_SAVED_TASK_CLAIM_LEASE_SECONDS")
+        if env_task_lease is not None:
+            self.timeouts.saved_task_claim_lease_seconds = as_int(
+                env_task_lease, -1,
+            )
+        env_task_heartbeat = env("KARI_SAVED_TASK_CLAIM_HEARTBEAT_SECONDS")
+        if env_task_heartbeat is not None:
+            self.timeouts.saved_task_claim_heartbeat_seconds = as_int(
+                env_task_heartbeat, -1,
+            )
+
         env_db_conn_timeout = env("DB_CONNECTION_TIMEOUT")
         if env_db_conn_timeout:
             self.timeouts.db_connection_timeout = as_int(env_db_conn_timeout, self.timeouts.db_connection_timeout)
@@ -441,6 +454,15 @@ class RuntimeSettings:
 
         if self.llm.max_retries < 0:
             issues.append("LLM max_retries must not be negative")
+
+        if self.timeouts.saved_task_claim_lease_seconds < 30:
+            issues.append("Saved task claim lease must be at least 30 seconds")
+        if (
+            self.timeouts.saved_task_claim_heartbeat_seconds < 1
+            or 2 * self.timeouts.saved_task_claim_heartbeat_seconds
+            >= self.timeouts.saved_task_claim_lease_seconds
+        ):
+            issues.append("Saved task heartbeat must be less than half the claim lease")
 
         if self.endpoints.database_url and "localhost" in self.endpoints.database_url:
             if self.environment == Environment.PRODUCTION:
