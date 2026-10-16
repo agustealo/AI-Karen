@@ -61,14 +61,14 @@ def setup(monkeypatch, *, service=None, store=None):
     return tool, memory
 
 
-def invoke(*, identity_user=USER, identity_tenant=TENANT, authorized=None):
+def invoke(*, identity_user=USER, identity_tenant=TENANT, authorized=None, execution=None):
     return bridges.ToolBridge().execute(
         tool_name="web_search", parameters={"query": "secrets?"},
         authorized_plan=authorized or plan(),
         tenant_id=identity_tenant, user_id=identity_user,
         policy_decision_id="policy-42",
         trajectory_id=TRAJECTORY,
-        agent_id="researcher", step_id="step-1",
+        agent_id="researcher", step_id="step-1", execution=execution,
     )
 
 
@@ -171,6 +171,42 @@ async def test_same_tenant_nonowner_cannot_replay_policy(monkeypatch):
         await invoke(identity_user=OTHER)
     assert tool.calls == []
     assert memory.get_for_trajectory(TRAJECTORY, tenant_id=TENANT) == []
+
+
+@pytest.mark.asyncio
+async def test_policy_bound_session_accepts_correct_context_and_blocks_replay(monkeypatch):
+    from ai_karen_engine.agent_medusa.contracts.specialist_execution import (
+        SpecialistExecutionContext,
+    )
+    tool, memory = setup(monkeypatch)
+    bound = plan()
+    bound.authorized_session_id = "authenticated-session-a"
+
+    # Omitting or spoofing a session cannot reuse a valid user/tenant plan.
+    with pytest.raises(PermissionError, match="another principal"):
+        await invoke(authorized=bound)
+    wrong = SpecialistExecutionContext(
+        authorized_plan=bound, tenant_id=TENANT, user_id=USER,
+        session_id="authenticated-session-b",
+        policy_decision_id="policy-42", trajectory_id=TRAJECTORY,
+        correlation_id="corr-a", step_id="step-1",
+    )
+    with pytest.raises(PermissionError, match="another principal"):
+        await invoke(authorized=bound, execution=wrong)
+    assert tool.calls == []
+
+    matching = SpecialistExecutionContext(
+        authorized_plan=bound, tenant_id=TENANT, user_id=USER,
+        session_id="authenticated-session-a",
+        policy_decision_id="policy-42", trajectory_id=TRAJECTORY,
+        correlation_id="corr-a", step_id="step-1",
+    )
+    result = await invoke(authorized=bound, execution=matching)
+    assert result["success"] is True
+    assert len(tool.calls) == 1
+    assert len(await memory.list_governed_tool_receipts_async(
+        trajectory_id=TRAJECTORY, tenant_id=TENANT, user_id=USER,
+    )) == 1
 
 
 @pytest.mark.asyncio
