@@ -746,10 +746,11 @@ async def test_status_only_stream_is_explicit_failure_not_successful_empty_answe
     chunks = await _collect_stream(runtime, request, decision, plan, status_only)
     assert [chunk.type for chunk in chunks] == [
         ChatStreamEventType.STATUS,
+        ChatStreamEventType.STATUS,
         ChatStreamEventType.ERROR,
         ChatStreamEventType.COMPLETE,
     ]
-    failure = chunks[1]
+    failure = chunks[2]
     assert failure.metadata["error_code"] == "CHAT_EMPTY_STREAM"
     assert failure.metadata["error_type"] == "EmptyGeneration"
     assert failure.metadata["correlation_id"] == "corr-1"
@@ -805,11 +806,12 @@ async def test_whitespace_only_assistant_stream_does_not_persist_as_model_reply(
     )
     memory_write.assert_not_awaited()
     assert [c.type for c in chunks] == [
+        ChatStreamEventType.STATUS,
         ChatStreamEventType.CONTENT,
         ChatStreamEventType.ERROR,
         ChatStreamEventType.COMPLETE,
     ]
-    assert chunks[1].metadata["error_code"] == "CHAT_EMPTY_STREAM"
+    assert chunks[2].metadata["error_code"] == "CHAT_EMPTY_STREAM"
     assert gateway.calls == []
 
 
@@ -839,11 +841,12 @@ async def test_partial_content_then_error_never_persists_failed_assistant_turn()
     )
 
     assert [chunk.type for chunk in chunks] == [
+        ChatStreamEventType.STATUS,
         ChatStreamEventType.CONTENT,
         ChatStreamEventType.ERROR,
         ChatStreamEventType.COMPLETE,
     ]
-    assert chunks[1].metadata["error_code"] == "PROVIDER_DISCONNECTED"
+    assert chunks[2].metadata["error_code"] == "PROVIDER_DISCONNECTED"
     assert chunks[-1].metadata["status"] == "error"
     assert chunks[-1].metadata["transcript_persistence_status"] == "skipped"
     assert chunks[-1].metadata["failure_category"] == "degraded_runtime"
