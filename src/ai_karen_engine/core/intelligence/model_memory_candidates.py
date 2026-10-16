@@ -173,6 +173,14 @@ def review_model_memory_candidates(
         return ModelCandidateReview((), ("invalid_source_context",))
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         return ModelCandidateReview((), ("invalid_observation_time",))
+    # A clipped quote cannot upgrade third-party, hypothetical or negated
+    # context into a direct autobiographical statement.
+    if (
+        any(char in source_text for char in ('"', "\u201c", "\u201d"))
+        or _UNTRUSTED_ATTRIBUTION.search(source_text)
+        or _NONASSERTIONS.search(source_text)
+    ):
+        return ModelCandidateReview((), ("source_context_not_direct_assertion",))
     items = _parse_envelope(raw_output)
     if items is None:
         return ModelCandidateReview((), ("invalid_model_envelope",))
@@ -198,7 +206,10 @@ def review_model_memory_candidates(
                 user_id=user_id,
                 subject=SemanticSubject(kind=SubjectKind.SELF, entity_id=user_id),
                 predicate=SemanticPredicate(
-                    namespace="personal_relation", relation=relation.replace(" ", "_")
+                    namespace="personal_relation",
+                    relation=personal_relation_attribute(relation).removeprefix(
+                        "personal_relation."
+                    ),
                 ),
                 object=SemanticObject(type="text", canonical_value=value),
                 qualifiers=SemanticQualifiers(),
