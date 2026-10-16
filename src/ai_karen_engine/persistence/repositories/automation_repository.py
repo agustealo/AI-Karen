@@ -30,6 +30,7 @@ def _task_row(row: Any) -> Dict[str, Any]:
         "id": data["task_id"],
         "name": data["name"],
         "description": data["description"],
+        "acceptanceCriteria": data.get("acceptance_criteria") or "",
         "primaryAgent": data["primary_agent"],
         "primaryAgentInstructions": data["primary_agent_instructions"],
         "taskType": data["task_type"],
@@ -114,12 +115,13 @@ class SqlAutomationRepository:
                     """
                     INSERT INTO public.automation_tasks (
                         task_id, tenant_id, created_by, name, description,
-                        primary_agent, primary_agent_instructions, task_type, sub_agents
+                        primary_agent, primary_agent_instructions, task_type, sub_agents,
+                        acceptance_criteria
                     ) VALUES (
                         :task_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
                         :name, :description, :primary_agent,
                         :primary_agent_instructions, :task_type,
-                        CAST(:sub_agents AS jsonb)
+                        CAST(:sub_agents AS jsonb), :acceptance_criteria
                     )
                     RETURNING *
                     """
@@ -134,6 +136,7 @@ class SqlAutomationRepository:
                     "primary_agent_instructions": record.get("primaryAgentInstructions", ""),
                     "task_type": record["taskType"],
                     "sub_agents": json.dumps(record.get("subAgents") or []),
+                    "acceptance_criteria": record.get("acceptanceCriteria") or "",
                 },
             )
             return _task_row(result.mappings().one())
