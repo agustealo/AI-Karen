@@ -264,3 +264,58 @@ async def test_semantic_role_lookup_uses_governed_requirement_not_raw_weather_qu
     assert memory_manager.calls[0]["query"] == "Where am I currently?"
     assert memory_manager.calls[0]["user_id"] == request.context.user_id
     assert memory_manager.calls[0]["tenant_id"] == request.context.tenant_id
+
+
+def test_canonical_profile_recall_semantics_survive_typed_runtime_resolution():
+    from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
+    request = _request()
+    metadata = {
+        "source": "postgres_profile_fact",
+        "tenant_id": "tenant-1",
+        "user_id": "user-1",
+        "custom": {
+            "source_store": "postgres",
+            "profile_fact_id": "profile-1",
+            "event_id": "event-1",
+            "attribute": "favorite_artist",
+            "cardinality": "set",
+            "semantic_scope": {"domain": "music", "facet": "artist"},
+        },
+    }
+    item = {
+        "id": "profile-1",
+        "content": "favorite_artist: Bob Marley",
+        "metadata": metadata,
+    }
+    resolver = RuntimeEvidenceResolver()
+    parsed = resolver._memory_item_to_evidence(
+        item, request=request, retrieved_at=datetime.now(timezone.utc),
+    )
+    assert parsed.fact_semantics is not None
+    assert parsed.fact_semantics.attribute == "favorite_artist"
+    assert parsed.fact_semantics.cardinality is FactCardinality.SET
+    assert parsed.fact_semantics.semantic_scope == (
+        ("domain", "music"), ("facet", "artist"),
+    )
+
+    # Tenant, principal, row identity and source identity must match before
+    # retrieval metadata is permitted to influence belief cardinality.
+    from copy import deepcopy
+
+    for mutate in (
+        lambda m: m.update({"tenant_id": "foreign-tenant"}),
+        lambda m: m.update({"user_id": "foreign-user"}),
+        lambda m: m.update({"source": "model_claim"}),
+        lambda m: m["custom"].update({"profile_fact_id": "foreign-row"}),
+        lambda m: m["custom"].update({"cardinality": "unverified"}),
+        lambda m: m["custom"].update({"semantic_scope": {"unexpected": "value"}}),
+    ):
+        forged = deepcopy(metadata)
+        mutate(forged)
+        untrusted = resolver._memory_item_to_evidence(
+            {**item, "metadata": forged},
+            request=request,
+            retrieved_at=datetime.now(timezone.utc),
+        )
+        assert untrusted.fact_semantics is None
