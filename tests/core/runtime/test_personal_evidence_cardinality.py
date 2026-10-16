@@ -38,7 +38,7 @@ def context(*items, authorized=True):
     )
 
 
-def check(ctx, *, cardinality=FactCardinality.SINGLETON):
+def check(ctx, *, cardinality=None):
     return evaluate_personal_evidence(
         ctx, tenant_id="t1", user_id="u1",
         attribute="favorite_artist", cardinality=cardinality,
