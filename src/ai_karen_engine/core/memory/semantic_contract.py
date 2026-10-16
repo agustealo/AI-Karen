@@ -260,6 +260,10 @@ SEMANTIC_METADATA_KEYS = frozenset({
     "subject", "predicate", "object", "modality", "temporality",
     "fact_key", "scope_key", "schema_version", "sensitivity",
     "consent_state", "propagation_allowed",
+    # Formation-owned assertion semantics may not be forged by request
+    # transport metadata (including an untrusted "please overwrite" hint).
+    "explicit_correction", "assertion_modality", "preference_domain",
+    "evidence_text", "temporal_scope",
 })
 RESERVED_MEMORY_METADATA_KEYS = frozenset({
     "signal_semantics", "runtime_context",
