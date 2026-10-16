@@ -44,7 +44,10 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
             )).scalars().all()
             return rows
 
-    async def observe(value: str, *, correction=False, modality="asserted"):
+    async def observe(
+        value: str, *, correction=False, modality="asserted",
+        source_type="chat_user",
+    ):
         event = uuid.uuid4()
         event_ids.append(event)
         statement = (
@@ -68,7 +71,7 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             session.add(MemoryEvent(
                 event_id=event, tenant_id=tenant, user_id=user,
-                source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                source_type=source_type, payload_hash=uuid.uuid4().hex,
                 event_type="memory_persisted",
                 payload={"content": statement,
                          "metadata": {"custom": {"signal_semantics": metadata}},
@@ -79,7 +82,7 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
             await projector._project_profile_fact(
                 session=session, tenant_uuid=tenant, user_uuid=user,
                 event_uuid=event, signal=signal, confidence=0.98,
-                source_type="chat_user", source_ref=None,
+                source_type=source_type, source_ref=None,
                 metadata=dict(metadata),
             )
         return event
@@ -155,6 +158,22 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
                 metadata=dict(replay.metadata),
             )
         assert len(await state()) == 3
+
+        # Authorized profile-correction ingress does not need the ordinary
+        # chat-specific linguistic correction flag, but still requires a
+        # classifier-admitted, asserted first-person profile fact.
+        corrected_by_api = await observe(
+            "soul", source_type="profile_correction",
+        )
+        rows = await state()
+        current = [row for row in rows if row.valid_to is None]
+        assert len(current) == 1
+        assert current[0].event_id == corrected_by_api
+        assert current[0].value["value"] == "soul"
+        assert current[0].value["belief_operation"] == "supersede"
+        assert [x.content for x in await retriever.recall(query())] == [
+            "favorite_genre: soul",
+        ]
 
         assert await retriever.recall(query(acting_user=uuid.uuid4())) == []
 
