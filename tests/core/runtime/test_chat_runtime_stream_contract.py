@@ -727,3 +727,80 @@ async def test_stream_personal_identity_uses_authorized_evidence_without_model_c
     assert len([c for c in chunks if c.type == ChatStreamEventType.COMPLETE]) == 1
     assert gateway.calls[0]["assistant_text"] == content
     assert gateway.calls[0]["response_metadata"]["response_source"] == "authorized_memory_evidence"
+
+
+
+@pytest.mark.asyncio
+async def test_status_only_stream_is_explicit_failure_not_successful_empty_answer():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def status_only(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="status", content="Waiting for model",
+            correlation_id="corr-1",
+        )
+
+    chunks = await _collect_stream(runtime, request, decision, plan, status_only)
+    assert [chunk.type for chunk in chunks] == [
+        ChatStreamEventType.STATUS,
+        ChatStreamEventType.ERROR,
+        ChatStreamEventType.COMPLETE,
+    ]
+    failure = chunks[1]
+    assert failure.metadata["error_code"] == "CHAT_EMPTY_STREAM"
+    assert failure.metadata["error_type"] == "EmptyGeneration"
+    assert failure.metadata["correlation_id"] == "corr-1"
+    assert failure.metadata["requested_provider"] == "ollama"
+    assert failure.metadata["requested_model"] == "llama3"
+    assert failure.content == "The selected runtime produced no assistant response."
+    assert chunks[-1].metadata["transcript_persistence_status"] == "skipped"
+    assert chunks[-1].metadata["generation_error"] is True
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_upstream_stream_error_is_not_replaced_with_second_empty_error():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def upstream_error(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="error", content="Model unavailable",
+            correlation_id="corr-1",
+            metadata={"error_code": "MODEL_UNAVAILABLE"},
+        )
+
+    chunks = await _collect_stream(runtime, request, decision, plan, upstream_error)
+    errors = [chunk for chunk in chunks if chunk.type == ChatStreamEventType.ERROR]
+    assert len(errors) == 1
+    assert errors[0].metadata["error_code"] == "MODEL_UNAVAILABLE"
+    assert chunks[-1].type == ChatStreamEventType.COMPLETE
+    assert chunks[-1].metadata["generation_error"] is True
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_assistant_stream_does_not_persist_as_model_reply():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def whitespace(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="   ", correlation_id="corr-1",
+        )
+
+    chunks = await _collect_stream(runtime, request, decision, plan, whitespace)
+    assert [c.type for c in chunks] == [
+        ChatStreamEventType.CONTENT,
+        ChatStreamEventType.ERROR,
+        ChatStreamEventType.COMPLETE,
+    ]
+    assert chunks[1].metadata["error_code"] == "CHAT_EMPTY_STREAM"
+    assert gateway.calls == []
