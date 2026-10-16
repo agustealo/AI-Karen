@@ -80,6 +80,29 @@ describe('Next.js chat SSE transport integrity', () => {
     expect(output).not.toContain('sensitive upstream socket failure');
   });
 
+  it('separates its error event from mid-record upstream truncation', async () => {
+    const output = await collect(observeChatSseBody(
+      stream('data: {"type":"content","content":"unterminated'),
+      'corr-cut',
+    ));
+    // The browser's canonical line parser must be able to read the
+    // diagnostic independently of the partial upstream JSON line.
+    const events = output.split('\n')
+      .filter(line => line.trimStart().startsWith('data:'))
+      .flatMap(line => {
+        try { return [JSON.parse(line.slice(line.indexOf('data:') + 5).trim())]; }
+        catch { return []; }
+      });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'error',
+      metadata: {
+        error_code: 'CHAT_STREAM_UPSTREAM_TERMINATED',
+        correlation_id: 'corr-cut',
+      },
+    });
+  });
+
   it('does not treat a bare upstream DONE marker as model-generated text', async () => {
     const output = await collect(observeChatSseBody(
       stream('data: [DONE]\n\n'), 'corr-5',
