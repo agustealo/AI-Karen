@@ -21,7 +21,7 @@ _SELF_AUTHORED_CLAUSE = re.compile(
 )
 
 _REPORTED_SPEECH = re.compile(
-    r"\b(?:he|she|they|someone|my\s+\w+)\s+"
+    r"\b(?:he|she|they|i|we|someone|my\s+\w+)\s+"
     r"(?:said|says|thinks|claims|quoted)\b",
     re.IGNORECASE,
 )
