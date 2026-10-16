@@ -201,3 +201,37 @@ def test_favorite_query_is_not_equated_to_an_unrelated_domain():
     ))
     assert meta["evidence_sufficiency"] == "missing"
     assert "Sunshine" not in answer
+
+
+def test_explicit_user_correction_reconciles_conversation_evidence():
+    dialogue = ctx(
+        ("user", "My favorite color is red."),
+        ("user", "Actually my favorite color is blue."),
+    )
+    resolved = evaluate_conversation_personal_evidence(
+        dialogue, tenant_id="tenant", user_id="user",
+        attribute="favorite_color",
+    )
+    assert resolved.status is EvidenceSufficiencyStatus.SUPPORTED
+    assert resolved.value == "blue"
+    assert resolved.reason == "authorized_conversation_assertion_not_durable"
+
+    answer, metadata = response("favorite_color", dialogue)
+    assert "blue" in answer.casefold()
+    assert "red" not in answer.casefold()
+    assert metadata["response_source"] == "authorized_conversation_evidence"
+
+
+def test_conversation_change_without_explicit_correction_remains_unresolved():
+    dialogue = ctx(
+        ("user", "My favorite color is red."),
+        ("user", "My favorite color is blue."),
+    )
+    resolved = evaluate_conversation_personal_evidence(
+        dialogue, tenant_id="tenant", user_id="user",
+        attribute="favorite_color",
+    )
+    assert resolved.status is EvidenceSufficiencyStatus.CONTRADICTORY
+    answer, _ = response("favorite_color", dialogue)
+    assert "conflicting" in answer.casefold()
+    assert "blue" not in answer.casefold()

@@ -1286,10 +1286,63 @@ class ChatRuntime:
             user_id=user_id,
             attribute=attribute,
         )
+        from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
         recent = evaluate_conversation_personal_evidence(
             decision.cognitive_context,
             tenant_id=tenant_id, user_id=user_id, attribute=attribute,
+            cardinality=(
+                FactCardinality.SET
+                if result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+                else FactCardinality.SINGLETON
+            ),
         )
+        if (
+            result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+            and recent.status is EvidenceSufficiencyStatus.AMBIGUOUS
+        ):
+            return "You corrected a saved preference set in this conversation, so I can't confirm its current members until the change is reconciled.", {
+                "evidence_sufficiency": "ambiguous",
+                "evidence_reason": recent.reason,
+                "evidence_count": len(recent.evidence_ids) + len(result.evidence_ids),
+                "response_source": "authorized_memory_evidence",
+                "actual_provider": None,
+                "actual_model": None,
+            }
+        if recent.status is EvidenceSufficiencyStatus.CONTRADICTORY:
+            return "You gave conflicting information in this conversation, so I can't verify a single answer.", {
+                "evidence_sufficiency": "contradictory",
+                "evidence_reason": recent.reason,
+                "evidence_count": len(recent.evidence_ids) + len(result.evidence_ids),
+                "response_source": "authorized_conversation_evidence",
+                "actual_provider": None,
+                "actual_model": None,
+            }
+        if (
+            result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+            and recent.status in {
+                EvidenceSufficiencyStatus.SUPPORTED,
+                EvidenceSufficiencyStatus.SUPPORTED_SET,
+            }
+            and not (
+                {
+                    value.casefold() for value in (
+                        recent.values
+                        if recent.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+                        else (recent.value,)
+                    )
+                }
+                <= {value.casefold() for value in result.values}
+            )
+        ):
+            return "Your saved preferences and this conversation mention different values, so I can't confirm the complete current set.", {
+                "evidence_sufficiency": "ambiguous",
+                "evidence_reason": "saved_set_and_conversation_need_reconciliation",
+                "evidence_count": len(result.evidence_ids) + len(recent.evidence_ids),
+                "response_source": "authorized_memory_evidence",
+                "actual_provider": None,
+                "actual_model": None,
+            }
         if (
             result.status is EvidenceSufficiencyStatus.SUPPORTED
             and recent.status is EvidenceSufficiencyStatus.SUPPORTED
@@ -1327,13 +1380,16 @@ class ChatRuntime:
         }
         if result.status is EvidenceSufficiencyStatus.SUPPORTED:
             return f"Your {attribute.replace('_', ' ')} is {result.value}.", metadata
-        if recent.status is EvidenceSufficiencyStatus.CONTRADICTORY:
-            return "You gave conflicting information in this conversation, so I can't verify a single answer.", {
-                **metadata, "evidence_sufficiency": "contradictory",
-                "evidence_reason": recent.reason,
-                "response_source": "authorized_conversation_evidence",
-                "evidence_count": len(recent.evidence_ids),
-            }
+        if result.status is EvidenceSufficiencyStatus.SUPPORTED_SET:
+            return (
+                f"I have these verified saved values for your {attribute.replace('_', ' ')}: "
+                f"{', '.join(result.values)}.",
+                {
+                    **metadata,
+                    "evidence_cardinality": "set",
+                    "evidence_value_count": len(result.values),
+                },
+            )
         if result.status is EvidenceSufficiencyStatus.AMBIGUOUS:
             return "Which detail about you would you like me to recall?", metadata
         if result.status is EvidenceSufficiencyStatus.CONTRADICTORY:

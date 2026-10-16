@@ -14,6 +14,7 @@ from typing import Any
 
 from ai_karen_engine.core.cognitive.state import ContextSnapshot
 from ai_karen_engine.core.contracts.cognitive import CognitiveScope
+from ai_karen_engine.core.memory.semantic_contract import FactCardinality
 
 # Context scope is the canonical cross-domain CognitiveScope. Keep the alias as
 # identity, not a wrapper/subclass, so tenant semantics cannot drift.
@@ -97,6 +98,29 @@ class EvidenceScope:
     def __post_init__(self) -> None:
         if not self.tenant_id:
             raise ValueError("evidence tenant_id must be present")
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceFactSemantics:
+    """Validated meaning of a source-projected memory fact, not a policy grant.
+
+    Only the runtime evidence adapter may bind these fields from canonical
+    profile projection metadata. Model output and arbitrary recall snippets
+    remain untyped evidence and cannot widen memory cardinality.
+    """
+
+    attribute: str
+    cardinality: FactCardinality
+    semantic_scope: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.attribute or not isinstance(self.cardinality, FactCardinality):
+            raise ValueError("typed memory fact attribute and cardinality required")
+        if any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in self.semantic_scope
+        ):
+            raise ValueError("typed memory fact scope must contain strings")
 
 
 @dataclass(slots=True)
@@ -198,6 +222,7 @@ class ContextEvidence:
     contradiction: EvidenceContradiction = field(default_factory=EvidenceContradiction)
     scope: EvidenceScope | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    fact_semantics: EvidenceFactSemantics | None = None
 
 
 @dataclass(slots=True)

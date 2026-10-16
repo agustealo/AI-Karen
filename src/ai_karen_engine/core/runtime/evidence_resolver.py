@@ -26,7 +26,9 @@ from ai_karen_engine.core.context.contracts import (
     EvidenceScope,
     EvidenceSource,
     EvidenceTemporalContext,
+    EvidenceFactSemantics,
 )
+from ai_karen_engine.core.memory.semantic_contract import FactCardinality
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
@@ -467,6 +469,69 @@ class RuntimeEvidenceResolver:
             len(result.messages) if injected else 0
         )
 
+    @staticmethod
+    def _profile_fact_semantics(
+        item_metadata: dict[str, Any],
+        *,
+        evidence_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> EvidenceFactSemantics | None:
+        """Admit cardinality only from the current scoped profile projection.
+
+        Ordinary memories, model text and unverified metadata cannot declare a
+        SET and thereby turn incompatible singleton facts into valid answers.
+        """
+        custom = item_metadata.get("custom")
+        if (
+            item_metadata.get("source") != "postgres_profile_fact"
+            or item_metadata.get("tenant_id") != tenant_id
+            or item_metadata.get("user_id") != user_id
+            or not isinstance(custom, dict)
+            or custom.get("source_store") != "postgres"
+            or str(custom.get("profile_fact_id") or "") != evidence_id
+            or not str(custom.get("event_id") or "").strip()
+        ):
+            return None
+        attribute = custom.get("attribute")
+        if not isinstance(attribute, str) or not attribute or len(attribute) > 128:
+            return None
+        raw_scope = custom.get("semantic_scope", {})
+        if not isinstance(raw_scope, dict) or len(raw_scope) > 8:
+            return None
+        normalized_scope: dict[str, str] = {}
+        for key, value in raw_scope.items():
+            if (
+                key not in {
+                    "scope", "domain", "facet", "project_id", "task_id",
+                    "task_type", "location",
+                }
+                or not isinstance(value, (str, int, float))
+                or isinstance(value, bool)
+            ):
+                return None
+            # Use the canonical projection comparator's scalar normalization.
+            normalized = str(value).strip().casefold()
+            if len(normalized) > 160:
+                return None
+            if normalized:
+                normalized_scope[key] = normalized
+        try:
+            cardinality = FactCardinality(str(custom.get("cardinality", "singleton")))
+        except ValueError:
+            return None
+        if cardinality not in {
+            FactCardinality.SINGLETON,
+            FactCardinality.SET,
+            FactCardinality.SCOPED_SINGLETON,
+        }:
+            return None
+        return EvidenceFactSemantics(
+            attribute=attribute,
+            cardinality=cardinality,
+            semantic_scope=tuple(sorted(normalized_scope.items())),
+        )
+
     @classmethod
     def _memory_item_to_evidence(
         cls,
@@ -514,6 +579,12 @@ class RuntimeEvidenceResolver:
                 "memory_type": item.get("memory_type"),
                 "memory_metadata": item_metadata,
             },
+            fact_semantics=cls._profile_fact_semantics(
+                item_metadata,
+                evidence_id=evidence_id,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+            ),
         )
 
     @classmethod
