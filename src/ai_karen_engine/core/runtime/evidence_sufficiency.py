@@ -137,6 +137,24 @@ def evaluate_personal_evidence(
                         reason="mixed_or_unverified_profile_semantics",
                     )
                 cardinality = projected[0].cardinality
+                # A scoped fact cannot answer a global question merely
+                # because it was the only value retrieved. Query-scope
+                # matching needs a separately governed, typed query intent.
+                # Until available, never globalize project/task/location
+                # preferences or scoped singletons.
+                scope = dict(projected[0].semantic_scope)
+                if (
+                    cardinality is FactCardinality.SCOPED_SINGLETON
+                    or any(
+                        scope.get(key) and scope[key] not in {"global", "user"}
+                        for key in ("scope", "project_id", "task_id", "task_type", "location")
+                    )
+                ):
+                    return EvidenceSufficiency(
+                        EvidenceSufficiencyStatus.AMBIGUOUS, attribute,
+                        evidence_ids=tuple(item[0] for item in live),
+                        reason="scoped_fact_requires_query_scope",
+                    )
             else:
                 cardinality = FactCardinality.SINGLETON
         if cardinality is FactCardinality.SET:
@@ -174,8 +192,13 @@ def evaluate_personal_evidence(
 def evaluate_conversation_personal_evidence(
     context: CognitiveContext | None, *, tenant_id: str, user_id: str,
     attribute: str | None,
+    cardinality: FactCardinality = FactCardinality.SINGLETON,
 ) -> EvidenceSufficiency:
-    """Evaluate attributed user statements from authorized conversation history."""
+    """Evaluate authorized conversation facts with trusted expected cardinality.
+
+    The caller may provide SET only after current saved evidence independently
+    proves that cardinality. Conversation text never grants itself SET policy.
+    """
     if not attribute:
         return EvidenceSufficiency(EvidenceSufficiencyStatus.AMBIGUOUS, None)
     if (
@@ -241,6 +264,16 @@ def evaluate_conversation_personal_evidence(
         default=0,
     )
     current_facts = facts[last_correction:]
+    if cardinality is FactCardinality.SET:
+        distinct: dict[str, str] = {}
+        for _fid, value, _correction in current_facts:
+            distinct.setdefault(value.casefold(), value)
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.SUPPORTED_SET, attribute,
+            evidence_ids=tuple(fid for fid, _, _ in current_facts),
+            values=tuple(distinct.values()),
+            reason="authorized_conversation_set_not_durable",
+        )
     if len({value.casefold() for _, value, _ in current_facts}) > 1:
         return EvidenceSufficiency(
             EvidenceSufficiencyStatus.CONTRADICTORY, attribute,
