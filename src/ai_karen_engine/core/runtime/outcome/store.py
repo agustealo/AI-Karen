@@ -35,11 +35,51 @@ class OutcomeStore(ABC):
 
         await asyncio.to_thread(self.save_outcome, payload)
 
+    async def list_governed_tool_receipts_async(
+        self,
+        *,
+        trajectory_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not trajectory_id or not tenant_id or not user_id:
+            raise OutcomeStoreError("Tool receipt scope is required")
+        events = [
+            record
+            for record in self.get_for_trajectory(
+                trajectory_id, tenant_id=tenant_id,
+            )
+            if record.get("user_id") == user_id
+            and record.get("source") == "runtime.execution"
+            and (record.get("metadata") or {}).get("event_type")
+            == "agent.tool.execution"
+        ]
+        return sorted(
+            events,
+            key=lambda value: (
+                str(value.get("recorded_at") or ""),
+                str(value.get("outcome_id") or ""),
+            ),
+            reverse=True,
+        )[:max(1, min(int(limit), 100))]
+
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Owner-scoped task review history, never a tenant-wide fallback."""
         raise OutcomeStoreError("Task review history is not available")
+
+    async def list_governed_tool_receipts_async(
+        self,
+        *,
+        trajectory_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List tool-runtime receipts only for the exact principal and run."""
+        raise OutcomeStoreError("Governed tool receipts are unavailable")
 
     @abstractmethod
     def get_for_trajectory(
@@ -277,6 +317,59 @@ class PostgresOutcomeStore(OutcomeStore):
         )
         if result.rowcount != 1:
             raise OutcomeStoreError("Outcome event was not appended")
+
+    async def list_governed_tool_receipts_async(
+        self,
+        *,
+        trajectory_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Tenant/user/run-filtered receipt read, never an unscoped audit listing."""
+        tenant = self._require_tenant(tenant_id)
+        if not trajectory_id or not user_id:
+            raise OutcomeStoreError("Tool receipt scope is required")
+        bounded = max(1, min(int(limit), 100))
+        try:
+            async with async_transaction_scope(tenant) as session:
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND trajectory_id = :trajectory_id
+                          AND source = 'runtime.execution'
+                          AND payload->'metadata'->>'event_type' = 'agent.tool.execution'
+                        ORDER BY recorded_at DESC, outcome_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant,
+                        "user_id": user_id,
+                        "trajectory_id": trajectory_id,
+                        "limit": bounded,
+                    },
+                )
+                return [
+                    self._payload_from_row(row["payload"])
+                    for row in result.mappings().all()
+                ]
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.governed_tool_receipts_read_failed",
+                extra={
+                    "tenant_id": tenant,
+                    "user_id": user_id,
+                    "trajectory_id": trajectory_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise OutcomeStoreError("Tool receipts unavailable") from exc
 
     async def list_task_reviews_async(
         self,
