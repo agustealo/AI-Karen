@@ -69,6 +69,11 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             """
         )
         await connection.execute(migration)
+        review_migration = (
+            root / "supabase/migrations/"
+            "20261016020000_29_saved_task_completion_review.sql"
+        ).read_text(encoding="utf-8")
+        await connection.execute(review_migration)
         await connection.execute(
             """
             ALTER TABLE public.automation_tasks ENABLE ROW LEVEL SECURITY;
@@ -115,7 +120,7 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         ) is False
         assert await repo.complete_task(
             task_id, str(tenant),
-            claim_token=loser, status="Success", last_error=None,
+            claim_token=loser, status="ReviewRequired", last_error=None,
         ) is None
         assert await repo.renew_task_claim(
             task_id, str(tenant), claim_token=winner, lease_seconds=60,
@@ -145,15 +150,31 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         assert recovered["runCount"] == 2
         assert await repo.complete_task(
             task_id, str(tenant),
-            claim_token=winner, status="Success", last_error=None,
+            claim_token=winner, status="ReviewRequired", last_error=None,
         ) is None
         terminal = await repo.complete_task(
             task_id, str(tenant),
-            claim_token=lease_3, status="Success", last_error=None,
+            claim_token=lease_3, status="ReviewRequired", last_error=None,
             runtime_task_id="correlation-verified",
         )
         assert terminal is not None
-        assert terminal["status"] == "Success"
+        assert terminal["status"] == "ReviewRequired"
+        assert terminal["executionId"] == lease_3
+        assert await repo.review_task(
+            task_id, str(tenant), user_id=str(uuid.uuid4()),
+            execution_id=lease_3, decision="approve", note="wrong reviewer",
+        ) is None
+        reviewed = await repo.review_task(
+            task_id, str(tenant), user_id=str(user), execution_id=lease_3,
+            decision="approve", note="Verified the recorded result",
+        )
+        assert reviewed is not None
+        assert reviewed["status"] == "Success"
+        assert reviewed["reviewedBy"] == str(user)
+        assert await repo.review_task(
+            task_id, str(tenant), user_id=str(user), execution_id=lease_3,
+            decision="approve", note="second approval",
+        ) is None
         assert terminal["runtimeTaskId"] == "correlation-verified"
 
         # A legacy Running record with no ownership is NOT silently stolen.
