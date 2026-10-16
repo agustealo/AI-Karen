@@ -253,3 +253,63 @@ async def test_live_profile_recall_filters_exact_project_scope_before_limit():
             await session.execute(
                 delete(MemoryEvent).where(MemoryEvent.event_id.in_(event_ids))
             )
+
+
+async def test_live_open_relation_can_be_recalled_by_the_same_generic_attribute():
+    """Real Postgres/RLS verification of generic semantic readback, not mock recall."""
+    from ai_karen_engine.core.intelligence.profile_attribute import requested_profile_attribute
+    from ai_karen_engine.core.memory.signals.semantic_classifier import classify_explicit_user_memory
+    from ai_karen_engine.core.memory.types import MemoryQuery
+    from ai_karen_engine.platform.memory.postgres.profile_retriever import (
+        PostgresProfileRecallRetriever,
+    )
+
+    statement = "My reading ritual is green tea at sunrise."
+    signals = [
+        signal for signal in classify_explicit_user_memory(statement)
+        if signal.metadata.get("source") == "explicit_open_relation"
+    ]
+    assert len(signals) == 1
+    signal = signals[0]
+    attribute = signal.metadata["attribute"]
+    assert requested_profile_attribute("What is my reading ritual?") == attribute
+    tenant, user, event = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    value = {"value": signal.metadata["normalized_value"], "cardinality": "singleton"}
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(MemoryEvent(
+                event_id=event, tenant_id=tenant, user_id=user,
+                source_type="integration_test", payload_hash=uuid.uuid4().hex,
+                event_type="assertion", payload={"evidence": statement},
+                consent_state="granted",
+            ))
+            session.add(ProfileFact(
+                event_id=event, tenant_id=tenant, user_id=user,
+                category="personal_relation", attribute=attribute,
+                value=value, source_type="integration_test",
+                projection_key=profile_projection_key(
+                    tenant_id=str(tenant), user_id=str(user),
+                    category="personal_relation", attribute=attribute,
+                    value=value, source_event_id=str(event),
+                ),
+            ))
+
+        recall = PostgresProfileRecallRetriever()
+        found = await recall.recall(MemoryQuery(
+            text="What is my reading ritual?",
+            tenant_id=str(tenant), user_id=str(user), top_k=5,
+        ))
+        assert len(found) == 1
+        assert found[0].content == (
+            "personal_relation.reading_ritual: green tea at sunrise"
+        )
+
+        cross_user = await recall.recall(MemoryQuery(
+            text="What is my reading ritual?",
+            tenant_id=str(tenant), user_id=str(uuid.uuid4()), top_k=5,
+        ))
+        assert cross_user == []
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(ProfileFact).where(ProfileFact.event_id == event))
+            await session.execute(delete(MemoryEvent).where(MemoryEvent.event_id == event))
