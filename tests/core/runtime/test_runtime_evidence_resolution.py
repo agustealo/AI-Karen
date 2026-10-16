@@ -280,7 +280,7 @@ def test_canonical_profile_recall_semantics_survive_typed_runtime_resolution():
             "event_id": "event-1",
             "attribute": "favorite_artist",
             "cardinality": "set",
-            "semantic_scope": {"domain": "music", "facet": "artist"},
+            "semantic_scope": {"domain": "music", "facet": "artist", "project_id": 42, "task_id": 2.5},
         },
     }
     item = {
@@ -297,6 +297,7 @@ def test_canonical_profile_recall_semantics_survive_typed_runtime_resolution():
     assert parsed.fact_semantics.cardinality is FactCardinality.SET
     assert parsed.fact_semantics.semantic_scope == (
         ("domain", "music"), ("facet", "artist"),
+        ("project_id", "42"), ("task_id", "2.5"),
     )
 
     # Tenant, principal, row identity and source identity must match before
@@ -310,6 +311,7 @@ def test_canonical_profile_recall_semantics_survive_typed_runtime_resolution():
         lambda m: m["custom"].update({"profile_fact_id": "foreign-row"}),
         lambda m: m["custom"].update({"cardinality": "unverified"}),
         lambda m: m["custom"].update({"semantic_scope": {"unexpected": "value"}}),
+        lambda m: m["custom"].update({"semantic_scope": {"project_id": True}}),
     ):
         forged = deepcopy(metadata)
         mutate(forged)
