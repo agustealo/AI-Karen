@@ -446,6 +446,7 @@ class SqlAutomationRepository:
                 "recorded_at": data["reviewed_at"],
                 "correlation_id": data.get("runtime_task_id"),
                 "acceptance_criteria": data.get("acceptance_criteria") or "",
+                "result_receipt": data.get("result_receipt") or {},
                 "receipt_sha256": hashlib.sha256(
                     receipt_json.encode("utf-8")
                 ).hexdigest(),
