@@ -184,6 +184,41 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             task_id, str(tenant), user_id=str(uuid.uuid4()),
             execution_id=lease_3, decision="approve", note="wrong reviewer",
         ) is None
+        # Persisted SQL, not only a Python/UI check, refuses incomplete output.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(
+                text(
+                    """
+                    UPDATE public.automation_tasks
+                    SET result_receipt = jsonb_set(
+                        result_receipt, '{artifact_count}', '1'::jsonb
+                    )
+                    WHERE task_id = :task_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
+                    """
+                ),
+                {"task_id": task_id, "tenant_id": str(tenant)},
+            )
+        assert await repo.review_task(
+            task_id, str(tenant), user_id=str(user), execution_id=lease_3,
+            decision="approve", note="Cannot review hidden artifact",
+        ) is None
+
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(
+                text(
+                    """
+                    UPDATE public.automation_tasks
+                    SET result_receipt = jsonb_set(
+                        result_receipt, '{artifact_count}', '0'::jsonb
+                    )
+                    WHERE task_id = :task_id
+                      AND tenant_id = CAST(:tenant_id AS uuid)
+                    """
+                ),
+                {"task_id": task_id, "tenant_id": str(tenant)},
+            )
+
         reviewed = await repo.review_task(
             task_id, str(tenant), user_id=str(user), execution_id=lease_3,
             decision="approve", note="Verified the recorded result",
