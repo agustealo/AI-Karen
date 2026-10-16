@@ -1297,6 +1297,18 @@ class ChatRuntime:
                 else FactCardinality.SINGLETON
             ),
         )
+        if (
+            result.status is EvidenceSufficiencyStatus.SUPPORTED_SET
+            and recent.status is EvidenceSufficiencyStatus.AMBIGUOUS
+        ):
+            return "You corrected a saved preference set in this conversation, so I can't confirm its current members until the change is reconciled.", {
+                "evidence_sufficiency": "ambiguous",
+                "evidence_reason": recent.reason,
+                "evidence_count": len(recent.evidence_ids) + len(result.evidence_ids),
+                "response_source": "authorized_memory_evidence",
+                "actual_provider": None,
+                "actual_model": None,
+            }
         if recent.status is EvidenceSufficiencyStatus.CONTRADICTORY:
             return "You gave conflicting information in this conversation, so I can't verify a single answer.", {
                 "evidence_sufficiency": "contradictory",
