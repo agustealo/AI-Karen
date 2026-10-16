@@ -784,6 +784,8 @@ async def test_upstream_stream_error_is_not_replaced_with_second_empty_error():
     assert chunks[-1].type == ChatStreamEventType.COMPLETE
     assert chunks[-1].metadata["status"] == "error"
     assert chunks[-1].metadata["failure_category"] == "degraded_runtime"
+    assert chunks[-1].metadata["error_code"] == "MODEL_UNAVAILABLE"
+    assert chunks[-1].metadata["error_type"] == "UpstreamStreamError"
     assert gateway.calls == []
 
 
@@ -831,7 +833,10 @@ async def test_partial_content_then_error_never_persists_failed_assistant_turn()
         yield ChatStreamChunk(
             type="error", content="Provider disconnected",
             correlation_id="corr-1",
-            metadata={"error_code": "PROVIDER_DISCONNECTED"},
+            metadata={
+                "error_code": "PROVIDER_DISCONNECTED",
+                "error_type": "ProviderConnectionError",
+            },
         )
 
     memory_write = AsyncMock()
@@ -850,5 +855,7 @@ async def test_partial_content_then_error_never_persists_failed_assistant_turn()
     assert chunks[-1].metadata["status"] == "error"
     assert chunks[-1].metadata["transcript_persistence_status"] == "skipped"
     assert chunks[-1].metadata["failure_category"] == "degraded_runtime"
+    assert chunks[-1].metadata["error_code"] == "PROVIDER_DISCONNECTED"
+    assert chunks[-1].metadata["error_type"] == "ProviderConnectionError"
     assert gateway.calls == []
     memory_write.assert_not_awaited()
