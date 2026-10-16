@@ -13,18 +13,18 @@ from ai_karen_engine.core.memory.signals.semantic_classifier import classify_exp
 from ai_karen_engine.core.memory.signals.signal_models import ExtractionResult
 
 
-@pytest.mark.parametrize(("statement", "question", "attribute", "value"), (
+@pytest.mark.parametrize(("statement", "question", "attribute", "value", "durable"), (
     ("My reading ritual is green tea at sunrise.", "What is my reading ritual?",
-     "personal_relation.reading_ritual", "green tea at sunrise"),
+     "personal_relation.reading_ritual", "green tea at sunrise", True),
     ("My preferred code editor is Neovim.", "What's my preferred code editor?",
-     "personal_relation.preferred_code_editor", "Neovim"),
+     "personal_relation.preferred_code_editor", "Neovim", True),
     ("My project planning method is kanban.", "What is my project planning method?",
-     "personal_relation.project_planning_method", "kanban"),
+     "personal_relation.project_planning_method", "kanban", False),
     ("My weekend breakfast is oatmeal.", "What is my weekend breakfast?",
-     "personal_relation.weekend_breakfast", "oatmeal"),
+     "personal_relation.weekend_breakfast", "oatmeal", False),
 ))
 def test_unseen_relations_share_a_canonical_attribute(
-    statement: str, question: str, attribute: str, value: str,
+    statement: str, question: str, attribute: str, value: str, durable: bool,
 ) -> None:
     interpretation = extract_personal_relation(statement)
     assert interpretation is not None
@@ -42,7 +42,10 @@ def test_unseen_relations_share_a_canonical_attribute(
     assert matches[0].signal_type == "profile_fact"
     assert matches[0].metadata["source"] == "explicit_open_relation"
     assert matches[0].metadata["normalized_value"] == value
-    assert matches[0].metadata["retention_scope"] == "user_profile"
+    assert matches[0].metadata["retention_scope"] == (
+        "user_profile" if durable else "session"
+    )
+    assert interpretation.durable_hint is durable
     assert matches[0].metadata["explicit_user_statement"] is True
 
 
@@ -166,6 +169,8 @@ async def test_sensitive_open_relations_are_refused_even_if_pii_detector_misses(
     "My reading ritual is maybe tea.",
     "My reading ritual is not tea.",
     "My reading ritual is tea this week.",
+    "My keyboard is broken.",
+    "My weekend breakfast is oatmeal.",
 ))
 async def test_unverified_relations_are_excluded_from_durable_formation(statement):
     result = await _evaluate(statement)
