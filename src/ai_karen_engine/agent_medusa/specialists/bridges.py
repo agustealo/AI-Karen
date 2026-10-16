@@ -155,6 +155,12 @@ class ToolBridge:
             or not step_id
         ):
             raise PermissionError("Governed tool execution identity does not match policy")
+        if not authorized_plan.matches_execution_scope(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            policy_decision_id=policy_decision_id,
+        ):
+            raise PermissionError("Authorized execution plan belongs to another principal")
         if execution is not None and (
             execution.tenant_id != tenant_id
             or execution.user_id != user_id
@@ -257,8 +263,9 @@ class ToolBridge:
             step_id=step_id,
             success=success,
             error_type=error_type or (
-                type(getattr(result, "error", None)).__name__
-                if getattr(result, "error", None) else None
+                "tool_reported_error" if getattr(result, "error", None)
+                else "tool_result_unacknowledged" if not success
+                else None
             ),
             result_sha256=result_sha256,
         )
