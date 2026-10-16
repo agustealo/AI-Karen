@@ -397,6 +397,7 @@ async def execute_saved_task(
             await repo.complete_task(
                 task_id, tenant_id, claim_token=claim_token,
                 status="Failed", last_error="Task execution cancelled",
+                result_receipt={"execution_request_id": resolved_request_id},
             )
         except Exception:
             logger.exception(
@@ -412,6 +413,7 @@ async def execute_saved_task(
         failed = await repo.complete_task(
             task_id, tenant_id, claim_token=claim_token,
             status="Failed", last_error=type(exc).__name__,
+            result_receipt={"execution_request_id": resolved_request_id},
         )
         if failed is None:
             raise AutomationTaskClaimLost(
