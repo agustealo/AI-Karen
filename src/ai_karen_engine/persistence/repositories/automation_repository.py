@@ -41,7 +41,11 @@ def _task_row(row: Any) -> Dict[str, Any]:
         "lastError": data.get("last_error"),
         "runCount": int(data.get("run_count") or 0),
         "runtimeTaskId": data.get("runtime_task_id"),
-        "executionId": str(data["execution_id"]) if data.get("execution_id") else None,
+        "executionId": (
+            str(data["execution_id"])
+            if data.get("execution_id") and data.get("status") != "Running"
+            else None
+        ),
         "resultReceipt": dict(data.get("result_receipt") or {}),
         "reviewedAt": data["reviewed_at"].isoformat() if data.get("reviewed_at") else None,
         "reviewedBy": str(data["reviewed_by"]) if data.get("reviewed_by") else None,
