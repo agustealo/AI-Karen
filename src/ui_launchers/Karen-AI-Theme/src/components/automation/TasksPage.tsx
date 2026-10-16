@@ -531,6 +531,18 @@ export default function TasksPage() {
                             <p className="whitespace-pre-wrap">Review note: {review.review_note}</p>
                           )}
                           <p className="break-all">Execution: {review.execution_id}</p>
+                          <p className="font-semibold">Captured runtime output</p>
+                          <p className="whitespace-pre-wrap break-words text-foreground">
+                            {review.result_receipt?.answer_text || "No retained output"}
+                          </p>
+                          {review.result_receipt?.answer_truncated && (
+                            <p>Original runtime response was truncated.</p>
+                          )}
+                          <p>
+                            Sources: {review.result_receipt?.source_count ?? 0} ·
+                            Artifacts: {review.result_receipt?.artifact_count ?? 0} ·
+                            Attachments: {review.result_receipt?.attachment_count ?? 0}
+                          </p>
                           <p className="break-all">Receipt SHA-256: {review.receipt_sha256}</p>
                           <p>Human attestation, not independently verified.</p>
                         </div>
