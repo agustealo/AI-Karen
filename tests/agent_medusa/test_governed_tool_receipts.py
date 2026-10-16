@@ -44,8 +44,9 @@ class FakeToolService:
         self.calls.append(tool_input)
         if self.raise_error:
             raise RuntimeError("provider private diagnostic")
+        assert tool_input.governed_execution is True
         return SimpleNamespace(
-            success=self.success, error=self.error,
+            success=self.success, error=self.error, metadata={},
             request_id=tool_input.request_id,
             result={"sensitive_token": "do-not-store", "items": 2},
         )
@@ -139,6 +140,28 @@ async def test_runtime_error_is_recorded_without_leaking_exception_content(monke
     assert len(receipts) == 1
     assert receipts[0]["metadata"]["error_type"] == "RuntimeError"
     assert "private diagnostic" not in str(receipts)
+
+
+@pytest.mark.asyncio
+async def test_cached_tool_success_is_not_a_fresh_execution_receipt(monkeypatch):
+    class CachedService(FakeToolService):
+        async def execute_tool(self, tool_input):
+            self.calls.append(tool_input)
+            return SimpleNamespace(
+                success=True, error=None, metadata={"cached": True},
+                request_id=tool_input.request_id,
+                result={"claimed_success": True},
+            )
+
+    tool, memory = setup(monkeypatch, service=CachedService())
+    response = await invoke()
+    assert len(tool.calls) == 1
+    assert response["success"] is False
+    receipts = await memory.list_governed_tool_receipts_async(
+        trajectory_id=TRAJECTORY, tenant_id=TENANT, user_id=USER,
+    )
+    assert receipts[0]["tool_success"] is False
+    assert receipts[0]["metadata"]["error_type"] == "cached_tool_result_not_execution"
 
 
 @pytest.mark.asyncio
