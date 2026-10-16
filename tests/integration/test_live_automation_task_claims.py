@@ -472,6 +472,23 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
             result_sha256="a" * 64,
         )
         assert receipt["source"] == "runtime.execution"
+        # ON CONFLICT DO NOTHING must not masquerade as a durable append.
+        from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+        with pytest.raises(OutcomeStoreError, match="not appended"):
+            await recorder.record_governed_tool_outcome_async(
+                tool_call_id=tool_call_id,
+                trajectory_id=tool_run,
+                correlation_id="retry-correlation",
+                session_id="test-authenticated-session",
+                tenant_id=str(tenant),
+                user_id=str(user),
+                policy_decision_id="policy-approved",
+                tool_name="web_search",
+                tool_version="1.0",
+                agent_id="researcher",
+                step_id="step-2",
+                success=True,
+            )
         store = PostgresOutcomeStore()
         recorded_tools = await store.list_governed_tool_receipts_async(
             trajectory_id=tool_run, tenant_id=str(tenant), user_id=str(user),
