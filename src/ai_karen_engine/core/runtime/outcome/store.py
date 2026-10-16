@@ -35,35 +35,6 @@ class OutcomeStore(ABC):
 
         await asyncio.to_thread(self.save_outcome, payload)
 
-    async def list_governed_tool_receipts_async(
-        self,
-        *,
-        trajectory_id: str,
-        tenant_id: str,
-        user_id: str,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        if not trajectory_id or not tenant_id or not user_id:
-            raise OutcomeStoreError("Tool receipt scope is required")
-        events = [
-            record
-            for record in self.get_for_trajectory(
-                trajectory_id, tenant_id=tenant_id,
-            )
-            if record.get("user_id") == user_id
-            and record.get("source") == "runtime.execution"
-            and (record.get("metadata") or {}).get("event_type")
-            == "agent.tool.execution"
-        ]
-        return sorted(
-            events,
-            key=lambda value: (
-                str(value.get("recorded_at") or ""),
-                str(value.get("outcome_id") or ""),
-            ),
-            reverse=True,
-        )[:max(1, min(int(limit), 100))]
-
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
@@ -130,6 +101,35 @@ class InMemoryOutcomeStore(OutcomeStore):
         if tenant_id is not None:
             records = [record for record in records if record.get("tenant_id") == tenant_id]
         return [dict(record) for record in records]
+
+    async def list_governed_tool_receipts_async(
+        self,
+        *,
+        trajectory_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not trajectory_id or not tenant_id or not user_id:
+            raise OutcomeStoreError("Tool receipt scope is required")
+        events = [
+            record
+            for record in self.get_for_trajectory(
+                trajectory_id, tenant_id=tenant_id,
+            )
+            if record.get("user_id") == user_id
+            and record.get("source") == "runtime.execution"
+            and (record.get("metadata") or {}).get("event_type")
+            == "agent.tool.execution"
+        ]
+        return sorted(
+            events,
+            key=lambda value: (
+                str(value.get("recorded_at") or ""),
+                str(value.get("outcome_id") or ""),
+            ),
+            reverse=True,
+        )[:max(1, min(int(limit), 100))]
 
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
