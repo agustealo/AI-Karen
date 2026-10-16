@@ -101,3 +101,4 @@ jobs:
           pytest tests/core/memory/test_profile_reconciliation_policy.py -q -rs
           pytest tests/integration/test_live_profile_reconciliation.py -q -rs
           pytest tests/integration/test_live_memory_consent_revocation.py -q -rs
+          pytest tests/integration/test_live_automation_task_claims.py -q -rs
