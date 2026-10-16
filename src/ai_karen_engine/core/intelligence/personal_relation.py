@@ -42,6 +42,12 @@ _TEMPORAL = re.compile(
 _SECONDARY_SUBJECT = re.compile(r"\b(?:he|she|they|someone|another\s+person)\s+(?:said|says)\b", re.I)
 _SUBJECT_POSSESSIVE = re.compile(r"(?:'s|’s)\b", re.I)
 _NON_FACT_RELATIONS = frozenset({"favorite", "fav", "favourite", "name"})
+# Generic stability cues, not a catalog of categories or personal facts.
+# Unseen relationships without a durability cue remain session observations.
+_DURABLE_CUES = frozenset({
+    "preferred", "usual", "regular", "routine", "ritual", "default",
+    "standard", "everyday", "long-term", "permanent",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +59,7 @@ class PersonalRelationAssertion:
     temporal_scope: str | None
     explicit_correction: bool
     evidence_text: str
+    durable_hint: bool
 
 
 def personal_relation_attribute(predicate: str) -> str | None:
@@ -101,6 +108,9 @@ def extract_personal_relation(text: str) -> PersonalRelationAssertion | None:
         temporal_scope=temporal_match.group(0).casefold() if temporal_match else None,
         explicit_correction=is_explicit_self_correction(original),
         evidence_text=original,
+        durable_hint=any(
+            token in _DURABLE_CUES for token in predicate.split()
+        ),
     )
 
 
