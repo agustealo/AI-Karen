@@ -462,6 +462,7 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
         durable = (
             relation.modality == "asserted"
             and relation.temporal_scope is None
+            and relation.durable_hint
         )
         signals.append(MemorySignal(
             text=relation.evidence_text,
@@ -481,7 +482,12 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
                 "temporal_scope": relation.temporal_scope,
                 "evidence_text": relation.evidence_text,
                 "retention_scope": "user_profile" if durable else "session",
-                "stability": "long_term" if durable else "temporary_or_uncertain",
+                "stability": (
+                    "long_term" if durable else
+                    "temporary" if relation.temporal_scope else
+                    "uncertain" if relation.modality != "asserted" else
+                    "unverified_durability"
+                ),
             },
         ))
     return _dedupe(signals)
