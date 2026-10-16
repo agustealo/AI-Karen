@@ -499,16 +499,23 @@ class RuntimeEvidenceResolver:
         raw_scope = custom.get("semantic_scope", {})
         if not isinstance(raw_scope, dict) or len(raw_scope) > 8:
             return None
-        if any(
-            key not in {
-                "scope", "domain", "facet", "project_id", "task_id",
-                "task_type", "location",
-            }
-            or not isinstance(value, str)
-            or len(value) > 160
-            for key, value in raw_scope.items()
-        ):
-            return None
+        normalized_scope: dict[str, str] = {}
+        for key, value in raw_scope.items():
+            if (
+                key not in {
+                    "scope", "domain", "facet", "project_id", "task_id",
+                    "task_type", "location",
+                }
+                or not isinstance(value, (str, int, float))
+                or isinstance(value, bool)
+            ):
+                return None
+            # Use the canonical projection comparator's scalar normalization.
+            normalized = str(value).strip().casefold()
+            if len(normalized) > 160:
+                return None
+            if normalized:
+                normalized_scope[key] = normalized
         try:
             cardinality = FactCardinality(str(custom.get("cardinality", "singleton")))
         except ValueError:
@@ -522,7 +529,7 @@ class RuntimeEvidenceResolver:
         return EvidenceFactSemantics(
             attribute=attribute,
             cardinality=cardinality,
-            semantic_scope=tuple(sorted(raw_scope.items())),
+            semantic_scope=tuple(sorted(normalized_scope.items())),
         )
 
     @classmethod
