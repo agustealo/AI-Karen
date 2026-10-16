@@ -490,6 +490,7 @@ class MedusaCoordinator:
             user_id=str(request.user_id or "").strip(),
             policy_decision_id=authorized_plan.policy_decision_id,
             trajectory_id=request.request_id,
+            session_id=request.session_id,
             correlation_id=self._correlation_id(request),
             step_id=step.id,
             budget_meter=meter,
