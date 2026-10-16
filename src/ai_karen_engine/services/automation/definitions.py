@@ -106,7 +106,9 @@ class AutomationDefinitionService:
 
     async def get_task(self, task_id: str, *, user: UserData) -> Dict[str, Any]:
         _require_identity(user)
-        task = await self._repository.get_task(task_id, str(user.tenant_id))
+        task = await self._repository.get_task(
+            task_id, str(user.tenant_id), created_by=str(user.user_id)
+        )
         if task is None:
             raise AutomationNotFoundError("Task not found")
         return task
@@ -123,11 +125,14 @@ class AutomationDefinitionService:
             str(user.tenant_id),
             status=status,
             agent_name=agent_name,
+            created_by=str(user.user_id),
         )
 
     async def delete_task(self, task_id: str, *, user: UserData) -> None:
         _require_identity(user)
-        if not await self._repository.delete_task(task_id, str(user.tenant_id)):
+        if not await self._repository.delete_task(
+            task_id, str(user.tenant_id), created_by=str(user.user_id)
+        ):
             raise AutomationNotFoundError("Task not found")
 
     async def create_cron(
@@ -146,7 +151,9 @@ class AutomationDefinitionService:
 
         target_id = str(payload.get("targetId") or "").strip()
         if job_type == "Task":
-            target = await self._repository.get_task(target_id, str(user.tenant_id))
+            target = await self._repository.get_task(
+                target_id, str(user.tenant_id), created_by=str(user.user_id)
+            )
         else:
             target = await self._repository.get_job(target_id, str(user.tenant_id))
         if target is None:
