@@ -28,13 +28,13 @@ class ClaimRepository:
         self.fail_renew = False
         self.reject_completion = False
 
-    async def get_task(self, task_id, tenant_id):
+    async def get_task(self, task_id, tenant_id, *, created_by=None):
         if tenant_id != "tenant-a" or task_id != "task-a":
             return None
         return {"id": task_id, "status": "Running" if self.running else "Pending"}
 
     async def mark_task_running(
-        self, task_id, tenant_id, *, claim_token, lease_seconds,
+        self, task_id, tenant_id, *, claim_token, lease_seconds, created_by,
     ):
         if await self.get_task(task_id, tenant_id) is None or self.running:
             return None
