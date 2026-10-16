@@ -62,8 +62,14 @@ the potentially secret exception message.
 A missing policy identity, invalid tenant/user UUID, unauthorized tool,
 plan-subject mismatch or insufficient budget is rejected *before* any
 external side effect. If outcome persistence fails *after* a tool may have
-acted, no success is returned and no automatic retry occurs. Operators and
-the task creator must reconcile through the external system before a retry.
+acted, no success is returned and no automatic retry occurs. The Medusa
+coordinator treats this error as fatal for the **whole run**, even if sibling
+specialists succeeded; it cannot be collapsed into an apparently usable
+partial response. Its safe error contract explicitly sets
+`recoverable=false` and `reconciliation_required=true`, with an instruction
+to verify destination state before retrying. Operators and the task creator
+must reconcile through the external system before a retry. The application
+must not treat an unreconciled response as permission to replay an action.
 
 ## Authenticated task read
 
