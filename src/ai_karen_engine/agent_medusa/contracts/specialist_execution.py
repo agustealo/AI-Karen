@@ -21,6 +21,7 @@ class SpecialistExecutionContext:
     user_id: str = "anonymous"
     policy_decision_id: str = ""
     trajectory_id: str = ""
+    session_id: Optional[str] = None
     correlation_id: str = ""
     step_id: str = ""
     budget_meter: Optional[Any] = None
