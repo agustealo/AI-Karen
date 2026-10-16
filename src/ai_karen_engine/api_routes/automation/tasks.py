@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from ai_karen_engine.core.runtime.task_output_verification import OutputVerificationContractError
 from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -131,7 +132,7 @@ async def create_task(
         return TaskDefinitionResponse(**record)
     except AutomationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except AutomationDefinitionError as exc:
+    except (AutomationDefinitionError, OutputVerificationContractError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception(
