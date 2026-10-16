@@ -101,6 +101,9 @@ jobs:
       - name: Verify canonical chat ingress and grounded response parity
         run: pytest tests/architecture/test_chat_stream_route_contract.py -q
 
+      - name: Burn empty and prematurely terminated chat SSE failures
+        run: pytest tests/core/runtime/test_chat_runtime_stream_contract.py tests/core/runtime/test_chat_sse_error_contract.py tests/architecture/test_stream_error_diagnostic_contract.py -q
+
       - name: Verify personal recall execution provenance
         run: pytest tests/core/runtime/test_personal_recall_provenance_metadata.py -q
 
