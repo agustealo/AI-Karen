@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.intelligence.model_memory_candidates import (
+        ModelCandidateReview,
+    )
 
 from ai_karen_engine.core.intelligence.contracts import (
     IntelligenceAnalysisResult,
