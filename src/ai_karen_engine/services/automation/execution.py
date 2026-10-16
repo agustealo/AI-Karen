@@ -197,6 +197,7 @@ async def list_saved_task_reviews(
             "reviewed_at": event["reviewed_at"],
             "acceptance_criteria": event.get("acceptance_criteria") or "",
             "receipt_sha256": event["receipt_sha256"],
+            "result_receipt": event.get("result_receipt") or {},
             "correlation_id": event.get("correlation_id"),
             "human_attestation": True,
             "independently_verified": False,
