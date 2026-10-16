@@ -135,8 +135,33 @@ class MemoryFormationEvaluator:
             and str(signal.metadata.get("preference_domain") or "").casefold()
             in sensitive_preference_domains
         )
+        # Apply the same centralized privacy authority to new, open-domain
+        # relations. A previously unseen relation must not bypass credential,
+        # medical, or similarly sensitive-data restrictions simply because the
+        # classifier can now recognize its generic structure.
+        relation_label = str(
+            signal.metadata.get("relation_predicate") or ""
+        ).casefold().replace("_", " ")
+        sensitive_relation_terms = sensitive_preference_domains | frozenset({
+            "health", "diagnosis", "medical", "disability", "treatment",
+            "bank", "account number", "financial", "income", "debt",
+            "credit", "passport", "ssn", "sexual", "political",
+            "religious", "ethnic", "criminal", "biometric",
+            "password", "secret", "credential", "private", "token",
+        })
+        sensitive_relation = (
+            signal.signal_type == "profile_fact"
+            and signal.metadata.get("semantic_class") == "personal_relation"
+            and any(
+                relation_label == term
+                or relation_label.startswith(term + " ")
+                or relation_label.endswith(" " + term)
+                or (" " + term + " ") in (" " + relation_label + " ")
+                for term in sensitive_relation_terms
+            )
+        )
 
-        if sensitive_preference:
+        if sensitive_preference or sensitive_relation:
             sensitivity = MemorySensitivity.PROHIBITED
         elif pii_types:
             profile_safe_name = (
