@@ -8,12 +8,14 @@ saved task content always reaches ChatRuntime through execute_task_definition.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from ai_karen_engine.auth.auth_service import get_auth_service
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionResult,
     ChatExecutionStatus,
@@ -23,12 +25,27 @@ from ai_karen_engine.persistence.repositories.automation_repository import (
     SqlAutomationRepository,
     get_automation_repository,
 )
+from ai_karen_engine.services.automation.claim_lease import (
+    ClaimLeaseLost,
+    run_with_claim_heartbeat,
+)
 from ai_karen_engine.services.auth.auth_service import UserStatus
 from ai_karen_engine.services.auth.fresh_user_lookup import get_fresh_user_by_id
 
 
 class AutomationExecutionError(RuntimeError):
     """Automation target reached runtime but did not complete successfully."""
+
+
+class AutomationTaskBusy(AutomationExecutionError):
+    """A task already has a live owner or an unreconciled legacy owner."""
+
+
+class AutomationTaskClaimLost(ClaimLeaseLost, AutomationExecutionError):
+    """A stale or expired owner cannot publish the current task result."""
+
+
+logger = logging.getLogger(__name__)
 
 
 class AutomationTargetNotFound(LookupError):
@@ -88,68 +105,116 @@ async def execute_saved_task(
     correlation_id: Optional[str] = None,
     repository: Optional[SqlAutomationRepository] = None,
 ) -> SavedTaskExecution:
-    """Run a durable saved task and persist its terminal lifecycle."""
+    """Execute a saved task with one durable, tenant-scoped fenced owner."""
     repo = repository or get_automation_repository()
     tenant_id = str(user.tenant_id or "").strip()
-    if not tenant_id:
-        raise AutomationExecutionError("Explicit tenant_id is required")
+    user_id = str(user.user_id or "").strip()
+    if not tenant_id or tenant_id == "default" or not user_id:
+        raise AutomationExecutionError("Authenticated tenant and user are required")
 
-    task = await repo.mark_task_running(task_id, tenant_id)
+    settings = get_runtime_settings().timeouts
+    lease_seconds = settings.saved_task_claim_lease_seconds
+    heartbeat_seconds = settings.saved_task_claim_heartbeat_seconds
+    if (
+        lease_seconds < 30
+        or heartbeat_seconds < 1
+        or 2 * heartbeat_seconds >= lease_seconds
+    ):
+        raise AutomationExecutionError("Invalid saved task claim configuration")
+
+    claim_token = str(uuid.uuid4())
+    task = await repo.mark_task_running(
+        task_id, tenant_id,
+        claim_token=claim_token, lease_seconds=lease_seconds,
+    )
     if task is None:
-        raise AutomationTargetNotFound("Task not found")
+        if await repo.get_task(task_id, tenant_id) is None:
+            raise AutomationTargetNotFound("Task not found")
+        raise AutomationTaskBusy("Task has an active or unreconciled execution claim")
 
     resolved_request_id = request_id or f"task:{task_id}:{uuid.uuid4()}"
     resolved_correlation_id = correlation_id or resolved_request_id
+
+    async def renew() -> bool:
+        return await repo.renew_task_claim(
+            task_id, tenant_id,
+            claim_token=claim_token, lease_seconds=lease_seconds,
+        )
+
     try:
-        result = await execute_task_definition(
-            task,
-            user=user,
-            request_id=resolved_request_id,
-            correlation_id=resolved_correlation_id,
+        result = await run_with_claim_heartbeat(
+            execute_task_definition(
+                task,
+                user=user,
+                request_id=resolved_request_id,
+                correlation_id=resolved_correlation_id,
+            ),
+            renew=renew,
+            heartbeat_seconds=heartbeat_seconds,
+            lost_error=AutomationTaskClaimLost,
+            lost_message="Saved task execution lost its durable ownership",
         )
     except asyncio.CancelledError:
-        await repo.complete_task(
-            task_id,
-            tenant_id,
-            status="Failed",
-            last_error="Task execution cancelled",
-        )
+        try:
+            await repo.complete_task(
+                task_id, tenant_id, claim_token=claim_token,
+                status="Failed", last_error="Task execution cancelled",
+            )
+        except Exception:
+            logger.exception(
+                "automation.task.cancel_finalization_failed",
+                extra={"task_id": task_id, "tenant_id": tenant_id,
+                       "correlation_id": resolved_correlation_id},
+            )
+        raise
+    except AutomationTaskClaimLost:
+        # Never let an expired owner update the latest task state.
         raise
     except Exception as exc:
-        await repo.complete_task(
-            task_id,
-            tenant_id,
-            status="Failed",
-            last_error=type(exc).__name__,
+        failed = await repo.complete_task(
+            task_id, tenant_id, claim_token=claim_token,
+            status="Failed", last_error=type(exc).__name__,
         )
+        if failed is None:
+            raise AutomationTaskClaimLost(
+                "Task failed after its execution claim was lost"
+            ) from exc
         raise
 
-    successful = result.status in {
-        ChatExecutionStatus.OK,
-        ChatExecutionStatus.DEGRADED,
-    } and bool(result.answer)
-    runtime_task_id = result.metadata.correlation_id
+    successful = (
+        result.status in {ChatExecutionStatus.OK, ChatExecutionStatus.DEGRADED}
+        and bool(result.answer.strip())
+    )
     completed = await repo.complete_task(
-        task_id,
-        tenant_id,
+        task_id, tenant_id,
+        claim_token=claim_token,
         status="Success" if successful else "Failed",
         last_error=(
-            None
-            if successful
-            else (
-                "runtime_gate"
-                if result.status == ChatExecutionStatus.GATE
-                else "runtime_execution_failed"
-            )
+            None if successful else
+            "runtime_gate" if result.status == ChatExecutionStatus.GATE
+            else "runtime_execution_failed"
         ),
-        runtime_task_id=runtime_task_id,
+        runtime_task_id=result.metadata.correlation_id,
     )
     if completed is None:
-        raise AutomationExecutionError("Task lifecycle update failed")
+        raise AutomationTaskClaimLost(
+            "Task result rejected because its execution claim expired or changed"
+        )
     if not successful:
         raise AutomationExecutionError("Task execution was not completed")
+    logger.info(
+        "automation.task.execution_completed",
+        extra={
+            "task_id": task_id,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "correlation_id": resolved_correlation_id,
+            "request_id": resolved_request_id,
+            "runtime_task_id": result.metadata.correlation_id,
+            "status": completed["status"],
+        },
+    )
     return SavedTaskExecution(task=completed, result=result)
-
 
 async def execute_automation_target(
     *,
@@ -191,6 +256,8 @@ __all__ = [
     "AutomationExecutionError",
     "AutomationPrincipalUnavailable",
     "AutomationTargetNotFound",
+    "AutomationTaskBusy",
+    "AutomationTaskClaimLost",
     "SavedTaskExecution",
     "execute_automation_target",
     "execute_saved_task",
