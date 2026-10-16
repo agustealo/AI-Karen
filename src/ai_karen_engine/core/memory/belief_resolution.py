@@ -102,6 +102,36 @@ def _resolve_competing_values(
     )
 
 
+def is_trusted_profile_correction(
+    *,
+    source_type: str,
+    signal_metadata: dict,
+    merged_metadata: dict,
+) -> bool:
+    """Recognize user-authorized corrections without trusting transport hints.
+
+    Classified assertions may correct current beliefs through either ordinary
+    chat with an explicit linguistic correction or the dedicated authenticated
+    profile-correction ingress. Neither route metadata nor source recency can
+    manufacture classifier-owned facts. Admission and authorization remain
+    upstream of this pure decision policy.
+    """
+    if (
+        signal_metadata.get("source") not in {
+            "explicit_semantic_rule", "explicit_general_fact_rule"
+        }
+        or signal_metadata.get("explicit_user_statement") is not True
+    ):
+        return False
+    if source_type == "profile_correction":
+        return True
+    return (
+        source_type in {"chat_user", "chat"}
+        and signal_metadata.get("explicit_correction") is True
+        and merged_metadata.get("explicit_correction") is True
+    )
+
+
 def resolve_profile_projection(
     incoming: ProfileProjectionEvidence,
     current: Sequence[ProfileProjectionEvidence],
@@ -232,4 +262,5 @@ __all__ = [
     "resolve_belief",
     "ProfileProjectionEvidence",
     "resolve_profile_projection",
+    "is_trusted_profile_correction",
 ]
