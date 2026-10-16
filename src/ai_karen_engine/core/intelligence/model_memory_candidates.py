@@ -52,10 +52,14 @@ _NONASSERTIONS = re.compile(
     r"i might|i could|i used to|i do not|i don't|i never|"
     r"for now|this week|temporarily|until\b|last year|"
     r"right now|currently|today\b|tonight\b|"
-    r"while i\b|this morning)\b",
+    r"while i\b|this morning|no longer|not anymore)\b",
     re.IGNORECASE,
 )
 _RELATION_ALLOWED = re.compile(r"^[a-z][a-z0-9 /-]{0,79}$", re.IGNORECASE)
+_DIRECT_USER_CLAUSE = re.compile(
+    r"^(?:i|my)\b|^(?:during|at|in)\s+[^,!?]{1,75},\s*(?:i|my)\b",
+    re.IGNORECASE,
+)
 _CANONICAL_VALUE_LIMIT = 120
 _ALLOWED_FIELDS = frozenset({
     "evidence_text", "span_start", "span_end", "relation", "value"
@@ -76,8 +80,8 @@ class ModelCandidateReview:
 
     candidates: tuple[ModelMemoryCandidate, ...]
     rejected: tuple[str, ...]
-    prompt_id: str = PROMPT_ID
-    prompt_version: str = PROMPT_VERSION
+    prompt_id: str
+    prompt_version: str
 
     @property
     def eligible_for_auto_persistence(self) -> bool:
@@ -168,6 +172,8 @@ def review_model_memory_candidates(
     source_event_id: str,
     source_message_id: str,
     observed_at: datetime,
+    prompt_id: str,
+    prompt_version: str,
 ) -> ModelCandidateReview:
     """Validate untrusted JSON against runtime-supplied source and provenance.
 
@@ -175,25 +181,35 @@ def review_model_memory_candidates(
     model JSON. Validity is evidence-binding only, *not* user fact truth.
     """
     if (
+        not isinstance(prompt_id, str) or prompt_id != PROMPT_ID
+        or not isinstance(prompt_version, str)
+        or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", prompt_version)
+    ):
+        return ModelCandidateReview(
+            (), ("invalid_prompt_provenance",),
+            str(prompt_id), str(prompt_version),
+        )
+    if (
         not isinstance(source_text, str)
         or not 1 <= len(source_text) <= MAX_SOURCE_LENGTH
         or any(not isinstance(value, str) or not value.strip()
                for value in (tenant_id, user_id, source_event_id, source_message_id))
     ):
-        return ModelCandidateReview((), ("invalid_source_context",))
+        return ModelCandidateReview((), ("invalid_source_context",), prompt_id, prompt_version)
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
-        return ModelCandidateReview((), ("invalid_observation_time",))
+        return ModelCandidateReview((), ("invalid_observation_time",), prompt_id, prompt_version)
     # A clipped quote cannot upgrade third-party, hypothetical or negated
     # context into a direct autobiographical statement.
     if (
-        any(char in source_text for char in ('"', "\u201c", "\u201d"))
+        any(char in source_text for char in ('"', "'", "\u2018", "\u2019", "\u201c", "\u201d"))
+        or not _DIRECT_USER_CLAUSE.match(source_text.strip())
         or _UNTRUSTED_ATTRIBUTION.search(source_text)
         or _NONASSERTIONS.search(source_text)
     ):
-        return ModelCandidateReview((), ("source_context_not_direct_assertion",))
+        return ModelCandidateReview((), ("source_context_not_direct_assertion",), prompt_id, prompt_version)
     items = _parse_envelope(raw_output)
     if items is None:
-        return ModelCandidateReview((), ("invalid_model_envelope",))
+        return ModelCandidateReview((), ("invalid_model_envelope",), prompt_id, prompt_version)
 
     accepted: list[ModelMemoryCandidate] = []
     rejected: list[str] = []
