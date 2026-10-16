@@ -260,6 +260,10 @@ SEMANTIC_METADATA_KEYS = frozenset({
     "subject", "predicate", "object", "modality", "temporality",
     "fact_key", "scope_key", "schema_version", "sensitivity",
     "consent_state", "propagation_allowed",
+    # Formation owns these semantic conclusions. Untrusted runtime metadata
+    # cannot claim "explicit correction" to overwrite an existing profile.
+    "explicit_correction", "assertion_modality", "evidence_text",
+    "preference_domain", "temporal_scope",
 })
 RESERVED_MEMORY_METADATA_KEYS = frozenset({
     "signal_semantics", "runtime_context",
