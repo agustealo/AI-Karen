@@ -21,7 +21,7 @@ class FakeRepository:
         self.claims = []
 
     async def mark_task_running(
-        self, task_id, tenant_id, *, claim_token, lease_seconds,
+        self, task_id, tenant_id, *, claim_token, lease_seconds, created_by,
     ):
         self.claims.append((task_id, tenant_id, claim_token, lease_seconds))
         if task_id == "missing":
@@ -37,7 +37,7 @@ class FakeRepository:
             "tenant_id": tenant_id,
         }
 
-    async def get_task(self, task_id, tenant_id):
+    async def get_task(self, task_id, tenant_id, *, created_by=None):
         return None if task_id == "missing" else {"id": task_id}
 
     async def renew_task_claim(
