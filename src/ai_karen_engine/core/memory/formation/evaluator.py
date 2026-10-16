@@ -8,6 +8,7 @@ feature flags can change mutation behavior without changing memory semantics.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Protocol
 
 from ai_karen_engine.core.memory.guards import (
@@ -135,8 +136,38 @@ class MemoryFormationEvaluator:
             and str(signal.metadata.get("preference_domain") or "").casefold()
             in sensitive_preference_domains
         )
+        # Apply the same centralized privacy authority to new, open-domain
+        # relations. A previously unseen relation must not bypass credential,
+        # medical, or similarly sensitive-data restrictions simply because the
+        # classifier can now recognize its generic structure.
+        relation_label = str(
+            signal.metadata.get("relation_predicate") or ""
+        ).casefold().replace("_", " ")
+        # Classify the entire asserted relation, including its value. A
+        # credential or diagnosis in the object cannot bypass privacy by
+        # appearing under an otherwise harmless predicate such as "reminder".
+        relation_payload = re.sub(
+            r"[^a-z0-9]+", " ",
+            f"{relation_label} {signal.metadata.get('normalized_value') or ''}".casefold(),
+        )
+        padded_payload = f" {relation_payload.strip()} "
+        sensitive_relation_terms = sensitive_preference_domains | frozenset({
+            "health", "diagnosis", "medical", "disability", "treatment",
+            "bank", "account number", "financial", "income", "debt",
+            "credit", "passport", "ssn", "sexual", "political",
+            "religious", "ethnic", "criminal", "biometric",
+            "password", "secret", "credential", "private", "token",
+        })
+        sensitive_relation = (
+            signal.signal_type == "profile_fact"
+            and signal.metadata.get("semantic_class") == "personal_relation"
+            and any(
+                f" {re.sub(r'[^a-z0-9]+', ' ', term).strip()} " in padded_payload
+                for term in sensitive_relation_terms
+            )
+        )
 
-        if sensitive_preference:
+        if sensitive_preference or sensitive_relation:
             sensitivity = MemorySensitivity.PROHIBITED
         elif pii_types:
             profile_safe_name = (

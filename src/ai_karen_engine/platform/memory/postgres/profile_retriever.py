@@ -79,10 +79,17 @@ class PostgresProfileRecallRetriever:
                 )
                 .limit(top_k)
             )
+            if intent.qualifiers or (
+                preferred_attribute is not None
+                and preferred_attribute.startswith("personal_relation.")
+            ):
+                # Exact open-domain profile queries must never retrieve
+                # unrelated sensitive profile facts merely because no matching
+                # relation exists. SQL applies this predicate before LIMIT.
+                stmt = stmt.where(ProfileFact.attribute == preferred_attribute)
             if intent.qualifiers:
                 # Narrow before LIMIT: a global high-ranked profile fact must
                 # not crowd a project/task-specific answer out of recall.
-                stmt = stmt.where(ProfileFact.attribute == preferred_attribute)
                 for key, expected in intent.qualifiers:
                     stmt = stmt.where(
                         func.lower(ProfileFact.value[key].astext) == expected

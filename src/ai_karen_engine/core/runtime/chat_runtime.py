@@ -1407,7 +1407,7 @@ class ChatRuntime:
             and recent.status is EvidenceSufficiencyStatus.SUPPORTED
         ):
             return (
-                f"You told me in this conversation that your {attribute.replace('_', ' ')} is {recent.value}.",
+                f"You told me in this conversation that your {attribute.removeprefix('personal_relation.').replace('_', ' ')} is {recent.value}.",
                 {
                     "evidence_sufficiency": "supported",
                     "evidence_reason": recent.reason,
@@ -1416,6 +1416,10 @@ class ChatRuntime:
                     "actual_provider": None, "actual_model": None,
                 },
             )
+        # Presentation only: keep the canonical namespaced fact identity
+        # unchanged for retrieval and governance, but avoid exposing its
+        # internal category prefix in consumer-facing responses.
+        fact_label = attribute.removeprefix("personal_relation.").replace("_", " ")
         metadata = {
             "evidence_sufficiency": result.status.value,
             "evidence_reason": result.reason,
@@ -1430,12 +1434,12 @@ class ChatRuntime:
         )
         if result.status is EvidenceSufficiencyStatus.SUPPORTED:
             return (
-                f"{scope_prefix}your {attribute.replace('_', ' ')} is {result.value}."
-                if query_scope else f"Your {attribute.replace('_', ' ')} is {result.value}."
+                f"{scope_prefix}your {fact_label} is {result.value}."
+                if query_scope else f"Your {fact_label} is {result.value}."
             ), metadata
         if result.status is EvidenceSufficiencyStatus.SUPPORTED_SET:
             return (
-                f"{scope_prefix}I have these verified saved values for your {attribute.replace('_', ' ')}: "
+                f"{scope_prefix}I have these verified saved values for your {fact_label}: "
                 f"{', '.join(result.values)}.",
                 {
                     **metadata,
