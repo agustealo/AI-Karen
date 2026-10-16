@@ -50,7 +50,9 @@ _UNTRUSTED_ATTRIBUTION = re.compile(
 _NONASSERTIONS = re.compile(
     r"\b(?:maybe|perhaps|possibly|hypothetically|if i|suppose|"
     r"i might|i could|i used to|i do not|i don't|i never|"
-    r"for now|this week|temporarily|until next|last year)\b",
+    r"for now|this week|temporarily|until\b|last year|"
+    r"right now|currently|today\b|tonight\b|"
+    r"while i\b|this morning)\b",
     re.IGNORECASE,
 )
 _RELATION_ALLOWED = re.compile(r"^[a-z][a-z0-9 /-]{0,79}$", re.IGNORECASE)
@@ -133,6 +135,14 @@ def _verified_span(
         or _NONASSERTIONS.search(quote)
         or value.casefold() not in quote.casefold()
         or relation.casefold() not in quote.casefold()
+        or any(char in source for char in ("?", "\u00bf"))
+        or (
+            # Relation/value overlap can fabricate an object that is only
+            # a word inside the predicate, not a separately stated value.
+            value.casefold() in relation.casefold()
+            or quote.casefold().find(value.casefold())
+            <= quote.casefold().find(relation.casefold())
+        )
     ):
         return None
     identity = personal_relation_attribute(relation)
