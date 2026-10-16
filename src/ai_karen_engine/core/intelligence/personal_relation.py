@@ -36,10 +36,17 @@ _HEDGED = re.compile(
 )
 _TEMPORAL = re.compile(
     r"\b(?:today|tonight|currently|temporarily|this\s+(?:week|month|season|year)|"
-    r"right\s+now|at\s+the\s+moment)\b",
+    r"right\s+now|at\s+the\s+moment|for\s+now|at\s+present|"
+    r"until\s+[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,3}|"
+    r"while\s+[^.!?]{1,60})\b",
     re.I,
 )
-_SECONDARY_SUBJECT = re.compile(r"\b(?:he|she|they|someone|another\s+person)\s+(?:said|says)\b", re.I)
+_SECONDARY_SUBJECT = re.compile(
+    r"\b(?:according\s+to\s+\w+|as\s+(?:he|she|they|someone)\s+(?:said|says)|"
+    r"(?:he|she|they|someone|another\s+person)\s+(?:said|says)|"
+    r"from\s+what\s+(?:he|she|they|someone)\s+(?:said|told))\b",
+    re.I,
+)
 _SUBJECT_POSSESSIVE = re.compile(r"(?:'s|’s)\b", re.I)
 _NON_FACT_RELATIONS = frozenset({"favorite", "fav", "favourite", "name"})
 # Generic stability cues, not a catalog of categories or personal facts.
@@ -69,6 +76,7 @@ def personal_relation_attribute(predicate: str) -> str | None:
     if (
         not tokens or len(tokens) > 5
         or tokens[0] in _NON_FACT_RELATIONS
+        or "name" in tokens  # Canonical name identity must not split into new slots.
         or any(token in {"and", "or", "your", "their", "someone", "friend's"}
                for token in tokens)
         or _SUBJECT_POSSESSIVE.search(cleaned)
