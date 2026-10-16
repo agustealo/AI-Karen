@@ -229,7 +229,8 @@ def test_sql_claims_are_atomic_scoped_and_fenced():
         "    async def task_summary(", 1
     )[0]
     assert "UPDATE public.automation_tasks" in mark
-    assert "status <> 'Running'" in mark
+    assert "status NOT IN ('Running', 'ReviewRequired')" in mark
+    assert "created_by = CAST(:created_by AS uuid)" in mark
     assert "claim_expires_at <= clock_timestamp()" in mark
     assert "claim_token IS NOT NULL" in mark
     assert "run_count = run_count + 1" in mark
