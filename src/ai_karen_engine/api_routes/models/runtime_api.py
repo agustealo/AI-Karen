@@ -215,7 +215,7 @@ async def get_runtime_provider_catalog(
                 category=category,
                 enabled=bool(provider.get("enabled", True)),
                 configured=bool(provider.get("is_configured", False)),
-                healthy=bool(provider.get("healthy", True)),
+                healthy=bool(provider.get("healthy", True)) and discovery_error is None,
                 runtime_engine=runtime_engine,
                 transport=transport,
                 compatibility_profile=safe_metadata.get("compatibility_profile"),
@@ -233,7 +233,7 @@ async def get_runtime_provider_catalog(
                 safe_diagnostic_metadata=safe_metadata,
                 models=models,
                 health=ProviderHealthInfo(
-                    status="healthy" if provider.get("healthy", True) else "degraded",
+                    status="healthy" if provider.get("healthy", True) and discovery_error is None else "degraded",
                     latency_ms=None,
                     last_checked_at=datetime.now(timezone.utc),
                 ),
