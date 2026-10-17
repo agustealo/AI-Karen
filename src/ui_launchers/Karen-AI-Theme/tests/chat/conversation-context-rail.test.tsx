@@ -31,6 +31,22 @@ describe('ConversationContextRail', () => {
     expect(screen.queryByText('secret-event')).toBeNull();
   });
 
+  it('shows mixed projection completion and failure counts together', () => {
+    render(
+      <ConversationContextRail
+        metadata={{
+          memory_persistence_status: 'persisted_projection_degraded',
+          memory_projection_targets: [
+            { target: 'memory_graph', success_count: 2, failure_count: 1 },
+          ],
+        }}
+        agentSteps={[]}
+      />,
+    );
+
+    expect(screen.getByText('completed (2) · failed (1)')).toBeTruthy();
+  });
+
   it('renders typed retriever failures without stringifying provenance objects', () => {
     render(
       <ConversationContextRail
