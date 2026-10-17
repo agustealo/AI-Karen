@@ -10,7 +10,11 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.api_routes.models.settings import build_model_settings_payload, get_provider_models
+from ai_karen_engine.api_routes.models.settings import build_model_settings_payload
+from ai_karen_engine.core.model_runtime.ollama_model_inventory import (
+    discover_installed_ollama_models,
+    resolve_ollama_inventory_endpoint,
+)
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
 
 APIRouter, Depends = import_fastapi("APIRouter", "Depends")
@@ -151,24 +155,25 @@ async def get_runtime_provider_catalog(
             raw_models = provider.get("models") or []
             discovery_error = None
             if provider_id == "ollama":
-                # Reuse the authorized provider inventory used by Application
-                # Settings. Native /api/tags is the source of truth for the
-                # active Ollama installation, not configured model defaults.
-                from fastapi import HTTPException
-
+                # The runtime inventory is shared by Chat and Application
+                # Settings. Both project native /api/tags, never saved IDs.
                 try:
-                    inventory = await get_provider_models(
-                        provider_id="ollama",
-                        current_user=current_user,
+                    target_url = resolve_ollama_inventory_endpoint(
+                        saved_base_url=provider.get("base_url"),
+                        configured_base_url=provider.get("default_base_url"),
+                        runtime_source=provider.get("runtime_source"),
+                        runtime_options=provider.get("runtime_options") or [],
                     )
-                    raw_models = inventory["models"]
-                except HTTPException as exc:
-                    raw_models = []
-                    discovery_error = "Ollama installed-model inventory unavailable"
-                    logger.warning(
-                        "runtime_catalog_ollama_inventory_unavailable",
-                        extra={"provider_id": provider_id, "status_code": exc.status_code},
-                    )
+                    names = await discover_installed_ollama_models(target_url or "")
+                    raw_models = [
+                        {
+                            "id": name,
+                            "name": name,
+                            "is_installed": True,
+                            "source": "ollama_native",
+                        }
+                        for name in names
+                    ]
                 except Exception as exc:
                     raw_models = []
                     discovery_error = "Ollama installed-model inventory unavailable"
