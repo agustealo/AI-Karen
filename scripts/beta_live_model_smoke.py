@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -112,6 +113,15 @@ def _select_model(configured_model: str | None, models_payload: dict[str, Any]) 
     return available_models[0]
 
 
+def _assert_grounded_name_answer(answer: str, expected_name: str) -> None:
+    """Require a precise answer to a stated conversational fact, not free association."""
+    tokens = re.findall(r"[A-Za-z]+", answer.casefold())
+    if not tokens or expected_name.casefold() not in tokens:
+        raise RuntimeError("Live model failed conversational name grounding")
+    if len(tokens) > 20:
+        raise RuntimeError("Live model gave an unfocused answer to a simple name question")
+
+
 def run() -> dict[str, Any]:
     config = SmokeConfig.from_environment()
     nonce = uuid.uuid4().hex
@@ -171,6 +181,38 @@ def run() -> dict[str, Any]:
     if not actual_model:
         raise RuntimeError("Live model response did not expose model provenance")
 
+    # Distinct from the nonce/transport check: test whether the configured
+    # model can use the preceding user statement to answer a simple question.
+    # This tests the provider itself; it does not prove ChatRuntime memory writes.
+    grounding_body = {
+        "model": selected_model,
+        "messages": [
+            {"role": "system", "content": "Answer the latest user question directly using only facts in the conversation. Do not invent details."},
+            {"role": "user", "content": "My name is Zeus."},
+            {"role": "assistant", "content": "Got it."},
+            {"role": "user", "content": "What name did I just tell you? Answer with only that name."},
+        ],
+        "temperature": 0.0,
+        "max_tokens": 64,
+        "stream": False,
+    }
+    grounding_status, grounding_payload, grounding_latency_ms = _request_json(
+        _chat_url(config.base_url),
+        method="POST",
+        api_key=config.api_key,
+        body=grounding_body,
+        timeout_seconds=config.timeout_seconds,
+    )
+    if grounding_status != 200:
+        raise RuntimeError("Live model grounding request returned an unsuccessful status")
+    grounding_choices = grounding_payload.get("choices")
+    if not isinstance(grounding_choices, list) or not grounding_choices:
+        raise RuntimeError("Live model grounding response has no choices")
+    grounding_message = grounding_choices[0].get("message") if isinstance(grounding_choices[0], dict) else None
+    if not isinstance(grounding_message, dict):
+        raise RuntimeError("Live model grounding response has no assistant message")
+    _assert_grounded_name_answer(str(grounding_message.get("content") or ""), "Zeus")
+
     return {
         "status": "passed",
         "response_source": "live_openai_compatible_endpoint",
@@ -181,6 +223,8 @@ def run() -> dict[str, Any]:
         "chat_latency_ms": round(chat_latency_ms, 2),
         "response_characters": len(text),
         "nonce_verified": True,
+        "conversation_grounding_verified": True,
+        "grounding_latency_ms": round(grounding_latency_ms, 2),
     }
 
 
