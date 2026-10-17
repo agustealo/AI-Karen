@@ -192,4 +192,4 @@ def test_link_schema_enforces_tenant_foreign_keys_one_use_and_rls():
     assert "FORCE ROW LEVEL SECURITY" in sql
     assert "app.current_tenant_id" in sql
     assert "proof_digest char(64) NOT NULL" in sql
-    assert "plaintext" not in sql.lower().split("CREATE TABLE")[1]
+    assert "secret_token text" not in sql.lower()
