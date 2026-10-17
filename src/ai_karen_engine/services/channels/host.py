@@ -7,7 +7,9 @@ merely wires those existing owners into installed native transport adapters.
 
 Do not auto-start tenant connections from a persisted 'enabled' bit. After a
 process restart, native transports remain inactive until explicitly resumed
-through a future governed reconciliation process.
+through a future governed reconciliation process. Authenticated ingress may
+schedule its committed inbox receipt immediately; persisted backlog discovery
+requires a separate tenant-authorized reconciliation action.
 """
 
 from __future__ import annotations
