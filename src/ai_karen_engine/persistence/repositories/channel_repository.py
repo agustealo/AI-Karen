@@ -36,6 +36,22 @@ class InboundAdmission:
     inserted: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimedChannelMessage:
+    """A separately rechecked, still-leased message for canonical ChatRuntime."""
+
+    inbox_id: str
+    correlation_id: str
+    tenant_id: str
+    user_id: str
+    binding_id: str
+    connection_id: str
+    external_conversation_id: str
+    external_sender_id: str
+    message_kind: str
+    text: str
+
+
 class ChannelAdmissionConflict(ValueError):
     """A native event ID was reused with different content."""
 
@@ -309,6 +325,55 @@ class SqlChannelRepository:
             )).scalar_one_or_none()
         return value is not None
 
+    async def load_claimed_message(
+        self, *, tenant_id: str, inbox_id: str, claim_token: str,
+    ) -> ClaimedChannelMessage | None:
+        """Revalidate lease and active, tenant-scoped binding before AI execution."""
+        tenant_id = _tenant_uuid(tenant_id)
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    SELECT i.inbox_id, i.correlation_id, i.tenant_id, i.user_id,
+                           i.binding_id, i.connection_id, i.external_conversation_id,
+                           i.external_sender_id, i.message_kind, i.message_text
+                    FROM public.channel_inbox i
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = i.tenant_id
+                     AND c.connection_id = i.connection_id
+                     AND c.revision = i.connection_revision
+                    JOIN public.channel_identity_bindings b
+                      ON b.tenant_id = i.tenant_id
+                     AND b.connection_id = i.connection_id
+                     AND b.binding_id = i.binding_id
+                     AND b.user_id = i.user_id
+                    WHERE i.tenant_id = CAST(:tenant AS uuid)
+                      AND i.inbox_id = CAST(:inbox AS uuid)
+                      AND i.status = 'processing'
+                      AND i.claim_token = CAST(:token AS uuid)
+                      AND i.claim_expires_at > clock_timestamp()
+                      AND c.enabled = true
+                      AND b.revoked_at IS NULL
+                      AND i.message_kind = 'text'
+                      AND i.message_text IS NOT NULL
+                """),
+                {"tenant": tenant_id, "inbox": str(uuid.UUID(inbox_id)),
+                 "token": str(uuid.UUID(claim_token))},
+            )).mappings().one_or_none()
+        if row is None:
+            return None
+        return ClaimedChannelMessage(
+            inbox_id=str(row["inbox_id"]),
+            correlation_id=str(row["correlation_id"]),
+            tenant_id=str(row["tenant_id"]),
+            user_id=str(row["user_id"]),
+            binding_id=str(row["binding_id"]),
+            connection_id=str(row["connection_id"]),
+            external_conversation_id=str(row["external_conversation_id"]),
+            external_sender_id=str(row["external_sender_id"]),
+            message_kind=str(row["message_kind"]),
+            text=str(row["message_text"]),
+        )
+
     async def complete_and_stage_delivery(
         self, *,
         tenant_id: str,
@@ -419,6 +484,7 @@ class SqlChannelRepository:
 __all__ = [
     "ChannelAdmissionConflict",
     "ChannelAdmissionDenied",
+    "ClaimedChannelMessage",
     "InboundAdmission",
     "SqlChannelRepository",
 ]
