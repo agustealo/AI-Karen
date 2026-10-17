@@ -489,7 +489,7 @@ export function normalizeRuntimeProviderCatalogResponse(
     );
 
   const selectableProviders = providers.filter((provider) =>
-    isProviderSelectable(provider) && provider.models.length > 0
+    isProviderSelectable(provider) && provider.healthy !== false && provider.models.length > 0
   );
   const builtInProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'builtIn');
   const localProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'local');
