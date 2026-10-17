@@ -135,6 +135,8 @@ async def test_host_binds_canonical_adapter_and_never_auto_starts_tenant_connect
     adapter.initialize.assert_awaited_once()
     assert host.ingress is not None
     assert host.activation is not None
+    assert host.delivery is not None
+    assert host.execution is None  # No runtime injected in this isolated test.
     assert host.ingress.max_native_body_bytes == 65_536
     assert adapter.bind_host_services.call_count == 1
     bound = adapter.bind_host_services.call_args.kwargs
@@ -152,6 +154,7 @@ async def test_host_binds_canonical_adapter_and_never_auto_starts_tenant_connect
     kernel.cleanup.assert_awaited_once()
     client.aclose.assert_awaited_once()
     assert host.ingress is None and host.activation is None
+    assert host.execution is None and host.delivery is None
 
 
 @pytest.mark.asyncio
