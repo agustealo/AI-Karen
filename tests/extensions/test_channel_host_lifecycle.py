@@ -377,6 +377,7 @@ async def test_host_dispatch_uses_only_bound_adapter_and_caller_policy_plan():
         execution_id="delivery-1", policy_decision_id="policy-1",
         authorized_user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
         authorized_tenant_id=tenant, allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.send"],
     )
     assert await host.dispatch_outbox(
         tenant_id=tenant, delivery_id=delivery_id,
