@@ -98,6 +98,7 @@ async def test_channel_registration_discoverable_but_cannot_activate(tmp_path):
 def test_ordinary_plugin_projection_is_unchanged(tmp_path):
     original = _channel_catalog()
     original["capabilities"] = {"provides_api": True}
+    original["category"] = "productivity"
     declaration = ExtensionManifest.from_dict(original)
     projected = PluginKernel(tmp_path)._project_runtime_manifest(declaration)
 
@@ -119,6 +120,20 @@ def test_invalid_channel_declarations_fail_closed(mutation):
     values["capabilities"]["communication_channel"].update(mutation)
     with pytest.raises(ValidationError):
         ExtensionManifest.from_dict(values)
+
+
+def test_channel_declared_category_cannot_fall_back_to_generic_execute():
+    catalog = _channel_catalog()
+    catalog["capabilities"] = {"communication_chanel": {"transport": "fake"}}
+    with pytest.raises(ValueError, match="communication channel capability declaration required"):
+        ExtensionManifest.from_dict(catalog)
+
+
+def test_channel_manifest_rejects_unknown_outer_capability_fields():
+    catalog = _channel_catalog()
+    catalog["capabilities"]["execute_anything"] = True
+    with pytest.raises(ValueError, match="Unknown communication channel capability fields"):
+        ExtensionManifest.from_dict(catalog)
 
 
 def test_untrusted_inbound_event_cannot_supply_karen_principal():
