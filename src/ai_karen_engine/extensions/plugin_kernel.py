@@ -202,6 +202,11 @@ class PluginKernel:
         self._active: Dict[str, str] = {}
         self._initialized = False
 
+    @staticmethod
+    def canonical_extensions_root() -> Path:
+        """Single source of installed built-in extension package location."""
+        return _CANONICAL_PLUGIN_ROOT
+
     @property
     def initialized(self) -> bool:
         return self._initialized
