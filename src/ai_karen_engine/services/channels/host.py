@@ -24,6 +24,7 @@ from ai_karen_engine.services.channels.credentials import ChannelVaultSecretReso
 from ai_karen_engine.services.channels.ingress import ChannelIngressService
 from ai_karen_engine.services.channels.execution import ChannelExecutionService
 from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+from ai_karen_engine.services.channels.worker import ChannelInboxWorker
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
     CredentialVaultService,
 )
@@ -59,6 +60,7 @@ class ChannelHostServices:
         self.activation: ChannelActivationService | None = None
         self.execution: ChannelExecutionService | None = None
         self.delivery: ChannelDeliveryService | None = None
+        self.worker: ChannelInboxWorker | None = None
         self._installed: dict[str, object] = {}
         self._resolvers: dict[str, ChannelVaultSecretResolver] = {}
         self._initialized = False
@@ -99,12 +101,9 @@ class ChannelHostServices:
                 kernel=self.kernel, repository=self.repository,
                 credential_authorizer=self.authorize_reference,
             )
-            self.ingress = ChannelIngressService(
-                kernel=self.kernel, repository=self.repository,
-                max_native_body_bytes=self.settings.max_native_body_bytes,
-            )
-            # These are dependency-bound services, not running workers. No tenant
-            # messages are claimed and no outbound call is authorized at startup.
+            # A worker is permitted only after the canonical ChatRuntime has
+            # been attached. It starts empty; webhook admission supplies only
+            # durable tenant-scoped inbox references, not raw provider text.
             self.delivery = ChannelDeliveryService(
                 kernel=self.kernel, repository=self.repository,
             )
@@ -112,6 +111,15 @@ class ChannelHostServices:
                 self.execution = ChannelExecutionService(
                     repository=self.repository, chat_runtime=self._chat_runtime,
                 )
+                self.worker = ChannelInboxWorker(
+                    repository=self.repository, execution=self.execution,
+                )
+                self.worker.start()
+            self.ingress = ChannelIngressService(
+                kernel=self.kernel, repository=self.repository,
+                max_native_body_bytes=self.settings.max_native_body_bytes,
+                on_admitted=self.worker.submit if self.worker is not None else None,
+            )
             self._initialized = True
             logger.info(
                 "channel.host.dependencies_bound",
@@ -147,6 +155,10 @@ class ChannelHostServices:
         self._initialized = False
         self.ingress = None
         self.activation = None
+        worker = self.worker
+        self.worker = None
+        if worker is not None:
+            await worker.shutdown()
         self.execution = None
         self.delivery = None
 
