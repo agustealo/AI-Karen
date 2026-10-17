@@ -555,7 +555,7 @@ class PluginKernel:
             return False
         if any(
             capability.id == "communication_channel"
-            for capability in registration.manifest.capabilities
+            for capability in getattr(registration.manifest, "capabilities", ())
         ):
             raise ValueError(
                 "Communication channel activation requires the governed Channel Gateway"
