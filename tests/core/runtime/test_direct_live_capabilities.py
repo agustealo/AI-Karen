@@ -1821,3 +1821,73 @@ async def test_current_detroit_news_uses_direct_cortex_capability_when_ml_unavai
     assert decision.plugin_candidates == ["intelligent-search"]
     assert decision.policy_constraints["direct_capability"] is True
     assert DirectCapabilityExecutor().can_handle(decision)
+
+
+@pytest.mark.asyncio
+async def test_colloquial_news_request_executes_authorized_search_without_model() -> None:
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(return_value=_analysis())
+    )
+    request = _request("Whats the latest news in detroit?")
+    decision = await decider.decide(request)
+    plan = _plan(
+        tools=["web_search"],
+        plugins=["intelligent-search"],
+        capabilities=["web.search"],
+    )
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+
+    tool_service = SimpleNamespace(
+        execute_tool=AsyncMock(return_value=SimpleNamespace(
+            success=True,
+            result={"status": "success", "results": [{
+                "url": "https://example.org/news/1",
+                "title": "Detroit civic update",
+                "published_at": "2026-10-16",
+                "snippet": "City officials published a public update.",
+            }]},
+            error=None,
+        ))
+    )
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_tool_service",
+        return_value=tool_service,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=request, decision=decision, plan=plan, meter=meter
+        )
+
+    assert result.handled is True
+    assert result.success is True
+    assert result.source == "tool"
+    assert "Detroit civic update" in result.text
+    assert result.sources[0]["url"] == "https://example.org/news/1"
+    call = tool_service.execute_tool.await_args.args[0]
+    assert call.tool_name == "web_search"
+    assert call.parameters["query"] == "Whats the latest news in detroit?"
+    assert call.user_context["authorized_plan"] is plan
+
+
+@pytest.mark.asyncio
+async def test_colloquial_news_request_without_authorized_search_reports_unavailable() -> None:
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(analyze=AsyncMock(return_value=_analysis()))
+    request = _request("Whats the latest news in detroit?")
+    decision = await decider.decide(request)
+    meter = ExecutionBudgetMeter(_plan(capabilities=["web.search"]).budget)
+    meter.start()
+    result = await DirectCapabilityExecutor().execute(
+        request=request,
+        decision=decision,
+        plan=_plan(capabilities=["web.search"]),
+        meter=meter,
+    )
+
+    assert result.handled is True
+    assert result.success is False
+    assert result.degraded is True
+    assert result.source == "capability_unavailable"
+    assert "not authorized" in result.text.lower()
+    assert "cnn" not in result.text.lower()
