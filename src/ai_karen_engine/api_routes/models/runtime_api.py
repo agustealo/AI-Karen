@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.api_routes.models.settings import build_model_settings_payload
+from ai_karen_engine.api_routes.models.settings import build_model_settings_payload, get_provider_models
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
 
 APIRouter, Depends = import_fastapi("APIRouter", "Depends")
@@ -149,6 +149,33 @@ async def get_runtime_provider_catalog(
                 runtime_engine = runtime_engine.replace("builtin_", "")
             transport = "process" if category == "builtin" else "http"
             raw_models = provider.get("models") or []
+            discovery_error = None
+            if provider_id == "ollama":
+                # Reuse the authorized provider inventory used by Application
+                # Settings. Native /api/tags is the source of truth for the
+                # active Ollama installation, not configured model defaults.
+                from fastapi import HTTPException
+
+                try:
+                    inventory = await get_provider_models(
+                        provider_id="ollama",
+                        current_user=current_user,
+                    )
+                    raw_models = inventory["models"]
+                except HTTPException as exc:
+                    raw_models = []
+                    discovery_error = "Ollama installed-model inventory unavailable"
+                    logger.warning(
+                        "runtime_catalog_ollama_inventory_unavailable",
+                        extra={"provider_id": provider_id, "status_code": exc.status_code},
+                    )
+                except Exception as exc:
+                    raw_models = []
+                    discovery_error = "Ollama installed-model inventory unavailable"
+                    logger.warning(
+                        "runtime_catalog_ollama_inventory_failed",
+                        extra={"provider_id": provider_id, "error_type": type(exc).__name__},
+                    )
             models = []
             for model_obj in raw_models:
                 model = model_obj.model_dump() if hasattr(model_obj, "model_dump") else (model_obj.dict() if hasattr(model_obj, "dict") else model_obj)
@@ -161,7 +188,9 @@ async def get_runtime_provider_catalog(
                         capabilities=list(model.get("capabilities") or []),
                     ))
 
-            if not models and provider.get("selected_model"):
+            if not models and provider.get("selected_model") and category == "custom":
+                # Custom endpoints permit manual model IDs. Managed providers
+                # cannot claim that a saved default was discovered.
                 models = [
                     RuntimeModel(
                         id=str(provider["selected_model"]),
@@ -184,7 +213,9 @@ async def get_runtime_provider_catalog(
                 transport=transport,
                 compatibility_profile=safe_metadata.get("compatibility_profile"),
                 default_model=provider.get("selected_model") or provider.get("default_model"),
-                selected_model=provider.get("selected_model"),
+                selected_model=provider.get("selected_model") if (
+                    category == "custom" or any(model.id == provider.get("selected_model") for model in models)
+                ) else (models[0].id if models else None),
                 api_key_env_var=provider.get("api_key_env_var"),
                 api_key_header=provider.get("api_key_header"),
                 api_key_prefix=provider.get("api_key_prefix"),
@@ -199,7 +230,7 @@ async def get_runtime_provider_catalog(
                     latency_ms=None,
                     last_checked_at=datetime.now(timezone.utc),
                 ),
-                degradation_reason=provider.get("degraded_reason"),
+                degradation_reason=discovery_error or provider.get("degraded_reason"),
                 allowed_for_current_user=bool(provider.get("user_selectable", True) and provider.get("policy_allowed", True)),
                 requires_api_key=bool(provider.get("api_key_env_var") or provider.get("requires_api_key")),
                 requires_base_url=bool(provider.get("supports_base_url_override")),
