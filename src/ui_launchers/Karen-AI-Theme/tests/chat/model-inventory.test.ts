@@ -6,6 +6,7 @@ import {
   normalizeRuntimeProviderCatalogResponse,
   reconcileDiscoveredModelSelection,
   canSaveProviderModelSelection,
+  getProviderModelDiscoveryNotice,
 } from '@/lib/model-runtime-inventory';
 
 describe('managed provider model discovery', () => {
@@ -111,5 +112,41 @@ describe('saved model identifiers are not runtime inventory', () => {
       }],
     });
     expect(response.providers[0].models).toEqual([]);
+  });
+});
+
+
+describe('provider inventory provenance', () => {
+  it('labels catalog-only results without asserting real endpoint availability', () => {
+    expect(getProviderModelDiscoveryNotice({
+      discovery_status: 'catalog_only',
+      inventory_source: 'configured_catalog',
+    })).toContain('not verified');
+  });
+
+  it('labels mixed results but not fully live-verified inventories', () => {
+    expect(getProviderModelDiscoveryNotice({
+      discovery_status: 'ready',
+      inventory_source: 'mixed',
+    })).toContain('not verified');
+    expect(getProviderModelDiscoveryNotice({
+      discovery_status: 'ready',
+      inventory_source: 'provider_live',
+    })).toBe('');
+    expect(getProviderModelDiscoveryNotice({
+      discovery_status: 'ready',
+      inventory_source: 'ollama_native',
+    })).toBe('');
+  });
+
+  it('never treats a failed live request as permission to save saved catalog defaults', () => {
+    expect(canSaveProviderModelSelection(
+      'stale-catalog-model', [],
+      { isLoading: false, manualEntryAllowed: false },
+    )).toBe(false);
+    expect(canSaveProviderModelSelection(
+      'custom-manual-model', [],
+      { isLoading: false, manualEntryAllowed: true },
+    )).toBe(true);
   });
 });
