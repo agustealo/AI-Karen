@@ -272,3 +272,39 @@ describe('custom-provider model provenance', () => {
     });
   });
 });
+
+
+describe('runtime provider disconnect and recovery', () => {
+  const catalog = (healthy: boolean) => normalizeRuntimeProviderCatalogResponse({
+    default_provider: 'ollama',
+    default_model: 'qwen3:4b',
+    providers: [{
+      id: 'ollama',
+      label: 'Ollama',
+      category: 'local',
+      enabled: true,
+      configured: true,
+      healthy,
+      selected_model: 'qwen3:4b',
+      models: [{ id: 'qwen3:4b', label: 'Qwen', available: true, source: 'ollama_native' }],
+    }],
+  });
+
+  it('keeps disconnected provider diagnostics but cannot select its stale model', () => {
+    const inventory = catalog(false);
+    expect(inventory.providers[0].healthy).toBe(false);
+    expect(inventory.providers[0].models).toHaveLength(1);
+    expect(inventory.selectableProviders).toEqual([]);
+    expect(resolveChatProviderModelSelection(inventory, 'ollama', 'qwen3:4b')).toEqual({
+      provider: '', model: '', preferenceUnavailable: true,
+    });
+  });
+
+  it('restores the same saved model after recovery without changing preference', () => {
+    const inventory = catalog(true);
+    expect(inventory.selectableProviders.map((provider) => provider.id)).toEqual(['ollama']);
+    expect(resolveChatProviderModelSelection(inventory, 'ollama', 'qwen3:4b')).toEqual({
+      provider: 'ollama', model: 'qwen3:4b', preferenceUnavailable: false,
+    });
+  });
+});
