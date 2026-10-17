@@ -356,3 +356,14 @@ async def test_recovery_scope_and_budget_are_required():
             await SqlChannelRepository().list_recoverable_inbound(
                 tenant_id=TENANT, connection_id=connection_id, limit=limit,
             )
+
+
+def test_claim_revalidates_active_verified_user_inside_atomic_sql():
+    from inspect import getsource
+    source = getsource(SqlChannelRepository.claim_inbound)
+    assert "JOIN public.auth_users u" in source
+    assert "u.tenant_id = i.tenant_id" in source
+    assert "u.user_id = i.user_id" in source
+    assert "u.is_active = true AND u.is_verified = true" in source
+    assert "c.revision = i.connection_revision" in source
+    assert "b.revoked_at IS NULL" in source
