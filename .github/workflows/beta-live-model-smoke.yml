@@ -58,7 +58,7 @@ jobs:
           Write-Host "beta_live_model_sha=$actual"
 
       - name: Compile live-model smoke harness
-        run: python -m py_compile scripts/beta_live_model_smoke.py
+        run: python -m py_compile scripts/beta_live_model_smoke.py scripts/ci/ollama_settings_live_proof.py
 
       - name: Prove real local model inference
         run: python scripts/beta_live_model_smoke.py
