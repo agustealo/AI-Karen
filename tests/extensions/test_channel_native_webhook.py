@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import UUID
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
