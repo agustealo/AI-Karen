@@ -36,6 +36,11 @@ LIVE_MODEL_BASE_URL="${KAREN_SMOKE_LIVE_MODEL_BASE_URL:-}"
 LIVE_MODEL_PROVIDER="${KAREN_SMOKE_LIVE_MODEL_PROVIDER:-lmstudio-desktop}"
 LIVE_MODEL_NAME="${KAREN_SMOKE_LIVE_MODEL_NAME:-}"
 LIVE_MODEL_TIMEOUT_SECONDS="${KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS:-90}"
+OLLAMA_SETTINGS_ONLY="${KAREN_SMOKE_ONLY_OLLAMA_SETTINGS:-false}"
+if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" && ( -z "${LIVE_MODEL_BASE_URL}" || ( "${LIVE_MODEL_PROVIDER}" != "ollama" && "${LIVE_MODEL_PROVIDER}" != "ollama-local" ) ) ]]; then
+  echo "Ollama Settings-only proof requires a real Ollama endpoint and provider" >&2
+  exit 1
+fi
 
 if command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -368,6 +373,10 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
     --cookie-file "${COOKIE_JAR}" \
     --model "${LIVE_MODEL_NAME}" \
     --timeout "${LIVE_MODEL_TIMEOUT_SECONDS}"
+  if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" ]]; then
+    echo "PRODUCTION OLLAMA SETTINGS-TO-RUNTIME LIVE PROOF PASSED"
+    exit 0
+  fi
 fi
 
 if [[ -n "${LIVE_MODEL_BASE_URL}" ]]; then
