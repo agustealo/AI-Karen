@@ -103,3 +103,89 @@ def test_settings_contract_accepts_runtime_and_response_modes() -> None:
     )
     assert request.runtime_source == "host"
     assert request.chat_response_mode == "streaming_first"
+
+
+@pytest.mark.asyncio
+async def test_ollama_runtime_source_and_response_mode_are_durably_saved(
+    ollama_endpoint: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored: dict[str, object] = {}
+    saved: list[bool] = []
+    settings = SimpleNamespace(
+        set_setting=lambda key, value, save=False: stored.__setitem__(key, value),
+        _save_settings=lambda: saved.append(True),
+    )
+    monkeypatch.setattr(settings_routes, "get_settings_manager", lambda: settings)
+    monkeypatch.setattr(
+        settings_routes, "get_registry",
+        lambda: SimpleNamespace(invalidate_provider_cache=lambda name: None),
+    )
+
+    async def live_host():
+        return [settings_routes.RuntimeOptionPayload(
+            source="host",
+            label="Local host",
+            available=True,
+            base_url="http://host.docker.internal:11434",
+            status="Online",
+            message="Available",
+        )]
+
+    async def settings_response():
+        return {"saved": True}
+
+    monkeypatch.setattr(settings_routes, "_get_ollama_runtime_options", live_host)
+    monkeypatch.setattr(settings_routes, "build_model_settings_payload", settings_response)
+
+    result = await settings_routes.update_model_settings(
+        settings_routes.ModelSettingsUpdateRequest(
+            provider="ollama",
+            model="qwen2.5:7b",
+            runtime_source="host",
+            chat_response_mode="non_streaming",
+        ),
+        current_user={"roles": ["admin"]},
+    )
+
+    assert result == {"saved": True}
+    assert stored["provider"] == "ollama"
+    assert stored["model"] == "qwen2.5:7b"
+    assert stored["model_providers.ollama.runtime_source"] == "host"
+    assert stored["chat_response_mode"] == "non_streaming"
+    assert saved == [True]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_runtime_is_rejected_before_persistence(
+    ollama_endpoint: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    changed: list[str] = []
+    monkeypatch.setattr(
+        settings_routes,
+        "get_settings_manager",
+        lambda: SimpleNamespace(set_setting=lambda key, value, save=False: changed.append(key)),
+    )
+    async def unavailable_host():
+        return [settings_routes.RuntimeOptionPayload(
+            source="host",
+            label="Local host",
+            available=False,
+            base_url="http://host.docker.internal:11434",
+            status="Offline",
+            message="Not detected",
+        )]
+
+    monkeypatch.setattr(settings_routes, "_get_ollama_runtime_options", unavailable_host)
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.update_model_settings(
+            settings_routes.ModelSettingsUpdateRequest(
+                provider="ollama",
+                model="qwen2.5:7b",
+                runtime_source="host",
+            ),
+            current_user={"roles": ["admin"]},
+        )
+    assert exc.value.status_code == 409
+    assert changed == []
