@@ -213,3 +213,37 @@ def test_webhook_does_not_claim_success_if_database_is_unavailable():
         response = client.post(NATIVE, content=b"native-data")
     assert response.status_code == 503
     assert "private database" not in response.text
+
+
+def test_global_auth_allows_only_exact_native_post_without_session(monkeypatch):
+    from ai_karen_engine.server import routers as canonical_routers
+    from ai_karen_engine.auth.auth_middleware import AuthenticationError
+
+    ingress, repo, _ = gateway()
+    authentication = AsyncMock(side_effect=AuthenticationError("No valid JWT"))
+    fake_auth = SimpleNamespace(
+        is_public_endpoint=lambda path: False,
+        authenticate_request=authentication,
+    )
+    monkeypatch.setattr(canonical_routers, "get_auth_middleware", lambda: fake_auth)
+    monkeypatch.setattr(
+        canonical_routers.auth_config, "should_bypass_auth", lambda: False,
+    )
+    app = isolated_app(ingress)
+    app.add_api_route(
+        "/api/channel-admin/private-test", lambda: {"unsafe": True},
+        methods=["GET"],
+    )
+    canonical_routers.configure_authentication_middleware(app)
+
+    with TestClient(app) as client:
+        signed = client.post(
+            NATIVE, content=b"native-data",
+            headers={"X-Telegram-Bot-Api-Secret-Token": "native-secret"},
+        )
+        assert signed.status_code == 202
+        authentication.assert_not_awaited()
+        unsigned_admin = client.get("/api/channel-admin/private-test")
+        assert unsigned_admin.status_code == 401
+    authentication.assert_awaited_once()
+    repo.admit_verified_inbound.assert_awaited_once()
