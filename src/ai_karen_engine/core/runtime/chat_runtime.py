@@ -135,6 +135,11 @@ class ChatRuntime:
         self._outcome_recorder = OutcomeRecorder(store=self._composition.outcome_store)
         self._emitter = get_observability_emitter()
 
+    @staticmethod
+    def _can_recover_stream_with_fallback(streamed_text: str) -> bool:
+        """Never replace a response after any content was sent to the client."""
+        return not streamed_text
+
     async def get_orchestrator(self) -> Any:
         """Return the graph orchestrator adapter for health/availability checks."""
         return get_workflow_runtime()
@@ -808,31 +813,35 @@ class ChatRuntime:
                 metadata={"error_code": "CHAT_STREAM_EXECUTION_FAILED"},
             )
 
+            # A client-visible partial answer cannot safely be concatenated
+            # with a different executor's answer. Only failures before the
+            # first content chunk are eligible for governed recovery.
             fallback: Optional[ChatExecutionResult] = None
-            try:
-                fallback = await build_runtime_fallback(
-                    runtime=self,
-                    request=request,
-                    failure=exc,
-                    correlation_id=ctx.correlation_id,
-                    conversation_id=conversation_id,
-                    start_time=stream_start,
-                    decision=decision,
-                )
-            except Exception as fallback_exc:
-                logger.error(
-                    "ChatRuntime stream fallback failed",
-                    extra={
-                        "correlation_id": ctx.correlation_id,
-                        "error_type": type(fallback_exc).__name__,
-                    },
-                )
-                self._emitter.emit(
-                    RuntimeEventType.REQUEST_FAILED,
-                    error_type=type(fallback_exc).__name__,
-                    status="fallback_error",
-                    metadata={"error_code": "CHAT_STREAM_FALLBACK_FAILED"},
-                )
+            if self._can_recover_stream_with_fallback(streamed_text):
+                try:
+                    fallback = await build_runtime_fallback(
+                        runtime=self,
+                        request=request,
+                        failure=exc,
+                        correlation_id=ctx.correlation_id,
+                        conversation_id=conversation_id,
+                        start_time=stream_start,
+                        decision=decision,
+                    )
+                except Exception as fallback_exc:
+                    logger.error(
+                        "ChatRuntime stream fallback failed",
+                        extra={
+                            "correlation_id": ctx.correlation_id,
+                            "error_type": type(fallback_exc).__name__,
+                        },
+                    )
+                    self._emitter.emit(
+                        RuntimeEventType.REQUEST_FAILED,
+                        error_type=type(fallback_exc).__name__,
+                        status="fallback_error",
+                        metadata={"error_code": "CHAT_STREAM_FALLBACK_FAILED"},
+                    )
 
             if fallback is not None and fallback.answer:
                 fallback_meta = fallback.metadata.to_dict()
@@ -878,14 +887,20 @@ class ChatRuntime:
                 generation_error = exc
                 provider_meta["generation_error"] = True
                 provider_meta["degraded_mode"] = True
-                provider_meta["degradation_reason"] = "all_execution_paths_failed"
+                provider_meta["degradation_reason"] = (
+                    "partial_stream_interrupted"
+                    if streamed_text else "all_execution_paths_failed"
+                )
                 yield self._enrich_chunk(
                     ChatStreamChunk(
                         type="error",
                         content="Unable to complete the response.",
                         correlation_id=ctx.correlation_id,
                         metadata={
-                            "error_code": "CHAT_GENERATION_FAILED",
+                            "error_code": (
+                                "CHAT_PARTIAL_STREAM_INTERRUPTED"
+                                if streamed_text else "CHAT_GENERATION_FAILED"
+                            ),
                             "error_type": type(exc).__name__,
                             "correlation_id": ctx.correlation_id,
                             "requested_provider": request.preferred_provider,
@@ -894,7 +909,7 @@ class ChatRuntime:
                             "actual_model": provider_meta.get("actual_model"),
                             "runtime_engine": provider_meta.get("runtime_engine"),
                             "fallback_level": provider_meta.get("fallback_level", 0),
-                            "degradation_reason": "all_execution_paths_failed",
+                            "degradation_reason": provider_meta["degradation_reason"],
                             "response_source": provider_meta.get("response_source"),
                             "degraded_mode": True,
                             "fallback_reason": provider_meta.get("fallback_reason"),
