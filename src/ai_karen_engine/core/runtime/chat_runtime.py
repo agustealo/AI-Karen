@@ -2252,7 +2252,7 @@ class ChatRuntime:
             forbidden_capabilities=list(decision.forbidden_capabilities),
             preferred_provider=request.preferred_provider,
             preferred_model=request.preferred_model,
-            max_tokens=request.max_tokens or decision.token_budget,
+            max_tokens=self._resolve_chat_generation_max_tokens(request, plan),
             temperature=request.temperature, timeout_ms=decision.time_budget_ms,
             correlation_id=request.context.correlation_id,
             request_id=request.context.request_id,
@@ -2286,6 +2286,32 @@ class ChatRuntime:
                 "error_type": type(exc).__name__,
             })
             return None
+
+    @staticmethod
+    def _resolve_chat_generation_max_tokens(
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+    ) -> int:
+        """Resolve direct-chat completion budget independently of prompt context.
+
+        Explicit client limits remain subject to the configured provider ceiling
+        and the authorized per-execution output budget. CORTEX's token_budget
+        remains an input/prompt assembly constraint, never a generation default.
+        """
+        from ai_karen_engine.config.runtime import get_runtime_settings
+
+        config = get_runtime_settings().llm
+        requested = (
+            request.max_tokens
+            if request.max_tokens is not None
+            else config.chat_default_max_output_tokens
+        )
+        if isinstance(requested, bool) or not isinstance(requested, int) or requested <= 0:
+            raise ValueError("Direct-chat max_tokens must be a positive integer")
+        ceiling = min(config.max_tokens, plan.budget.max_output_tokens)
+        if ceiling <= 0:
+            raise ValueError("Direct-chat generation budget is disabled")
+        return min(requested, ceiling)
 
     async def _run_simple(
         self,
