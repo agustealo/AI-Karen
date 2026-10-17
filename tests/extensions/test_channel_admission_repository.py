@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +20,6 @@ from ai_karen_engine.persistence.repositories.channel_repository import (
 )
 
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-OTHER_TENANT = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 INBOX = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 BINDING = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 USER = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
