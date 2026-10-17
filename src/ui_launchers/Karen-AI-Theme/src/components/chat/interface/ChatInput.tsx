@@ -38,6 +38,7 @@ interface ChatInputProps {
   selectedModel: string;
   applyModelSelection: (providerId: string, modelId: string) => Promise<void>;
   isUpdatingModelSelection: boolean;
+  onRefreshModels: () => Promise<void>;
 
   // Session management
   sessions: Session[];
@@ -82,6 +83,7 @@ export function ChatInput({
   selectedModel,
   applyModelSelection,
   isUpdatingModelSelection,
+  onRefreshModels,
   sessions,
   currentSession,
   isLoadingSessions,
@@ -199,6 +201,7 @@ export function ChatInput({
               selectedModel={selectedModel}
               applyModelSelection={applyModelSelection}
               isUpdatingModelSelection={isUpdatingModelSelection}
+              onRefreshModels={onRefreshModels}
             />
 
             <ChatActionsMenu
