@@ -1,17 +1,14 @@
-"""Canonical Ollama model inventory for the runtime and its API projections.
+"""Pure canonical selection of the configured Ollama runtime endpoint.
 
-Ollama's native /api/tags response owns installed-model truth. The runtime
-owns endpoint selection; routes may authorize caller-supplied URLs but must
-not invoke one another or invent model IDs from persisted defaults.
+Ollama's native /api/tags adapter lives in integrations, and the Core never
+imports that concrete adapter. API projections reuse this selection policy.
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ai_karen_engine.integrations.providers.ollama_provider import OllamaProvider
 
 
 def _get_field(option: Any, key: str) -> Any:
@@ -52,15 +49,3 @@ def resolve_ollama_inventory_endpoint(
     if runtime_options:
         return None
     return configured_base_url
-
-
-async def discover_installed_ollama_models(base_url: str) -> list[str]:
-    """Get exact installed model names from Ollama without synthetic fallbacks."""
-    if not base_url or not base_url.strip():
-        raise ValueError("Ollama inventory endpoint is not configured")
-
-    def _read() -> list[str]:
-        client = OllamaProvider(base_url=base_url, timeout=3, max_retries=0)
-        return client.get_models()
-
-    return await asyncio.to_thread(_read)
