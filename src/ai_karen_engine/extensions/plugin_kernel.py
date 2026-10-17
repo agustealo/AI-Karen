@@ -510,6 +510,51 @@ class PluginKernel:
     def get_catalog_manifest(self, plugin_id: str) -> Optional[CatalogExtensionManifest]:
         return self._catalog_manifests.get(plugin_id)
 
+    def get_channel_activation_manifest(
+        self, plugin_id: str,
+    ) -> Optional[CatalogExtensionManifest]:
+        """Read canonical installed channel truth without enabling plugin execution.
+
+        Communication capabilities deliberately remain DISABLED to the generic
+        ExtensionExecutionService. Channel Gateway authorizes each tenant-owned
+        connection separately. A manually disabled or invalid installation
+        overrides any connection-enabled state.
+        """
+        record = self.get_record(plugin_id)
+        registration = self.runtime_registry.get(plugin_id)
+        manifest = self.get_catalog_manifest(plugin_id)
+        if (
+            record is None
+            or record["is_valid"] is not True
+            or registration is None
+            or registration.state is not ExtensionLifecycleState.DISABLED
+            or manifest is None
+            or manifest.capabilities.communication_channel is None
+        ):
+            return None
+        marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
+        if marker.is_symlink() or marker.exists():
+            return None
+        return manifest
+
+    def is_canonical_channel_adapter(self, plugin_id: str, adapter: Any) -> bool:
+        """Require installed, host-loaded channel code, never a caller stub.
+
+        Generic extension registrations stay disabled for execution. This
+        strictly checks object identity against the canonical loader's
+        process-local installed extension instance, after catalog gating.
+        """
+        if self.get_channel_activation_manifest(plugin_id) is None:
+            return False
+        try:
+            return self.loader.load_extension(plugin_id) is adapter
+        except Exception as exc:
+            logger.warning(
+                "channel.adapter_resolution_failed",
+                extra={"installation_id": plugin_id, "error_type": type(exc).__name__},
+            )
+            return False
+
     def get_required_permissions(self, plugin_id: str) -> list[str]:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:

@@ -106,9 +106,10 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
-    async def get_enabled_connection(
+    async def get_connection(
         self, *, tenant_id: str, connection_id: str,
     ) -> ChannelConnection | None:
+        """Read tenant-scoped channel configuration, including inactive accounts."""
         tenant_id = _tenant_uuid(tenant_id)
         if not connection_id:
             raise ValueError("connection_id is required")
@@ -119,21 +120,59 @@ class SqlChannelRepository:
                            provider_account_id, credential_handle, revision, enabled
                     FROM public.channel_connections
                     WHERE tenant_id = CAST(:tenant AS uuid)
-                      AND connection_id = :connection AND enabled = true
+                      AND connection_id = :connection
                 """),
                 {"tenant": tenant_id, "connection": connection_id},
             )).mappings().one_or_none()
-        if row is None:
-            return None
+        return self._connection_from_row(row) if row is not None else None
+
+    @staticmethod
+    def _connection_from_row(row: Mapping[str, Any]) -> ChannelConnection:
         return ChannelConnection(
-            connection_id=row["connection_id"],
-            installation_id=row["installation_id"],
+            connection_id=str(row["connection_id"]),
+            installation_id=str(row["installation_id"]),
             tenant_id=str(row["tenant_id"]),
-            provider_account_id=row["provider_account_id"],
-            credential_handle=row["credential_handle"],
+            provider_account_id=str(row["provider_account_id"]),
+            credential_handle=str(row["credential_handle"]),
             revision=int(row["revision"]),
             enabled=bool(row["enabled"]),
         )
+
+    async def get_enabled_connection(
+        self, *, tenant_id: str, connection_id: str,
+    ) -> ChannelConnection | None:
+        connection = await self.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        return connection if connection is not None and connection.enabled else None
+
+    async def set_connection_enabled(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int, enabled: bool,
+    ) -> ChannelConnection | None:
+        """CAS-revoke or activate an account; revision fences stale transports."""
+        tenant_id = _tenant_uuid(tenant_id)
+        if not connection_id or expected_revision < 1 or type(enabled) is not bool:
+            raise ValueError("Invalid channel connection lifecycle transition")
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    UPDATE public.channel_connections
+                    SET enabled = :enabled,
+                        revision = revision + 1,
+                        updated_at = now()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND revision = :revision
+                      AND enabled IS DISTINCT FROM :enabled
+                    RETURNING connection_id, installation_id, tenant_id,
+                              provider_account_id, credential_handle,
+                              revision, enabled
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "revision": expected_revision, "enabled": enabled},
+            )).mappings().one_or_none()
+        return self._connection_from_row(row) if row is not None else None
 
     async def get_verified_binding(
         self, *, tenant_id: str, connection_id: str, external_sender_id: str,

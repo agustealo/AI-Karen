@@ -22,7 +22,6 @@ from ai_karen_engine.extensions.channels.contracts import (
     ChannelDeliveryReceipt,
     ChannelDeliveryState,
 )
-from ai_karen_engine.extensions.contracts import ExtensionLifecycleState
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.persistence.repositories.channel_repository import (
     ClaimedChannelDelivery,
@@ -55,17 +54,22 @@ class ChannelDeliveryService:
         self._kernel = kernel
         self._repository = repository
 
-    def _authorized_channel(self, connection: ChannelConnection) -> dict[str, Any]:
-        registration = self._kernel.runtime_registry.get(connection.installation_id)
-        if registration is None or registration.state is not ExtensionLifecycleState.ENABLED:
-            raise ChannelDeliveryDenied("Transport extension is not enabled")
-        capabilities = registration.manifest.capabilities
-        if not any(c.id == "communication_channel" for c in capabilities):
+    def _authorized_channel(
+        self, connection: ChannelConnection, adapter: ChannelAdapter,
+    ) -> dict[str, Any]:
+        catalog = self._kernel.get_channel_activation_manifest(
+            connection.installation_id
+        )
+        if catalog is None:
+            raise ChannelDeliveryDenied("Installed channel is not available to the host")
+        declared = catalog.capabilities.communication_channel
+        if declared is None:
             raise ChannelDeliveryDenied("Installed extension is not a channel")
-        declared = registration.manifest.metadata.get("communication_channel")
-        if not isinstance(declared, dict):
-            raise ChannelDeliveryDenied("Channel contract metadata is unavailable")
-        return declared
+        if not self._kernel.is_canonical_channel_adapter(
+            connection.installation_id, adapter,
+        ):
+            raise ChannelDeliveryDenied("Channel adapter does not match installed host code")
+        return declared.model_dump(mode="json")
 
     @staticmethod
     async def _plan_allows(
@@ -154,7 +158,7 @@ class ChannelDeliveryService:
         )
         if snapshot is None:
             raise ChannelDeliveryDenied("No enabled tenant channel connection")
-        declared = self._authorized_channel(snapshot)
+        declared = self._authorized_channel(snapshot, adapter)
         if not await self._plan_allows(
             authorized_plan, tenant_id=tenant_id, user_id=preflight.user_id,
             installation_id=snapshot.installation_id,
