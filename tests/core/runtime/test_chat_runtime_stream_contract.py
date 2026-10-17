@@ -859,3 +859,63 @@ async def test_partial_content_then_error_never_persists_failed_assistant_turn()
     assert chunks[-1].metadata["error_type"] == "ProviderConnectionError"
     assert gateway.calls == []
     memory_write.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_stream_execution_exception_uses_canonical_runtime_fallback():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def failing_stream(*args, **kwargs):
+        raise RuntimeError("secret-upstream-detail")
+        if False:
+            yield ChatStreamChunk(
+                type="content",
+                content="unreachable",
+                correlation_id="corr-1",
+            )
+
+    fallback = MagicMock()
+    fallback.answer = "Recovered through fallback"
+    fallback.metadata.to_dict.return_value = {
+        "actual_provider": "vllm",
+        "actual_model": "fallback-model",
+        "runtime_engine": "vllm",
+        "response_source": "model",
+        "fallback_level": 1,
+        "degraded_mode": True,
+        "degradation_reason": "primary_provider_failed",
+    }
+
+    with patch(
+        "ai_karen_engine.core.runtime.chat_runtime.build_runtime_fallback",
+        new_callable=AsyncMock,
+        return_value=fallback,
+    ) as fallback_builder:
+        chunks = await _collect_stream(
+            runtime,
+            request,
+            decision,
+            plan,
+            failing_stream,
+        )
+
+    fallback_builder.assert_awaited_once()
+    contents = [
+        chunk.content
+        for chunk in chunks
+        if chunk.type == ChatStreamEventType.CONTENT
+    ]
+    assert contents == ["Recovered through fallback"]
+    assert all("secret-upstream-detail" not in chunk.content for chunk in chunks)
+    assert not [
+        chunk for chunk in chunks
+        if chunk.type == ChatStreamEventType.ERROR
+    ]
+    assert chunks[-1].type == ChatStreamEventType.COMPLETE
+    assert chunks[-1].metadata["fallback_level"] == 1
+    assert chunks[-1].metadata["degraded_mode"] is True
+    assert gateway.calls[0]["assistant_text"] == "Recovered through fallback"

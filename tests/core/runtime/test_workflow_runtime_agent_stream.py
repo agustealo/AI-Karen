@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamEventType
+import pytest
+
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext,
+    ChatExecutionRequest,
+    ChatStreamEventType,
+)
 from ai_karen_engine.core.runtime.workflow_runtime import WorkflowRuntime
 
 
@@ -117,3 +123,39 @@ def test_rich_result_extraction_does_not_copy_internal_graph_state() -> None:
 
     assert metadata["artifacts"] == [{"id": "r1"}]
     assert "internal_state" not in metadata
+
+
+
+@pytest.mark.asyncio
+async def test_workflow_stream_propagates_failure_to_chat_runtime_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = WorkflowRuntime()
+
+    class FailingOrchestrator:
+        async def stream_process(self, **_kwargs):
+            raise RuntimeError("secret-provider-detail")
+            if False:
+                yield {}
+
+    async def get_failing_orchestrator():
+        return FailingOrchestrator()
+
+    monkeypatch.setattr(runtime, "_get_orchestrator", get_failing_orchestrator)
+
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": "hello"}],
+        context=ChatExecutionContext(
+            user_id="00000000-0000-0000-0000-000000000001",
+            tenant_id="00000000-0000-0000-0000-000000000002",
+            session_id="session-1",
+            conversation_id="00000000-0000-0000-0000-000000000003",
+            request_id="request-1",
+            correlation_id="corr-1",
+        ),
+        stream=True,
+    )
+
+    with pytest.raises(RuntimeError, match="secret-provider-detail"):
+        async for _chunk in runtime.stream(request):
+            pytest.fail("workflow adapter must not translate runtime failures into SSE chunks")

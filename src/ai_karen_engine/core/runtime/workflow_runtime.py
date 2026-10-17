@@ -64,44 +64,31 @@ class WorkflowRuntime:
         conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
 
-        try:
-            orchestrator = await self._get_orchestrator()
-            async for chunk in orchestrator.stream_process(
-                messages=self._to_langchain(request.messages),
-                user_id=ctx.user_id,
-                session_id=conversation_id,
-                config=config,
-            ):
-                for activity_chunk in self._extract_agent_activity_chunks(
-                    chunk,
-                    correlation_id=ctx.correlation_id,
-                ):
-                    yield activity_chunk
-
-                content, meta = self._extract_stream_payload(chunk)
-                if content or meta:
-                    yield _SharedChatStreamChunk(
-                        type=(
-                            "status"
-                            if meta.get("status") and not content
-                            else "content"
-                        ),
-                        content=content,
-                        correlation_id=ctx.correlation_id,
-                        metadata=meta,
-                    )
-        except Exception as exc:  # pragma: no cover - defensive adapter boundary
-            logger.error(
-                "WorkflowRuntime.stream failed: %s",
-                exc,
-                extra={"correlation_id": ctx.correlation_id},
-            )
-            yield _SharedChatStreamChunk(
-                type="error",
-                content=str(exc),
+        orchestrator = await self._get_orchestrator()
+        async for chunk in orchestrator.stream_process(
+            messages=self._to_langchain(request.messages),
+            user_id=ctx.user_id,
+            session_id=conversation_id,
+            config=config,
+        ):
+            for activity_chunk in self._extract_agent_activity_chunks(
+                chunk,
                 correlation_id=ctx.correlation_id,
-                metadata={"event": "error"},
-            )
+            ):
+                yield activity_chunk
+
+            content, meta = self._extract_stream_payload(chunk)
+            if content or meta:
+                yield _SharedChatStreamChunk(
+                    type=(
+                        "status"
+                        if meta.get("status") and not content
+                        else "content"
+                    ),
+                    content=content,
+                    correlation_id=ctx.correlation_id,
+                    metadata=meta,
+                )
 
     async def _get_orchestrator(self):
         from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator
