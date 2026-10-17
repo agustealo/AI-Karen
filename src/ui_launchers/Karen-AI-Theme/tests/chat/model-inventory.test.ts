@@ -83,6 +83,25 @@ describe('saved model identifiers are not runtime inventory', () => {
     expect(response.selected_model).toBe('');
   });
 
+  it('does not treat managed provider custom-auth support as manual model authority', () => {
+    const response = normalizeModelSettingsResponse({
+      selected_provider: 'gmi-cloud',
+      selected_model: 'saved-unverified-model',
+      providers: [{
+        id: 'gmi-cloud',
+        display_name: 'GMI Cloud',
+        provider_type: 'remote',
+        supports_custom_auth: true,
+        selected_model: 'saved-unverified-model',
+        models: [],
+      }],
+    });
+    const managed = response.providers.find((entry) => entry.id === 'gmi-cloud');
+    expect(managed?.models).toEqual([]);
+    expect(response.customProviders.map((entry) => entry.id)).not.toContain('gmi-cloud');
+    expect(response.selected_model).toBe('');
+  });
+
   it('keeps manual model entry only for custom providers', () => {
     const response = normalizeModelSettingsResponse({
       selected_provider: 'custom',
