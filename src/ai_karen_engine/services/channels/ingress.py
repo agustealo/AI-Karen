@@ -130,7 +130,7 @@ class ChannelIngressService:
         if (
             event.message_kind == "text"
             and isinstance(event.text, str)
-            and re.match(r"^/link(?:\\s|$)", event.text)
+            and re.match(r"^/link(?:\s|$)", event.text)
         ):
             raise ChannelAdmissionDenied("Link proofs use identity admission only")
         admission = await self._repository.admit_verified_inbound(
