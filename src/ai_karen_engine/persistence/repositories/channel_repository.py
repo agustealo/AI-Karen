@@ -11,6 +11,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 from sqlalchemy import text
 
@@ -216,7 +217,9 @@ class SqlChannelRepository:
             return self._admission_from_row(existing, inserted=False)
 
     @staticmethod
-    def _admission_from_row(row: object, *, inserted: bool) -> InboundAdmission:
+    def _admission_from_row(
+        row: Mapping[str, Any], *, inserted: bool
+    ) -> InboundAdmission:
         return InboundAdmission(
             inbox_id=str(row["inbox_id"]),
             correlation_id=str(row["correlation_id"]),
