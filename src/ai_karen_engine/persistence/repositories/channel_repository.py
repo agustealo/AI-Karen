@@ -566,7 +566,11 @@ class SqlChannelRepository:
                           JOIN public.channel_identity_bindings b
                             ON b.tenant_id = c.tenant_id
                            AND b.connection_id = c.connection_id
+                          JOIN public.auth_users u
+                            ON u.tenant_id = i.tenant_id
+                           AND u.user_id = i.user_id
                           WHERE c.tenant_id = i.tenant_id
+                            AND u.is_active = true AND u.is_verified = true
                             AND c.connection_id = i.connection_id
                             AND c.enabled = true
                             AND c.revision = i.connection_revision
