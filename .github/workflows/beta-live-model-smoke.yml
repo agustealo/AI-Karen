@@ -8,6 +8,8 @@ on:
     paths:
       - "scripts/beta_live_model_smoke.py"
       - "scripts/ci/production-first-boot-smoke.sh"
+      - "scripts/ci/ollama_settings_live_proof.py"
+      - "src/ai_karen_engine/api_routes/models/settings.py"
       - "src/ai_karen_engine/api_routes/chat/**"
       - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
       - "src/ai_karen_engine/core/runtime/**"
@@ -56,7 +58,7 @@ jobs:
           Write-Host "beta_live_model_sha=$actual"
 
       - name: Compile live-model smoke harness
-        run: python -m py_compile scripts/beta_live_model_smoke.py
+        run: python -m py_compile scripts/beta_live_model_smoke.py scripts/ci/ollama_settings_live_proof.py
 
       - name: Prove real local model inference
         run: python scripts/beta_live_model_smoke.py

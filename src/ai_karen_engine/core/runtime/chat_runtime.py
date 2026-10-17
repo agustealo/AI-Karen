@@ -139,6 +139,60 @@ class ChatRuntime:
         """Return the graph orchestrator adapter for health/availability checks."""
         return get_workflow_runtime()
 
+    @staticmethod
+    def _apply_selected_model_settings(request: ChatExecutionRequest) -> None:
+        """Apply an explicitly saved application model choice inside runtime.
+
+        The settings API persists administrative defaults, but provider routing
+        belongs to this runtime. Do not promote legacy SettingsManager defaults
+        or override a provider/model explicitly selected on the request.
+        """
+        if request.preferred_provider or request.preferred_model:
+            return
+
+        try:
+            from ai_karen_engine.services.formatting.settings_manager import (
+                get_settings_manager,
+            )
+            from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                get_provider_registry_service,
+            )
+
+            settings = get_settings_manager()
+            provider = str(settings.get_setting("provider") or "").strip()
+            model = str(settings.get_setting("model") or "").strip()
+            if not provider or not model or model == "auto":
+                return
+            # A per-provider last_model is written only when the administrator
+            # actually saves a provider/model choice. The historical default
+            # settings.json values must never become forced model requests.
+            if settings.get_setting(f"model_providers.{provider}.last_model") != model:
+                return
+
+            registry = get_provider_registry_service()
+            provider_id = registry.canonicalize_provider_id(provider)
+            endpoint = registry.get_provider_endpoint(provider_id)
+            if endpoint is None or not endpoint.enabled:
+                logger.warning(
+                    "configured_model_provider_unavailable",
+                    extra={"provider": provider_id, "correlation_id": request.context.correlation_id},
+                )
+                return
+
+            request.preferred_provider = provider_id
+            request.preferred_model = model
+            request.metadata["model_selection_source"] = "application_settings"
+        except Exception as exc:
+            # Preserve router fallback behavior when settings are unreadable;
+            # never synthesize model answers or bypass provider policy.
+            logger.warning(
+                "configured_model_selection_unavailable",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "correlation_id": request.context.correlation_id,
+                },
+            )
+
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
         start = time.time()
         ctx = request.context
@@ -167,6 +221,9 @@ class ChatRuntime:
                     mode=getattr(gate, "mode", "gate"),
                 ),
             )
+
+        # Runtime owns configured defaults; transport and UI never force them.
+        self._apply_selected_model_settings(request)
 
         # Do not read prior conversation or personal context while gated.
         await self._prepare_conversation_continuation(request)
@@ -503,6 +560,7 @@ class ChatRuntime:
             return
 
         # Match HTTP ordering: runtime availability gate precedes context access.
+        self._apply_selected_model_settings(request)
         await self._prepare_conversation_continuation(request)
 
         decision_started = time.perf_counter()

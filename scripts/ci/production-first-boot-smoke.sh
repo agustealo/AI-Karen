@@ -36,6 +36,11 @@ LIVE_MODEL_BASE_URL="${KAREN_SMOKE_LIVE_MODEL_BASE_URL:-}"
 LIVE_MODEL_PROVIDER="${KAREN_SMOKE_LIVE_MODEL_PROVIDER:-lmstudio-desktop}"
 LIVE_MODEL_NAME="${KAREN_SMOKE_LIVE_MODEL_NAME:-}"
 LIVE_MODEL_TIMEOUT_SECONDS="${KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS:-90}"
+OLLAMA_SETTINGS_ONLY="${KAREN_SMOKE_ONLY_OLLAMA_SETTINGS:-false}"
+if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" && ( -z "${LIVE_MODEL_BASE_URL}" || ( "${LIVE_MODEL_PROVIDER}" != "ollama" && "${LIVE_MODEL_PROVIDER}" != "ollama-local" ) ) ]]; then
+  echo "Ollama Settings-only proof requires a real Ollama endpoint and provider" >&2
+  exit 1
+fi
 
 if command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -140,7 +145,7 @@ PY
     lmstudio-desktop)
       api_env+=( -e LMSTUDIO_BASE_URL="${container_model_url}" )
       ;;
-    ollama-local)
+    ollama|ollama-local)
       api_env+=( -e OLLAMA_BASE_URL="${container_model_url}" )
       ;;
     llamacpp-server)
@@ -358,6 +363,21 @@ assert payload.get("tenant_id"), payload
 assert payload.get("username"), payload
 assert {"admin", "user"}.issubset(roles), payload
 PY
+
+if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "${LIVE_MODEL_PROVIDER}" == "ollama-local" ) ]]; then
+  echo "[smoke] proving real Ollama Settings discovery, save, reload and unforced ChatRuntime execution"
+  "${PYTHON_BIN}" scripts/ci/ollama_settings_live_proof.py \
+    --api-url "${BASE_URL}" \
+    --ollama-url "${LIVE_MODEL_BASE_URL}" \
+    --backend-ollama-url "${container_model_url}" \
+    --cookie-file "${COOKIE_JAR}" \
+    --model "${LIVE_MODEL_NAME}" \
+    --timeout "${LIVE_MODEL_TIMEOUT_SECONDS}"
+  if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" ]]; then
+    echo "PRODUCTION OLLAMA SETTINGS-TO-RUNTIME LIVE PROOF PASSED"
+    exit 0
+  fi
+fi
 
 if [[ -n "${LIVE_MODEL_BASE_URL}" ]]; then
   echo "[smoke] proving two-turn ChatRuntime execution against configured live model"
