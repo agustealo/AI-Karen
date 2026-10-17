@@ -1,5 +1,5 @@
 import { apiClient } from '@/lib/api';
-import { getRuntimeDisplayName, getRuntimeGroupLabel, isBuiltInRuntimeProvider } from '@/lib/chat-response';
+import { getRuntimeDisplayName, getRuntimeGroupLabel, isBuiltInRuntimeProvider, normalizeProviderName } from '@/lib/chat-response';
 
 export interface RuntimeProviderModel {
   id: string;
@@ -425,7 +425,9 @@ export function normalizeRuntimeProviderCatalogResponse(
   const providers = (response.providers || [])
     .map((provider) => {
       const normalizedModels = sortProviderModels(
-        (provider.models || []).map((model) => ({
+        (provider.models || [])
+          .filter((model) => provider.id !== 'ollama' || model.available !== false)
+          .map((model) => ({
           id: model.id,
           name: model.label || model.id,
           family: provider.category || 'runtime',
@@ -509,14 +511,14 @@ export function normalizeRuntimeProviderCatalogResponse(
   const thirdPartyProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'thirdParty');
 
   const selectedProvider =
-    providers.find((provider) => provider.id === response.default_provider)?.id ||
+    selectableProviders.find((provider) => provider.id === response.default_provider)?.id ||
     selectableProviders[0]?.id ||
-    providers[0]?.id ||
     '';
+  const selectedProviderDetails = selectableProviders.find((provider) => provider.id === selectedProvider);
+  const preferredModel = selectedProviderDetails?.selected_model || response.default_model || '';
   const selectedModel =
-    response.default_model ||
-    providers.find((provider) => provider.id === selectedProvider)?.selected_model ||
-    providers.find((provider) => provider.id === selectedProvider)?.models[0]?.id ||
+    selectedProviderDetails?.models.find((model) => model.id === preferredModel)?.id ||
+    selectedProviderDetails?.models[0]?.id ||
     '';
 
   return {
@@ -532,5 +534,36 @@ export function normalizeRuntimeProviderCatalogResponse(
     timeout_seconds: undefined,
     auto_download: undefined,
     fallback_hierarchy: response.fallback_order,
+  };
+}
+
+
+/** Reconcile account model preferences against backend-reported chat inventory. */
+export function resolveChatProviderModelSelection(
+  inventory: NormalizedRuntimeInventory,
+  preferredProviderId: string,
+  preferredModelId: string,
+): { provider: string; model: string; preferenceUnavailable: boolean } {
+  const selectable = inventory.selectableProviders;
+  const selected = selectable.find((item) =>
+    item.id === preferredProviderId ||
+    (preferredProviderId && normalizeProviderName(item.id) === normalizeProviderName(preferredProviderId))
+  );
+  const fallback = selectable.find((item) => item.id === inventory.selected_provider) || selectable[0];
+  const provider = selected || fallback;
+  if (!provider) {
+    return { provider: '', model: '', preferenceUnavailable: Boolean(preferredProviderId) };
+  }
+  const candidates = provider.models;
+  const preferenceModel = selected ? preferredModelId : '';
+  const configuredModel = provider.selected_model || provider.default_model || '';
+  const model = candidates.find((item) => item.id === preferenceModel)?.id ||
+    candidates.find((item) => item.id === configuredModel)?.id ||
+    candidates[0]?.id ||
+    '';
+  return {
+    provider: provider.id,
+    model,
+    preferenceUnavailable: Boolean(preferredProviderId && !selected),
   };
 }
