@@ -49,10 +49,10 @@ async def test_chat_catalog_lists_live_installed_ollama_models(
         return {
             "models": [
                 settings_routes.ProviderModelPayload(
-                    id=selected, name=selected, is_installed=True,
+                    id=selected, name=selected, family='ollama', capabilities=[], is_installed=True,
                 ),
                 settings_routes.ProviderModelPayload(
-                    id=alt, name=alt, is_installed=True,
+                    id=alt, name=alt, family='ollama', capabilities=[], is_installed=True,
                 ),
             ],
         }
