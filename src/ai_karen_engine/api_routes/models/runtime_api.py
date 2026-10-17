@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.api_routes.models.settings import build_model_settings_payload
 from ai_karen_engine.core.model_runtime.ollama_model_inventory import (
-    discover_installed_ollama_models,
     resolve_ollama_inventory_endpoint,
+)
+from ai_karen_engine.integrations.providers.ollama_provider import (
+    discover_installed_ollama_models,
 )
 from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydantic
 
