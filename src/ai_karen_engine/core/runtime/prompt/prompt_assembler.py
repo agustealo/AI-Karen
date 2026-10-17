@@ -146,9 +146,6 @@ class PromptAssembler:
             "content": _EVIDENCE_FIRST_INSTRUCTION,
             "source": "evidence_first_conversation_contract",
         })
-        if request.messages:
-            messages.extend(request.messages)
-
         if request.tool_contracts and not included_tool_contracts:
             messages.extend(self._build_tool_contract_messages(request.tool_contracts))
             included_tool_contracts = [
@@ -163,6 +160,13 @@ class PromptAssembler:
             messages.append(
                 self._build_capability_message(request.provider_capabilities)
             )
+
+        # The active conversation must remain the final prompt component.
+        # Trailing workflow/capability system messages can be mistaken for the
+        # latest turn by small local models, causing answers to internal
+        # instructions instead of the user's actual message.
+        if request.messages:
+            messages.extend(request.messages)
 
         prompt_hash = self._calculate_prompt_hash(messages, metadata)
 
