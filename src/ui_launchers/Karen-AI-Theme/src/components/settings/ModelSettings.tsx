@@ -425,8 +425,17 @@ export default function ModelSettings() {
 
   const handleSave = async () => {
     if (!selectedProviderDetails) return;
-    if (!selectedModel.trim()) {
-      toast({ title: 'Model required', description: 'Select or enter the model Karen should use.', variant: 'destructive' });
+    if (!canSaveProviderModelSelection(selectedModel, availableModels, {
+      isLoading: isLoadingModels,
+      manualEntryAllowed: canEnterModelManually,
+    })) {
+      toast({
+        title: 'Model not available',
+        description: isLoadingModels
+          ? 'Model discovery is still running. Save after the inventory is available.'
+          : 'Choose a model from the current provider inventory before saving.',
+        variant: 'destructive',
+      });
       return;
     }
     setIsSaving(true);
@@ -1006,7 +1015,7 @@ export default function ModelSettings() {
                     </div>
 
                   <div className="flex justify-end pt-4">
-                    <Button onClick={handleSave} disabled={isSaving} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
+                    <Button onClick={handleSave} disabled={isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
                       {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-5 w-5" />}
                       Finalize Intelligence Settings
                     </Button>
