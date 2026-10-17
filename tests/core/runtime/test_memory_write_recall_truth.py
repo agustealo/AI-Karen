@@ -124,3 +124,40 @@ def test_verification_receipt_does_not_promote_projection_failure_to_saved():
         {"status": "success", "persisted": 0, "write_authority": "disabled_or_shadow"},
         {"memory_persistence_status": "disabled_or_shadow"},
     )
+
+
+@pytest.mark.asyncio
+async def test_governed_projection_target_outcomes_reach_runtime_without_receipt_ids(
+    monkeypatch,
+):
+    from ai_karen_engine import core
+
+    manager = MemoryManager({
+        "status": "degraded",
+        "persisted": 1,
+        "extracted": 1,
+        "admitted": 1,
+        "projection_failures": 1,
+        "write_authority": "neurovault",
+        "projection_targets": [
+            {"target": "stm", "success_count": 1, "failure_count": 0},
+            {"target": "memory_graph", "success_count": 0, "failure_count": 1},
+        ],
+        "receipts": [
+            {"memory_id": "private-id", "event_id": "private-event-id"},
+        ],
+    })
+    monkeypatch.setattr(core.memory, "get_memory_manager", lambda: manager)
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._emitter = SimpleNamespace(emit=lambda *args, **kwargs: None)
+    meta = {}
+
+    await runtime._persist_memory(request(), "", meta, plan())
+
+    assert meta["memory_persistence_status"] == "persisted_projection_degraded"
+    assert meta["memory_projection_targets"] == [
+        {"target": "stm", "success_count": 1, "failure_count": 0},
+        {"target": "memory_graph", "success_count": 0, "failure_count": 1},
+    ]
+    assert "private-id" not in str(meta)
+    assert "private-event-id" not in str(meta)
