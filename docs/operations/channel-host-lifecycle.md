@@ -71,9 +71,7 @@ python -m compileall src
 ruff check src tests
 pytest tests/extensions/test_channel_host_lifecycle.py -q
 pytest tests/extensions/ -q
-pytest tests/architecture/test_application_runtime_lifecycle.py -q
+pytest tests/architecture/ -q
 ```
 
-The last command is only relevant when that architecture test path exists in
-the current checkout; CI main-quality, production-first-boot, authentication,
-plugin-backend, and database contracts are the binding project gates.
+Main Quality, Production First-Boot, authentication, plugin-backend, and database contract workflows remain binding release gates.
