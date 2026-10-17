@@ -244,7 +244,7 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
     # Common apostrophe omissions must not convert live-information questions
     # into model-only chat. This applies across all capability patterns.
     q = " ".join(str(query or "").casefold().replace("’", "'").split())
-    q = re.sub(r"\\b(what|who|where|when|why|how)s\\b", r"\\1's", q)
+    q = re.sub(r"\b(what|who|where|when|why|how)s\b", r"\1's", q)
     # A user's private resource is not a public search target, even when a
     # sentence contains a freshness word such as "latest" or "update".
     private_update = bool(re.search(
