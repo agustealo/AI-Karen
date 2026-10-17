@@ -784,7 +784,8 @@ async def build_model_settings_payload() -> Dict[str, Any]:
                     family=dm.model_type or "unknown",
                     capabilities=list(dm.capabilities),
                     size_gb=float(dm.size_bytes / (1024**3)) if dm.size_bytes else None,
-                    is_installed=bool(dm.weights_present)
+                    is_installed=bool(dm.weights_present),
+                    source="local_runtime",
                 ))
 
         # Endpoint settings from storage
