@@ -130,3 +130,39 @@ async def test_worker_validates_budgets_and_canonical_receipts():
     with pytest.raises(TypeError):
         await worker.submit({"tenant_id": TENANT, "inbox_id": INBOX})
     await worker.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_task_budget_caps_waiters_without_claiming_overflow():
+    worker, repo, execution = make_worker()
+    worker._max_scheduled = 1
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def block(**kwargs):
+        entered.set()
+        await release.wait()
+        return True
+
+    execution.execute_claimed_text.side_effect = block
+    assert await worker.submit(admission()) is True
+    await entered.wait()
+    other = admission(inbox_id="22222222-2222-2222-2222-222222222222")
+    assert await worker.submit(other) is False
+    assert repo.claim_inbound.await_count == 1
+    release.set()
+    await asyncio.gather(*tuple(worker._tasks))
+    assert await worker.submit(other) is True
+    await asyncio.gather(*tuple(worker._tasks))
+    await worker.shutdown()
+
+
+def test_invalid_scheduled_budget_is_denied():
+    for budget in (0, 2, 4097):
+        with pytest.raises(ValueError):
+            ChannelInboxWorker(
+                repository=SimpleNamespace(),
+                execution=SimpleNamespace(),
+                max_inflight=4,
+                max_scheduled=budget,
+            )
