@@ -30,23 +30,14 @@ const cleanString = (value: unknown): string => {
 };
 
 const isSelectableProvider = (provider: ProviderDetails): boolean => {
-  const providerType = cleanString(provider.provider_type).toLowerCase();
-  const isBuiltinProvider =
-    providerType === 'builtin' ||
-    provider.id === 'builtin_transformers' ||
-    provider.id === 'builtin_vllm';
-
-  if (isBuiltinProvider) {
-    return true;
-  }
-
   return (
     provider.selectable !== false &&
     provider.enabled !== false &&
     provider.user_selectable !== false &&
     provider.policy_allowed !== false &&
     provider.is_configured !== false &&
-    !provider.policy_rejection_reason
+    !provider.policy_rejection_reason &&
+    provider.models.length > 0
   );
 };
 
@@ -65,7 +56,7 @@ const getModelDisplayName = (model: ModelDetails | null | undefined): string => 
 const getAllowedProviders = (
   modelSettings: NormalizedRuntimeInventory | null,
 ): ProviderDetails[] => {
-  return (modelSettings?.providers ?? [])
+  return (modelSettings?.selectableProviders ?? [])
     .filter(isSelectableProvider)
     .filter((provider) => cleanString(provider.id));
 };
