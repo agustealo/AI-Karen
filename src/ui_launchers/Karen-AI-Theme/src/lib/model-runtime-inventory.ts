@@ -275,11 +275,14 @@ const normalizeModels = (
     (selectedProvider === provider.id ? selectedModel : null) ||
     '';
 
-  return models.length > 0
-    ? models
-      : fallbackModelId
-        ? [{ id: fallbackModelId, name: fallbackModelId, source: 'saved' }]
-        : [];
+  // Managed providers must report only models supplied by the runtime or
+  // provider registry. A saved selection does not prove model availability.
+  if (models.length > 0 || getRuntimeProviderBucket(provider) !== 'custom') {
+    return models;
+  }
+  return fallbackModelId
+    ? [{ id: fallbackModelId, name: fallbackModelId, source: 'saved' }]
+    : [];
 };
 
 /**
@@ -361,10 +364,10 @@ export function normalizeModelSettingsResponse(response: RuntimeSettingsResponse
     providers.find((provider) => provider.id === response.selected_provider)?.id ||
     providers[0]?.id ||
     '';
+  const selectedProviderDetails = providers.find((provider) => provider.id === selectedProvider);
   const selectedModel =
-    providers.find((provider) => provider.id === selectedProvider)?.selected_model ||
-    providers.find((provider) => provider.id === selectedProvider)?.models[0]?.id ||
-    response.selected_model ||
+    selectedProviderDetails?.models.find((model) => model.id === selectedProviderDetails.selected_model)?.id ||
+    selectedProviderDetails?.models[0]?.id ||
     '';
 
   return {
@@ -404,8 +407,9 @@ export function normalizeRuntimeProviderCatalogResponse(
         response.default_model ||
         '';
       const diagnostic = provider.safe_diagnostic_metadata || {};
+      const isCustomProvider = provider.id === 'custom' || provider.category === 'custom';
       const resolvedModels: RuntimeProviderModel[] =
-        normalizedModels.length > 0
+        normalizedModels.length > 0 || !isCustomProvider
           ? normalizedModels
           : fallbackModelId
             ? [{
