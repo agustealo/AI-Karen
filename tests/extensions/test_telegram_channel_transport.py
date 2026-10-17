@@ -1,0 +1,236 @@
+"""Telegram reference channel: signed inbound, bounded text, real provider receipts.
+
+This exercises an actually installable ExtensionBase package through Karen's
+canonical loader, with offline host-injected secret and network dependencies.
+No external API token, tenant fixture, or network account is required.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+
+from ai_karen_engine.extensions.channels.contracts import (
+    ChannelConnection,
+    ChannelDeliveryRequest,
+    ChannelDeliveryState,
+)
+from ai_karen_engine.extensions.contracts import (
+    RiskClass,
+)
+from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+
+
+TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+TOKEN = "123456:host-resolved-test-bot-token"
+SECRET = "webhook-secret-1"
+
+
+def _plugin_root() -> Path:
+    return Path(__file__).resolve().parents[2] / (
+        "src/ai_karen_engine/extensions/plugins"
+    )
+
+
+def connection(*, enabled=True) -> ChannelConnection:
+    return ChannelConnection(
+        connection_id="telegram-conn-1",
+        installation_id="telegram-bot",
+        tenant_id=TENANT,
+        provider_account_id="telegram-account",
+        credential_handle="vault://telegram-account",
+        revision=2,
+        enabled=enabled,
+    )
+
+
+def native_message(*, sender=901, chat=901, kind="private", text="Hello Karen"):
+    return json.dumps({
+        "update_id": 741,
+        "tenant_id": "forged-tenant",
+        "user_id": "forged-user",
+        "message": {
+            "message_id": 100,
+            "from": {"id": sender},
+            "chat": {"id": chat, "type": kind},
+            "text": text,
+        },
+    }).encode("utf-8")
+
+
+def delivery():
+    return ChannelDeliveryRequest(
+        delivery_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        connection_id="telegram-conn-1",
+        destination_id="901",
+        idempotency_key="inbox-event-741",
+        message_kind="text",
+        text="Hello from Karen",
+    )
+
+
+def load_transport(*, response=None):
+    kernel = PluginKernel(_plugin_root())
+    adapter = kernel.loader.load_extension("telegram-bot")
+    resolver = AsyncMock(return_value={
+        "webhook_secret": SECRET,
+        "bot_token": TOKEN,
+    })
+    client = SimpleNamespace(post=AsyncMock(return_value=(
+        response if response is not None else httpx.Response(200, json={
+            "ok": True,
+            "result": {"message_id": 432, "chat": {"id": 901}},
+        })
+    )))
+    adapter.bind_host_services(secret_resolver=resolver, http_client=client)
+    return kernel, adapter, resolver, client
+
+
+@pytest.mark.asyncio
+async def test_installed_telegram_channel_is_discoverable_but_disabled():
+    kernel, adapter, _, _ = load_transport()
+    catalog = kernel.loader.load_manifest("telegram-bot")
+    projected = kernel._project_runtime_manifest(catalog)
+    assert projected.id == "telegram-bot"
+    assert projected.enabled_by_default is False
+    assert [c.id for c in projected.capabilities] == ["communication_channel"]
+    assert projected.risk_class is RiskClass.HIGH
+    assert catalog.capabilities.communication_channel.authentication == "token"
+    assert catalog.capabilities.communication_channel.supports_delivery_receipts is False
+    assert adapter.manifest.name == "telegram-bot"
+
+
+@pytest.mark.asyncio
+async def test_valid_header_authenticates_exact_native_event_and_leaves_external_user_untrusted():
+    _, adapter, resolver, _ = load_transport()
+    await adapter.start(connection=connection())
+    headers = {"x-tElEgRaM-BoT-aPi-SeCrEt-ToKeN": SECRET}
+    body = native_message()
+    assert await adapter.verify_event(
+        connection=connection(), headers=headers, body=body,
+    )
+    normalized = await adapter.normalize_event(
+        connection=connection(), headers=headers, body=body,
+    )
+    assert normalized.external_event_id == "741"
+    assert normalized.external_sender_id == "901"
+    assert normalized.external_conversation_id == "901"
+    assert normalized.text == "Hello Karen"
+    assert not hasattr(normalized, "tenant_id")
+    assert not hasattr(normalized, "user_id")
+    resolver.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_or_duplicate_header_fails_closed():
+    _, adapter, _, _ = load_transport()
+    await adapter.start(connection=connection())
+    for headers in (
+        {}, {"X-Telegram-Bot-Api-Secret-Token": "wrong"},
+        {"X-Telegram-Bot-Api-Secret-Token": SECRET,
+         "x-telegram-bot-api-secret-token": SECRET},
+    ):
+        assert await adapter.verify_event(
+            connection=connection(), headers=headers, body=native_message(),
+        ) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [
+    native_message(sender=901, chat=-1000999, kind="supergroup"),
+    native_message(sender=902, chat=901),
+    native_message(text=""),
+    json.dumps({"update_id": 74, "edited_message": {"text": "edited"}}).encode(),
+])
+async def test_unsupported_telegram_updates_do_not_enter_inbox(case):
+    _, adapter, _, _ = load_transport()
+    await adapter.start(connection=connection())
+    with pytest.raises(ValueError):
+        await adapter.normalize_event(
+            connection=connection(), headers={}, body=case,
+        )
+
+
+@pytest.mark.asyncio
+async def test_transport_cannot_start_with_disabled_account():
+    _, adapter, _, client = load_transport()
+    with pytest.raises(PermissionError):
+        await adapter.start(connection=connection(enabled=False))
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_not_bound_blocks_provider_calls():
+    kernel = PluginKernel(_plugin_root())
+    adapter = kernel.loader.load_extension("telegram-bot")
+    with pytest.raises(PermissionError):
+        await adapter.start(connection=connection())
+
+
+@pytest.mark.asyncio
+async def test_send_message_requires_actual_bot_api_response_id():
+    _, adapter, resolver, client = load_transport()
+    await adapter.start(connection=connection())
+    receipt = await adapter.send(
+        connection=connection(), delivery=delivery(),
+    )
+    assert receipt.state is ChannelDeliveryState.SENT
+    assert receipt.provider_message_id == "432"
+    assert receipt.provider_receipt_id is None
+    assert client.post.await_count == 1
+    args, kwargs = client.post.await_args
+    assert args[0].startswith("https://api.telegram.org/bot")
+    assert args[0].endswith("/sendMessage")
+    assert kwargs["json"] == {"chat_id": 901, "text": "Hello from Karen"}
+    assert resolver.await_args.kwargs["tenant_id"] == TENANT
+    assert resolver.await_args.kwargs["credential_handle"] == "vault://telegram-account"
+
+
+@pytest.mark.asyncio
+async def test_mismatched_provider_chat_never_reports_sent():
+    _, adapter, _, _ = load_transport(response=httpx.Response(
+        200, json={"ok": True, "result": {
+            "message_id": 432, "chat": {"id": 999},
+        }},
+    ))
+    await adapter.start(connection=connection())
+    receipt = await adapter.send(connection=connection(), delivery=delivery())
+    assert receipt.state is ChannelDeliveryState.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_telegram_429_is_unknown_not_safe_to_retry():
+    _, adapter, _, _ = load_transport(response=httpx.Response(429))
+    await adapter.start(connection=connection())
+    receipt = await adapter.send(connection=connection(), delivery=delivery())
+    assert receipt.state is ChannelDeliveryState.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_telegram_403_is_explicitly_rejected():
+    _, adapter, _, _ = load_transport(response=httpx.Response(403))
+    await adapter.start(connection=connection())
+    receipt = await adapter.send(connection=connection(), delivery=delivery())
+    assert receipt.state is ChannelDeliveryState.FAILED
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_not_converted_into_fake_sent_receipt():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.post.side_effect = httpx.TimeoutException("network uncertain")
+    with pytest.raises(httpx.TimeoutException):
+        await adapter.send(connection=connection(), delivery=delivery())
+
+
+@pytest.mark.asyncio
+async def test_generic_plugin_hook_cannot_act_as_ai_or_delivery_path():
+    _, adapter, _, client = load_transport()
+    with pytest.raises(PermissionError, match="no generic hook"):
+        await adapter.execute_hook(None, None)
+    client.post.assert_not_awaited()
