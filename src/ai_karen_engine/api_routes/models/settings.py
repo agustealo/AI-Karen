@@ -189,7 +189,6 @@ class ProviderModelsResponse(BaseModel):
     inventory_source: Literal["configured_catalog", "local_runtime", "provider_live", "ollama_native", "mixed", "none"] = "none"
     live_discovery_failed: bool = False
     discovered_at: str
-    discovery_status: Literal["ready", "catalog_only"] = "ready"
 
 
 class ProviderSettingsValidationRequest(BaseModel):
@@ -716,6 +715,7 @@ async def get_provider_models(
         "discovery_status": discovery_status,
         "inventory_source": inventory_source,
         "live_discovery_failed": live_discovery_failed,
+        "discovered_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
