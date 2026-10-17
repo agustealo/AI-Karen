@@ -12,6 +12,7 @@ import {
 } from '@/lib/chat-response';
 import {
   normalizeRuntimeProviderCatalogResponse,
+  resolveChatProviderModelSelection,
   type RuntimeProviderCatalogResponse,
   type NormalizedRuntimeInventory,
 } from '@/lib/model-runtime-inventory';
@@ -1068,41 +1069,18 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       const savedSelection = savedSettings.preferences?.model_selection;
       const preferredProviderId = savedSelection?.provider || savedSettings.preferred_provider || normalized.selected_provider;
       const preferredModelId = savedSelection?.model || savedSettings.preferred_model || normalized.selected_model;
+      const resolved = resolveChatProviderModelSelection(
+        normalized, preferredProviderId, preferredModelId,
+      );
       setModelSettings(normalized);
-
-      // Check if selected provider is still available and configured
-      const selectableProviders = normalized.selectableProviders;
-      const selectedProviderId = preferredProviderId;
-      const selectedProvider = selectableProviders.find(p => p.id === selectedProviderId);
-
-      if (selectedProviderId && !selectedProvider) {
-        const fallbackProvider = selectableProviders[0];
-        
+      setSelectedProvider(resolved.provider);
+      setSelectedModel(resolved.model);
+      if (resolved.preferenceUnavailable) {
         toast({
           title: 'Selected provider unavailable',
-          description: `The provider "${selectedProviderId}" is not configured or no longer available. Karen switched to ${fallbackProvider?.display_name || 'the default runtime'}.`,
+          description: `The provider "${preferredProviderId}" is not configured or no longer available. Karen switched to the configured runtime.`,
           variant: 'destructive',
         });
-        
-        setSelectedProvider(fallbackProvider?.id || '');
-        setSelectedModel(fallbackProvider?.selected_model || fallbackProvider?.default_model || fallbackProvider?.models?.[0]?.id || '');
-      } else {
-        setSelectedProvider(selectedProviderId);
-        
-        // Ensure selected model is valid for this provider
-        const modelId = preferredModelId;
-        const modelExists = selectedProvider?.models.some(m => m.id === modelId);
-        
-        if (selectedProvider && !modelExists) {
-           setSelectedModel(
-             selectedProvider.selected_model ||
-             selectedProvider.default_model ||
-             selectedProvider.models?.[0]?.id ||
-             ''
-           );
-        } else {
-           setSelectedModel(modelId);
-        }
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
