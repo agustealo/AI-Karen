@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from sqlalchemy import or_, select, text
@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.security.encryption_utils import encrypt_data
+from ai_karen_engine.core.security.encryption_utils import decrypt_data
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig, ServiceStatus
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.identity_vault_schema import (
@@ -417,6 +418,127 @@ class CredentialVaultService(BaseService):
             )
             await session.commit()
             return credential
+
+    async def resolve_channel_secrets(
+        self, *,
+        tenant_id: uuid.UUID,
+        actor_user_id: str,
+        installation_id: str,
+        credential_handle: str,
+        required_secret_types: frozenset[str],
+        correlation_id: str | None = None,
+    ) -> Dict[str, str]:
+        """Read an installed channel's exact vault secret types under tenant scope.
+
+        Internal host-only API: the caller must already have an authorized
+        RuntimePolicy execution plan. Never expose this method from a public
+        route, plugin hook or untrusted tool. The provider's canonical ID must
+        match the installed channel, and only requested secrets are returned.
+        Failures are deliberately non-diagnostic to the external transport.
+        """
+        try:
+            tenant_uuid = uuid.UUID(str(tenant_id))
+            prefix = "vault://"
+            if (
+                not isinstance(credential_handle, str)
+                or not credential_handle.startswith(prefix)
+            ):
+                raise ValueError("Invalid reference")
+            resource_id = uuid.UUID(credential_handle[len(prefix):])
+            if credential_handle != prefix + str(resource_id):
+                raise ValueError("Noncanonical reference")
+        except (ValueError, TypeError, AttributeError):
+            raise PermissionError("Channel credential reference denied") from None
+
+        if (
+            not isinstance(actor_user_id, str) or not actor_user_id.strip()
+            or not isinstance(installation_id, str) or not installation_id.strip()
+            or not isinstance(required_secret_types, frozenset)
+            or not required_secret_types
+            or len(required_secret_types) > 8
+            or any(
+                not isinstance(kind, str) or not kind
+                or len(kind) > 50
+                or not kind.replace("_", "").isalnum()
+                for kind in required_secret_types
+            )
+        ):
+            raise PermissionError("Channel credential scope denied")
+
+        async with self._session_scope() as session:
+            statement = (
+                self._tenant_query(Credential, tenant_uuid)
+                .join(
+                    ProviderDefinition,
+                    Credential.provider_id == ProviderDefinition.id,
+                )
+                .options(selectinload(Credential.secrets))
+                .where(
+                    Credential.id == resource_id,
+                    Credential.tenant_id == tenant_uuid,
+                    ProviderDefinition.tenant_id == tenant_uuid,
+                    ProviderDefinition.provider_id == installation_id,
+                    ProviderDefinition.enabled.is_(True),
+                    Credential.status == CredentialStatus.ACTIVE.value,
+                    or_(
+                        Credential.expires_at.is_(None),
+                        Credential.expires_at > datetime.now(timezone.utc),
+                    ),
+                )
+            )
+            credential = (await session.execute(statement)).scalar_one_or_none()
+            if credential is None:
+                raise PermissionError("Channel credential unavailable")
+
+            encrypted: Dict[str, str] = {}
+            for secret in credential.secrets:
+                kind = secret.secret_type
+                if kind not in required_secret_types:
+                    continue
+                if (
+                    secret.tenant_id != tenant_uuid
+                    or kind in encrypted
+                    or not isinstance(secret.encrypted_value, str)
+                    or not secret.encrypted_value
+                ):
+                    raise PermissionError("Channel credential unavailable")
+                encrypted[kind] = secret.encrypted_value
+            if set(encrypted) != required_secret_types:
+                raise PermissionError("Channel credential unavailable")
+
+            # Decryption and audit both happen inside the Vault, before any
+            # plaintext leaves this privileged call. No decrypted values enter
+            # traces, result receipts, log messages, or audit metadata.
+            try:
+                plaintext = {
+                    kind: decrypt_data(value.encode("ascii"))
+                    for kind, value in encrypted.items()
+                }
+            except Exception:
+                raise PermissionError("Channel credential unavailable") from None
+            if any(not isinstance(value, str) or not value for value in plaintext.values()):
+                raise PermissionError("Channel credential unavailable")
+
+            await self._audit(
+                session,
+                tenant_id=tenant_uuid,
+                user_id=actor_user_id,
+                event_type=AuditEventType.ACCESS,
+                action="channel_credential_resolved",
+                resource_type="credential",
+                resource_id=str(credential.id),
+                credential_id=credential.id,
+                provider_id=credential.provider_id,
+                correlation_id=correlation_id,
+                metadata={
+                    "installation_id": installation_id,
+                    "secret_types": sorted(required_secret_types),
+                },
+            )
+            # Audit must be durable BEFORE credentials are made available to
+            # the transport. A persistence failure denies the operation.
+            await session.commit()
+            return plaintext
 
     async def get_credential(self, credential_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[Credential]:
         async with self._session_scope() as session:
