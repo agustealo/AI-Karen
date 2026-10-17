@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name karen-ci-ollama \
-            -p 127.0.0.1:11434:11434 \
+            -p 11434:11434 \
             "$OLLAMA_CI_IMAGE" > /dev/null
 
           for attempt in $(seq 1 60); do
