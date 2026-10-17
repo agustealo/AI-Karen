@@ -87,6 +87,8 @@ class RecallResult:
     degraded: bool = False
     degradation_reason: str | None = None
     provenance: tuple[dict[str, Any], ...] = ()
+    # Diagnostic metadata only: no query text, retrieved contents or exception messages.
+    source_health: tuple[dict[str, Any], ...] = ()
 
 
 @runtime_checkable
@@ -168,8 +170,14 @@ class NeuroRecall:
 
         failures: list[BaseException] = []
         raw_candidates: list[MemoryEntry] = []
+        source_health: list[dict[str, Any]] = []
         for index, task in enumerate(tasks):
+            source = {
+                "index": index,
+                "retriever": type(self._retrievers[index]).__name__,
+            }
             if task not in done:
+                source_health.append({**source, "status": "timeout", "candidate_count": 0})
                 continue
             try:
                 value = task.result()
@@ -177,6 +185,12 @@ class NeuroRecall:
                 raise
             except BaseException as exc:
                 failures.append(exc)
+                source_health.append({
+                    **source,
+                    "status": "failed",
+                    "candidate_count": 0,
+                    "error_type": type(exc).__name__,
+                })
                 logger.warning(
                     "memory.neuro_recall.retriever_failed",
                     extra={
@@ -190,6 +204,9 @@ class NeuroRecall:
                     },
                 )
                 continue
+            source_health.append({
+                **source, "status": "success", "candidate_count": len(value),
+            })
             raw_candidates.extend(value)
 
         if not raw_candidates and (failures or deadline_exceeded):
@@ -207,6 +224,7 @@ class NeuroRecall:
                 degraded=True,
                 degradation_reason=reason,
                 provenance=(),
+                source_health=tuple(source_health),
             )
 
         selected_by_id: dict[str, MemoryEntry] = {}
@@ -313,6 +331,7 @@ class NeuroRecall:
             degraded=degraded,
             degradation_reason=degradation_reason,
             provenance=provenance,
+            source_health=tuple(source_health),
         )
 
     @staticmethod
