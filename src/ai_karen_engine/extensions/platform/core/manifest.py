@@ -26,7 +26,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 logger = logging.getLogger(__name__)
@@ -276,6 +276,27 @@ class ExtensionManifest(BaseModel):
     # Unknown fields must be rejected at the boundary; legacy normalization
     # happens explicitly in from_dict() before model creation.
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_channel_catalog_boundary(cls, value: Any) -> Any:
+        """Strict for new channel contracts without breaking ordinary legacy plugins."""
+        if not isinstance(value, dict):
+            return value
+        capabilities = value.get("capabilities")
+        category = value.get("category")
+        if not isinstance(capabilities, dict):
+            if category == "communication":
+                raise ValueError("communication channel capability declaration required")
+            return value
+        if category == "communication" and "communication_channel" not in capabilities:
+            raise ValueError("communication channel capability declaration required")
+        if "communication_channel" in capabilities:
+            known = set(ExtensionCapabilities.model_fields)
+            unexpected = set(capabilities) - known
+            if unexpected:
+                raise ValueError("Unknown communication channel capability fields")
+        return value
 
     # Basic metadata (from manifest.py)
     name: str = Field(pattern=NAME_PATTERN, min_length=1, max_length=50)
