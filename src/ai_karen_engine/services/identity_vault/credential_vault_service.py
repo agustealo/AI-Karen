@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.core.security.encryption_utils import decrypt_data, encrypt_data
+from ai_karen_engine.core.security.encryption_utils import encrypt_data
+from ai_karen_engine.core.security.encryption_utils import decrypt_data
 from ai_karen_engine.core.services.base import BaseService, ServiceConfig, ServiceStatus
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.database.identity_vault_schema import (
@@ -466,7 +467,7 @@ class CredentialVaultService(BaseService):
 
         async with self._session_scope() as session:
             statement = (
-                select(Credential)
+                self._tenant_query(Credential, tenant_uuid)
                 .join(
                     ProviderDefinition,
                     Credential.provider_id == ProviderDefinition.id,
