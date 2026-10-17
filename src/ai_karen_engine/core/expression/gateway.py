@@ -162,7 +162,7 @@ class ExpressionGateway:
 
         for level, engine_id in enumerate(sequence):
             cfg = self.settings.engines.get(engine_id)
-            logger.debug("Gateway trying %s, cfg: %s", engine_id, cfg)
+            logger.debug("Gateway evaluating configured engine %s", engine_id)
 
             if not cfg or not cfg.enabled:
                 skipped_engines.append(
@@ -243,7 +243,8 @@ class ExpressionGateway:
 
             try:
                 result = await engine.generate(task)
-                logger.debug("Engine %s returned text: %r", engine_id, result.text)
+                # Generated text can contain private user facts or tool evidence.
+                # Keep payloads out of runtime logs, even at DEBUG level.
 
                 has_text = bool(result.text and result.text.strip())
                 is_valid = validate_response_text(result.text) if has_text else False
