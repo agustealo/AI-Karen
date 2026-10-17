@@ -37,6 +37,7 @@ class RuntimeModel(BaseModel):
     id: str
     label: str
     available: bool = True
+    source: str = "configured_catalog"
     default: bool = False
     capabilities: List[str] = Field(default_factory=list)
 
@@ -191,6 +192,7 @@ async def get_runtime_provider_catalog(
                         id=str(model.get("id") or ""),
                         label=str(model.get("name") or model.get("label") or model.get("id") or ""),
                         available=bool(model.get("is_installed", model.get("available", True))),
+                        source=str(model.get("source") or "configured_catalog"),
                         default=str(model.get("id") or "") == str(provider.get("selected_model") or ""),
                         capabilities=list(model.get("capabilities") or []),
                     ))
@@ -203,6 +205,7 @@ async def get_runtime_provider_catalog(
                         id=str(provider["selected_model"]),
                         label=str(provider["selected_model"]),
                         available=True,
+                        source="manual_configured",
                         default=True,
                         capabilities=list(safe_metadata.get("capabilities") or ["chat"]),
                     )
