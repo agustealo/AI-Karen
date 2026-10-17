@@ -471,8 +471,6 @@ class RuntimeSettings:
 
         if self.llm.chat_default_max_output_tokens <= 0:
             issues.append("LLM chat_default_max_output_tokens must be positive")
-        if self.llm.chat_default_max_output_tokens > self.llm.max_tokens:
-            issues.append("LLM chat_default_max_output_tokens must not exceed max_tokens")
 
         if self.llm.timeout <= 0:
             issues.append("LLM timeout must be positive")
