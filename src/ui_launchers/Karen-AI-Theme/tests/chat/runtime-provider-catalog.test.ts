@@ -68,6 +68,8 @@ describe('runtime provider catalog normalization', () => {
     expect(gemini?.api_key_env_var).toBe('GEMINI_API_KEY');
     expect(ollama?.provider_type).toBe('local');
     expect(ollama?.requires_api_key).toBe(false);
-    expect(ollama?.models[0]?.id).toBe('qwen3:4b');
+    // A configured selection is not evidence that Ollama has the model installed.
+    expect(ollama?.selected_model).toBe('qwen3:4b');
+    expect(ollama?.models).toEqual([]);
   });
 });
