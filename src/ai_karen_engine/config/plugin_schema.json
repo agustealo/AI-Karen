@@ -1,146 +1,385 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Karen Extension Manifest",
-  "description": "Canonical schema for AI Karen extension manifests.",
-  "type": "object",
-  "required": [
-    "id",
-    "name",
-    "version",
-    "plugin_api_version",
-    "description",
-    "entrypoint"
-  ],
-  "properties": {
-    "id": {
-      "type": "string",
-      "pattern": "^[a-z0-9_-]+$"
-    },
-    "name": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
-    },
-    "version": {
-      "type": "string",
-      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
-    },
-    "plugin_api_version": {
-      "type": "string",
-      "default": "1.0"
-    },
-    "description": {
-      "type": "string"
-    },
-    "entrypoint": {
-      "type": "string",
-      "pattern": "^[a-z_][a-z0-9_]*:[a-z_][a-z0-9_]*$"
-    },
-    "capabilities": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "version"],
-        "properties": {
-          "id": {"type": "string"},
-          "version": {"type": "string"},
-          "provides_ui": {"type": "boolean", "default": false},
-          "provides_api": {"type": "boolean", "default": false},
-          "provides_background_tasks": {"type": "boolean", "default": false},
-          "provides_webhooks": {"type": "boolean", "default": false},
-          "prompt_contract_id": {"type": "string"},
-          "prompt_version": {"type": "string"}
+  "title": "Karen Extension Manifest: catalog source and derived runtime projection",
+  "description": "An installable catalog declaration is authoritative; runtime registrations are projected by PluginKernel. Communication channel declarations live only in the catalog capability object.",
+  "$defs": {
+    "communication_channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "ingress",
+        "inbound",
+        "outbound",
+        "authentication"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "default": "1.0.0"
+        },
+        "transport": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "ingress": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "webhook",
+              "polling",
+              "session"
+            ]
+          }
+        },
+        "inbound": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "text",
+              "media",
+              "command",
+              "event"
+            ]
+          }
+        },
+        "outbound": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "text",
+              "media",
+              "command",
+              "event"
+            ]
+          }
+        },
+        "authentication": {
+          "type": "string",
+          "enum": [
+            "hmac",
+            "token",
+            "oauth2",
+            "session"
+          ]
+        },
+        "supports_edits": {
+          "type": "boolean",
+          "default": false
+        },
+        "supports_streaming": {
+          "type": "boolean",
+          "default": false
+        },
+        "supports_media": {
+          "type": "boolean",
+          "default": false
+        },
+        "supports_delivery_receipts": {
+          "type": "boolean",
+          "default": false
         }
       }
-    },
-    "intents": {
-      "type": "array",
-      "items": {"type": "string"}
-    },
-    "required_permissions": {
-      "type": "array",
-      "items": {"type": "string"}
-    },
-    "optional_permissions": {
-      "type": "array",
-      "items": {"type": "string"}
-    },
-    "required_roles": {
-      "type": "array",
-      "items": {"type": "string"}
-    },
-    "tenant_scope": {
-      "type": "string",
-      "enum": ["single", "multi", "global"]
-    },
-    "allowed_tenant_ids": {
-      "type": "array",
-      "items": {"type": "string"}
-    },
-    "input_schema": {
-      "type": "object"
-    },
-    "output_schema": {
-      "type": "object"
-    },
-    "prompt_contract_id": {
-      "type": "string"
-    },
-    "prompt_version": {
-      "type": "string"
-    },
-    "requires_network": {
-      "type": "boolean",
-      "default": false
-    },
-    "requires_filesystem": {
-      "type": "boolean",
-      "default": false
-    },
-    "requires_credentials": {
-      "type": "boolean",
-      "default": false
-    },
-    "requires_external_api": {
-      "type": "boolean",
-      "default": false
-    },
-    "side_effect_level": {
-      "type": "string",
-      "enum": ["none", "read", "write", "external"]
-    },
-    "timeout_ms": {
-      "type": "integer",
-      "minimum": 1,
-      "default": 30000
-    },
-    "max_retries": {
-      "type": "integer",
-      "minimum": 0,
-      "default": 3
-    },
-    "enabled_by_default": {
-      "type": "boolean",
-      "default": false
-    },
-    "trusted_ui": {
-      "type": "boolean",
-      "default": false
-    },
-    "dependencies": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id"],
-        "properties": {
-          "id": {"type": "string"},
-          "version": {"type": "string"},
-          "optional": {"type": "boolean", "default": false},
-          "dependency_type": {"type": "string", "default": "extension"}
-        }
-      }
-    },
-    "metadata": {
-      "type": "object"
     }
-  }
+  },
+  "oneOf": [
+    {
+      "title": "Installable catalog declaration (canonical editable source)",
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "display_name",
+        "description",
+        "author",
+        "license",
+        "category"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "api_version": {
+          "type": "string",
+          "default": "1.0"
+        },
+        "entrypoint": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "provides_ui": {
+              "type": "boolean"
+            },
+            "provides_api": {
+              "type": "boolean"
+            },
+            "provides_background_tasks": {
+              "type": "boolean"
+            },
+            "provides_webhooks": {
+              "type": "boolean"
+            },
+            "prompt_first": {
+              "type": "boolean"
+            },
+            "allowed_prompt_overrides": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "communication_channel": {
+              "$ref": "#/$defs/communication_channel"
+            }
+          },
+          "additionalProperties": true
+        },
+        "permissions": {
+          "type": "object"
+        },
+        "rbac": {
+          "type": "object"
+        },
+        "config_schema": {
+          "type": "object"
+        },
+        "prompt_files": {
+          "type": "object"
+        }
+      }
+    },
+    {
+      "title": "Runtime projection (derived, not independently edited)",
+      "description": "Canonical schema for AI Karen extension manifests.",
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "version",
+        "plugin_api_version",
+        "description",
+        "entrypoint"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+$"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+        },
+        "plugin_api_version": {
+          "type": "string",
+          "default": "1.0"
+        },
+        "description": {
+          "type": "string"
+        },
+        "entrypoint": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*:[a-z_][a-z0-9_]*$"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "version"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "provides_ui": {
+                "type": "boolean",
+                "default": false
+              },
+              "provides_api": {
+                "type": "boolean",
+                "default": false
+              },
+              "provides_background_tasks": {
+                "type": "boolean",
+                "default": false
+              },
+              "provides_webhooks": {
+                "type": "boolean",
+                "default": false
+              },
+              "prompt_contract_id": {
+                "type": "string"
+              },
+              "prompt_version": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "intents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_permissions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "optional_permissions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tenant_scope": {
+          "type": "string",
+          "enum": [
+            "single",
+            "multi",
+            "global"
+          ]
+        },
+        "allowed_tenant_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "input_schema": {
+          "type": "object"
+        },
+        "output_schema": {
+          "type": "object"
+        },
+        "prompt_contract_id": {
+          "type": "string"
+        },
+        "prompt_version": {
+          "type": "string"
+        },
+        "requires_network": {
+          "type": "boolean",
+          "default": false
+        },
+        "requires_filesystem": {
+          "type": "boolean",
+          "default": false
+        },
+        "requires_credentials": {
+          "type": "boolean",
+          "default": false
+        },
+        "requires_external_api": {
+          "type": "boolean",
+          "default": false
+        },
+        "side_effect_level": {
+          "type": "string",
+          "enum": [
+            "none",
+            "read",
+            "write",
+            "external"
+          ]
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30000
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3
+        },
+        "enabled_by_default": {
+          "type": "boolean",
+          "default": false
+        },
+        "trusted_ui": {
+          "type": "boolean",
+          "default": false
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "optional": {
+                "type": "boolean",
+                "default": false
+              },
+              "dependency_type": {
+                "type": "string",
+                "default": "extension"
+              }
+            }
+          }
+        },
+        "metadata": {
+          "type": "object"
+        }
+      }
+    }
+  ]
 }
