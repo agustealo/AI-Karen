@@ -17,6 +17,7 @@ from sqlalchemy import text
 
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection,
+    ChannelDeliveryRequest,
     InboundChannelEvent,
     VerifiedIdentityBinding,
 )
@@ -304,6 +305,71 @@ class SqlChannelRepository:
                  "lease_seconds": lease_seconds},
             )).scalar_one_or_none()
         return value is not None
+
+    async def complete_and_stage_delivery(
+        self, *,
+        tenant_id: str,
+        inbox_id: str,
+        claim_token: str,
+        delivery: ChannelDeliveryRequest,
+    ) -> bool:
+        """Atomically publish one accepted delivery from a still-owned chat turn.
+
+        The outbox is not marked sent, delivered, or read. A lost lease cannot
+        create a response. Unique delivery IDs/idempotency keys reject duplicate
+        external delivery attempts with a transaction-wide rollback.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        delivery_id = str(uuid.UUID(delivery.delivery_id))
+        inbox_uuid = str(uuid.UUID(inbox_id))
+        token = str(uuid.UUID(claim_token))
+        if delivery.text is not None and len(delivery.text) > 32768:
+            raise ValueError("Outbound text exceeds the governed storage ceiling")
+        if not delivery.destination_id or not delivery.connection_id:
+            raise ValueError("Outbound delivery destination and connection are required")
+
+        async with async_transaction_scope(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    WITH completed AS (
+                        UPDATE public.channel_inbox
+                        SET status = 'completed',
+                            claim_token = NULL, claim_expires_at = NULL,
+                            updated_at = now()
+                        WHERE tenant_id = CAST(:tenant AS uuid)
+                          AND inbox_id = CAST(:inbox AS uuid)
+                          AND connection_id = :connection
+                          AND status = 'processing'
+                          AND claim_token = CAST(:token AS uuid)
+                          AND claim_expires_at > clock_timestamp()
+                        RETURNING tenant_id, connection_id, inbox_id
+                    )
+                    INSERT INTO public.channel_outbox (
+                        delivery_id, tenant_id, connection_id, inbox_id,
+                        destination_id, idempotency_key, message_kind,
+                        message_text, status
+                    )
+                    SELECT CAST(:delivery AS uuid), completed.tenant_id,
+                           completed.connection_id, completed.inbox_id,
+                           :destination, :idempotency, :kind,
+                           :body, 'accepted'
+                    FROM completed
+                    RETURNING delivery_id
+                """),
+                {
+                    "tenant": tenant_id,
+                    "inbox": inbox_uuid,
+                    "token": token,
+                    "connection": delivery.connection_id,
+                    "delivery": delivery_id,
+                    "destination": delivery.destination_id,
+                    "idempotency": delivery.idempotency_key,
+                    "kind": delivery.message_kind,
+                    "body": delivery.text,
+                },
+            )
+            inserted = result.scalar_one_or_none()
+        return inserted is not None
 
     async def fail_inbound_claim(
         self, *, tenant_id: str, inbox_id: str,
