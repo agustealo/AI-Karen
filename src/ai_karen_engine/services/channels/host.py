@@ -7,7 +7,9 @@ merely wires those existing owners into installed native transport adapters.
 
 Do not auto-start tenant connections from a persisted 'enabled' bit. After a
 process restart, native transports remain inactive until explicitly resumed
-through a future governed reconciliation process.
+through a future governed reconciliation process. Authenticated ingress may
+schedule its committed inbox receipt immediately; persisted backlog discovery
+requires a separate tenant-authorized reconciliation action.
 """
 
 from __future__ import annotations
@@ -17,11 +19,15 @@ import logging
 import httpx
 
 from ai_karen_engine.config.channels import ChannelHostSettings
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.persistence.repositories.channel_repository import SqlChannelRepository
 from ai_karen_engine.services.channels.activation import ChannelActivationService
 from ai_karen_engine.services.channels.credentials import ChannelVaultSecretResolver
 from ai_karen_engine.services.channels.ingress import ChannelIngressService
+from ai_karen_engine.services.channels.execution import ChannelExecutionService
+from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+from ai_karen_engine.services.channels.worker import ChannelInboxWorker
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
     CredentialVaultService,
 )
@@ -41,6 +47,7 @@ class ChannelHostServices:
         http_client: httpx.AsyncClient,
         owns_vault: bool = True,
         owns_kernel: bool = True,
+        chat_runtime: object | None = None,
     ) -> None:
         self.settings = settings.validate()
         if not self.settings.enabled:
@@ -51,8 +58,12 @@ class ChannelHostServices:
         self.http_client = http_client
         self._owns_vault = owns_vault
         self._owns_kernel = owns_kernel
+        self._chat_runtime = chat_runtime
         self.ingress: ChannelIngressService | None = None
         self.activation: ChannelActivationService | None = None
+        self.execution: ChannelExecutionService | None = None
+        self.delivery: ChannelDeliveryService | None = None
+        self.worker: ChannelInboxWorker | None = None
         self._installed: dict[str, object] = {}
         self._resolvers: dict[str, ChannelVaultSecretResolver] = {}
         self._initialized = False
@@ -93,9 +104,24 @@ class ChannelHostServices:
                 kernel=self.kernel, repository=self.repository,
                 credential_authorizer=self.authorize_reference,
             )
+            # A worker is permitted only after the canonical ChatRuntime has
+            # been attached. It starts empty; webhook admission supplies only
+            # durable tenant-scoped inbox references, not raw provider text.
+            self.delivery = ChannelDeliveryService(
+                kernel=self.kernel, repository=self.repository,
+            )
+            if self._chat_runtime is not None:
+                self.execution = ChannelExecutionService(
+                    repository=self.repository, chat_runtime=self._chat_runtime,
+                )
+                self.worker = ChannelInboxWorker(
+                    repository=self.repository, execution=self.execution,
+                )
+                self.worker.start()
             self.ingress = ChannelIngressService(
                 kernel=self.kernel, repository=self.repository,
                 max_native_body_bytes=self.settings.max_native_body_bytes,
+                on_admitted=self.worker.submit if self.worker is not None else None,
             )
             self._initialized = True
             logger.info(
@@ -124,6 +150,112 @@ class ChannelHostServices:
             credential_handle=credential_handle,
         )
 
+    async def recover_inbox(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        limit: int = 100,
+    ) -> int:
+        """Requeue durably admitted work after explicit current policy admission.
+
+        No process-start scan and no implicit tenant restart. The configured
+        canonical installation and fresh principal must be authorized for the
+        exact channel.recover capability before even reading backlog metadata.
+        Individual execution still requires an atomic database claim.
+        """
+        if (
+            not self._initialized or self._closed or self.worker is None
+            or self.activation is None
+        ):
+            raise PermissionError("Channel recovery host is unavailable")
+        if not 1 <= limit <= 1000:
+            raise ValueError("Channel recovery limit must be 1..1000")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel recovery connection is unavailable")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.recover", plan=authorized_plan,
+        )
+        if self.kernel.get_channel_activation_manifest(
+            connection.installation_id
+        ) is None:
+            raise PermissionError("Channel recovery installation is unavailable")
+        receipts = await self.repository.list_recoverable_inbound(
+            tenant_id=tenant_id, connection_id=connection_id, limit=limit,
+        )
+        scheduled = 0
+        for receipt in receipts:
+            if self._closed:
+                break
+            if receipt.tenant_id != tenant_id:
+                raise PermissionError("Channel recovery receipt tenant mismatch")
+            if await self.worker.submit(receipt):
+                scheduled += 1
+        logger.info(
+            "channel.host.recovery_scheduled",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "requested_count": len(receipts),
+                "scheduled_count": scheduled,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            },
+        )
+        return scheduled
+
+    async def dispatch_outbox(
+        self, *, tenant_id: str, delivery_id: str,
+        authorized_plan: AuthorizedExecutionPlan, lease_seconds: int = 90,
+    ) -> bool:
+        """Dispatch an existing outbox item through the bound canonical adapter.
+
+        This method never creates authorization or selects transport based on
+        native provider input. The persisted delivery selects its connection;
+        ChannelDeliveryService rechecks RuntimePolicy scope, lease, revision,
+        principal and native receipt evidence before recording a send.
+        """
+        if not self._initialized or self._closed or self.delivery is None:
+            raise PermissionError("Channel outbound host is unavailable")
+        if not isinstance(authorized_plan, AuthorizedExecutionPlan):
+            raise PermissionError("RuntimePolicy outbound plan is required")
+        if not 3 <= lease_seconds <= 3600:
+            raise ValueError("Outbound dispatch lease must be 3..3600 seconds")
+        preflight = await self.repository.get_delivery_preflight(
+            tenant_id=tenant_id, delivery_id=delivery_id,
+        )
+        if preflight is None:
+            return False
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=preflight.connection_id,
+        )
+        if connection is None or connection.tenant_id != tenant_id:
+            raise PermissionError("Channel outbound connection is unavailable")
+        adapter = self._installed.get(connection.installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(
+                connection.installation_id
+            ) is None
+            or not self.kernel.is_canonical_channel_adapter(
+                connection.installation_id, adapter
+            )
+        ):
+            raise PermissionError("Channel outbound installation is unavailable")
+        # Dispatch owns all final authorization and DB claim fencing. The
+        # host has no right to manufacture an execution plan on its behalf.
+        return await self.delivery.dispatch(
+            tenant_id=tenant_id, delivery_id=delivery_id,
+            adapter=adapter, authorized_plan=authorized_plan,
+            lease_seconds=lease_seconds,
+        )
+
     async def shutdown(self) -> None:
         """Revoke process-local transport capability before database cleanup."""
         if self._closed:
@@ -132,6 +264,12 @@ class ChannelHostServices:
         self._initialized = False
         self.ingress = None
         self.activation = None
+        worker = self.worker
+        self.worker = None
+        if worker is not None:
+            await worker.shutdown()
+        self.execution = None
+        self.delivery = None
 
         for name, adapter in reversed(tuple(self._installed.items())):
             try:

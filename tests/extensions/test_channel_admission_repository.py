@@ -302,3 +302,68 @@ def test_claim_and_delivery_code_fence_credential_rotation_and_revocation():
     assert "claim_expires_at > clock_timestamp()" in source
     assert "INSERT INTO public.channel_outbox" in source
 
+
+
+class RecoveryResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self.rows
+
+
+class RecoverySession:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    async def execute(self, statement, args):
+        self.calls.append((str(statement), dict(args)))
+        return RecoveryResult(self.rows)
+
+
+@pytest.mark.asyncio
+async def test_recovery_enumeration_is_tenant_connection_and_identity_scoped(monkeypatch):
+    session = RecoverySession([committed_row()])
+    install_scope(monkeypatch, session)
+    recovered = await SqlChannelRepository().list_recoverable_inbound(
+        tenant_id=TENANT, connection_id="connection-a", limit=12,
+    )
+    assert len(recovered) == 1
+    assert recovered[0].inbox_id == INBOX
+    assert recovered[0].inserted is False
+    sql, args = session.calls[0]
+    assert args == {"tenant": TENANT, "connection": "connection-a", "limit": 12}
+    assert "c.revision = i.connection_revision" in sql
+    assert "i.connection_id = :connection" in sql
+    assert "b.revoked_at IS NULL" in sql
+    assert "u.is_active = true AND u.is_verified = true" in sql
+    assert "i.claim_expires_at <= clock_timestamp()" in sql
+    assert "i.status = 'pending'" in sql
+    assert "i.status = 'processing'" in sql
+    assert "i.status = 'completed'" not in sql
+    assert "i.status = 'failed'" not in sql
+
+
+@pytest.mark.asyncio
+async def test_recovery_scope_and_budget_are_required():
+    for connection_id, limit in (("", 1), (" ", 1), ("connection-a", 0),
+                                 ("connection-a", 1001)):
+        with pytest.raises(ValueError):
+            await SqlChannelRepository().list_recoverable_inbound(
+                tenant_id=TENANT, connection_id=connection_id, limit=limit,
+            )
+
+
+def test_claim_revalidates_active_verified_user_inside_atomic_sql():
+    from inspect import getsource
+    source = getsource(SqlChannelRepository.claim_inbound)
+    assert "JOIN public.auth_users u" in source
+    assert "u.tenant_id = i.tenant_id" in source
+    assert "u.user_id = i.user_id" in source
+    assert "u.is_active = true AND u.is_verified = true" in source
+    assert "c.revision = i.connection_revision" in source
+    assert "b.revoked_at IS NULL" in source
