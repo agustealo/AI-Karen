@@ -61,15 +61,17 @@ class ClaimedChannelDelivery:
     connection: ChannelConnection
     delivery: ChannelDeliveryRequest
     user_id: str
+    external_conversation_id: str
     claim_token: str
 
 
 @dataclass(frozen=True, slots=True)
 class ChannelDeliveryPreflight:
-    """Read-only tenant-scoped principal and connection for policy admission."""
+    """Read-only tenant-scoped principal and session for policy admission."""
 
     connection_id: str
     user_id: str
+    external_conversation_id: str
 
 
 class ChannelAdmissionConflict(ValueError):
@@ -480,7 +482,7 @@ class SqlChannelRepository:
         async with async_transaction_scope(tenant_id) as session:
             row = (await session.execute(
                 text("""
-                    SELECT o.connection_id, i.user_id
+                    SELECT o.connection_id, i.user_id, i.external_conversation_id
                     FROM public.channel_outbox o
                     JOIN public.channel_inbox i
                       ON i.tenant_id = o.tenant_id
@@ -495,7 +497,8 @@ class SqlChannelRepository:
             )).mappings().one_or_none()
         return (
             ChannelDeliveryPreflight(
-                connection_id=str(row["connection_id"]), user_id=str(row["user_id"])
+                connection_id=str(row["connection_id"]), user_id=str(row["user_id"]),
+                external_conversation_id=str(row["external_conversation_id"])
             )
             if row is not None
             else None
@@ -552,7 +555,7 @@ class SqlChannelRepository:
                     )
                     SELECT o.delivery_id, o.tenant_id, o.connection_id,
                            o.destination_id, o.idempotency_key, o.message_kind,
-                           o.message_text, i.user_id,
+                           o.message_text, i.user_id, i.external_conversation_id,
                            c.installation_id, c.provider_account_id,
                            c.credential_handle, c.revision, c.enabled
                     FROM claimed o
@@ -588,6 +591,7 @@ class SqlChannelRepository:
                 text=row["message_text"],
             ),
             user_id=str(row["user_id"]),
+            external_conversation_id=str(row["external_conversation_id"]),
             claim_token=token,
         )
 
@@ -632,6 +636,14 @@ class SqlChannelRepository:
                    ChannelDeliveryState.UNKNOWN}
         if receipt.state not in allowed:
             raise ValueError("An internal accepted state is not a provider send receipt")
+        if receipt.state is ChannelDeliveryState.SENT and not receipt.provider_message_id:
+            raise ValueError("Sent requires provider message evidence")
+        if receipt.state in {ChannelDeliveryState.DELIVERED, ChannelDeliveryState.READ} and (
+            not receipt.provider_message_id or not receipt.provider_receipt_id
+        ):
+            raise ValueError("Delivered/read require provider message and receipt evidence")
+        if receipt.state is ChannelDeliveryState.FAILED and not receipt.error_code:
+            raise ValueError("Failed requires a provider or host failure code")
         if receipt.error_code and (
             len(receipt.error_code) > 80
             or not all(c.isascii() and (c.isalnum() or c == "_")

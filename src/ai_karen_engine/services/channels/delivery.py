@@ -8,6 +8,7 @@ blind resend that could deliver duplicate messages.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -27,6 +28,8 @@ from ai_karen_engine.persistence.repositories.channel_repository import (
     ClaimedChannelDelivery,
     SqlChannelRepository,
 )
+from ai_karen_engine.services.channels.execution import _stable_channel_session
+from ai_karen_engine.persistence.repositories.channel_repository import ClaimedChannelMessage
 from ai_karen_engine.services.automation.claim_lease import (
     ClaimLeaseLost,
     run_with_claim_heartbeat,
@@ -68,16 +71,33 @@ class ChannelDeliveryService:
     async def _plan_allows(
         plan: AuthorizedExecutionPlan, *,
         tenant_id: str, user_id: str, installation_id: str,
+        session_id: str,
     ) -> bool:
         """The provider adapter cannot mint or widen RuntimePolicy authority."""
         return bool(
             isinstance(plan, AuthorizedExecutionPlan)
             and plan.matches_execution_scope(
                 tenant_id=tenant_id, user_id=user_id,
+                session_id=session_id,
             )
             and installation_id in plan.allowed_plugins
             and not plan.approval_requirements
             and await ActionExecutionGate.authorize(plan, installation_id)
+        )
+
+    @staticmethod
+    def _session_id(
+        *, tenant_id: str, user_id: str, connection_id: str,
+        external_conversation_id: str,
+    ) -> str:
+        """Reuse channel execution's canonical session derivation."""
+        return _stable_channel_session(
+            ClaimedChannelMessage(
+                inbox_id="", correlation_id="", tenant_id=tenant_id,
+                user_id=user_id, binding_id="", connection_id=connection_id,
+                external_conversation_id=external_conversation_id,
+                external_sender_id="", message_kind="text", text="",
+            )
         )
 
     @staticmethod
@@ -138,6 +158,11 @@ class ChannelDeliveryService:
         if not await self._plan_allows(
             authorized_plan, tenant_id=tenant_id, user_id=preflight.user_id,
             installation_id=snapshot.installation_id,
+            session_id=self._session_id(
+                tenant_id=tenant_id, user_id=preflight.user_id,
+                connection_id=preflight.connection_id,
+                external_conversation_id=preflight.external_conversation_id,
+            ),
         ):
             raise ChannelDeliveryDenied("Outbound action was not authorized by RuntimePolicy")
         claimed = await self._repository.claim_outbound(
@@ -160,6 +185,11 @@ class ChannelDeliveryService:
                 tenant_id=claimed.connection.tenant_id,
                 user_id=claimed.user_id,
                 installation_id=claimed.connection.installation_id,
+                session_id=self._session_id(
+                    tenant_id=claimed.connection.tenant_id, user_id=claimed.user_id,
+                    connection_id=claimed.connection.connection_id,
+                    external_conversation_id=claimed.external_conversation_id,
+                ),
             ):
                 receipt = ChannelDeliveryReceipt(
                     delivery_id=delivery_id,
@@ -194,8 +224,9 @@ class ChannelDeliveryService:
                 )
             else:
                 try:
-                    value = await adapter.send(
-                        connection=connection, delivery=claimed.delivery,
+                    value = await asyncio.wait_for(
+                        adapter.send(connection=connection, delivery=claimed.delivery),
+                        timeout=max(1.0, min(60.0, lease_seconds * 0.8)),
                     )
                 except Exception as exc:
                     logger.warning(

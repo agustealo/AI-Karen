@@ -44,12 +44,14 @@ def create_components(*, state=ChannelDeliveryState.SENT, provider_id="provider-
     claim = ClaimedChannelDelivery(
         connection=connection, delivery=delivery,
         user_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        external_conversation_id="native-room",
         claim_token=CLAIM,
     )
     repo = SimpleNamespace(
         get_delivery_preflight=AsyncMock(
             return_value=ChannelDeliveryPreflight(
                 connection_id="conn", user_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+                external_conversation_id="native-room",
             ),
         ),
         get_enabled_connection=AsyncMock(return_value=connection),
@@ -257,3 +259,31 @@ async def test_approval_requirement_blocks_automatic_send(immediate_heartbeat):
         )
     adapter.send.assert_not_awaited()
     repo.claim_outbound.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_bound_session_mismatch_cannot_consume_claim():
+    service, repo, adapter, _ = create_components()
+    plan = authorization()
+    plan.authorized_session_id = "wrong-session"
+    with pytest.raises(ChannelDeliveryDenied, match="not authorized"):
+        await service.dispatch(
+            tenant_id=TENANT, delivery_id=DELIVERY,
+            adapter=adapter, authorized_plan=plan,
+        )
+    repo.claim_outbound.assert_not_awaited()
+    adapter.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_timeout_marks_uncertain_without_retries(immediate_heartbeat):
+    import asyncio
+    service, repo, adapter, _ = create_components()
+    async def hang(**kwargs):
+        await asyncio.sleep(1000)
+    adapter.send.side_effect = hang
+    assert await service.dispatch(
+        tenant_id=TENANT, delivery_id=DELIVERY,
+        adapter=adapter, authorized_plan=authorization(), lease_seconds=3,
+    ) is False
+    assert adapter.send.await_count == 1
+    assert repo.finalize_outbound_claim.await_args.kwargs["receipt"].state is ChannelDeliveryState.UNKNOWN
