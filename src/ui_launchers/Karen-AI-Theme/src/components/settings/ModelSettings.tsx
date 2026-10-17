@@ -297,11 +297,15 @@ export default function ModelSettings() {
   useEffect(() => {
     if (!selectedProviderDetails) return;
     const providerDefaultModel = selectedProviderDetails.selected_model || selectedProviderDetails.default_model || selectedProviderDetails.models[0]?.id || '';
-    const providerBaseUrl = usesRuntimeOptions
-      ? normalizeDisplayBaseUrl(selectedProviderDetails.base_url || selectedProviderDetails.default_base_url || '')
+    const selectedSource = selectedProviderDetails.runtime_source === 'container' ? 'container' : 'host';
+    const runtimeEndpoint = usesRuntimeOptions
+      ? selectedProviderDetails.runtime_options?.find((option) => option.source === selectedSource)?.base_url
+      : undefined;
+    const providerBaseUrl = runtimeEndpoint
+      ? normalizeDisplayBaseUrl(runtimeEndpoint)
       : (selectedProviderDetails.base_url || selectedProviderDetails.default_base_url || '');
     if (usesRuntimeOptions) {
-      setRuntimeSource(selectedProviderDetails.runtime_source === 'container' ? 'container' : 'host');
+      setRuntimeSource(selectedSource);
     }
     setBaseUrl(usesRuntimeOptions ? providerBaseUrl : normalizeDisplayBaseUrl(providerBaseUrl));
     setApiKey('');
@@ -839,7 +843,7 @@ export default function ModelSettings() {
                               </SelectTrigger>
                               <SelectContent>
                                 {(selectedProviderDetails.runtime_options ?? []).map((option) => (
-                                  <SelectItem key={option.source} value={option.source}>
+                                  <SelectItem key={option.source} value={option.source} disabled={!option.available}>
                                     {option.label}
                                   </SelectItem>
                                 ))}
