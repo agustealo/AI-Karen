@@ -444,7 +444,7 @@ export function normalizeRuntimeProviderCatalogResponse(
       const diagnostic = provider.safe_diagnostic_metadata || {};
       const isCustomProvider = provider.id === 'custom' || provider.category === 'custom';
       const resolvedModels: RuntimeProviderModel[] =
-        normalizedModels.length > 0 || !isCustomProvider
+        normalizedModels.length > 0 || !isCustomProvider || (provider.models || []).length > 0
           ? normalizedModels
           : fallbackModelId
             ? [{
