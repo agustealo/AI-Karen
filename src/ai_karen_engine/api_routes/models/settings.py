@@ -336,6 +336,11 @@ class OllamaPullRequest(BaseModel):
 class RuntimeOptionPayload(BaseModel):
     source: str
     label: str
+    available: bool
+    base_url: str
+    status: str
+    message: str
+    setup_command: Optional[str] = None
 
 
 class CustomProviderTemplate(BaseModel):
@@ -1101,13 +1106,3 @@ class ProviderSettingsValidationResponse(BaseModel):
 class OllamaPullRequest(BaseModel):
     model: str
     base_url: Optional[str] = None
-
-
-class RuntimeOptionPayload(BaseModel):
-    source: str
-    label: str
-    available: bool
-    base_url: str
-    status: str
-    message: str
-    setup_command: Optional[str] = None
