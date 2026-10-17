@@ -919,3 +919,44 @@ async def test_stream_execution_exception_uses_canonical_runtime_fallback():
     assert chunks[-1].metadata["fallback_level"] == 1
     assert chunks[-1].metadata["degraded_mode"] is True
     assert gateway.calls[0]["assistant_text"] == "Recovered through fallback"
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_exposes_safe_projection_targets_not_raw_receipts():
+    runtime, _gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def fake_stream(*args, **kwargs):
+        yield ChatStreamChunk(type="content", content="Hello", correlation_id="corr-1")
+
+    async def degraded_projection(_request, _text, metadata, _plan):
+        metadata["memory_persistence_status"] = "persisted_projection_degraded"
+        metadata["memory_degraded"] = True
+        metadata["memory_degradation_reason"] = "memory_projection_failed"
+        metadata["memory_projection_targets"] = [
+            {"target": "stm", "success_count": 1, "failure_count": 0},
+            {"target": "memory_graph", "success_count": 0, "failure_count": 1},
+        ]
+        return {
+            "persisted": 1,
+            "receipts": [{"memory_id": "private-never-expose"}],
+        }
+
+    chunks = await _collect_stream(
+        runtime,
+        request,
+        decision,
+        plan,
+        fake_stream,
+        persist_memory=AsyncMock(side_effect=degraded_projection),
+    )
+    terminal = chunks[-1].metadata
+
+    assert terminal["memory_persistence_status"] == "persisted_projection_degraded"
+    assert terminal["memory_projection_targets"] == [
+        {"target": "stm", "success_count": 1, "failure_count": 0},
+        {"target": "memory_graph", "success_count": 0, "failure_count": 1},
+    ]
+    assert "private-never-expose" not in str(terminal)

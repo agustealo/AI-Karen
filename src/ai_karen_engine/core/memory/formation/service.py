@@ -39,6 +39,39 @@ from .evaluator import MemoryFormationEvaluator
 logger = get_logger(__name__)
 
 
+def _projection_target_health(
+    receipts: list[dict[str, Any]],
+    *,
+    allowed_targets: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    """Expose registered projection targets only, never arbitrary receipt keys.
+
+    The injected ProjectionManager is the source of worker identities. The
+    formation service additionally owns the reserved projection_pipeline
+    marker for an unavailable projection call or missing ledger event.
+    """
+    permitted = allowed_targets | {"projection_pipeline"}
+    counts: dict[str, dict[str, int]] = {}
+    for receipt in receipts:
+        outcomes = receipt.get("projection_results")
+        if not isinstance(outcomes, Mapping):
+            continue
+        for raw_target, succeeded in outcomes.items():
+            target = str(raw_target)
+            if (
+                target not in permitted
+                or len(target) > 64
+                or not all(ch.isascii() and (ch.isalnum() or ch == "_") for ch in target)
+            ):
+                target = "unidentified_projection"
+            current = counts.setdefault(target, {"success_count": 0, "failure_count": 0})
+            current["success_count" if succeeded is True else "failure_count"] += 1
+    return [
+        {"target": target, **counts[target]}
+        for target in sorted(counts)
+    ]
+
+
 class DerivedProjector(Protocol):
     async def project(
         self,
@@ -82,6 +115,10 @@ class MemoryFormationService:
         self._evaluator = evaluator or MemoryFormationEvaluator()
         self._vault_factory = vault_factory
         self._derived_projector = derived_projector
+        # Derived projector reflects the existing ProjectionManager worker registry.
+        self._projection_target_names = frozenset(
+            getattr(derived_projector, "projection_target_names", ())
+        )
         self._episode_state_store = episode_state_store
         self._event_segmenter = event_segmenter or EventSegmenter()
 
@@ -294,6 +331,9 @@ class MemoryFormationService:
                 "persisted": persisted,
                 "persistence_failures": persistence_failures,
                 "projection_failures": projection_failures,
+                "projection_targets": _projection_target_health(
+                    receipts, allowed_targets=self._projection_target_names
+                ),
                 "reason": "memory_write_not_authorized",
                 "authorization_error": authorization_error,
                 "request_id": request_id,
@@ -319,6 +359,9 @@ class MemoryFormationService:
             "persisted": persisted,
             "persistence_failures": persistence_failures,
             "projection_failures": projection_failures,
+            "projection_targets": _projection_target_health(
+                    receipts, allowed_targets=self._projection_target_names
+                ),
             "errors": errors,
             "processing_time_ms": evaluation.processing_time_ms,
             "request_id": request_id,

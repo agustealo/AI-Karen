@@ -114,6 +114,12 @@ interface ProviderAttemptInsight {
   errorType?: string;
 }
 
+interface ProjectionTargetInsight {
+  target: string;
+  successCount: number;
+  failureCount: number;
+}
+
 interface RuntimeInsight {
   requestedProvider?: string;
   requestedModel?: string;
@@ -131,6 +137,7 @@ interface RuntimeInsight {
   providerAttempts: ProviderAttemptInsight[];
   transcriptPersistenceStatus?: string;
   memoryPersistenceStatus?: string;
+  projectionTargets: ProjectionTargetInsight[];
   correlationId?: string;
   requestId?: string;
   trajectoryId?: string;
@@ -325,6 +332,20 @@ const normalizeRuntimeInsight = (metadata: JsonRecord): RuntimeInsight => {
       asString(metadata.transcript_persistence_status) || undefined,
     memoryPersistenceStatus:
       asString(metadata.memory_persistence_status) || undefined,
+    projectionTargets: Array.isArray(metadata.memory_projection_targets)
+      ? metadata.memory_projection_targets
+          .map((raw): ProjectionTargetInsight | null => {
+            const entry = asRecord(raw);
+            const target = asString(entry.target);
+            if (!target) return null;
+            return {
+              target,
+              successCount: asNumber(entry.success_count) ?? 0,
+              failureCount: asNumber(entry.failure_count) ?? 0,
+            };
+          })
+          .filter((item): item is ProjectionTargetInsight => item !== null)
+      : [],
     correlationId: asString(metadata.correlation_id) || undefined,
     requestId: asString(metadata.request_id) || undefined,
     trajectoryId: asString(metadata.trajectory_id) || undefined,
@@ -1333,6 +1354,22 @@ function RailContent({
                 </p>
               </div>
             </div>
+            {runtime.projectionTargets.length > 0 && (
+              <div className="space-y-1" data-testid="memory-projection-targets">
+                <p className="font-semibold text-muted-foreground">Memory projection targets</p>
+                {runtime.projectionTargets.map((target) => (
+                  <div key={target.target} className="flex justify-between gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
+                    <span className="truncate">{target.target}</span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {[
+                        target.successCount > 0 ? `completed (${target.successCount})` : null,
+                        target.failureCount > 0 ? `failed (${target.failureCount})` : null,
+                      ].filter(Boolean).join(' · ') || 'not attempted'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {runtime.trajectoryId && (
               <div className="flex items-center gap-2 truncate text-muted-foreground">
                 <GitBranch className="h-3 w-3 shrink-0" />

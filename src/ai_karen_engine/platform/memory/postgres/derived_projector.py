@@ -55,6 +55,11 @@ class PostgresDerivedMemoryProjector:
     def __init__(self, projection_manager: ProjectionManager) -> None:
         self._projection_manager = projection_manager
 
+    @property
+    def projection_target_names(self) -> frozenset[str]:
+        """Return worker identities from the canonical injected ProjectionManager."""
+        return frozenset(self._projection_manager.workers)
+
     async def project(
         self,
         *,
