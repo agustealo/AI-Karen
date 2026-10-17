@@ -39,6 +39,8 @@ class ChannelHostServices:
         repository: SqlChannelRepository,
         vault: CredentialVaultService,
         http_client: httpx.AsyncClient,
+        owns_vault: bool = True,
+        owns_kernel: bool = True,
     ) -> None:
         self.settings = settings.validate()
         if not self.settings.enabled:
@@ -47,6 +49,8 @@ class ChannelHostServices:
         self.repository = repository
         self.vault = vault
         self.http_client = http_client
+        self._owns_vault = owns_vault
+        self._owns_kernel = owns_kernel
         self.ingress: ChannelIngressService | None = None
         self.activation: ChannelActivationService | None = None
         self._installed: dict[str, object] = {}
@@ -147,14 +151,16 @@ class ChannelHostServices:
                 extra={"error_type": type(exc).__name__},
             )
         try:
-            await self.vault.stop()
+            if self._owns_vault:
+                await self.vault.stop()
         except Exception as exc:
             logger.warning(
                 "channel.host.vault_shutdown_failed",
                 extra={"error_type": type(exc).__name__},
             )
         try:
-            await self.kernel.cleanup()
+            if self._owns_kernel:
+                await self.kernel.cleanup()
         except Exception as exc:
             logger.warning(
                 "channel.host.kernel_cleanup_failed",
