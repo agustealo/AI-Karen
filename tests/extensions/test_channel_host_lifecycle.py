@@ -352,3 +352,81 @@ async def test_recovery_refuses_disabled_or_cross_tenant_connection_before_polic
     host.activation._authorize.assert_not_awaited()
     host.repository.list_recoverable_inbound.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_host_dispatch_uses_only_bound_adapter_and_caller_policy_plan():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    delivery_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_delivery_preflight = AsyncMock(
+        return_value=SimpleNamespace(connection_id="conn"),
+    )
+    host.repository.get_enabled_connection = AsyncMock(
+        return_value=ChannelConnection(
+            connection_id="conn", tenant_id=tenant,
+            installation_id="telegram-bot", provider_account_id="account",
+            credential_handle="vault://ref", revision=2, enabled=True,
+        ),
+    )
+    host.delivery.dispatch = AsyncMock(return_value=True)
+    plan = AuthorizedExecutionPlan(
+        execution_id="delivery-1", policy_decision_id="policy-1",
+        authorized_user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        authorized_tenant_id=tenant, allowed_plugins=["telegram-bot"],
+    )
+    assert await host.dispatch_outbox(
+        tenant_id=tenant, delivery_id=delivery_id,
+        authorized_plan=plan, lease_seconds=45,
+    )
+    host.delivery.dispatch.assert_awaited_once_with(
+        tenant_id=tenant, delivery_id=delivery_id, adapter=adapter,
+        authorized_plan=plan, lease_seconds=45,
+    )
+    adapter.send.assert_not_awaited()
+    await host.shutdown()
+    with pytest.raises(PermissionError):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id=delivery_id,
+            authorized_plan=plan,
+        )
+
+
+@pytest.mark.asyncio
+async def test_host_outbound_denies_before_dispatch_when_plan_missing_or_connection_foreign():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_delivery_preflight = AsyncMock(
+        return_value=SimpleNamespace(connection_id="conn"),
+    )
+    host.repository.get_enabled_connection = AsyncMock(
+        return_value=ChannelConnection(
+            connection_id="conn", tenant_id=other,
+            installation_id="telegram-bot", provider_account_id="account",
+            credential_handle="vault://ref", revision=2, enabled=True,
+        ),
+    )
+    host.delivery.dispatch = AsyncMock()
+    with pytest.raises(PermissionError, match="plan"):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id=other, authorized_plan=None,
+        )
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    plan = AuthorizedExecutionPlan(
+        execution_id="delivery-2", policy_decision_id="policy-2",
+        authorized_user_id=other, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"],
+    )
+    with pytest.raises(PermissionError, match="connection"):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id=other, authorized_plan=plan,
+        )
+    host.delivery.dispatch.assert_not_awaited()
+    adapter.send.assert_not_awaited()
+    await host.shutdown()
