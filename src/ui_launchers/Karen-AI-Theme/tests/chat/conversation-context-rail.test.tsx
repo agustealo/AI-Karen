@@ -5,6 +5,32 @@ import ConversationContextRail from '@/components/chat/ConversationContextRail';
 import type { AgentStepEvent } from '@/lib/types';
 
 describe('ConversationContextRail', () => {
+  it('shows actual projection target failures without leaking memory receipt IDs', () => {
+    render(
+      <ConversationContextRail
+        metadata={{
+          memory_persistence_status: 'persisted_projection_degraded',
+          correlation_id: 'corr-safe',
+          memory_projection_targets: [
+            { target: 'stm', success_count: 1, failure_count: 0 },
+            { target: 'memory_graph', success_count: 0, failure_count: 1 },
+          ],
+          receipts: [{ memory_id: 'private-never-expose', event_id: 'secret-event' }],
+        }}
+        agentSteps={[]}
+      />,
+    );
+
+    expect(screen.getByTestId('memory-projection-targets')).toBeTruthy();
+    expect(screen.getByText('Memory projection targets')).toBeTruthy();
+    expect(screen.getByText('stm')).toBeTruthy();
+    expect(screen.getByText('memory_graph')).toBeTruthy();
+    expect(screen.getByText('completed (1)')).toBeTruthy();
+    expect(screen.getByText('failed (1)')).toBeTruthy();
+    expect(screen.queryByText('private-never-expose')).toBeNull();
+    expect(screen.queryByText('secret-event')).toBeNull();
+  });
+
   it('renders typed retriever failures without stringifying provenance objects', () => {
     render(
       <ConversationContextRail
