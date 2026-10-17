@@ -528,3 +528,39 @@ async def test_durable_semantics_keep_contextual_scope_separate_from_access_scop
     assert custom["scope"] == "user"
     assert custom["runtime_context"]["request_id"] == "request-1"
     assert projector.calls[0]["signal"].metadata["scope"] == "genre:reggae"
+
+
+@pytest.mark.asyncio
+async def test_missing_durable_event_receipt_does_not_mask_projection_failure():
+    signal = MemorySignal(
+        text="I prefer concise explanations",
+        signal_type="preference",
+        confidence=0.95,
+    )
+
+    class _EventlessVault(_Vault):
+        async def persist(self, entry, *, context):
+            self.calls.append((entry, context))
+            return VaultWriteReceipt(
+                memory_id=entry.id,
+                persisted=True,
+                version=entry.version,
+                metadata={},
+            )
+
+    vault = _EventlessVault()
+    projector = _Projector()
+    result = await _service(vault, projector, signal).process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        correlation_id="test-eventless-receipt",
+        policy_context={"memory_write_authorized": True},
+    )
+
+    assert result["persisted"] == 1
+    assert result["status"] == "degraded"
+    assert result["projection_failures"] == 1
+    assert "projection:missing_event_id" in result["errors"]
+    assert result["receipts"][0]["projection_results"] == {"projection_pipeline": False}
+    assert projector.calls == []

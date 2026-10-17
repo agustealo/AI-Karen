@@ -261,6 +261,22 @@ class MemoryFormationService:
                         1 for ok in projection_results.values() if not ok
                     )
 
+            if not event_id:
+                # The ledger commit succeeded, but there is no durable event
+                # reference for downstream projection or replay.
+                projection_failures += 1
+                errors.append("projection:missing_event_id")
+                projection_results = {"projection_pipeline": False}
+                logger.warning(
+                    "memory.formation.projection_missing_event_id",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "memory_id": receipt.memory_id,
+                        "correlation_id": correlation_id,
+                    },
+                )
+
             receipts.append(
                 {
                     "memory_id": receipt.memory_id,
