@@ -179,7 +179,7 @@ def test_schema_parity_covers_runtime_and_channel_catalog():
     runtime = PluginKernel(root / "extensions" / "plugins")._project_runtime_manifest(
         ExtensionManifest.from_dict(catalog)
     )
-    jsonschema.validate(runtime.model_dump(mode="json"), schema)
+    jsonschema.validate(runtime.model_dump(mode="json", exclude_none=True), schema)
     invalid = _channel_catalog()
     invalid["capabilities"]["communication_channel"]["authentication"] = "none"
     with pytest.raises(jsonschema.ValidationError):
