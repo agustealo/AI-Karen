@@ -113,10 +113,22 @@ class ChannelIngressService:
             raise ChannelAdmissionDenied("Channel contract metadata is unavailable")
         if event.message_kind not in declared.get("inbound", []):
             raise ChannelAdmissionDenied("Unsupported inbound channel message kind")
-        return await self._repository.admit_verified_inbound(
+        admission = await self._repository.admit_verified_inbound(
             connection=connection,
             event=event,
         )
+        logger.info(
+            "channel.ingress.admitted",
+            extra={
+                "tenant_id": admission.tenant_id,
+                "user_id": admission.user_id,
+                "connection_id": connection_id,
+                "correlation_id": admission.correlation_id,
+                "inbox_id": admission.inbox_id,
+                "new_event": admission.inserted,
+            },
+        )
+        return admission
 
 
 __all__ = ["ChannelIngressService"]
