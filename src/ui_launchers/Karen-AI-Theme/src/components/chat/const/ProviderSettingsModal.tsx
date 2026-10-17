@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Label } from '@/components/ui/label';
-import { Bot, ChevronDown, Info, Loader2 } from 'lucide-react';
+import { Bot, ChevronDown, Info, Loader2, RefreshCw } from 'lucide-react';
 import { getRuntimeDisplayName } from '@/lib/chat-response';
 import { getRuntimeProviderBucket } from '@/lib/model-runtime-inventory';
 import type { ProviderDetails } from '../types';
@@ -27,6 +27,7 @@ interface ProviderSettingsModalProps {
   selectedModel: string;
   applyModelSelection: (providerId: string, modelId: string) => Promise<void>;
   isUpdatingModelSelection: boolean;
+  onRefreshModels?: () => Promise<void>;
 }
 
 interface ProviderGroupConfig {
@@ -66,8 +67,8 @@ const getFirstAvailableModelId = (
    * when a provider has models but no saved selected_model yet.
    */
   return (
-    cleanString(provider.selected_model) ||
-    cleanString(provider.default_model) ||
+    provider.models?.find((model) => model.id === cleanString(provider.selected_model))?.id ||
+    provider.models?.find((model) => model.id === cleanString(provider.default_model))?.id ||
     cleanString(provider.models?.[0]?.id)
   );
 };
@@ -132,8 +133,20 @@ export const ProviderSettingsModal = ({
   selectedModel,
   applyModelSelection,
   isUpdatingModelSelection,
+  onRefreshModels,
 }: ProviderSettingsModalProps) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
+
+  const refreshModels = async () => {
+    if (!onRefreshModels || isRefreshingModels) return;
+    setIsRefreshingModels(true);
+    try {
+      await onRefreshModels();
+    } finally {
+      setIsRefreshingModels(false);
+    }
+  };
   const [localProvider, setLocalProvider] = useState(selectedProvider);
   const [localModel, setLocalModel] = useState(selectedModel);
 
@@ -216,7 +229,8 @@ export const ProviderSettingsModal = ({
   };
 
   const handleApply = async () => {
-    if (!localProvider || !localModel || isUpdatingModelSelection) {
+    if (!localProvider || !localModel || isUpdatingModelSelection ||
+      !providerModels.some((model) => model.id === localModel)) {
       return;
     }
 
@@ -230,7 +244,10 @@ export const ProviderSettingsModal = ({
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+    <Dialog open={isOpen} onOpenChange={(nextOpen) => {
+      setIsOpen(nextOpen);
+      if (nextOpen) void refreshModels();
+    }}>
       <DialogTrigger asChild>
         <Button
           type="button"
@@ -332,8 +349,21 @@ export const ProviderSettingsModal = ({
 
           <div className="flex min-w-0 flex-1 flex-col">
             <DialogHeader className="p-6 pb-2">
-              <DialogTitle className="flex items-center gap-2">
-                {activeProviderLabel} Models
+              <DialogTitle className="flex items-center justify-between gap-2">
+                <span>{activeProviderLabel} Models</span>
+                {onRefreshModels && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void refreshModels()}
+                    disabled={isRefreshingModels || isUpdatingModelSelection}
+                    aria-label="Refresh available provider models"
+                  >
+                    {isRefreshingModels ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-2 h-3 w-3" />}
+                    Refresh
+                  </Button>
+                )}
               </DialogTitle>
               <DialogDescription className="text-xs">
                 Choose from the providers and models already configured in settings.
@@ -410,7 +440,8 @@ export const ProviderSettingsModal = ({
                   isUpdatingModelSelection ||
                   !localProvider ||
                   !localModel ||
-                  providerModels.length === 0
+                  providerModels.length === 0 ||
+                  !providerModels.some((model) => model.id === localModel)
                 }
                 className="h-9 min-w-[120px]"
               >
