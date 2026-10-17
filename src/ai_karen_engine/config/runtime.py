@@ -80,6 +80,8 @@ class LLMSettings:
     )
     temperature: float = 0.7
     max_tokens: int = 2048
+    # Default completion budget for ordinary direct chat, not prompt context.
+    chat_default_max_output_tokens: int = 512
     timeout: int = 30
     max_retries: int = 3
 
@@ -300,6 +302,12 @@ class RuntimeSettings:
         if env_max_tokens:
             self.llm.max_tokens = as_int(env_max_tokens, self.llm.max_tokens)
 
+        env_chat_output_tokens = env("KARI_CHAT_DEFAULT_MAX_OUTPUT_TOKENS")
+        if env_chat_output_tokens:
+            self.llm.chat_default_max_output_tokens = as_int(
+                env_chat_output_tokens, self.llm.chat_default_max_output_tokens
+            )
+
         env_timeout = env("KARI_LLM_TIMEOUT")
         if env_timeout:
             self.llm.timeout = as_int(env_timeout, self.llm.timeout)
@@ -460,6 +468,9 @@ class RuntimeSettings:
 
         if self.llm.max_tokens <= 0:
             issues.append("LLM max_tokens must be positive")
+
+        if self.llm.chat_default_max_output_tokens <= 0:
+            issues.append("LLM chat_default_max_output_tokens must be positive")
 
         if self.llm.timeout <= 0:
             issues.append("LLM timeout must be positive")
