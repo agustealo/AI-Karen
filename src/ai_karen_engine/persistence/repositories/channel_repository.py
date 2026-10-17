@@ -163,11 +163,12 @@ class SqlChannelRepository:
             inserted = (await session.execute(
                 text("""
                     INSERT INTO public.channel_inbox (
-                        tenant_id, connection_id, external_event_id, external_sender_id,
-                        external_conversation_id, message_kind, message_text, event_digest,
+                        tenant_id, connection_id, connection_revision, external_event_id,
+                        external_sender_id, external_conversation_id, message_kind,
+                        message_text, event_digest,
                         binding_id, user_id
                     )
-                    SELECT c.tenant_id, c.connection_id, :event, :sender,
+                    SELECT c.tenant_id, c.connection_id, c.revision, :event, :sender,
                            :conversation, :message_kind, :message_text, :digest,
                            b.binding_id, b.user_id
                     FROM public.channel_connections c
@@ -208,6 +209,7 @@ class SqlChannelRepository:
                       AND b.external_sender_id = :sender
                       AND b.revoked_at IS NULL AND c.enabled = true
                       AND c.revision = :revision
+                      AND i.connection_revision = c.revision
                 """),
                 args,
             )).mappings().one_or_none()
@@ -265,6 +267,7 @@ class SqlChannelRepository:
                           WHERE c.tenant_id = i.tenant_id
                             AND c.connection_id = i.connection_id
                             AND c.enabled = true
+                            AND c.revision = i.connection_revision
                             AND b.binding_id = i.binding_id
                             AND b.user_id = i.user_id
                             AND b.revoked_at IS NULL
@@ -342,6 +345,19 @@ class SqlChannelRepository:
                           AND status = 'processing'
                           AND claim_token = CAST(:token AS uuid)
                           AND claim_expires_at > clock_timestamp()
+                          AND EXISTS (
+                              SELECT 1 FROM public.channel_connections c
+                              JOIN public.channel_identity_bindings b
+                                ON b.tenant_id = c.tenant_id
+                               AND b.connection_id = c.connection_id
+                              WHERE c.tenant_id = channel_inbox.tenant_id
+                                AND c.connection_id = channel_inbox.connection_id
+                                AND c.revision = channel_inbox.connection_revision
+                                AND c.enabled = true
+                                AND b.binding_id = channel_inbox.binding_id
+                                AND b.user_id = channel_inbox.user_id
+                                AND b.revoked_at IS NULL
+                          )
                         RETURNING tenant_id, connection_id, inbox_id
                     )
                     INSERT INTO public.channel_outbox (
