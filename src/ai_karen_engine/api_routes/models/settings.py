@@ -110,6 +110,7 @@ class ProviderModelPayload(BaseModel):
     capabilities: List[str]
     size_gb: Optional[float] = None
     is_installed: bool = False
+    source: Literal["configured_catalog", "local_runtime", "provider_live", "ollama_native"] = "configured_catalog"
 
 
 class ProviderPayload(BaseModel):
@@ -178,6 +179,9 @@ class ProviderModelsResponse(BaseModel):
     provider: str
     base_url: Optional[str] = None
     models: List[ProviderModelPayload]
+    discovery_status: Literal["ready", "catalog_only", "empty"] = "empty"
+    inventory_source: Literal["configured_catalog", "local_runtime", "provider_live", "ollama_native", "mixed", "none"] = "none"
+    live_discovery_failed: bool = False
     discovered_at: str
     discovery_status: Literal["ready", "catalog_only"] = "ready"
 
@@ -598,7 +602,8 @@ async def get_provider_models(
                 detail="Model discovery requires a configured provider endpoint",
             )
 
-    # Never turn a configured model into a claim of installation.
+    # A configured catalog entry is not evidence of provider discovery.
+    live_discovery_failed = False
     by_id: Dict[str, ProviderModelPayload] = {
         model.id: ProviderModelPayload(
             id=model.id,
@@ -634,6 +639,7 @@ async def get_provider_models(
                 family="ollama",
                 capabilities=[],
                 is_installed=True,
+                source="ollama_native",
             )
             for name in names
         }
@@ -650,8 +656,10 @@ async def get_provider_models(
                     size_gb=float(item.size_bytes / (1024 ** 3))
                     if item.size_bytes else None,
                     is_installed=bool(item.weights_present),
+                    source="local_runtime",
                 )
         except Exception:
+            live_discovery_failed = True
             logger.warning("Local model discovery unavailable for %s", normalized_id, exc_info=True)
 
         if target_url and provider.provider_type in {ProviderType.REMOTE, ProviderType.HYBRID, ProviderType.CUSTOM}:
@@ -662,23 +670,41 @@ async def get_provider_models(
                     base_url=target_url, api_key=api_key, timeout=3, max_retries=0
                 )
                 for name in await asyncio.to_thread(client.get_models):
-                    if name not in by_id:
-                        by_id[name] = ProviderModelPayload(
-                            id=name,
-                            name=name,
-                            family=normalized_id,
-                            capabilities=[],
-                            is_installed=False,
-                        )
+                    # A live listing supersedes a matching configured catalog
+                    # model. Otherwise the UI would report a live ID as static.
+                    by_id[name] = ProviderModelPayload(
+                        id=name,
+                        name=name,
+                        family=normalized_id,
+                        capabilities=[],
+                        is_installed=False,
+                        source="provider_live",
+                    )
             except Exception:
+                live_discovery_failed = True
                 logger.warning("Remote model discovery unavailable for %s", normalized_id, exc_info=True)
+
+    sources = {model.source for model in by_id.values()}
+    if normalized_id == "ollama":
+        inventory_source = "ollama_native"
+        discovery_status = "ready" if by_id else "empty"
+    else:
+        live_sources = sources - {"configured_catalog"}
+        discovery_status = (
+            "ready" if live_sources else "catalog_only" if by_id else "empty"
+        )
+        inventory_source = (
+            "mixed" if len(sources) > 1
+            else next(iter(sources)) if sources else "none"
+        )
 
     return {
         "provider": normalized_id,
         "base_url": target_url,
         "models": list(by_id.values()),
-        "discovered_at": datetime.now(timezone.utc).isoformat(),
-        "discovery_status": "ready",
+        "discovery_status": discovery_status,
+        "inventory_source": inventory_source,
+        "live_discovery_failed": live_discovery_failed,
     }
 
 
