@@ -272,3 +272,40 @@ describe('custom-provider model provenance', () => {
     });
   });
 });
+
+
+describe('runtime provider model availability and recovery', () => {
+  const catalog = (available: boolean, healthy: boolean) => normalizeRuntimeProviderCatalogResponse({
+    default_provider: 'ollama',
+    default_model: 'qwen3:4b',
+    providers: [{
+      id: 'ollama', label: 'Ollama', category: 'local',
+      enabled: true, configured: true, healthy,
+      selected_model: 'qwen3:4b',
+      models: [{ id: 'qwen3:4b', label: 'Qwen', available, source: 'ollama_native' }],
+    }],
+  });
+
+  it('retains diagnostics but excludes an unavailable model after disconnect', () => {
+    const inventory = catalog(false, false);
+    expect(inventory.providers[0].healthy).toBe(false);
+    expect(inventory.selectableProviders).toEqual([]);
+    expect(resolveChatProviderModelSelection(inventory, 'ollama', 'qwen3:4b')).toEqual({
+      provider: '', model: '', preferenceUnavailable: true,
+    });
+  });
+
+  it('restores the saved model after recovery', () => {
+    const inventory = catalog(true, true);
+    expect(inventory.selectableProviders.map((provider) => provider.id)).toEqual(['ollama']);
+    expect(resolveChatProviderModelSelection(inventory, 'ollama', 'qwen3:4b')).toEqual({
+      provider: 'ollama', model: 'qwen3:4b', preferenceUnavailable: false,
+    });
+  });
+
+  it('does not mistake degraded but available models for disconnected ones', () => {
+    const inventory = catalog(true, false);
+    expect(inventory.providers[0].healthy).toBe(false);
+    expect(inventory.selectableProviders.map((provider) => provider.id)).toEqual(['ollama']);
+  });
+});
