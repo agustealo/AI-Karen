@@ -903,7 +903,7 @@ export default function ModelSettings() {
                         
                         <div className="space-y-3 md:self-start">
                           <div className="flex items-center justify-between">
-                            <Label htmlFor="model-picker" className="font-semibold">Model Identification</Label>
+                            <Label htmlFor="model-picker" className="font-semibold">{canEnterModelManually ? "Model Identification" : "Available Models"}</Label>
                             {selectedProviderDetails.supports_model_discovery && (
                               <Button
                                 variant="outline"
