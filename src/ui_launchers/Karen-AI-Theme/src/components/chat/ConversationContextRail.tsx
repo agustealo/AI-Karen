@@ -1361,9 +1361,10 @@ function RailContent({
                   <div key={target.target} className="flex justify-between gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
                     <span className="truncate">{target.target}</span>
                     <span className="shrink-0 text-muted-foreground">
-                      {target.failureCount > 0
-                        ? `failed (${target.failureCount})`
-                        : `completed (${target.successCount})`}
+                      {[
+                        target.successCount > 0 ? `completed (${target.successCount})` : null,
+                        target.failureCount > 0 ? `failed (${target.failureCount})` : null,
+                      ].filter(Boolean).join(' · ') || 'not attempted'}
                     </span>
                   </div>
                 ))}
