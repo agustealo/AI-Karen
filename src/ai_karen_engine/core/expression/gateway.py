@@ -162,7 +162,7 @@ class ExpressionGateway:
 
         for level, engine_id in enumerate(sequence):
             cfg = self.settings.engines.get(engine_id)
-            logger.debug("Gateway trying %s, cfg: %s", engine_id, cfg)
+            logger.debug("Gateway evaluating configured engine %s", engine_id)
 
             if not cfg or not cfg.enabled:
                 skipped_engines.append(
