@@ -288,7 +288,7 @@ class ChatRuntime:
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
                 if decision.intent == "search.general" and direct_result.success:
-                    synthesized = await self._synthesize_search_evidence(request, decision, meter, direct_result)
+                    synthesized = await self._synthesize_search_evidence(request, decision, plan, meter, direct_result)
                     if synthesized is not None:
                         text, answer_meta = synthesized
                         provider_meta.update(answer_meta)
@@ -2216,7 +2216,7 @@ class ChatRuntime:
             },
         )
 
-    async def _synthesize_search_evidence(self, request, decision, meter, retrieved):
+    async def _synthesize_search_evidence(self, request, decision, plan, meter, retrieved):
         """Use the existing model gateway only for bounded fetched-page evidence."""
         from ai_karen_engine.services.response.response_contracts import ResponseContract
         from ai_karen_engine.services.response.response_prompt_builder import ResponsePromptBuilder
@@ -2341,7 +2341,7 @@ class ChatRuntime:
             forbidden_capabilities=list(decision.forbidden_capabilities),
             preferred_provider=request.preferred_provider,
             preferred_model=request.preferred_model,
-            max_tokens=request.max_tokens or decision.token_budget,
+            max_tokens=self._resolve_chat_generation_max_tokens(request, plan),
             temperature=request.temperature,
             timeout_ms=decision.time_budget_ms,
             correlation_id=ctx.correlation_id,
