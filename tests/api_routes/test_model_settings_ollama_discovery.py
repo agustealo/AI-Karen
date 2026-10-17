@@ -189,3 +189,60 @@ async def test_unavailable_runtime_is_rejected_before_persistence(
         )
     assert exc.value.status_code == 409
     assert changed == []
+
+
+
+@pytest.mark.parametrize(
+    "provided,expected",
+    [
+        ("ollama", "ollama"),
+        ("amazon-nova", "amazon-nova"),
+        ("gmi-cloud", "gmi-cloud"),
+        ("builtin_transformers", "builtin_transformers"),
+        ("My Custom", "my_custom"),
+    ],
+)
+def test_provider_ids_preserve_registered_names(provided: str, expected: str) -> None:
+    assert settings_routes._normalize_provider_id(provided) == expected
+
+
+@pytest.mark.asyncio
+async def test_hyphenated_provider_selection_persists_under_canonical_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored: dict[str, object] = {}
+    saved: list[bool] = []
+    monkeypatch.setattr(
+        settings_routes,
+        "get_settings_manager",
+        lambda: SimpleNamespace(
+            set_setting=lambda key, value, save=False: stored.__setitem__(key, value),
+            _save_settings=lambda: saved.append(True),
+        ),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_registry",
+        lambda: SimpleNamespace(invalidate_provider_cache=lambda provider: None),
+    )
+
+    async def settings_response() -> dict[str, bool]:
+        return {"saved": True}
+
+    monkeypatch.setattr(settings_routes, "build_model_settings_payload", settings_response)
+    result = await settings_routes.update_model_settings(
+        settings_routes.ModelSettingsUpdateRequest(
+            provider="gmi-cloud", model="meta-llama/Llama-3.1-70B-Instruct",
+        ),
+        current_user={"roles": ["admin"]},
+    )
+
+    assert result == {"saved": True}
+    assert stored["provider"] == "gmi-cloud"
+    assert stored["model_providers.gmi-cloud.last_model"] == "meta-llama/Llama-3.1-70B-Instruct"
+    assert saved == [True]
