@@ -237,6 +237,24 @@ export function reconcileDiscoveredModelSelection<T extends RuntimeProviderModel
  * Managed providers can only save a model returned by the active discovery
  * inventory. Custom providers may explicitly enter a model ID.
  */
+/**
+ * Distinguish a configured provider catalog from live model enumeration.
+ * Catalog IDs are usable configuration choices, but not proof that a remote
+ * endpoint currently exposes those models.
+ */
+export function getProviderModelDiscoveryNotice(result: {
+  discovery_status?: 'ready' | 'catalog_only' | 'empty';
+  inventory_source?: 'configured_catalog' | 'local_runtime' | 'provider_live' | 'ollama_native' | 'mixed' | 'none';
+}): string {
+  if (result.discovery_status === 'catalog_only') {
+    return 'Showing configured catalog models. Live provider availability is not verified.';
+  }
+  if (result.inventory_source === 'mixed') {
+    return 'Some models come from the configured catalog and are not verified by live discovery.';
+  }
+  return '';
+}
+
 export function canSaveProviderModelSelection(
   selectedModel: string,
   models: RuntimeProviderModel[],
