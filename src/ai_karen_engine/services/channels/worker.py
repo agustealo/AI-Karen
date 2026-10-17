@@ -30,14 +30,18 @@ class ChannelInboxWorker:
         execution: ChannelExecutionService,
         max_inflight: int = 4,
         lease_seconds: int = 90,
+        max_scheduled: int = 64,
     ) -> None:
         if not 1 <= max_inflight <= 64:
             raise ValueError("Channel worker concurrency must be 1..64")
         if not 3 <= lease_seconds <= 3600:
             raise ValueError("Channel worker lease must be 3..3600 seconds")
+        if not max_inflight <= max_scheduled <= 4096:
+            raise ValueError("Channel worker scheduled budget must be bounded")
         self._repository = repository
         self._execution = execution
         self._lease_seconds = lease_seconds
+        self._max_scheduled = max_scheduled
         self._limit = asyncio.Semaphore(max_inflight)
         self._tasks: set[asyncio.Task[None]] = set()
         self._scheduled: set[tuple[str, str]] = set()
@@ -62,6 +66,13 @@ class ChannelInboxWorker:
             raise TypeError("Channel worker requires a canonical admission receipt")
         key = (admission.tenant_id, admission.inbox_id)
         if key in self._scheduled:
+            return False
+        if len(self._scheduled) >= self._max_scheduled:
+            logger.warning(
+                "channel.worker.capacity_exhausted",
+                extra={"tenant_id": admission.tenant_id,
+                       "inbox_id": admission.inbox_id},
+            )
             return False
         self._scheduled.add(key)
         task = asyncio.create_task(self._run(admission, key))
