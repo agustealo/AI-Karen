@@ -8,6 +8,8 @@ by their canonical systems exactly as they are for every other provider.
 
 from __future__ import annotations
 
+import asyncio
+
 import logging
 import os
 import time
@@ -276,3 +278,19 @@ class OllamaProvider(LLMProviderBase):
             }
         except Exception as exc:
             return {"status": "unhealthy", "provider": "ollama", "error": str(exc)}
+
+
+async def discover_installed_ollama_models(base_url: str) -> List[str]:
+    """Read real installed model IDs through the sole Ollama adapter.
+
+    Model routing and endpoint selection remain owned by the canonical
+    runtime; this adapter handles network I/O and never fabricates inventory.
+    """
+    if not base_url or not base_url.strip():
+        raise ValueError("Ollama inventory endpoint is not configured")
+
+    def _read() -> List[str]:
+        client = OllamaProvider(base_url=base_url, timeout=3, max_retries=0)
+        return client.get_models()
+
+    return await asyncio.to_thread(_read)
