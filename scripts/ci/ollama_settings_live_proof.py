@@ -87,8 +87,18 @@ def assert_saved_selection(payload: dict[str, Any], model: str) -> None:
 
 def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict[str, str]:
     metadata = payload.get("metadata") or {}
-    if not isinstance(metadata, dict) or not str(payload.get("content") or "").strip():
-        raise LiveProofError("Default ChatRuntime did not produce an assistant response")
+    if not isinstance(metadata, dict):
+        raise LiveProofError("Default ChatRuntime did not return runtime provenance")
+    if not str(payload.get("content") or "").strip():
+        # Emit diagnostics only, never assistant content, prompts, credentials
+        # or private conversation data into CI logs.
+        fields = ("actual_provider", "actual_model", "response_source",
+                  "failure_category", "degradation_reason", "fallback_level")
+        diagnostic = {name: metadata.get(name) for name in fields}
+        raise LiveProofError(
+            "Default ChatRuntime did not produce an assistant response; "
+            + json.dumps(diagnostic, sort_keys=True, default=str)
+        )
     provider = str(metadata.get("actual_provider") or "").strip()
     actual_model = str(metadata.get("actual_model") or payload.get("model") or "").strip()
     if provider not in {"ollama", "ollama-local"} or actual_model != model:
