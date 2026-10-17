@@ -122,6 +122,46 @@ class ExtensionPromptFiles(BaseModel):
 
 
 # Capability Models
+class CommunicationChannelDeclaration(BaseModel):
+    """Versioned transport declaration, not permission to execute or impersonate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(default="1.0.0", pattern=SEMVER_PATTERN)
+    transport: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    ingress: List[str] = Field(min_length=1)
+    inbound: List[str] = Field(min_length=1)
+    outbound: List[str] = Field(min_length=1)
+    authentication: str = Field(min_length=1)
+    supports_edits: bool = False
+    supports_streaming: bool = False
+    supports_media: bool = False
+    supports_delivery_receipts: bool = False
+
+    @field_validator("ingress")
+    @classmethod
+    def validate_ingress(cls, modes: List[str]) -> List[str]:
+        supported = {"webhook", "polling", "session"}
+        if len(modes) != len(set(modes)) or not set(modes) <= supported:
+            raise ValueError("Invalid communication channel ingress capability")
+        return modes
+
+    @field_validator("inbound", "outbound")
+    @classmethod
+    def validate_message_kinds(cls, kinds: List[str]) -> List[str]:
+        supported = {"text", "media", "command", "event"}
+        if len(kinds) != len(set(kinds)) or not set(kinds) <= supported:
+            raise ValueError("Invalid communication channel message capability")
+        return kinds
+
+    @field_validator("authentication")
+    @classmethod
+    def validate_authentication(cls, mode: str) -> str:
+        if mode not in {"hmac", "token", "oauth2", "session"}:
+            raise ValueError("Unsupported communication channel authentication")
+        return mode
+
+
 class ExtensionCapabilities(BaseModel):
     """Extension capability declarations."""
 
@@ -129,6 +169,7 @@ class ExtensionCapabilities(BaseModel):
     provides_api: bool = False
     provides_background_tasks: bool = False
     provides_webhooks: bool = False
+    communication_channel: Optional[CommunicationChannelDeclaration] = None
     prompt_first: bool = True
     allowed_prompt_overrides: List[str] = Field(default_factory=list)
 
@@ -532,6 +573,7 @@ __all__ = [
     "PromptTemplateConfig",
     "ExtensionPromptFiles",
     "ExtensionCapabilities",
+    "CommunicationChannelDeclaration",
     "ExtensionDependencies",
     "ExtensionPermissions",
     "ExtensionResources",
