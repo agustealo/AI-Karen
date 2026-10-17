@@ -161,7 +161,7 @@ describe('empty runtime inventory is not a selectable Chat provider', () => {
 
   it('excludes the unverified bootstrap provider without losing its health state', () => {
     const inventory = normalizeRuntimeProviderCatalogResponse({
-      catalog_version: 'bootstrap', default_provider: 'builtin_transformers',
+      default_provider: 'builtin_transformers',
       default_model: 'auto',
       providers: [{
         id: 'builtin_transformers', label: 'Transformers', category: 'builtin',
