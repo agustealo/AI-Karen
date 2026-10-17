@@ -214,3 +214,23 @@ describe('provider availability is enforced consistently', () => {
     expect(resolveChatProviderModelSelection(inventory, 'remote-managed', 'offline-model').model).toBe('');
   });
 });
+
+
+describe('custom-provider unavailable model protection', () => {
+  it('does not recreate a custom model explicitly marked unavailable', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'custom', default_model: 'offline-custom',
+      providers: [{
+        id: 'custom', label: 'Custom', category: 'custom',
+        enabled: true, configured: true, healthy: false,
+        selected_model: 'offline-custom',
+        models: [{ id: 'offline-custom', label: 'Unavailable', available: false }],
+      }],
+    });
+    expect(inventory.providers[0].models).toEqual([]);
+    expect(inventory.selectableProviders).toEqual([]);
+    expect(resolveChatProviderModelSelection(inventory, 'custom', 'offline-custom')).toEqual({
+      provider: '', model: '', preferenceUnavailable: true,
+    });
+  });
+});
