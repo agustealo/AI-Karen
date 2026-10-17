@@ -33,6 +33,10 @@ from ai_karen_engine.api_routes.chat.conversation import router as conversation_
 from ai_karen_engine.api_routes.chat.copilot import router as copilot_router
 from ai_karen_engine.api_routes.chat.runtime import router as chat_runtime_router
 from ai_karen_engine.api_routes.chat.websocket import router as websocket_router
+from ai_karen_engine.api_routes.channels.webhooks import (
+    is_native_channel_webhook_path,
+    router as native_channel_webhook_router,
+)
 from ai_karen_engine.api_routes.content.communications import router as communications_center_router
 from ai_karen_engine.api_routes.extensions.extensions import router as extensions_router
 from ai_karen_engine.api_routes.memory.memory import router as memory_router
@@ -112,6 +116,7 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(admin_training_router, "/api", ("admin-training",)),
     RouterSpec(training_data_router, tags=("training-data",)),
     RouterSpec(auth_router, "/api", ("authentication",)),
+    RouterSpec(native_channel_webhook_router, tags=("communication-channels",)),
     RouterSpec(events_router, "/api/events", ("events",)),
     RouterSpec(websocket_router, "/api/ws", ("websocket",)),
     RouterSpec(analytics_router, "/api/analytics", ("analytics",)),
@@ -216,6 +221,7 @@ def configure_authentication_middleware(app: FastAPI) -> None:
 
         if (
             auth_middleware.is_public_endpoint(path)
+            or is_native_channel_webhook_path(path, request.method)
             or path.startswith("/metrics")
             or path.startswith("/health")
             or path.startswith("/api/health")
