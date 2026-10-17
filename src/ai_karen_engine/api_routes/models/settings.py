@@ -15,7 +15,7 @@ import os
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -132,6 +132,7 @@ class ProviderPayload(BaseModel):
     api_key_header: Optional[str] = "Authorization"
     api_key_prefix: Optional[str] = "Bearer"
     custom_headers: Optional[Dict[str, str]] = None
+    runtime_source: Optional[Literal["host", "container"]] = None
     runtime_options: Optional[List[RuntimeOptionPayload]] = None
     is_configured: bool = False
     healthy: bool = True
@@ -156,6 +157,7 @@ class ModelSettingsResponse(BaseModel):
     default_provider: str = "builtin_transformers"
     default_model: str = "auto"
     fallback_hierarchy: List[str]
+    chat_response_mode: Literal["streaming_first", "auto", "non_streaming"] = "streaming_first"
 
 
 class ModelSettingsUpdateRequest(BaseModel):
@@ -167,6 +169,8 @@ class ModelSettingsUpdateRequest(BaseModel):
     api_key_header: Optional[str] = None
     api_key_prefix: Optional[str] = None
     custom_headers: Optional[Dict[str, str]] = None
+    runtime_source: Optional[Literal["host", "container"]] = None
+    chat_response_mode: Optional[Literal["streaming_first", "auto", "non_streaming"]] = None
 
 
 class ProviderModelsResponse(BaseModel):
@@ -174,6 +178,7 @@ class ProviderModelsResponse(BaseModel):
     base_url: Optional[str] = None
     models: List[ProviderModelPayload]
     discovered_at: str
+    discovery_status: Literal["ready", "catalog_only"] = "ready"
 
 
 class ProviderSettingsValidationRequest(BaseModel):
@@ -394,9 +399,27 @@ async def update_model_settings(
     settings = get_settings_manager()
     provider_manager = get_provider_config_manager()
 
+    # Validate the selected runtime against backend-owned endpoints before
+    # persisting any part of this settings update.
+    if request.runtime_source is not None:
+        if _normalize_provider_id(request.provider) != "ollama":
+            raise HTTPException(status_code=400, detail="Runtime source is only supported for Ollama")
+        options = await _get_ollama_runtime_options()
+        option = next((item for item in options if item.source == request.runtime_source), None)
+        if option is None or not option.available:
+            raise HTTPException(status_code=409, detail="Selected Ollama runtime is unavailable")
+        if request.base_url and _discovery_url_key(request.base_url, ollama=True) != _discovery_url_key(option.base_url, ollama=True):
+            raise HTTPException(status_code=400, detail="Runtime source and endpoint do not match")
+
     if request.provider:
         normalized_provider = _normalize_provider_id(request.provider)
         settings.set_setting("provider", normalized_provider, save=False)
+
+    if request.runtime_source is not None:
+        settings.set_setting("model_providers.ollama.runtime_source", request.runtime_source, save=False)
+
+    if request.chat_response_mode is not None:
+        settings.set_setting("chat_response_mode", request.chat_response_mode, save=False)
 
     if request.model:
         settings.set_setting("model", request.model, save=False)
@@ -688,7 +711,7 @@ async def build_model_settings_payload() -> Dict[str, Any]:
                 name=m.name,
                 family=m.family or "unknown",
                 capabilities=list(m.capabilities or []),
-                is_installed=True
+                is_installed=False
             ))
 
         # 2. Add models from discovery service if applicable
@@ -784,6 +807,7 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             api_key_prefix=str(override.get("api_key_prefix", provider.authentication.api_key_prefix if provider.authentication else "Bearer")),
             custom_headers=override.get("custom_headers"),
             runtime_options=runtime_options,
+            runtime_source=override.get("runtime_source") if provider.name == "ollama" else None,
             is_configured=is_configured,
             healthy=healthy,
             user_selectable=bool(provider.priority > 0),
@@ -816,7 +840,8 @@ async def build_model_settings_payload() -> Dict[str, Any]:
         "default_model": "auto",
         "fallback_hierarchy": list(settings.get_setting("llm_providers.fallback_hierarchy") or [
             "builtin_transformers", "fallback", "openai", "gemini"
-        ])
+        ]),
+        "chat_response_mode": settings.get_setting("chat_response_mode", "streaming_first"),
     }
 
 
