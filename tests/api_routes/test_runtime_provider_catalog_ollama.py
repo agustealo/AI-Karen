@@ -88,3 +88,37 @@ async def test_chat_catalog_fails_closed_when_ollama_discovery_is_unavailable(
     assert ollama.health.status == "degraded"
     assert catalog.default_model == "auto"
     assert catalog.default_provider == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_settings_failure_never_advertises_unverified_bootstrap_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unavailable() -> dict[str, object]:
+        raise ConnectionError("Settings storage unavailable")
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", unavailable)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    assert catalog.catalog_version == "bootstrap"
+    assert catalog.errors[0]["error_type"] == "settings_payload_failed"
+    assert len(catalog.providers) == 1
+    provider = catalog.providers[0]
+    assert provider.configured is False
+    assert provider.healthy is False
+    assert provider.health.status == "degraded"
+    assert provider.models == []
+    assert provider.selected_model is None
+    assert "unverified" in (provider.degradation_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_empty_provider_settings_do_not_advertise_available_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def empty() -> dict[str, object]:
+        return {"providers": []}
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", empty)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    assert catalog.catalog_version == "bootstrap"
+    assert not any(model.available for provider in catalog.providers for model in provider.models)
