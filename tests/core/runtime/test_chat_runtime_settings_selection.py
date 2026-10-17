@@ -167,7 +167,9 @@ def test_early_stream_gate_provenance_is_explicitly_non_execution() -> None:
 
     from ai_karen_engine.core.runtime import chat_runtime
 
-    tree = ast.parse(inspect.getsource(chat_runtime.ChatRuntime.execute_stream))
+    from textwrap import dedent
+
+    tree = ast.parse(dedent(inspect.getsource(chat_runtime.ChatRuntime.execute_stream)))
     gate_receipts = [
         node for node in ast.walk(tree)
         if isinstance(node, ast.Assign)
