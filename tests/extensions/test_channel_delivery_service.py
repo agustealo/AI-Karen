@@ -60,7 +60,8 @@ def create_components(*, state=ChannelDeliveryState.SENT, provider_id="provider-
         finalize_outbound_claim=AsyncMock(return_value=True),
     )
     registration = SimpleNamespace(
-        state=ExtensionLifecycleState.ENABLED,
+        state=ExtensionLifecycleState.DISABLED,
+        manual_disabled=False,
         manifest=SimpleNamespace(
             capabilities=[SimpleNamespace(id="communication_channel")],
             metadata={"communication_channel": {
@@ -70,7 +71,22 @@ def create_components(*, state=ChannelDeliveryState.SENT, provider_id="provider-
         ),
     )
     kernel = SimpleNamespace(
-        runtime_registry=SimpleNamespace(get=lambda _: registration)
+        is_canonical_channel_adapter=lambda plugin_id, given: given is adapter,
+        get_channel_activation_manifest=lambda _: (
+            SimpleNamespace(capabilities=SimpleNamespace(
+                communication_channel=SimpleNamespace(
+                    inbound=["text"],
+                    outbound=["text"],
+                    model_dump=lambda **kw: {
+                        "outbound": ["text"],
+                        "supports_delivery_receipts": supports_receipts,
+                    },
+                ),
+            ))
+            if registration.state is ExtensionLifecycleState.DISABLED
+            and not registration.manual_disabled
+            else None
+        ),
     )
     adapter = SimpleNamespace(send=AsyncMock(
         return_value=ChannelDeliveryReceipt(
@@ -155,8 +171,8 @@ async def test_verified_delivery_receipt_is_passed_through(immediate_heartbeat):
 @pytest.mark.asyncio
 async def test_disabled_plugin_is_denied_before_claim_or_transport():
     service, repo, adapter, registration = create_components()
-    registration.state = ExtensionLifecycleState.DISABLED
-    with pytest.raises(ChannelDeliveryDenied, match="not enabled"):
+    registration.manual_disabled = True
+    with pytest.raises(ChannelDeliveryDenied, match="not available"):
         await service.dispatch(tenant_id=TENANT, delivery_id=DELIVERY, adapter=adapter, authorized_plan=authorization())
     repo.claim_outbound.assert_not_awaited()
     adapter.send.assert_not_awaited()
@@ -287,3 +303,17 @@ async def test_host_timeout_marks_uncertain_without_retries(immediate_heartbeat)
     ) is False
     assert adapter.send.await_count == 1
     assert repo.finalize_outbound_claim.await_args.kwargs["receipt"].state is ChannelDeliveryState.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_unregistered_adapter_cannot_send_under_an_enabled_connection():
+    service, repo, canonical, _ = create_components()
+    impostor = SimpleNamespace(send=AsyncMock())
+    with pytest.raises(ChannelDeliveryDenied, match="does not match"):
+        await service.dispatch(
+            tenant_id=TENANT, delivery_id=DELIVERY,
+            adapter=impostor, authorized_plan=authorization(),
+        )
+    impostor.send.assert_not_awaited()
+    canonical.send.assert_not_awaited()
+    repo.claim_outbound.assert_not_awaited()

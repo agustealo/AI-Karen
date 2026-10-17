@@ -14,7 +14,6 @@ from ai_karen_engine.extensions.channels.contracts import (
     ChannelAdapter,
     InboundChannelEvent,
 )
-from ai_karen_engine.extensions.contracts import ExtensionLifecycleState
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.persistence.repositories.channel_repository import (
     ChannelAdmissionDenied,
@@ -65,16 +64,18 @@ class ChannelIngressService:
         if connection is None or connection.tenant_id != tenant_id:
             raise ChannelAdmissionDenied("Channel connection is inactive or outside tenant")
 
-        registration = self._kernel.runtime_registry.get(connection.installation_id)
-        if registration is None or registration.state is not ExtensionLifecycleState.ENABLED:
-            raise ChannelAdmissionDenied("Transport extension is not enabled")
-        channel_capability = next(
-            (c for c in registration.manifest.capabilities
-             if c.id == "communication_channel"),
-            None,
+        catalog = self._kernel.get_channel_activation_manifest(
+            connection.installation_id
         )
+        if catalog is None:
+            raise ChannelAdmissionDenied("Installed channel is not available to the host")
+        channel_capability = catalog.capabilities.communication_channel
         if channel_capability is None:
             raise ChannelAdmissionDenied("Installed extension is not a channel")
+        if not self._kernel.is_canonical_channel_adapter(
+            connection.installation_id, adapter
+        ):
+            raise ChannelAdmissionDenied("Channel adapter does not match installed host code")
 
         # An approved adapter is injected by the host's plugin lifecycle; no
         # transport-specific route imports or alternate extension registry.
@@ -108,10 +109,7 @@ class ChannelIngressService:
         if event.connection_id != connection.connection_id:
             raise ChannelAdmissionDenied("Adapter event connection mismatch")
 
-        declared = registration.manifest.metadata.get("communication_channel")
-        if not isinstance(declared, dict):
-            raise ChannelAdmissionDenied("Channel contract metadata is unavailable")
-        if event.message_kind not in declared.get("inbound", []):
+        if event.message_kind not in channel_capability.inbound:
             raise ChannelAdmissionDenied("Unsupported inbound channel message kind")
         admission = await self._repository.admit_verified_inbound(
             connection=connection,

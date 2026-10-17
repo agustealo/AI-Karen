@@ -54,14 +54,30 @@ def components(*, enabled=True, verified=True, kind="text"):
         admit_verified_inbound=AsyncMock(return_value=admission),
     )
     registration = SimpleNamespace(
-        state=ExtensionLifecycleState.ENABLED,
+        state=ExtensionLifecycleState.DISABLED,
+        manual_disabled=False,
         manifest=SimpleNamespace(
             capabilities=[SimpleNamespace(id="communication_channel")],
             metadata={"communication_channel": {"inbound": ["text"]}},
         ),
     )
     kernel = SimpleNamespace(
-        runtime_registry=SimpleNamespace(get=lambda _: registration),
+        is_canonical_channel_adapter=lambda plugin_id, given: given is adapter,
+        get_channel_activation_manifest=lambda _: (
+            SimpleNamespace(capabilities=SimpleNamespace(
+                communication_channel=SimpleNamespace(
+                    inbound=["text"],
+                    outbound=["text"],
+                    model_dump=lambda **kw: {
+                        "outbound": ["text"],
+                        "supports_delivery_receipts": False,
+                    },
+                ),
+            ))
+            if registration.state is ExtensionLifecycleState.DISABLED
+            and not registration.manual_disabled
+            else None
+        ),
     )
     service = ChannelIngressService(
         kernel=kernel, repository=repository, max_native_body_bytes=4096
@@ -99,8 +115,8 @@ async def test_invalid_signature_never_normalizes_or_persists():
 @pytest.mark.asyncio
 async def test_disabled_plugin_never_calls_provider_adapter():
     service, adapter, repo, registration = components()
-    registration.state = ExtensionLifecycleState.DISABLED
-    with pytest.raises(ChannelAdmissionDenied, match="not enabled"):
+    registration.manual_disabled = True
+    with pytest.raises(ChannelAdmissionDenied, match="not available"):
         await service.verify_and_admit(
             tenant_id=TENANT, connection_id="connection-a",
             adapter=adapter, headers={}, body=b"payload",
@@ -155,3 +171,20 @@ async def test_body_limit_checked_before_any_io():
         )
     repo.get_enabled_connection.assert_not_awaited()
     adapter.verify_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unregistered_adapter_cannot_bypass_host_native_signature_gate():
+    service, canonical, repo, _ = components()
+    impostor = SimpleNamespace(
+        verify_event=AsyncMock(return_value=True),
+        normalize_event=AsyncMock(return_value=canonical.normalize_event.return_value),
+    )
+    with pytest.raises(ChannelAdmissionDenied, match="does not match"):
+        await service.verify_and_admit(
+            tenant_id=TENANT, connection_id="connection-a",
+            adapter=impostor, headers={}, body=b"forged",
+        )
+    impostor.verify_event.assert_not_awaited()
+    canonical.verify_event.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()
