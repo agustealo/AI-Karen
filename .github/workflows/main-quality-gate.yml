@@ -167,6 +167,7 @@ jobs:
           pytest tests/core/model_runtime/test_ollama_execution_mapping.py -q
           pytest tests/api_routes/test_model_settings_ollama_discovery.py -q
           pytest tests/api_routes/test_ollama_settings_live_proof.py -q
+          pytest tests/api_routes/test_runtime_provider_catalog_ollama.py -q
           pytest tests/core/runtime/test_chat_runtime_settings_selection.py -q
 
       - name: Personalization authority proofs
