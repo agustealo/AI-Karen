@@ -5,5 +5,6 @@ The transport plugin does not own memory, model routing, or ChatRuntime.
 
 from .ingress import ChannelIngressService
 from .execution import ChannelExecutionService
+from .delivery import ChannelDeliveryService
 
 __all__ = ["ChannelIngressService"]

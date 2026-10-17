@@ -17,7 +17,9 @@ from sqlalchemy import text
 
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection,
+    ChannelDeliveryReceipt,
     ChannelDeliveryRequest,
+    ChannelDeliveryState,
     InboundChannelEvent,
     VerifiedIdentityBinding,
 )
@@ -50,6 +52,24 @@ class ClaimedChannelMessage:
     external_sender_id: str
     message_kind: str
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedChannelDelivery:
+    """Host-owned durable dispatch lease and installation-scoped account."""
+
+    connection: ChannelConnection
+    delivery: ChannelDeliveryRequest
+    user_id: str
+    claim_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelDeliveryPreflight:
+    """Read-only tenant-scoped principal and connection for policy admission."""
+
+    connection_id: str
+    user_id: str
 
 
 class ChannelAdmissionConflict(ValueError):
@@ -452,6 +472,235 @@ class SqlChannelRepository:
             inserted = result.scalar_one_or_none()
         return inserted is not None
 
+    async def get_delivery_preflight(
+        self, *, tenant_id: str, delivery_id: str,
+    ) -> ChannelDeliveryPreflight | None:
+        """Resolve host-owned tenant principal before consuming a one-shot claim."""
+        tenant_id = _tenant_uuid(tenant_id)
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    SELECT o.connection_id, i.user_id
+                    FROM public.channel_outbox o
+                    JOIN public.channel_inbox i
+                      ON i.tenant_id = o.tenant_id
+                     AND i.connection_id = o.connection_id
+                     AND i.inbox_id = o.inbox_id
+                    WHERE o.tenant_id = CAST(:tenant AS uuid)
+                      AND o.delivery_id = CAST(:delivery AS uuid)
+                      AND o.status = 'accepted'
+                      AND o.claim_token IS NULL
+                """),
+                {"tenant": tenant_id, "delivery": str(uuid.UUID(delivery_id))},
+            )).mappings().one_or_none()
+        return (
+            ChannelDeliveryPreflight(
+                connection_id=str(row["connection_id"]), user_id=str(row["user_id"])
+            )
+            if row is not None
+            else None
+        )
+
+    async def claim_outbound(
+        self, *, tenant_id: str, delivery_id: str, lease_seconds: int,
+    ) -> ClaimedChannelDelivery | None:
+        """Claim a NEVER-ATTEMPTED delivery; never replay ambiguous sends.
+
+        The reservation joins the original signed-event identity, the current
+        connection revision and a currently active host user in one DB query.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if not 3 <= lease_seconds <= 3600:
+            raise ValueError("Outbound lease must be between 3 and 3600 seconds")
+        token = str(uuid.uuid4())
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    WITH claimed AS (
+                        UPDATE public.channel_outbox o
+                        SET claim_token = CAST(:claim AS uuid),
+                            claim_expires_at = clock_timestamp() + make_interval(secs => :seconds),
+                            attempt_count = o.attempt_count + 1,
+                            updated_at = now()
+                        WHERE o.tenant_id = CAST(:tenant AS uuid)
+                          AND o.delivery_id = CAST(:delivery AS uuid)
+                          AND o.status = 'accepted'
+                          AND o.claim_token IS NULL
+                          AND o.claim_expires_at IS NULL
+                          AND EXISTS (
+                              SELECT 1 FROM public.channel_inbox i
+                              JOIN public.channel_connections c
+                                ON c.tenant_id = i.tenant_id
+                               AND c.connection_id = i.connection_id
+                               AND c.revision = i.connection_revision
+                              JOIN public.channel_identity_bindings b
+                                ON b.tenant_id = i.tenant_id
+                               AND b.connection_id = i.connection_id
+                               AND b.binding_id = i.binding_id
+                               AND b.user_id = i.user_id
+                              JOIN public.auth_users u
+                                ON u.tenant_id = i.tenant_id AND u.user_id = i.user_id
+                              WHERE i.tenant_id = o.tenant_id
+                                AND i.connection_id = o.connection_id
+                                AND i.inbox_id = o.inbox_id
+                                AND i.status = 'completed'
+                                AND c.enabled = true
+                                AND b.revoked_at IS NULL
+                                AND u.is_active = true
+                          )
+                        RETURNING *
+                    )
+                    SELECT o.delivery_id, o.tenant_id, o.connection_id,
+                           o.destination_id, o.idempotency_key, o.message_kind,
+                           o.message_text, i.user_id,
+                           c.installation_id, c.provider_account_id,
+                           c.credential_handle, c.revision, c.enabled
+                    FROM claimed o
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = o.tenant_id
+                     AND c.connection_id = o.connection_id
+                    JOIN public.channel_inbox i
+                      ON i.tenant_id = o.tenant_id
+                     AND i.connection_id = o.connection_id
+                     AND i.inbox_id = o.inbox_id
+                """),
+                {"tenant": tenant_id, "delivery": str(uuid.UUID(delivery_id)),
+                 "seconds": lease_seconds, "claim": token},
+            )).mappings().one_or_none()
+        if row is None:
+            return None
+        return ClaimedChannelDelivery(
+            connection=ChannelConnection(
+                connection_id=row["connection_id"],
+                installation_id=row["installation_id"],
+                tenant_id=str(row["tenant_id"]),
+                provider_account_id=row["provider_account_id"],
+                credential_handle=row["credential_handle"],
+                revision=int(row["revision"]),
+                enabled=bool(row["enabled"]),
+            ),
+            delivery=ChannelDeliveryRequest(
+                delivery_id=str(row["delivery_id"]),
+                connection_id=row["connection_id"],
+                destination_id=row["destination_id"],
+                idempotency_key=row["idempotency_key"],
+                message_kind=row["message_kind"],
+                text=row["message_text"],
+            ),
+            user_id=str(row["user_id"]),
+            claim_token=token,
+        )
+
+    async def renew_outbound_claim(
+        self, *, tenant_id: str, delivery_id: str,
+        claim_token: str, lease_seconds: int,
+    ) -> bool:
+        tenant_id = _tenant_uuid(tenant_id)
+        if not 3 <= lease_seconds <= 3600:
+            raise ValueError("Outbound lease must be between 3 and 3600 seconds")
+        async with async_transaction_scope(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    UPDATE public.channel_outbox
+                    SET claim_expires_at = clock_timestamp() + make_interval(secs => :seconds),
+                        updated_at = now()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND delivery_id = CAST(:delivery AS uuid)
+                      AND status = 'accepted'
+                      AND claim_token = CAST(:claim AS uuid)
+                      AND claim_expires_at > clock_timestamp()
+                    RETURNING delivery_id
+                """),
+                {"tenant": tenant_id, "delivery": str(uuid.UUID(delivery_id)),
+                 "claim": str(uuid.UUID(claim_token)), "seconds": lease_seconds},
+            )
+            return result.scalar_one_or_none() is not None
+
+    async def finalize_outbound_claim(
+        self, *, tenant_id: str, claim_token: str,
+        receipt: ChannelDeliveryReceipt,
+    ) -> bool:
+        """Persist actual provider evidence under fencing even if account was revoked.
+
+        Revocation stops NEW sends, but does not erase an already-observed
+        provider outcome. Advance delivery/read statuses only via explicit
+        provider evidence supplied to the host by the declared adapter.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        allowed = {ChannelDeliveryState.SENT, ChannelDeliveryState.DELIVERED,
+                   ChannelDeliveryState.READ, ChannelDeliveryState.FAILED,
+                   ChannelDeliveryState.UNKNOWN}
+        if receipt.state not in allowed:
+            raise ValueError("An internal accepted state is not a provider send receipt")
+        if receipt.error_code and (
+            len(receipt.error_code) > 80
+            or not all(c.isascii() and (c.isalnum() or c == "_")
+                       for c in receipt.error_code)
+        ):
+            raise ValueError("Delivery error must be a bounded symbolic code")
+        async with async_transaction_scope(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    UPDATE public.channel_outbox
+                    SET status = :state,
+                        provider_message_id = :provider_message,
+                        provider_receipt_id = :provider_receipt,
+                        last_error_code = :error_code,
+                        claim_token = NULL, claim_expires_at = NULL,
+                        updated_at = now()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND delivery_id = CAST(:delivery AS uuid)
+                      AND status = 'accepted'
+                      AND claim_token = CAST(:claim AS uuid)
+                      AND claim_expires_at > clock_timestamp()
+                    RETURNING delivery_id
+                """),
+                {"tenant": tenant_id,
+                 "delivery": str(uuid.UUID(receipt.delivery_id)),
+                 "claim": str(uuid.UUID(claim_token)),
+                 "state": receipt.state.value,
+                 "provider_message": receipt.provider_message_id,
+                 "provider_receipt": receipt.provider_receipt_id,
+                 "error_code": receipt.error_code},
+            )
+            return result.scalar_one_or_none() is not None
+
+    async def quarantine_expired_outbound_claims(
+        self, *, tenant_id: str, limit: int = 100,
+    ) -> list[str]:
+        """Ambiguous provider sends become UNKNOWN and are never blindly retried."""
+        tenant_id = _tenant_uuid(tenant_id)
+        if not 1 <= limit <= 1000:
+            raise ValueError("Invalid delivery reconciliation limit")
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    WITH expired AS (
+                        SELECT delivery_id
+                        FROM public.channel_outbox
+                        WHERE tenant_id = CAST(:tenant AS uuid)
+                          AND status = 'accepted'
+                          AND claim_token IS NOT NULL
+                          AND claim_expires_at <= clock_timestamp()
+                        ORDER BY claim_expires_at, delivery_id
+                        LIMIT :limit
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE public.channel_outbox o
+                    SET status = 'unknown', claim_token = NULL,
+                        claim_expires_at = NULL,
+                        last_error_code = 'delivery_receipt_unknown',
+                        updated_at = now()
+                    FROM expired
+                    WHERE o.tenant_id = CAST(:tenant AS uuid)
+                      AND o.delivery_id = expired.delivery_id
+                      AND o.status = 'accepted'
+                    RETURNING o.delivery_id
+                """),
+                {"tenant": tenant_id, "limit": limit},
+            )).scalars().all()
+        return [str(delivery_id) for delivery_id in rows]
+
     async def fail_inbound_claim(
         self, *, tenant_id: str, inbox_id: str,
         claim_token: str, error_code: str,
@@ -485,6 +734,8 @@ __all__ = [
     "ChannelAdmissionConflict",
     "ChannelAdmissionDenied",
     "ClaimedChannelMessage",
+    "ClaimedChannelDelivery",
+    "ChannelDeliveryPreflight",
     "InboundAdmission",
     "SqlChannelRepository",
 ]
