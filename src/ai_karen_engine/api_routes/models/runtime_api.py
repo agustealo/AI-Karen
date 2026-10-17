@@ -197,14 +197,14 @@ async def get_runtime_provider_catalog(
                         capabilities=list(model.get("capabilities") or []),
                     ))
 
-            if not models and provider.get("selected_model") and category == "custom":
+            if not models and provider.get("selected_model") and category == "custom" and provider.get("is_configured", False):
                 # Custom endpoints permit manual model IDs. Managed providers
                 # cannot claim that a saved default was discovered.
                 models = [
                     RuntimeModel(
                         id=str(provider["selected_model"]),
                         label=str(provider["selected_model"]),
-                        available=True,
+                        available=bool(provider.get("healthy", False)),
                         source="manual_configured",
                         default=True,
                         capabilities=list(safe_metadata.get("capabilities") or ["chat"]),
