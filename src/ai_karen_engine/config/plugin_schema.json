@@ -180,7 +180,34 @@
         "prompt_files": {
           "type": "object"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "category": {
+                "const": "communication"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "then": {
+            "required": [
+              "capabilities"
+            ],
+            "properties": {
+              "capabilities": {
+                "type": "object",
+                "required": [
+                  "communication_channel"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     {
       "title": "Runtime projection (derived, not independently edited)",
