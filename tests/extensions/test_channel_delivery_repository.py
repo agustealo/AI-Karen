@@ -69,6 +69,7 @@ async def test_outbound_claim_binds_current_revision_identity_and_user(monkeypat
         "credential_handle": "vault://credential", "revision": 3,
         "enabled": True,
         "user_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "external_conversation_id": "native-room",
     }))
     install(monkeypatch, session)
     claim = await SqlChannelRepository().claim_outbound(
@@ -78,6 +79,7 @@ async def test_outbound_claim_binds_current_revision_identity_and_user(monkeypat
     assert claim.delivery.delivery_id == DELIVERY
     assert claim.connection.revision == 3
     assert claim.user_id == "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    assert claim.external_conversation_id == "native-room"
     sql, args = session.calls[0]
     for guard in (
         "o.status = 'accepted'",
@@ -170,3 +172,20 @@ async def test_outbound_lease_enforces_bounds_before_sql(bad):
         await SqlChannelRepository().claim_outbound(
             tenant_id=TENANT, delivery_id=DELIVERY, lease_seconds=bad,
         )
+
+@pytest.mark.asyncio
+async def test_repository_rejects_unproven_success_without_sql():
+    store = SqlChannelRepository()
+    for state, mid, rid in [
+        (ChannelDeliveryState.SENT, None, None),
+        (ChannelDeliveryState.DELIVERED, "msg", None),
+        (ChannelDeliveryState.READ, None, "receipt"),
+    ]:
+        with pytest.raises(ValueError, match="evidence"):
+            await store.finalize_outbound_claim(
+                tenant_id=TENANT, claim_token=CLAIM,
+                receipt=ChannelDeliveryReceipt(
+                    delivery_id=DELIVERY, state=state,
+                    provider_message_id=mid, provider_receipt_id=rid,
+                ),
+            )
