@@ -272,7 +272,7 @@ export const getRuntimeProviderBucket = (
   const providerType = String(provider.provider_type || '').toLowerCase();
 
   if (isBuiltInRuntimeProvider(provider.id)) return 'builtIn';
-  if (provider.id === 'custom' || providerType === 'custom' || provider.supports_custom_auth) return 'custom';
+  if (provider.id === 'custom' || providerType === 'custom') return 'custom';
   if (providerType === 'local' || (provider.id === 'ollama' && providerType === 'hybrid')) return 'local';
   return 'thirdParty';
 };
