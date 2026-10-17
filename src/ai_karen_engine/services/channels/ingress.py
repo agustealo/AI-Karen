@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Mapping
 
 from ai_karen_engine.extensions.channels.contracts import (
@@ -37,12 +38,14 @@ class ChannelIngressService:
         kernel: PluginKernel,
         repository: SqlChannelRepository,
         max_native_body_bytes: int,
+        on_admitted: Callable[[InboundAdmission], Awaitable[bool]] | None = None,
     ) -> None:
         if not 1 <= max_native_body_bytes <= 10_485_760:
             raise ValueError("Invalid channel request body budget")
         self._kernel = kernel
         self._repository = repository
         self._max_native_body_bytes = max_native_body_bytes
+        self._on_admitted = on_admitted
 
     async def _verify_native_event(
         self,
@@ -143,6 +146,18 @@ class ChannelIngressService:
         admission = await self._repository.admit_verified_inbound(
             connection=connection, event=event,
         )
+        if self._on_admitted is not None:
+            try:
+                await self._on_admitted(admission)
+            except Exception as exc:
+                # Inbox is committed. Never turn valid ingress into an HTTP
+                # retry storm when the process-local worker is unavailable.
+                logger.warning(
+                    "channel.ingress.worker_schedule_failed",
+                    extra={"tenant_id": admission.tenant_id,
+                           "inbox_id": admission.inbox_id,
+                           "error_type": type(exc).__name__},
+                )
         logger.info(
             "channel.ingress.admitted",
             extra={
