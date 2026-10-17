@@ -2438,6 +2438,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         selectedModel={selectedModel}
         applyModelSelection={handleApplyModelSelection}
         isUpdatingModelSelection={isUpdatingModelSelection}
+        onRefreshModels={loadModelSettings}
         sessions={sessions}
         currentSession={currentSession}
         isLoadingSessions={isLoadingSessions}
