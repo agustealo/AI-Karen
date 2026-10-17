@@ -39,6 +39,34 @@ from .evaluator import MemoryFormationEvaluator
 logger = get_logger(__name__)
 
 
+def _projection_target_health(receipts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summarize actual projection outcomes without exposing memory contents.
+
+    Only the canonical worker target and aggregate outcomes cross into chat
+    telemetry. Memory identifiers, event identifiers and exception strings stay
+    in governed formation receipts.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    for receipt in receipts:
+        outcomes = receipt.get("projection_results")
+        if not isinstance(outcomes, Mapping):
+            continue
+        for raw_target, succeeded in outcomes.items():
+            target = str(raw_target)
+            if (
+                not target
+                or len(target) > 64
+                or not all(ch.isascii() and (ch.isalnum() or ch == "_") for ch in target)
+            ):
+                target = "unidentified_projection"
+            current = counts.setdefault(target, {"success_count": 0, "failure_count": 0})
+            current["success_count" if succeeded is True else "failure_count"] += 1
+    return [
+        {"target": target, **counts[target]}
+        for target in sorted(counts)
+    ]
+
+
 class DerivedProjector(Protocol):
     async def project(
         self,
@@ -294,6 +322,7 @@ class MemoryFormationService:
                 "persisted": persisted,
                 "persistence_failures": persistence_failures,
                 "projection_failures": projection_failures,
+            "projection_targets": _projection_target_health(receipts),
                 "reason": "memory_write_not_authorized",
                 "authorization_error": authorization_error,
                 "request_id": request_id,
@@ -319,6 +348,7 @@ class MemoryFormationService:
             "persisted": persisted,
             "persistence_failures": persistence_failures,
             "projection_failures": projection_failures,
+                "projection_targets": _projection_target_health(receipts),
             "errors": errors,
             "processing_time_ms": evaluation.processing_time_ms,
             "request_id": request_id,
