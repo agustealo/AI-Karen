@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS public.channel_identity_bindings (
     created_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT channel_identity_unique_sender
         UNIQUE (tenant_id, connection_id, external_sender_id),
+    CONSTRAINT channel_identity_tenant_binding_principal
+        UNIQUE (tenant_id, connection_id, binding_id, user_id),
     CONSTRAINT channel_identity_tenant_connection
         FOREIGN KEY (tenant_id, connection_id)
         REFERENCES public.channel_connections(tenant_id, connection_id) ON DELETE CASCADE,
@@ -73,6 +75,15 @@ CREATE TABLE IF NOT EXISTS public.channel_inbox (
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT channel_inbox_unique_event
         UNIQUE (tenant_id, connection_id, external_event_id),
+    CONSTRAINT channel_inbox_tenant_identity
+        FOREIGN KEY (tenant_id, connection_id, binding_id, user_id)
+        REFERENCES public.channel_identity_bindings(tenant_id, connection_id, binding_id, user_id),
+    CONSTRAINT channel_inbox_tenant_inbox
+        UNIQUE (tenant_id, connection_id, inbox_id),
+    CONSTRAINT channel_inbox_verified_binding_pair CHECK (
+        (binding_id IS NULL AND user_id IS NULL)
+        OR (binding_id IS NOT NULL AND user_id IS NOT NULL)
+    ),
     CONSTRAINT channel_inbox_tenant_connection
         FOREIGN KEY (tenant_id, connection_id)
         REFERENCES public.channel_connections(tenant_id, connection_id) ON DELETE CASCADE,
@@ -98,7 +109,7 @@ CREATE TABLE IF NOT EXISTS public.channel_outbox (
     delivery_id uuid PRIMARY KEY,
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     connection_id text NOT NULL,
-    inbox_id uuid NOT NULL REFERENCES public.channel_inbox(inbox_id) ON DELETE CASCADE,
+    inbox_id uuid NOT NULL,
     destination_id text NOT NULL,
     idempotency_key text NOT NULL,
     message_kind text NOT NULL,
@@ -117,6 +128,9 @@ CREATE TABLE IF NOT EXISTS public.channel_outbox (
     CONSTRAINT channel_outbox_tenant_connection
         FOREIGN KEY (tenant_id, connection_id)
         REFERENCES public.channel_connections(tenant_id, connection_id) ON DELETE CASCADE,
+    CONSTRAINT channel_outbox_tenant_inbox
+        FOREIGN KEY (tenant_id, connection_id, inbox_id)
+        REFERENCES public.channel_inbox(tenant_id, connection_id, inbox_id) ON DELETE CASCADE,
     CONSTRAINT channel_outbox_nonempty CHECK (
         length(trim(destination_id)) > 0 AND length(trim(idempotency_key)) > 0
     ),
