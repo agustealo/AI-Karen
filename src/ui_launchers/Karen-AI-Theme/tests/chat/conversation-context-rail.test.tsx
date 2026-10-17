@@ -5,6 +5,37 @@ import ConversationContextRail from '@/components/chat/ConversationContextRail';
 import type { AgentStepEvent } from '@/lib/types';
 
 describe('ConversationContextRail', () => {
+  it('renders typed retriever failures without stringifying provenance objects', () => {
+    render(
+      <ConversationContextRail
+        metadata={{
+          consumer_insights: {
+            vector_health: {
+              available: true,
+              authority: 'neuro_recall',
+              status: 'degraded',
+              failed_retriever_count: 1,
+              provenance: [{ memory_id: 'private-id', source: 'postgres' }],
+              source_health: [
+                { index: 0, retriever: 'PostgresRecallRetriever', status: 'success', candidate_count: 2 },
+                { index: 1, retriever: 'PostgresProfileRecallRetriever', status: 'failed', error_type: 'TimeoutError', candidate_count: 0 },
+              ],
+            },
+          },
+        }}
+        agentSteps={[]}
+      />,
+    );
+
+    expect(screen.getByTestId('retrieval-source-health')).toBeTruthy();
+    expect(screen.getByText('PostgresRecallRetriever')).toBeTruthy();
+    expect(screen.getByText('PostgresProfileRecallRetriever')).toBeTruthy();
+    expect(screen.getByText('failed · TimeoutError')).toBeTruthy();
+    expect(screen.getByText('1')).toBeTruthy();
+    expect(screen.queryByText('[object Object]')).toBeNull();
+    expect(screen.queryByText('private-id')).toBeNull();
+  });
+
   it('renders canonical continuity and capability receipts without inventing access', () => {
     const metadata = {
       proactive_continuity: {

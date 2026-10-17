@@ -215,12 +215,12 @@ class RuntimeEvidenceResolver:
             )
         except Exception as exc:
             logger.warning(
-                "Runtime evidence memory resolution failed: %s",
-                exc,
+                "Runtime evidence memory resolution failed",
                 extra={
                     "correlation_id": ctx.correlation_id,
                     "tenant_id": ctx.tenant_id,
                     "user_id": ctx.user_id,
+                    "error_type": type(exc).__name__,
                 },
             )
             cognitive_context.metadata.update(
@@ -229,7 +229,7 @@ class RuntimeEvidenceResolver:
                     "memory_recall_count": 0,
                     "memory_latency_ms": 0.0,
                     "memory_degraded": True,
-                    "memory_degradation_reason": str(exc),
+                    "memory_degradation_reason": "memory_retrieval_unavailable",
                     "memory_resolver_id": self.MEMORY_RESOLVER_ID,
                 }
             )

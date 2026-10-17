@@ -819,14 +819,36 @@ function RailContent({
               {vectorHealth.available === true ? (
                 <div className="grid grid-cols-2 gap-2 text-[10px]">
                   {Object.entries(vectorHealth)
-                    .filter(([key]) => key !== 'available')
-                    .slice(0, 6)
+                    .filter(([key, value]) =>
+                      key !== 'available' && value !== null &&
+                      ['string', 'number', 'boolean'].includes(typeof value))
+                    .slice(0, 8)
                     .map(([key, value]) => (
                       <div key={key} className="rounded-lg border border-border/60 bg-background/40 p-2">
                         <p className="text-[8px] uppercase text-muted-foreground">{key.replace(/_/g, ' ')}</p>
                         <p className="mt-1 truncate font-semibold">{String(value)}</p>
                       </div>
                     ))}
+                  {Array.isArray(vectorHealth.source_health) && vectorHealth.source_health.length > 0 && (
+                    <div className="col-span-2 space-y-1" data-testid="retrieval-source-health">
+                      <p className="text-[9px] font-semibold text-muted-foreground">Retriever diagnostics</p>
+                      {vectorHealth.source_health.map((raw, index) => {
+                        const source = asRecord(raw);
+                        const name = asString(source.retriever);
+                        const status = asString(source.status);
+                        const errorType = asString(source.error_type);
+                        return (
+                          <div key={index} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
+                            <span className="font-medium">{name || 'Unidentified source'}</span>
+                            <span className="text-muted-foreground">
+                              {status || 'unknown'}
+                              {errorType ? ` · ${errorType}` : ''}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <EmptyTruth>

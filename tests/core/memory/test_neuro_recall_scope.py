@@ -243,3 +243,90 @@ async def test_partial_retriever_failure_preserves_good_scoped_results():
     assert [memory.id for memory in result.memories] == ["durable"]
     assert result.degraded is True
     assert result.degradation_reason == "partial_retrieval_failure"
+
+
+@pytest.mark.asyncio
+async def test_partial_recall_diagnostics_identify_failed_source_without_user_data():
+    class _BrokenRetriever:
+        async def recall(self, query):
+            raise RuntimeError("secret query and credential must not escape")
+
+    good = _FakeRetriever([
+        _memory("ok", "tenant-1", "user-1", content="My name is Zeus")
+    ])
+    result = await NeuroRecall(retrievers=(good, _BrokenRetriever())).recall(
+        RecallRequest(query="Who am I?", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.degraded is True
+    assert result.degradation_reason == "partial_retrieval_failure"
+    assert len(result.memories) == 1
+    assert result.source_health == (
+        {"index": 0, "retriever": "_FakeRetriever", "status": "success", "candidate_count": 1},
+        {"index": 1, "retriever": "_BrokenRetriever", "status": "failed", "candidate_count": 0, "error_type": "RuntimeError"},
+    )
+    serialized = str(result.source_health)
+    assert "secret" not in serialized
+    assert "Zeus" not in serialized
+    assert "Who am I?" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_timeout_diagnostics_keep_partial_success_and_source_order():
+    class _SlowRetriever:
+        async def recall(self, query):
+            await asyncio.sleep(0.2)
+            return []
+
+    result = await NeuroRecall(retrievers=(
+        _FakeRetriever([_memory("ok", "tenant-1", "user-1")]),
+        _SlowRetriever(),
+    )).recall(RecallRequest(
+        query="Who am I?", tenant_id="tenant-1", user_id="user-1",
+        latency_budget_ms=5,
+    ))
+    assert result.degraded
+    assert result.degradation_reason == "recall_deadline_exceeded"
+    assert [item["status"] for item in result.source_health] == ["success", "timeout"]
+    assert [item["retriever"] for item in result.source_health] == [
+        "_FakeRetriever", "_SlowRetriever",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_health_records_healthy_empty_retriever():
+    result = await NeuroRecall(_FakeRetriever([])).recall(
+        RecallRequest(query="unrecognized", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.degraded is False
+    assert result.source_health == (
+        {"index": 0, "retriever": "_FakeRetriever", "status": "success", "candidate_count": 0},
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_memory_health_preserves_partial_results_and_safe_diagnostics():
+    from ai_karen_engine.core.memory.memory_runtime_manager import MemoryRuntimeManager
+
+    class _BrokenRetriever:
+        async def recall(self, query):
+            raise ValueError("private backend credential")
+
+    manager = object.__new__(MemoryRuntimeManager)
+    manager._neuro_recall = NeuroRecall(retrievers=(
+        _FakeRetriever([_memory("known", "tenant-1", "user-1", content="Zeus")]),
+        _BrokenRetriever(),
+    ))
+    payload = await manager.recall_context(
+        user_id="user-1", tenant_id="tenant-1", query="What's my name?",
+        top_k=5, correlation_id="corr-1",
+    )
+
+    assert payload["status"] == "degraded"
+    assert payload["results"][0]["content"] == "Zeus"
+    health = payload["retrieval_health"]
+    assert health["retriever_count"] == 2
+    assert health["failed_retriever_count"] == 1
+    assert health["timed_out_retriever_count"] == 0
+    assert [item["status"] for item in health["source_health"]] == ["success", "failed"]
+    assert "private backend credential" not in str(health["source_health"])
+    assert "Zeus" not in str(health["source_health"])

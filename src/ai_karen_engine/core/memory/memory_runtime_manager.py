@@ -304,6 +304,7 @@ class MemoryRuntimeManager:
             )
 
         memory_metrics.increment("recall_hits", len(formatted))
+        source_health = [dict(item) for item in result.source_health]
         return {
             "results": formatted,
             "status": "degraded" if result.degraded else "success",
@@ -320,6 +321,14 @@ class MemoryRuntimeManager:
                 "status": "degraded" if result.degraded else "healthy",
                 "latency_ms": result.latency_ms,
                 "result_count": len(formatted),
+                "retriever_count": len(source_health),
+                "failed_retriever_count": sum(
+                    item["status"] == "failed" for item in source_health
+                ),
+                "timed_out_retriever_count": sum(
+                    item["status"] == "timeout" for item in source_health
+                ),
+                "source_health": source_health,
                 "provenance": list(result.provenance),
                 "hnsw_reported": False,
                 "vector_drift_reported": False,
