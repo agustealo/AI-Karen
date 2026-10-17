@@ -812,7 +812,7 @@ class ChatRuntime:
             try:
                 # Fallback can replace an empty stream, never content already
                 # delivered to the client by a different provider/model.
-                if not streamed_text.strip():
+                if not streamed_text:
                     fallback = await build_runtime_fallback(
                         runtime=self,
                         request=request,
@@ -837,7 +837,7 @@ class ChatRuntime:
                     metadata={"error_code": "CHAT_STREAM_FALLBACK_FAILED"},
                 )
 
-            if fallback is not None and fallback.answer and not streamed_text.strip():
+            if fallback is not None and fallback.answer and not streamed_text:
                 # A partial primary answer has already reached the client.
                 # Never append fallback text and attribute their mixture to one model.
                 fallback_meta = fallback.metadata.to_dict()
