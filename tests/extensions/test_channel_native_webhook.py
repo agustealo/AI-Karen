@@ -116,6 +116,11 @@ async def test_link_event_consumed_without_chat_or_second_native_verification():
     "/link", "/link bad",
     "/link " + TOKEN + " extra",
     "/link " + TOKEN + "\nwith trailing text",
+    " /link " + TOKEN,
+    "\t/link " + TOKEN,
+    "/LINK " + TOKEN,
+    "/link@KarenTelegramBot " + TOKEN,
+    " /Link@Karen_Telegram_Bot " + TOKEN,
 ])
 async def test_malformed_or_replayed_link_prefix_is_never_a_chat_message(text):
     ingress, repo, _ = gateway(text=text)
