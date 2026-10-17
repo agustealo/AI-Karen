@@ -193,7 +193,7 @@ def classify_general_user_facts(text: str) -> list[MemorySignal]:
                 continue
             if temporary and attribute == "current_location" and match.start() == temporary.start():
                 continue
-            value = _clean(match.group(1))
+            value = _clean_location_value(match.group(1))
             if not value:
                 continue
             signals.append(
@@ -450,6 +450,18 @@ def _profile_fact(
 
 def _clean(value: str) -> str:
     return " ".join(str(value or "").strip(" \t\n\r.,;:!?").split())
+
+
+# Discourse particles after an asserted place are not part of its name.
+# Preserve the user's original utterance as provenance while normalizing value.
+_TRAILING_LOCATION_DISCOURSE = re.compile(
+    r"(?i)(?:\s*,?\s+(?:though|however|by the way))+$"
+)
+
+
+def _clean_location_value(value: str) -> str:
+    cleaned = _clean(value)
+    return _clean(_TRAILING_LOCATION_DISCOURSE.sub("", cleaned))
 
 
 def _slug(value: str) -> str:
