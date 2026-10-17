@@ -210,6 +210,52 @@ class ChannelHostServices:
         )
         return scheduled
 
+    async def dispatch_outbox(
+        self, *, tenant_id: str, delivery_id: str,
+        authorized_plan: AuthorizedExecutionPlan, lease_seconds: int = 90,
+    ) -> bool:
+        """Dispatch an existing outbox item through the bound canonical adapter.
+
+        This method never creates authorization or selects transport based on
+        native provider input. The persisted delivery selects its connection;
+        ChannelDeliveryService rechecks RuntimePolicy scope, lease, revision,
+        principal and native receipt evidence before recording a send.
+        """
+        if not self._initialized or self._closed or self.delivery is None:
+            raise PermissionError("Channel outbound host is unavailable")
+        if not isinstance(authorized_plan, AuthorizedExecutionPlan):
+            raise PermissionError("RuntimePolicy outbound plan is required")
+        if not 3 <= lease_seconds <= 3600:
+            raise ValueError("Outbound dispatch lease must be 3..3600 seconds")
+        preflight = await self.repository.get_delivery_preflight(
+            tenant_id=tenant_id, delivery_id=delivery_id,
+        )
+        if preflight is None:
+            return False
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=preflight.connection_id,
+        )
+        if connection is None or connection.tenant_id != tenant_id:
+            raise PermissionError("Channel outbound connection is unavailable")
+        adapter = self._installed.get(connection.installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(
+                connection.installation_id
+            ) is None
+            or not self.kernel.is_canonical_channel_adapter(
+                connection.installation_id, adapter
+            )
+        ):
+            raise PermissionError("Channel outbound installation is unavailable")
+        # Dispatch owns all final authorization and DB claim fencing. The
+        # host has no right to manufacture an execution plan on its behalf.
+        return await self.delivery.dispatch(
+            tenant_id=tenant_id, delivery_id=delivery_id,
+            adapter=adapter, authorized_plan=authorized_plan,
+            lease_seconds=lease_seconds,
+        )
+
     async def shutdown(self) -> None:
         """Revoke process-local transport capability before database cleanup."""
         if self._closed:
