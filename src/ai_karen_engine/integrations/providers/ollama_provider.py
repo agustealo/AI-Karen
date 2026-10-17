@@ -58,9 +58,16 @@ class OllamaProvider(LLMProviderBase):
 
     @staticmethod
     def _normalize_base_url(base_url: str) -> str:
+        """Resolve a configured Ollama root, /v1, or /api URL to its native API.
+
+        Inference can use Ollama's OpenAI-compatible /v1 endpoint, but
+        installed-model discovery is served from the native /api/tags path.
+        """
         normalized = str(base_url or "").strip().rstrip("/")
         if not normalized:
             return ""
+        if normalized.endswith("/v1"):
+            normalized = normalized[:-3]
         if not normalized.endswith("/api"):
             normalized = f"{normalized}/api"
         return normalized
