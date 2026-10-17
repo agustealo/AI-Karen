@@ -1,0 +1,96 @@
+name: Ollama Settings Live E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/ci/ollama_settings_live_proof.py"
+      - "scripts/ci/production-first-boot-smoke.sh"
+      - "src/ai_karen_engine/api_routes/models/settings.py"
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/runtime/**"
+      - ".github/workflows/ollama-settings-live-e2e.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/ci/ollama_settings_live_proof.py"
+      - "scripts/ci/production-first-boot-smoke.sh"
+      - "src/ai_karen_engine/api_routes/models/settings.py"
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/runtime/**"
+      - ".github/workflows/ollama-settings-live-e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ollama-settings-live-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ollama-settings-live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OLLAMA_CI_MODEL: smollm2:135m-instruct-q2_K
+      OLLAMA_CI_IMAGE: ollama/ollama:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attest exact checkout and compile smoke proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python -m py_compile scripts/ci/ollama_settings_live_proof.py
+          bash -n scripts/ci/production-first-boot-smoke.sh
+
+      - name: Start a real Ollama daemon and install a small model
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name karen-ci-ollama \
+            -p 127.0.0.1:11434:11434 \
+            "$OLLAMA_CI_IMAGE" > /dev/null
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:11434/api/tags > /dev/null; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' karen-ci-ollama | grep -q true; then
+              docker logs karen-ci-ollama >&2
+              exit 1
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              docker logs karen-ci-ollama >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker exec karen-ci-ollama ollama pull "$OLLAMA_CI_MODEL"
+
+          curl --fail --silent http://127.0.0.1:11434/api/tags | \
+            python -c 'import json,os,sys; models=json.load(sys.stdin)["models"]; wanted=os.environ["OLLAMA_CI_MODEL"]; assert wanted in {m.get("name") for m in models}, "Ollama model pull not visible in native inventory"'
+
+      - name: Build production API image
+        run: |
+          docker build --target app --build-arg PROFILE=runtime \
+            -t ai-karen-api:ollama-live .
+
+      - name: Prove production Settings discovery, save and unforced inference
+        shell: bash
+        env:
+          KAREN_SMOKE_API_IMAGE: ai-karen-api:ollama-live
+          KAREN_SMOKE_LIVE_MODEL_BASE_URL: http://127.0.0.1:11434/v1
+          KAREN_SMOKE_LIVE_MODEL_PROVIDER: ollama-local
+          KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS: "120"
+          KAREN_SMOKE_ONLY_OLLAMA_SETTINGS: "true"
+        run: |
+          set -euo pipefail
+          export KAREN_SMOKE_LIVE_MODEL_NAME="$OLLAMA_CI_MODEL"
+          bash scripts/ci/production-first-boot-smoke.sh
