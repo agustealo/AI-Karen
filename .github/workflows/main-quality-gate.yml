@@ -160,6 +160,12 @@ jobs:
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q
 
+      - name: Ollama live inventory and provider settings contracts
+        run: |
+          pytest tests/core/model_runtime/test_ollama_native_inventory.py -q
+          pytest tests/core/model_runtime/test_ollama_execution_mapping.py -q
+          pytest tests/api_routes/test_model_settings_ollama_discovery.py -q
+
       - name: Personalization authority proofs
         run: pytest tests/core/personalization/test_personalization.py -q
 
