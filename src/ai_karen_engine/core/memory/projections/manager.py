@@ -49,6 +49,21 @@ class ProjectionManager:
                 if store_name == "memory_graph"
                 else "memory_learning_enabled"
             )
+            # A disabled optional projection is not a failed projection.
+            # Do not invoke a fallback or report failure for a policy skip.
+            # The shared SafeStageRunner still governs enabled execution.
+            if not self.safe_runner.flags.is_enabled(
+                flag_name, tenant_id, user_id
+            ):
+                logger.info(
+                    "memory.projection.skipped_by_policy",
+                    extra={
+                        "event_id": event_id,
+                        "target_store": store_name,
+                        "reason": "projection_feature_disabled",
+                    },
+                )
+                continue
             names.append(store_name)
             tasks.append(
                 self.safe_runner.run_stage(
