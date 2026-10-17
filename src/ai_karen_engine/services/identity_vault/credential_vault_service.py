@@ -447,7 +447,7 @@ class CredentialVaultService(BaseService):
             resource_id = uuid.UUID(credential_handle[len(prefix):])
             if credential_handle != prefix + str(resource_id):
                 raise ValueError("Noncanonical reference")
-        except (ValueError, TypeError, AttributeError) as exc:
+        except (ValueError, TypeError, AttributeError):
             raise PermissionError("Channel credential reference denied") from None
 
         if (
