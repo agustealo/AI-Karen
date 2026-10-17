@@ -85,6 +85,30 @@ def assert_saved_selection(payload: dict[str, Any], model: str) -> None:
         raise LiveProofError("Chat response mode did not round-trip")
 
 
+def assert_chat_catalog_matches(
+    native: list[str], catalog: dict[str, Any], selected: str,
+) -> None:
+    """Chat composer catalog must expose the same installed Ollama IDs."""
+    provider = next(
+        (item for item in catalog.get("providers", []) if item.get("id") == "ollama"),
+        None,
+    )
+    if not provider:
+        raise LiveProofError("Ollama is missing from the chat provider picker")
+    entries = provider.get("models")
+    if not isinstance(entries, list):
+        raise LiveProofError("Chat provider model picker has no model inventory")
+    ids = [str(item.get("id") or "") for item in entries]
+    if len(ids) != len(set(ids)) or set(ids) != set(native):
+        raise LiveProofError("Chat model inventory differs from installed Ollama models")
+    if any(item.get("available") is not True for item in entries):
+        raise LiveProofError("Chat model picker marked an installed Ollama model unavailable")
+    if provider.get("selected_model") != selected:
+        raise LiveProofError("Chat model picker did not honor the selected Ollama model")
+    if catalog.get("default_provider") != "ollama" or catalog.get("default_model") != selected:
+        raise LiveProofError("Chat runtime catalog defaults diverged from saved Settings")
+
+
 def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict[str, str]:
     metadata = payload.get("metadata") or {}
     if not isinstance(metadata, dict):
@@ -204,6 +228,11 @@ def run(
     reloaded = _request(f"{api}/api/settings/model", timeout=timeout, cookies=cookie_file)
     assert_saved_selection(reloaded, selected)
 
+    chat_catalog = _request(
+        f"{api}/api/runtime/providers", timeout=timeout, cookies=cookie_file,
+    )
+    assert_chat_catalog_matches(native, chat_catalog, selected)
+
     # Do NOT supply preferred_llm_provider or preferred_model here.
     # This proves that the saved Settings choice reaches the actual runtime.
     response = _request(
@@ -222,6 +251,7 @@ def run(
         "status": "passed",
         "verification": "authenticated_ollama_settings_to_default_chat_runtime",
         "installed_model_count": len(native),
+        "chat_catalog_model_count": len(native),
         "selected_model": selected,
         **provenance,
     }
