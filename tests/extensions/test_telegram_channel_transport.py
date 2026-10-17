@@ -173,6 +173,42 @@ async def test_host_not_bound_blocks_provider_calls():
 
 
 @pytest.mark.asyncio
+async def test_connection_revision_rotation_must_be_reactivated_by_host():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    rotated = connection().model_copy(update={"revision": 3})
+    with pytest.raises(PermissionError, match="not active"):
+        await adapter.verify_event(
+            connection=rotated,
+            headers={"X-Telegram-Bot-Api-Secret-Token": SECRET},
+            body=native_message(),
+        )
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tenant_scoped_activation_cannot_enable_another_tenant():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    other = connection().model_copy(update={
+        "tenant_id": "22222222-2222-2222-2222-222222222222",
+    })
+    with pytest.raises(PermissionError, match="not active"):
+        await adapter.send(connection=other, delivery=delivery())
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_stop_revokes_all_connection_revision_activations():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    await adapter.stop(connection=connection())
+    with pytest.raises(PermissionError, match="not active"):
+        await adapter.send(connection=connection(), delivery=delivery())
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_send_message_requires_actual_bot_api_response_id():
     _, adapter, resolver, client = load_transport()
     await adapter.start(connection=connection())
