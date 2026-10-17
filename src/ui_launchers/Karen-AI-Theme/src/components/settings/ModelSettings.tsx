@@ -43,6 +43,7 @@ import {
   sortProviderModels,
   normalizeDiscoveredProviderModels,
   reconcileDiscoveredModelSelection,
+  canSaveProviderModelSelection,
 } from '@/lib/model-runtime-inventory';
 
 interface ProviderModel {
