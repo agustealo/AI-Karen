@@ -197,19 +197,23 @@ async def get_runtime_provider_catalog(
                         capabilities=list(model.get("capabilities") or []),
                     ))
 
-            if not models and provider.get("selected_model") and category == "custom" and provider.get("is_configured", False):
-                # Custom endpoints permit manual model IDs. Managed providers
-                # cannot claim that a saved default was discovered.
-                models = [
-                    RuntimeModel(
-                        id=str(provider["selected_model"]),
-                        label=str(provider["selected_model"]),
-                        available=bool(provider.get("healthy", False)),
-                        source="manual_configured",
-                        default=True,
-                        capabilities=list(safe_metadata.get("capabilities") or ["chat"]),
-                    )
-                ]
+            selected_manual_model = str(provider.get("selected_model") or "").strip()
+            if (
+                category == "custom"
+                and provider.get("is_configured", False)
+                and selected_manual_model
+                and not any(model.id == selected_manual_model for model in models)
+            ):
+                # A saved manual model may differ from the static catalog.
+                # Only the configured endpoint can contribute this entry.
+                models.append(RuntimeModel(
+                    id=selected_manual_model,
+                    label=selected_manual_model,
+                    available=bool(provider.get("healthy", False)),
+                    source="manual_configured",
+                    default=True,
+                    capabilities=list(safe_metadata.get("capabilities") or ["chat"]),
+                ))
 
             catalog_providers.append(RuntimeProvider(
                 id=provider_id,
