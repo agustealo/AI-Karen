@@ -175,3 +175,42 @@ describe('empty runtime inventory is not a selectable Chat provider', () => {
     expect(inventory.selected_model).toBe('');
   });
 });
+
+
+describe('provider availability is enforced consistently', () => {
+  it('never selects explicitly unavailable models for a managed remote provider', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'remote-managed',
+      default_model: 'removed-model',
+      providers: [{
+        id: 'remote-managed', label: 'Managed Cloud', category: 'external',
+        enabled: true, configured: true, healthy: true,
+        selected_model: 'removed-model',
+        models: [
+          { id: 'removed-model', label: 'Removed', available: false },
+          { id: 'active-model', label: 'Active', available: true },
+        ],
+      }],
+    });
+    expect(inventory.selectableProviders[0].models.map((model) => model.id)).toEqual(['active-model']);
+    expect(resolveChatProviderModelSelection(inventory, 'remote-managed', 'removed-model')).toEqual({
+      provider: 'remote-managed', model: 'active-model', preferenceUnavailable: false,
+    });
+  });
+
+  it('keeps a provider visible for diagnostics if all its models are unavailable', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'remote-managed', default_model: 'offline-model',
+      providers: [{
+        id: 'remote-managed', label: 'Managed Cloud', category: 'external',
+        enabled: true, configured: true, healthy: false,
+        selected_model: 'offline-model',
+        models: [{ id: 'offline-model', label: 'Offline', available: false }],
+      }],
+    });
+    expect(inventory.providers).toHaveLength(1);
+    expect(inventory.providers[0].models).toEqual([]);
+    expect(inventory.selectableProviders).toEqual([]);
+    expect(resolveChatProviderModelSelection(inventory, 'remote-managed', 'offline-model').model).toBe('');
+  });
+});
