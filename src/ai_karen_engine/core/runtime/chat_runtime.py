@@ -896,7 +896,6 @@ class ChatRuntime:
                             "fallback_level": provider_meta.get("fallback_level", 0),
                             "degradation_reason": "all_execution_paths_failed",
                             "response_source": provider_meta.get("response_source"),
-                            "fallback_level": provider_meta.get("fallback_level", 0),
                             "degraded_mode": True,
                             "fallback_reason": provider_meta.get("fallback_reason"),
                         },
@@ -2942,20 +2941,30 @@ class ChatRuntime:
         response_metadata: Dict[str, Any],
         request: ChatExecutionRequest,
     ) -> Dict[str, Any]:
+        """Preserve workflow execution provenance without claiming an unobserved model."""
         raw = response_metadata or {}
         llm = raw.get("llm_metadata") or {}
+
+        def observed(key: str) -> Any:
+            # Workflow adapters may report canonical fields directly or in
+            # llm_metadata. Nested observed values take precedence; never infer
+            # the actual executor from the user's requested model.
+            value = llm.get(key)
+            return value if value is not None else raw.get(key)
+
         normalized = {
-            "requested_provider": llm.get("requested_provider")
+            "requested_provider": observed("requested_provider")
             or request.preferred_provider,
-            "requested_model": llm.get("requested_model")
+            "requested_model": observed("requested_model")
             or request.preferred_model,
-            "actual_provider": llm.get("actual_provider"),
-            "actual_model": llm.get("actual_model"),
-            "runtime_engine": llm.get("runtime_engine"),
-            "response_source": llm.get("response_source"),
-            "fallback_level": llm.get("fallback_level", 0),
-            "degraded_mode": bool(llm.get("degraded_mode")),
-            "degradation_reason": llm.get("degradation_reason"),
+            "actual_provider": observed("actual_provider"),
+            "actual_model": observed("actual_model"),
+            "runtime_engine": observed("runtime_engine"),
+            "response_source": observed("response_source"),
+            "fallback_level": observed("fallback_level") if observed("fallback_level") is not None else 0,
+            "degraded_mode": bool(observed("degraded_mode")),
+            "degradation_reason": observed("degradation_reason"),
+            "fallback_reason": observed("fallback_reason"),
             "llm": raw.get("llm"),
         }
         for key in _RICH_RESULT_KEYS:
