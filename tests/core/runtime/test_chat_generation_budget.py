@@ -78,3 +78,14 @@ def test_chat_default_is_validated_in_canonical_runtime_config():
 def test_chat_generation_default_is_distinct_from_global_provider_limit():
     llm = LLMSettings()
     assert 0 < llm.chat_default_max_output_tokens < llm.max_tokens
+
+
+def test_config_default_is_clamped_when_provider_limit_is_lower(monkeypatch):
+    assert _resolve(monkeypatch, default=512, maximum=128) == 128
+
+
+def test_environment_can_override_direct_chat_default(monkeypatch):
+    monkeypatch.setenv("KARI_CHAT_DEFAULT_MAX_OUTPUT_TOKENS", "384")
+    settings = RuntimeSettings()
+    settings.apply_env_overrides()
+    assert settings.llm.chat_default_max_output_tokens == 384
