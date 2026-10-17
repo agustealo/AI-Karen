@@ -4,6 +4,12 @@
 -- No implicit worker RLS bypass. Schema creation is migration-owned.
 BEGIN;
 
+-- User identities must belong to the same tenant as the channel connection.
+-- The auth_users user_id PK already prevents duplicates; this composite index
+-- additionally provides a tenant-specific FK target.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_tenant_user
+    ON public.auth_users (tenant_id, user_id);
+
 CREATE TABLE IF NOT EXISTS public.channel_connections (
     connection_id text PRIMARY KEY,
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
@@ -27,7 +33,10 @@ CREATE TABLE IF NOT EXISTS public.channel_identity_bindings (
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     connection_id text NOT NULL,
     external_sender_id text NOT NULL,
-    user_id uuid NOT NULL REFERENCES public.auth_users(user_id) ON DELETE CASCADE,
+    user_id uuid NOT NULL,
+    CONSTRAINT channel_identity_tenant_user
+        FOREIGN KEY (tenant_id, user_id)
+        REFERENCES public.auth_users(tenant_id, user_id) ON DELETE CASCADE,
     revision bigint NOT NULL DEFAULT 1 CHECK (revision >= 1),
     verified_at timestamptz NOT NULL,
     revoked_at timestamptz,
@@ -66,7 +75,7 @@ CREATE TABLE IF NOT EXISTS public.channel_inbox (
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     last_error_code text,
     binding_id uuid REFERENCES public.channel_identity_bindings(binding_id),
-    user_id uuid REFERENCES public.auth_users(user_id),
+    user_id uuid,
     conversation_id text,
     correlation_id uuid NOT NULL DEFAULT gen_random_uuid(),
     result_receipt jsonb NOT NULL DEFAULT '{}'::jsonb
