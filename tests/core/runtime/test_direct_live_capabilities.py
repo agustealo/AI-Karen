@@ -1765,3 +1765,59 @@ def test_weather_accepts_structured_observation(observation: dict) -> None:
     rendered = executor._render("search.weather", "weather in Detroit", payload)
     assert "temperature_f:" in rendered or "temp:" in rendered
     assert "Wikipedia" not in rendered
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What's the latest news in Detroit?",
+        "Whats the latest news in detroit?",
+        "What’s the latest news in Detroit?",
+        "What is the latest news in Detroit?",
+        "Whats the latest news in Kingston?",
+        "Whats the latest headlines in Toronto?",
+    ],
+)
+def test_current_news_variants_require_governed_live_evidence(query: str) -> None:
+    route = resolve_capability_decision(query)
+    assert route.intent == "search.general"
+    assert route.requires_live_data is True
+    assert route.requires_tool is True
+    assert route.allow_llm_only is False
+    assert route.capability == "web.search"
+    assert route.handler == "web_search"
+    assert route.preferred_plugin == "intelligent-search"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_intent"),
+    [
+        ("Hows the weather in Detroit?", "search.weather"),
+        ("Whats the weather in Kingston?", "search.weather"),
+        ("Whats the current time in Detroit?", "time.current"),
+        ("Whats the latest with my private repo?", "general.chat"),
+        ("Explain whats changed in our latest refactor.", "general.chat"),
+    ],
+)
+def test_contraction_normalization_preserves_capability_boundaries(
+    query: str, expected_intent: str
+) -> None:
+    assert resolve_capability_decision(query).intent == expected_intent
+
+
+@pytest.mark.asyncio
+async def test_current_detroit_news_uses_direct_cortex_capability_when_ml_unavailable() -> None:
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(side_effect=RuntimeError("classifier unavailable"))
+    )
+    decision = await decider.decide(_request("Whats the latest news in detroit?"))
+
+    assert decision.intent == "search.general"
+    assert decision.topology is ExecutionTopology.DIRECT
+    assert decision.graph_required is False
+    assert decision.required_capabilities == ["web.search"]
+    assert decision.tool_requirements == ["web_search"]
+    assert decision.plugin_candidates == ["intelligent-search"]
+    assert decision.policy_constraints["direct_capability"] is True
+    assert DirectCapabilityExecutor().can_handle(decision)
