@@ -548,6 +548,75 @@ assert metadata.get("actual_provider") == sys.argv[2], metadata
 assert metadata.get("response_source") not in {"emergency", "unavailable"}, metadata
 assert int(metadata.get("memory_recall_count") or 0) > 0, metadata
 PY
+  # Consumer incident regression: a short follow-up must not cause a long
+  # invented biography. Keep this on the real authenticated ChatRuntime path.
+  context_session="beta_context_${GITHUB_RUN_ID:-local}_$"
+  context_payload="$("${PYTHON_BIN}" - "${context_session}" "${LIVE_MODEL_PROVIDER}" "${LIVE_MODEL_NAME}" <<'PY'
+import json
+import sys
+
+session_id, provider, model = sys.argv[1:4]
+payload = {
+    "messages": [{
+        "content": "I'm from Jamaica. I live in Detroit. My name is Zeus.",
+        "message_type": "user",
+    }],
+    "preferred_llm_provider": provider,
+    "temperature": 0.0,
+    "max_tokens": 96,
+    "stream": False,
+    "session_id": session_id,
+}
+if model:
+    payload["preferred_model"] = model
+print(json.dumps(payload))
+PY
+)"
+  curl -fsS --max-time "${LIVE_MODEL_TIMEOUT_SECONDS}" \
+    -b "${COOKIE_JAR}" -H 'Content-Type: application/json' \
+    -d "${context_payload}" "${BASE_URL}/api/chat" > /dev/null
+
+  fragment_payload="$("${PYTHON_BIN}" - "${context_session}" "${LIVE_MODEL_PROVIDER}" "${LIVE_MODEL_NAME}" <<'PY'
+import json
+import sys
+
+session_id, provider, model = sys.argv[1:4]
+payload = {
+    "messages": [{"content": "in detroit", "message_type": "user"}],
+    "preferred_llm_provider": provider,
+    "temperature": 0.0,
+    # Intentionally omit max_tokens to exercise the actual runtime default.
+    "stream": False,
+    "session_id": session_id,
+}
+if model:
+    payload["preferred_model"] = model
+print(json.dumps(payload))
+PY
+)"
+  fragment_response="$(curl -fsS --max-time "${LIVE_MODEL_TIMEOUT_SECONDS}" \
+    -b "${COOKIE_JAR}" -H 'Content-Type: application/json' \
+    -d "${fragment_payload}" "${BASE_URL}/api/chat")"
+
+  "${PYTHON_BIN}" - "${fragment_response}" "${LIVE_MODEL_PROVIDER}" <<'PY'
+import json
+import re
+import sys
+
+response = json.loads(sys.argv[1])
+content = str(response.get("content") or "").strip()
+metadata = response.get("metadata") or {}
+words = re.findall(r"[a-z]+", content.casefold())
+assert words and len(words) <= 70, "Short-location follow-up produced excessive output"
+assert "detroit" in words, "Model ignored user's most recent location"
+assert not ({"romania", "zeph"} & set(words)), (
+    "Model invented identities or locations absent from the authorized conversation"
+)
+assert metadata.get("actual_provider") == sys.argv[2], metadata
+assert metadata.get("response_source") not in {"emergency", "unavailable"}, metadata
+PY
+  echo "PRODUCTION LIVE-MODEL SHORT-FOLLOW-UP GROUNDING PROOF PASSED"
+
   echo "PRODUCTION LIVE-MODEL CROSS-SESSION NAME RECALL PROOF PASSED"
 
   echo "PRODUCTION LIVE-MODEL TWO-TURN CHAT PROOF PASSED"
