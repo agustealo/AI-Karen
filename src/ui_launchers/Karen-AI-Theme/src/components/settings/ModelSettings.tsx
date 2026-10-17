@@ -44,6 +44,7 @@ import {
   normalizeDiscoveredProviderModels,
   reconcileDiscoveredModelSelection,
   canSaveProviderModelSelection,
+  getProviderModelDiscoveryNotice,
 } from '@/lib/model-runtime-inventory';
 
 interface ProviderModel {
@@ -75,6 +76,9 @@ interface ProviderModelsResponse {
   provider: string;
   base_url?: string | null;
   models: ProviderModel[];
+  discovery_status?: 'ready' | 'catalog_only' | 'empty';
+  inventory_source?: 'configured_catalog' | 'local_runtime' | 'provider_live' | 'ollama_native' | 'mixed' | 'none';
+  live_discovery_failed?: boolean;
 }
 
 function formatErrorMessage(error: unknown, fallback: string): string {
@@ -145,6 +149,7 @@ export default function ModelSettings() {
   const [apiKeyPrefix, setApiKeyPrefix] = useState('Bearer');
   const [availableModels, setAvailableModels] = useState<ProviderModel[]>([]);
   const [modelDiscoveryError, setModelDiscoveryError] = useState('');
+  const [modelDiscoveryNotice, setModelDiscoveryNotice] = useState('');
   const modelDiscoveryRequestId = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -253,30 +258,29 @@ export default function ModelSettings() {
   const loadProviderModels = useCallback(async (
     providerId: string,
     providerBaseUrl?: string,
-    fallbackModels: ProviderModel[] = [],
+    manualEntryAllowed = false,
   ) => {
     if (!providerId) return;
     const requestId = ++modelDiscoveryRequestId.current;
     setModelDiscoveryError('');
+    setModelDiscoveryNotice('');
     setIsLoadingModels(true);
     try {
       const query = providerBaseUrl?.trim() ? `?base_url=${encodeURIComponent(providerBaseUrl.trim())}` : '';
       const response = await apiClient.get<ProviderModelsResponse>(`/api/settings/model/providers/${encodeURIComponent(providerId)}/models${query}`);
       if (requestId !== modelDiscoveryRequestId.current) return;
       const discovered = normalizeDiscoveredProviderModels(providerId, response.models || []);
+      setModelDiscoveryNotice(getProviderModelDiscoveryNotice(response));
       setAvailableModels(discovered);
       setSelectedModel((previous) => reconcileDiscoveredModelSelection(previous, discovered));
     } catch (error) {
       if (requestId !== modelDiscoveryRequestId.current) return;
       const message = formatErrorMessage(error, `Karen could not refresh models for ${providerId}.`);
       setModelDiscoveryError(message);
-      // A saved default is not proof that the Ollama model exists.
-      if (providerId === 'ollama') {
-        setAvailableModels([]);
-        setSelectedModel('');
-      } else {
-        setAvailableModels(fallbackModels);
-      }
+      // A failed endpoint is never evidence that a managed model is
+      // available, regardless of its saved or catalog-selected ID.
+      setAvailableModels([]);
+      if (!manualEntryAllowed) setSelectedModel('');
       toast({
         title: 'Model discovery failed',
         description: message,
@@ -313,8 +317,8 @@ export default function ModelSettings() {
     setApiKeyPrefix(selectedProviderDetails.api_key_prefix ?? 'Bearer');
     setAvailableModels(requiresLiveModelInventory ? [] : fallbackProviderModels);
     setSelectedModel(providerDefaultModel);
-    void loadProviderModels(selectedProviderDetails.id, providerBaseUrl, fallbackProviderModels);
-  }, [fallbackProviderModels, loadProviderModels, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
+    void loadProviderModels(selectedProviderDetails.id, providerBaseUrl, canEnterModelManually);
+  }, [canEnterModelManually, fallbackProviderModels, loadProviderModels, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
 
   useEffect(() => {
     if (!usesRuntimeOptions) return;
@@ -839,7 +843,7 @@ export default function ModelSettings() {
                                   void loadProviderModels(
                                     selectedProviderDetails.id,
                                     nextBaseUrl,
-                                    fallbackProviderModels,
+                                    canEnterModelManually,
                                   );
                                 }
                               }}
@@ -918,7 +922,7 @@ export default function ModelSettings() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                onClick={() => loadProviderModels(selectedProvider, baseUrl, fallbackProviderModels)}
+                                onClick={() => loadProviderModels(selectedProvider, baseUrl, canEnterModelManually)}
                                 disabled={isLoadingModels}
                                 className="h-7 w-7"
                                 title="Refresh model discovery"
@@ -933,7 +937,7 @@ export default function ModelSettings() {
                                 <SelectValue placeholder="Discovering models..." />
                               </SelectTrigger>
                               <SelectContent>
-                                {availableModels.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+                                {availableModels.map(m => <SelectItem key={m.id} value={m.id}>{m.name}{m.source === 'configured_catalog' ? ' (catalog)' : ''}</SelectItem>)}
                               </SelectContent>
                             </Select>
                           ) : canEnterModelManually ? (
@@ -944,6 +948,9 @@ export default function ModelSettings() {
                                 : modelDiscoveryError ? 'Model discovery unavailable. Refresh to retry.'
                                   : 'No models available on this provider.'}
                             </div>
+                          )}
+                          {modelDiscoveryNotice && (
+                            <p role="status" className="text-xs text-amber-600">{modelDiscoveryNotice}</p>
                           )}
                           {modelDiscoveryError && (
                             <p role="alert" className="text-xs text-destructive">{modelDiscoveryError}</p>

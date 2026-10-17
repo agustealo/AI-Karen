@@ -1,5 +1,5 @@
 import { apiClient } from '@/lib/api';
-import { getRuntimeDisplayName, getRuntimeGroupLabel, isBuiltInRuntimeProvider } from '@/lib/chat-response';
+import { getRuntimeDisplayName, getRuntimeGroupLabel, isBuiltInRuntimeProvider, normalizeProviderName } from '@/lib/chat-response';
 
 export interface RuntimeProviderModel {
   id: string;
@@ -237,6 +237,24 @@ export function reconcileDiscoveredModelSelection<T extends RuntimeProviderModel
  * Managed providers can only save a model returned by the active discovery
  * inventory. Custom providers may explicitly enter a model ID.
  */
+/**
+ * Distinguish a configured provider catalog from live model enumeration.
+ * Catalog IDs are usable configuration choices, but not proof that a remote
+ * endpoint currently exposes those models.
+ */
+export function getProviderModelDiscoveryNotice(result: {
+  discovery_status?: 'ready' | 'catalog_only' | 'empty';
+  inventory_source?: 'configured_catalog' | 'local_runtime' | 'provider_live' | 'ollama_native' | 'mixed' | 'none';
+}): string {
+  if (result.discovery_status === 'catalog_only') {
+    return 'Showing configured catalog models. Live provider availability is not verified.';
+  }
+  if (result.inventory_source === 'mixed') {
+    return 'Some models come from the configured catalog and are not verified by live discovery.';
+  }
+  return '';
+}
+
 export function canSaveProviderModelSelection(
   selectedModel: string,
   models: RuntimeProviderModel[],
@@ -254,7 +272,7 @@ export const getRuntimeProviderBucket = (
   const providerType = String(provider.provider_type || '').toLowerCase();
 
   if (isBuiltInRuntimeProvider(provider.id)) return 'builtIn';
-  if (provider.id === 'custom' || providerType === 'custom' || provider.supports_custom_auth) return 'custom';
+  if (provider.id === 'custom' || providerType === 'custom') return 'custom';
   if (providerType === 'local' || (provider.id === 'ollama' && providerType === 'hybrid')) return 'local';
   return 'thirdParty';
 };
@@ -407,7 +425,9 @@ export function normalizeRuntimeProviderCatalogResponse(
   const providers = (response.providers || [])
     .map((provider) => {
       const normalizedModels = sortProviderModels(
-        (provider.models || []).map((model) => ({
+        (provider.models || [])
+          .filter((model) => provider.id !== 'ollama' || model.available !== false)
+          .map((model) => ({
           id: model.id,
           name: model.label || model.id,
           family: provider.category || 'runtime',
@@ -491,14 +511,14 @@ export function normalizeRuntimeProviderCatalogResponse(
   const thirdPartyProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'thirdParty');
 
   const selectedProvider =
-    providers.find((provider) => provider.id === response.default_provider)?.id ||
+    selectableProviders.find((provider) => provider.id === response.default_provider)?.id ||
     selectableProviders[0]?.id ||
-    providers[0]?.id ||
     '';
+  const selectedProviderDetails = selectableProviders.find((provider) => provider.id === selectedProvider);
+  const preferredModel = selectedProviderDetails?.selected_model || response.default_model || '';
   const selectedModel =
-    response.default_model ||
-    providers.find((provider) => provider.id === selectedProvider)?.selected_model ||
-    providers.find((provider) => provider.id === selectedProvider)?.models[0]?.id ||
+    selectedProviderDetails?.models.find((model) => model.id === preferredModel)?.id ||
+    selectedProviderDetails?.models[0]?.id ||
     '';
 
   return {
@@ -514,5 +534,36 @@ export function normalizeRuntimeProviderCatalogResponse(
     timeout_seconds: undefined,
     auto_download: undefined,
     fallback_hierarchy: response.fallback_order,
+  };
+}
+
+
+/** Reconcile account model preferences against backend-reported chat inventory. */
+export function resolveChatProviderModelSelection(
+  inventory: NormalizedRuntimeInventory,
+  preferredProviderId: string,
+  preferredModelId: string,
+): { provider: string; model: string; preferenceUnavailable: boolean } {
+  const selectable = inventory.selectableProviders;
+  const selected = selectable.find((item) =>
+    item.id === preferredProviderId ||
+    (preferredProviderId && normalizeProviderName(item.id) === normalizeProviderName(preferredProviderId))
+  );
+  const fallback = selectable.find((item) => item.id === inventory.selected_provider) || selectable[0];
+  const provider = selected || fallback;
+  if (!provider) {
+    return { provider: '', model: '', preferenceUnavailable: Boolean(preferredProviderId) };
+  }
+  const candidates = provider.models;
+  const preferenceModel = selected ? preferredModelId : '';
+  const configuredModel = provider.selected_model || provider.default_model || '';
+  const model = candidates.find((item) => item.id === preferenceModel)?.id ||
+    candidates.find((item) => item.id === configuredModel)?.id ||
+    candidates[0]?.id ||
+    '';
+  return {
+    provider: provider.id,
+    model,
+    preferenceUnavailable: Boolean(preferredProviderId && !selected),
   };
 }

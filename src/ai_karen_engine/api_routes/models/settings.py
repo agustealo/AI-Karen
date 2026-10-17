@@ -44,6 +44,12 @@ from ai_karen_engine.config.llm_provider_config import (
 from ai_karen_engine.core.model_runtime.model_discovery_service import (
     get_model_discovery_service,
 )
+from ai_karen_engine.core.model_runtime.ollama_model_inventory import (
+    resolve_ollama_inventory_endpoint,
+)
+from ai_karen_engine.integrations.providers.ollama_provider import (
+    discover_installed_ollama_models,
+)
 from ai_karen_engine.integrations.llm_registry import get_registry
 from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
 from ai_karen_engine.core.security.secrets.secrets import get_secret_manager
@@ -110,6 +116,7 @@ class ProviderModelPayload(BaseModel):
     capabilities: List[str]
     size_gb: Optional[float] = None
     is_installed: bool = False
+    source: Literal["configured_catalog", "local_runtime", "provider_live", "ollama_native"] = "configured_catalog"
 
 
 class ProviderPayload(BaseModel):
@@ -178,8 +185,10 @@ class ProviderModelsResponse(BaseModel):
     provider: str
     base_url: Optional[str] = None
     models: List[ProviderModelPayload]
+    discovery_status: Literal["ready", "catalog_only", "empty"] = "empty"
+    inventory_source: Literal["configured_catalog", "local_runtime", "provider_live", "ollama_native", "mixed", "none"] = "none"
+    live_discovery_failed: bool = False
     discovered_at: str
-    discovery_status: Literal["ready", "catalog_only"] = "ready"
 
 
 class ProviderSettingsValidationRequest(BaseModel):
@@ -575,17 +584,25 @@ async def get_provider_models(
     if not provider.enabled:
         raise HTTPException(status_code=409, detail="Model provider is disabled")
 
-    saved_endpoint = _get_provider_override(normalized_id).get("base_url")
+    override = _get_provider_override(normalized_id)
+    saved_endpoint = override.get("base_url")
     configured_endpoint = provider.endpoint.base_url if provider.endpoint else None
     allowed_endpoints = {
         value for value in (saved_endpoint, configured_endpoint) if value
     }
+    ollama_options = []
     if normalized_id == "ollama":
-        allowed_endpoints.update(
-            option.base_url for option in await _get_ollama_runtime_options()
-        )
+        ollama_options = await _get_ollama_runtime_options()
+        allowed_endpoints.update(option.base_url for option in ollama_options)
 
-    target_url = base_url or saved_endpoint or configured_endpoint
+    target_url = base_url or (
+        resolve_ollama_inventory_endpoint(
+            saved_base_url=saved_endpoint,
+            configured_base_url=configured_endpoint,
+            runtime_source=override.get("runtime_source"),
+            runtime_options=ollama_options,
+        ) if normalized_id == "ollama" else saved_endpoint or configured_endpoint
+    )
     if base_url:
         requested_key = _discovery_url_key(base_url, ollama=normalized_id == "ollama")
         authorized_keys = {
@@ -598,7 +615,8 @@ async def get_provider_models(
                 detail="Model discovery requires a configured provider endpoint",
             )
 
-    # Never turn a configured model into a claim of installation.
+    # A configured catalog entry is not evidence of provider discovery.
+    live_discovery_failed = False
     by_id: Dict[str, ProviderModelPayload] = {
         model.id: ProviderModelPayload(
             id=model.id,
@@ -615,11 +633,8 @@ async def get_provider_models(
     if normalized_id == "ollama":
         if not target_url:
             raise HTTPException(status_code=503, detail="Ollama endpoint is not configured")
-        from ai_karen_engine.integrations.providers.ollama_provider import OllamaProvider
-
         try:
-            client = OllamaProvider(base_url=target_url, timeout=3, max_retries=0)
-            names = await asyncio.to_thread(client.get_models)
+            names = await discover_installed_ollama_models(target_url)
         except Exception as exc:
             logger.warning("Ollama model discovery unavailable", exc_info=True)
             raise HTTPException(
@@ -634,6 +649,7 @@ async def get_provider_models(
                 family="ollama",
                 capabilities=[],
                 is_installed=True,
+                source="ollama_native",
             )
             for name in names
         }
@@ -650,8 +666,10 @@ async def get_provider_models(
                     size_gb=float(item.size_bytes / (1024 ** 3))
                     if item.size_bytes else None,
                     is_installed=bool(item.weights_present),
+                    source="local_runtime",
                 )
         except Exception:
+            live_discovery_failed = True
             logger.warning("Local model discovery unavailable for %s", normalized_id, exc_info=True)
 
         if target_url and provider.provider_type in {ProviderType.REMOTE, ProviderType.HYBRID, ProviderType.CUSTOM}:
@@ -662,23 +680,42 @@ async def get_provider_models(
                     base_url=target_url, api_key=api_key, timeout=3, max_retries=0
                 )
                 for name in await asyncio.to_thread(client.get_models):
-                    if name not in by_id:
-                        by_id[name] = ProviderModelPayload(
-                            id=name,
-                            name=name,
-                            family=normalized_id,
-                            capabilities=[],
-                            is_installed=False,
-                        )
+                    # A live listing supersedes a matching configured catalog
+                    # model. Otherwise the UI would report a live ID as static.
+                    by_id[name] = ProviderModelPayload(
+                        id=name,
+                        name=name,
+                        family=normalized_id,
+                        capabilities=[],
+                        is_installed=False,
+                        source="provider_live",
+                    )
             except Exception:
+                live_discovery_failed = True
                 logger.warning("Remote model discovery unavailable for %s", normalized_id, exc_info=True)
+
+    sources = {model.source for model in by_id.values()}
+    if normalized_id == "ollama":
+        inventory_source = "ollama_native"
+        discovery_status = "ready" if by_id else "empty"
+    else:
+        live_sources = sources - {"configured_catalog"}
+        discovery_status = (
+            "ready" if live_sources else "catalog_only" if by_id else "empty"
+        )
+        inventory_source = (
+            "mixed" if len(sources) > 1
+            else next(iter(sources)) if sources else "none"
+        )
 
     return {
         "provider": normalized_id,
         "base_url": target_url,
         "models": list(by_id.values()),
+        "discovery_status": discovery_status,
+        "inventory_source": inventory_source,
+        "live_discovery_failed": live_discovery_failed,
         "discovered_at": datetime.now(timezone.utc).isoformat(),
-        "discovery_status": "ready",
     }
 
 
@@ -758,7 +795,8 @@ async def build_model_settings_payload() -> Dict[str, Any]:
                     family=dm.model_type or "unknown",
                     capabilities=list(dm.capabilities),
                     size_gb=float(dm.size_bytes / (1024**3)) if dm.size_bytes else None,
-                    is_installed=bool(dm.weights_present)
+                    is_installed=bool(dm.weights_present),
+                    source="local_runtime",
                 ))
 
         # Endpoint settings from storage

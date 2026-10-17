@@ -7,6 +7,7 @@ import pytest
 from scripts.ci.ollama_settings_live_proof import (
     LiveProofError,
     assert_default_runtime_response,
+    assert_chat_catalog_matches,
     assert_inventory_matches,
     assert_saved_selection,
     installed_models,
@@ -110,3 +111,37 @@ def test_default_runtime_must_not_relabel_fallback_as_ollama_success() -> None:
         }
         with pytest.raises(LiveProofError):
             assert_default_runtime_response(changed, "smollm2:135m")
+
+
+def test_chat_catalog_includes_all_installed_models_and_selected_default() -> None:
+    native = ["goekdenizguelmez/JOSIEFIED-Qwen3:8b", "qwen2.5:7b"]
+    catalog = {
+        "default_provider": "ollama",
+        "default_model": native[0],
+        "providers": [{
+            "id": "ollama",
+            "selected_model": native[0],
+            "models": [
+                {"id": native[0], "available": True},
+                {"id": native[1], "available": True},
+            ],
+        }],
+    }
+    assert_chat_catalog_matches(native, catalog, native[0])
+    catalog["providers"][0]["models"] = [{"id": native[0], "available": True}]
+    with pytest.raises(LiveProofError, match="differs"):
+        assert_chat_catalog_matches(native, catalog, native[0])
+
+
+def test_chat_catalog_rejects_saved_model_masquerading_as_installed() -> None:
+    native = ["qwen2.5:7b"]
+    catalog = {
+        "default_provider": "ollama",
+        "default_model": "removed:latest",
+        "providers": [{
+            "id": "ollama", "selected_model": "removed:latest",
+            "models": [{"id": "removed:latest", "available": True}],
+        }],
+    }
+    with pytest.raises(LiveProofError, match="differs"):
+        assert_chat_catalog_matches(native, catalog, native[0])
