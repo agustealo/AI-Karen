@@ -19,6 +19,7 @@ import logging
 import httpx
 
 from ai_karen_engine.config.channels import ChannelHostSettings
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.persistence.repositories.channel_repository import SqlChannelRepository
 from ai_karen_engine.services.channels.activation import ChannelActivationService
@@ -148,6 +149,66 @@ class ChannelHostServices:
             installation_id=installation_id,
             credential_handle=credential_handle,
         )
+
+    async def recover_inbox(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        limit: int = 100,
+    ) -> int:
+        """Requeue durably admitted work after explicit current policy admission.
+
+        No process-start scan and no implicit tenant restart. The configured
+        canonical installation and fresh principal must be authorized for the
+        exact channel.recover capability before even reading backlog metadata.
+        Individual execution still requires an atomic database claim.
+        """
+        if (
+            not self._initialized or self._closed or self.worker is None
+            or self.activation is None
+        ):
+            raise PermissionError("Channel recovery host is unavailable")
+        if not 1 <= limit <= 1000:
+            raise ValueError("Channel recovery limit must be 1..1000")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel recovery connection is unavailable")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.recover", plan=authorized_plan,
+        )
+        if self.kernel.get_channel_activation_manifest(
+            connection.installation_id
+        ) is None:
+            raise PermissionError("Channel recovery installation is unavailable")
+        receipts = await self.repository.list_recoverable_inbound(
+            tenant_id=tenant_id, connection_id=connection_id, limit=limit,
+        )
+        scheduled = 0
+        for receipt in receipts:
+            if self._closed:
+                break
+            if receipt.tenant_id != tenant_id:
+                raise PermissionError("Channel recovery receipt tenant mismatch")
+            if await self.worker.submit(receipt):
+                scheduled += 1
+        logger.info(
+            "channel.host.recovery_scheduled",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "requested_count": len(receipts),
+                "scheduled_count": scheduled,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            },
+        )
+        return scheduled
 
     async def shutdown(self) -> None:
         """Revoke process-local transport capability before database cleanup."""
