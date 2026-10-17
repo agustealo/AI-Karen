@@ -301,3 +301,32 @@ async def test_source_health_records_healthy_empty_retriever():
     assert result.source_health == (
         {"index": 0, "retriever": "_FakeRetriever", "status": "success", "candidate_count": 0},
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_memory_health_preserves_partial_results_and_safe_diagnostics():
+    from ai_karen_engine.core.memory.memory_runtime_manager import MemoryRuntimeManager
+
+    class _BrokenRetriever:
+        async def recall(self, query):
+            raise ValueError("private backend credential")
+
+    manager = object.__new__(MemoryRuntimeManager)
+    manager._neuro_recall = NeuroRecall(retrievers=(
+        _FakeRetriever([_memory("known", "tenant-1", "user-1", content="Zeus")]),
+        _BrokenRetriever(),
+    ))
+    payload = await manager.recall_context(
+        user_id="user-1", tenant_id="tenant-1", query="What's my name?",
+        top_k=5, correlation_id="corr-1",
+    )
+
+    assert payload["status"] == "degraded"
+    assert payload["results"][0]["content"] == "Zeus"
+    health = payload["retrieval_health"]
+    assert health["retriever_count"] == 2
+    assert health["failed_retriever_count"] == 1
+    assert health["timed_out_retriever_count"] == 0
+    assert [item["status"] for item in health["source_health"]] == ["success", "failed"]
+    assert "private backend credential" not in str(health["source_health"])
+    assert "Zeus" not in str(health["source_health"])
