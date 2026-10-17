@@ -22,6 +22,8 @@ from ai_karen_engine.persistence.repositories.channel_repository import SqlChann
 from ai_karen_engine.services.channels.activation import ChannelActivationService
 from ai_karen_engine.services.channels.credentials import ChannelVaultSecretResolver
 from ai_karen_engine.services.channels.ingress import ChannelIngressService
+from ai_karen_engine.services.channels.execution import ChannelExecutionService
+from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
     CredentialVaultService,
 )
@@ -41,6 +43,7 @@ class ChannelHostServices:
         http_client: httpx.AsyncClient,
         owns_vault: bool = True,
         owns_kernel: bool = True,
+        chat_runtime: object | None = None,
     ) -> None:
         self.settings = settings.validate()
         if not self.settings.enabled:
@@ -51,8 +54,11 @@ class ChannelHostServices:
         self.http_client = http_client
         self._owns_vault = owns_vault
         self._owns_kernel = owns_kernel
+        self._chat_runtime = chat_runtime
         self.ingress: ChannelIngressService | None = None
         self.activation: ChannelActivationService | None = None
+        self.execution: ChannelExecutionService | None = None
+        self.delivery: ChannelDeliveryService | None = None
         self._installed: dict[str, object] = {}
         self._resolvers: dict[str, ChannelVaultSecretResolver] = {}
         self._initialized = False
@@ -97,6 +103,15 @@ class ChannelHostServices:
                 kernel=self.kernel, repository=self.repository,
                 max_native_body_bytes=self.settings.max_native_body_bytes,
             )
+            # These are dependency-bound services, not running workers. No tenant
+            # messages are claimed and no outbound call is authorized at startup.
+            self.delivery = ChannelDeliveryService(
+                kernel=self.kernel, repository=self.repository,
+            )
+            if self._chat_runtime is not None:
+                self.execution = ChannelExecutionService(
+                    repository=self.repository, chat_runtime=self._chat_runtime,
+                )
             self._initialized = True
             logger.info(
                 "channel.host.dependencies_bound",
@@ -132,6 +147,8 @@ class ChannelHostServices:
         self._initialized = False
         self.ingress = None
         self.activation = None
+        self.execution = None
+        self.delivery = None
 
         for name, adapter in reversed(tuple(self._installed.items())):
             try:
