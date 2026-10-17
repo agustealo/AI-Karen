@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeDiscoveredProviderModels,
   reconcileDiscoveredModelSelection,
+  canSaveProviderModelSelection,
 } from '@/lib/model-runtime-inventory';
 
 describe('managed provider model discovery', () => {
@@ -22,6 +23,19 @@ describe('managed provider model discovery', () => {
       { id: 'gemini-2.5-flash', name: 'Gemini Flash' },
     ]);
     expect(models).toHaveLength(1);
+  });
+
+  it('blocks saving a stale model while inventory is loading or absent', () => {
+    const inventory = [
+      { id: 'qwen2.5:7b', name: 'Qwen 2.5', is_installed: true },
+    ];
+    const managed = { isLoading: false, manualEntryAllowed: false };
+    expect(canSaveProviderModelSelection('qwen2.5:7b', inventory, managed)).toBe(true);
+    expect(canSaveProviderModelSelection('saved-but-removed', inventory, managed)).toBe(false);
+    expect(canSaveProviderModelSelection('qwen2.5:7b', inventory, { ...managed, isLoading: true })).toBe(false);
+    expect(canSaveProviderModelSelection('qwen2.5:7b', [], managed)).toBe(false);
+    expect(canSaveProviderModelSelection('custom-model', [], { ...managed, manualEntryAllowed: true })).toBe(true);
+    expect(canSaveProviderModelSelection('', inventory, { ...managed, manualEntryAllowed: true })).toBe(false);
   });
 
   it('does not fabricate a selection when the selected runtime has no models', () => {

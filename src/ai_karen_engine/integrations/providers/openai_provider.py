@@ -162,6 +162,13 @@ class OpenAIProvider(LLMProviderBase):
     def _normalize_base_url(self, base_url: str) -> str:
         """Normalize provider base URLs for the active transport."""
         normalized = str(base_url or "").rstrip("/")
+        if self.provider_name in {"ollama", "ollama-local"}:
+            # Ollama's installed-model API lives under /api, while this adapter
+            # uses OpenAI chat completions under /v1. Settings intentionally
+            # persist the backend-approved host/container root URL.
+            if normalized.endswith("/api") or normalized.endswith("/v1"):
+                normalized = normalized.rsplit("/", 1)[0]
+            return f"{normalized}/v1" if normalized else ""
         if self.provider_name == "zai" and normalized.endswith("/api/coding/paas/v4"):
             logger.warning(
                 "Normalizing legacy Z.ai coding endpoint to general PaaS endpoint for chat completions"

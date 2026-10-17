@@ -233,6 +233,21 @@ export function reconcileDiscoveredModelSelection<T extends RuntimeProviderModel
     : (models[0]?.id ?? '');
 }
 
+/**
+ * Managed providers can only save a model returned by the active discovery
+ * inventory. Custom providers may explicitly enter a model ID.
+ */
+export function canSaveProviderModelSelection(
+  selectedModel: string,
+  models: RuntimeProviderModel[],
+  options: { isLoading: boolean; manualEntryAllowed: boolean },
+): boolean {
+  const modelId = selectedModel.trim();
+  if (!modelId || options.isLoading) return false;
+  return options.manualEntryAllowed ||
+    models.some((model) => model.id === modelId);
+}
+
 export const getRuntimeProviderBucket = (
   provider: RuntimeProviderDetails,
 ): RuntimeProviderBucket => {
