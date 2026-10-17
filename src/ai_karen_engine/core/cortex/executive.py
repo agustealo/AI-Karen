@@ -203,6 +203,14 @@ class CortexExecutionDecider:
             graph_required = True
             reason_codes.append("force_graph_override")
 
+        # A single authorized live-data lookup cannot be replaced by an
+        # incidental reasoning recommendation from Intelligence. Preserve
+        # explicit workflows, human approvals, and all graph requirements.
+        if analysis.get("direct_capability", False) and not graph_required:
+            if reasoning_modes:
+                reason_codes.append("direct_live_capability_over_incidental_reasoning")
+            reasoning_modes = []
+
         execution_mode = (
             RuntimeExecutionMode.GRAPH
             if graph_required

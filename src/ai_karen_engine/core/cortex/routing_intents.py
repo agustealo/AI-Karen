@@ -239,7 +239,12 @@ class CapabilityDecision:
 
 
 def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
-    q = " ".join(query.lower().split())
+    # Normalize surface spelling for matching only. Keep the original request
+    # untouched for tool parameters, provenance and conversational evidence.
+    # Common apostrophe omissions must not convert live-information questions
+    # into model-only chat. This applies across all capability patterns.
+    q = " ".join(str(query or "").casefold().replace("’", "'").split())
+    q = re.sub(r"\b(what|who|where|when|why|how)s\b", r"\1's", q)
     # A user's private resource is not a public search target, even when a
     # sentence contains a freshness word such as "latest" or "update".
     private_update = bool(re.search(
