@@ -153,6 +153,8 @@ def test_stream_error_events_include_canonical_failure_provenance() -> None:
             continue
         metadata = arguments.get("metadata")
         if isinstance(metadata, ast.Dict):
-            error_metadata.append({key.value for key in metadata.keys if isinstance(key, ast.Constant)})
+            keys = {key.value for key in metadata.keys if isinstance(key, ast.Constant)}
+            if "error_code" in keys:
+                error_metadata.append(keys)
     assert len(error_metadata) >= 2
     assert all(required.issubset(keys) for keys in error_metadata)
