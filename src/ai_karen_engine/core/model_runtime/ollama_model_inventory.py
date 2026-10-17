@@ -36,16 +36,22 @@ def resolve_ollama_inventory_endpoint(
         return saved_base_url.strip()
     source = runtime_source or "host"
     option = next(
-        (
-            item for item in runtime_options
-            if _get_field(item, "source") == source
-            and _get_field(item, "available") is True
-            and isinstance(_get_field(item, "base_url"), str)
-            and _get_field(item, "base_url").strip()
-        ),
+        (item for item in runtime_options if _get_field(item, "source") == source),
         None,
     )
-    return str(_get_field(option, "base_url")).strip() if option is not None else configured_base_url
+    if option is not None:
+        url = _get_field(option, "base_url")
+        return (
+            url.strip()
+            if _get_field(option, "available") is True
+            and isinstance(url, str) and url.strip()
+            else None
+        )
+    # Do not silently switch from an unavailable selected runtime to
+    # another Ollama installation with a different model inventory.
+    if runtime_options:
+        return None
+    return configured_base_url
 
 
 async def discover_installed_ollama_models(base_url: str) -> list[str]:
