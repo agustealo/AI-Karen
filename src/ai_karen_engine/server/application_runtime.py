@@ -72,6 +72,8 @@ async def initialize_application_channel_host(app: FastAPI) -> None:
     # requests never select a plugin, vault actor, model, or generic executor.
     app.state.plugin_kernel = kernel
     app.state.credential_vault_service = vault
+    app.state._channel_host_owns_kernel = existing_kernel is None
+    app.state._channel_host_owns_vault = existing_vault is None
     app.state.channel_host_services = host
     app.state.channel_ingress_service = host.ingress
     logger.info(
@@ -156,6 +158,13 @@ async def shutdown_application_runtime(app: FastAPI) -> None:
                 "Channel host shutdown degraded",
                 extra={"error_type": type(exc).__name__},
             )
+
+    if getattr(app.state, "_channel_host_owns_kernel", False):
+        app.state.plugin_kernel = None
+    if getattr(app.state, "_channel_host_owns_vault", False):
+        app.state.credential_vault_service = None
+    app.state._channel_host_owns_kernel = False
+    app.state._channel_host_owns_vault = False
 
     model_download_worker = getattr(app.state, "model_download_worker", None)
     if model_download_worker is not None:
