@@ -93,3 +93,24 @@ def test_ollama_native_completion_reason_is_preserved(
     assert provider.last_usage["output_tokens"] == 24
     assert provider.last_usage["finish_reason"] == done_reason
     assert provider.last_usage["output_truncated"] is expected_truncated
+
+
+@pytest.mark.parametrize(
+    ("done_reason", "truncated"),
+    [("stop", False), ("length", True)],
+)
+def test_ollama_generate_text_records_native_completion_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    done_reason: str,
+    truncated: bool,
+) -> None:
+    provider = OllamaProvider(model="qwen3:4b", base_url="http://localhost:11434")
+    monkeypatch.setattr(provider, "_request", lambda path, payload: {
+        "message": {"content": "Partial model output"},
+        "prompt_eval_count": 7,
+        "eval_count": 18,
+        "done_reason": done_reason,
+    })
+    assert provider.generate_text([{"role": "user", "content": "Explain this"}]) == "Partial model output"
+    assert provider.last_usage["finish_reason"] == done_reason
+    assert provider.last_usage["output_truncated"] is truncated
