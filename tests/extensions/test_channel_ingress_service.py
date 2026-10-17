@@ -245,3 +245,17 @@ async def test_replayed_receipt_is_scheduled_for_claim_revalidation():
     )
     assert result.inserted is False
     schedule.assert_awaited_once_with(result)
+
+
+@pytest.mark.asyncio
+async def test_worker_saturation_is_logged_as_deferred_not_processed(caplog):
+    service, adapter, repo, _ = components()
+    callback = AsyncMock(return_value=False)
+    service._on_admitted = callback
+    result = await service.verify_and_admit(
+        tenant_id=TENANT, connection_id="connection-a",
+        adapter=adapter, headers={}, body=b"native",
+    )
+    assert result is repo.admit_verified_inbound.return_value
+    callback.assert_awaited_once_with(result)
+    assert "channel.ingress.worker_deferred" in caplog.text
