@@ -247,3 +247,23 @@ async def test_application_shutdown_revokes_ingress_before_database_cleanup(monk
     assert seen == ["channel_stopped", "db"]
     assert app.state.channel_host_services is None
     fake_host.shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_host_binds_existing_runtime_execution_without_starting_worker():
+    host, _, _, _, adapter = fake_components()
+    runtime = SimpleNamespace(execute=AsyncMock())
+    host._chat_runtime = runtime
+    await host.initialize()
+    assert host.execution is not None
+    assert host.execution._chat_runtime is runtime
+    assert host.execution._repository is host.repository
+    assert host.delivery is not None
+    assert host.delivery._repository is host.repository
+    assert host.delivery._kernel is host.kernel
+    runtime.execute.assert_not_awaited()
+    adapter.start.assert_not_awaited()
+    adapter.send.assert_not_awaited()
+    await host.shutdown()
+    assert host.execution is None
+    assert host.delivery is None
