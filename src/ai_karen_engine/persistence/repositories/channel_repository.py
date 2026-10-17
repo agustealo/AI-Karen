@@ -106,6 +106,176 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def create_connection(
+        self, *, tenant_id: str, installation_id: str,
+        provider_account_id: str, credential_handle: str,
+    ) -> ChannelConnection | None:
+        """Create ONLY a disabled tenant account; never activate plugin runtime."""
+        tenant_id = _tenant_uuid(tenant_id)
+        if any(
+            not isinstance(x, str) or not x.strip() or len(x) > 256
+            for x in (installation_id, provider_account_id, credential_handle)
+        ):
+            raise ValueError("Invalid channel connection identifier or credential handle")
+        connection_id = str(uuid.uuid4())
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_connections (
+                        connection_id, tenant_id, installation_id,
+                        provider_account_id, credential_handle, enabled, revision
+                    ) VALUES (
+                        :connection, CAST(:tenant AS uuid), :installation,
+                        :provider_account, :credential, false, 1
+                    )
+                    ON CONFLICT DO NOTHING
+                    RETURNING connection_id, installation_id, tenant_id,
+                              provider_account_id, credential_handle, revision, enabled
+                """),
+                {"connection": connection_id, "tenant": tenant_id,
+                 "installation": installation_id,
+                 "provider_account": provider_account_id,
+                 "credential": credential_handle},
+            )).mappings().one_or_none()
+        return self._connection_from_row(row) if row is not None else None
+
+    async def issue_link_challenge(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        proof_digest: str, ttl_seconds: int,
+    ) -> str | None:
+        """Store digest only; revoke the previous open code for this user.
+
+        All checks and the one-use secret are scoped to an enabled connection,
+        its current revision, and a fresh active verified Karen user.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        principal_id = str(uuid.UUID(user_id))
+        if not connection_id or not 60 <= ttl_seconds <= 900:
+            raise ValueError("Invalid channel proof scope or time-to-live")
+        if (
+            len(proof_digest) != 64
+            or any(c not in "0123456789abcdef" for c in proof_digest)
+        ):
+            raise ValueError("Channel proof digest must be SHA-256 hex")
+        async with async_transaction_scope(tenant_id) as session:
+            # Disable any previous unconsumed proof for the same owner. The
+            # unique partial index forbids two simultaneous outstanding codes.
+            await session.execute(
+                text("""
+                    UPDATE public.channel_link_challenges
+                    SET revoked_at = clock_timestamp()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                      AND consumed_at IS NULL AND revoked_at IS NULL
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": principal_id},
+            )
+            row = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_link_challenges (
+                        tenant_id, connection_id, connection_revision,
+                        user_id, proof_digest, expires_at
+                    )
+                    SELECT c.tenant_id, c.connection_id, c.revision,
+                           u.user_id, :digest,
+                           now() + make_interval(secs => :ttl)
+                    FROM public.channel_connections c
+                    JOIN public.auth_users u ON u.tenant_id = c.tenant_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND c.enabled = true
+                      AND u.user_id = CAST(:user AS uuid)
+                      AND u.is_active = true AND u.is_verified = true
+                    RETURNING challenge_id
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": principal_id, "digest": proof_digest, "ttl": ttl_seconds},
+            )).scalar_one_or_none()
+        return str(row) if row is not None else None
+
+    async def consume_verified_link(
+        self, *, connection: ChannelConnection,
+        external_sender_id: str, proof_digest: str,
+    ) -> VerifiedIdentityBinding | None:
+        """Atomically attest the native sender using one unexpired host proof.
+
+        The user_id comes only from the DB challenge, NEVER the native event.
+        Consuming the same code a second time cannot create another binding.
+        """
+        tenant_id = _tenant_uuid(connection.tenant_id)
+        if (
+            not connection.enabled
+            or not external_sender_id or len(external_sender_id) > 256
+            or len(proof_digest) != 64
+            or any(c not in "0123456789abcdef" for c in proof_digest)
+        ):
+            raise ValueError("Invalid channel identity proof")
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    WITH matched AS (
+                        SELECT p.challenge_id, p.user_id
+                        FROM public.channel_link_challenges p
+                        JOIN public.channel_connections c
+                          ON c.tenant_id = p.tenant_id
+                         AND c.connection_id = p.connection_id
+                         AND c.revision = p.connection_revision
+                        JOIN public.auth_users u
+                          ON u.tenant_id = p.tenant_id
+                         AND u.user_id = p.user_id
+                        WHERE p.tenant_id = CAST(:tenant AS uuid)
+                          AND p.connection_id = :connection
+                          AND p.proof_digest = :digest
+                          AND p.connection_revision = :revision
+                          AND p.expires_at > clock_timestamp()
+                          AND p.consumed_at IS NULL AND p.revoked_at IS NULL
+                          AND c.enabled = true
+                          AND u.is_active = true AND u.is_verified = true
+                        FOR UPDATE OF p
+                    ),
+                    linked AS (
+                        INSERT INTO public.channel_identity_bindings (
+                            tenant_id, connection_id, external_sender_id,
+                            user_id, verified_at
+                        )
+                        SELECT CAST(:tenant AS uuid), :connection, :sender,
+                               m.user_id, clock_timestamp()
+                        FROM matched m
+                        ON CONFLICT (tenant_id, connection_id, external_sender_id)
+                        DO NOTHING
+                        RETURNING binding_id, tenant_id, connection_id,
+                                  external_sender_id, user_id, revision
+                    ),
+                    consumed AS (
+                        UPDATE public.channel_link_challenges p
+                        SET consumed_at = clock_timestamp()
+                        FROM linked l
+                        WHERE p.challenge_id IN (SELECT challenge_id FROM matched)
+                          AND p.user_id = l.user_id
+                          AND p.consumed_at IS NULL AND p.revoked_at IS NULL
+                        RETURNING p.challenge_id
+                    )
+                    SELECT l.binding_id, l.tenant_id, l.connection_id,
+                           l.external_sender_id, l.user_id, l.revision
+                    FROM linked l
+                    WHERE EXISTS (SELECT 1 FROM consumed)
+                """),
+                {"tenant": tenant_id, "connection": connection.connection_id,
+                 "revision": connection.revision, "digest": proof_digest,
+                 "sender": external_sender_id},
+            )).mappings().one_or_none()
+        if row is None:
+            return None
+        return VerifiedIdentityBinding(
+            binding_id=str(row["binding_id"]),
+            tenant_id=str(row["tenant_id"]), user_id=str(row["user_id"]),
+            connection_id=str(row["connection_id"]),
+            external_sender_id=str(row["external_sender_id"]),
+            revision=int(row["revision"]),
+        )
+
     async def get_connection(
         self, *, tenant_id: str, connection_id: str,
     ) -> ChannelConnection | None:

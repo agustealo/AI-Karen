@@ -42,10 +42,13 @@ class ChannelActivationService:
         kernel: PluginKernel,
         repository: SqlChannelRepository,
         principal_lookup: Callable[..., Awaitable[Any]] | None = None,
+        credential_authorizer: Callable[..., Awaitable[bool]] | None = None,
     ) -> None:
         self._kernel = kernel
         self._repository = repository
         self._principal_lookup = principal_lookup or self._fresh_principal
+        # Host vault owns this decision; a missing verifier fails closed.
+        self._credential_authorizer = credential_authorizer
         # An operator rarely changes connections. Serializing startup/CAS
         # prevents two activations in one process from stopping each other's
         # shared adapter. Other replicas are fenced by the durable revision.
@@ -109,6 +112,64 @@ class ChannelActivationService:
         canonical = self._kernel.loader.load_extension(installation_id)
         if canonical is not adapter:
             raise ChannelActivationDenied("Channel adapter is not owned by canonical loader")
+
+    async def provision(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        installation_id: str, provider_account_id: str,
+        credential_handle: str, authorized_plan: AuthorizedExecutionPlan,
+    ) -> ChannelConnection:
+        """Provision a disabled account using canonical catalog and vault authority.
+
+        Provisioning does not activate a transport, grant generic plugin execute
+        permission, or attest ownership of any external sender identity.
+        """
+        if (
+            not isinstance(provider_account_id, str)
+            or not provider_account_id.strip()
+            or len(provider_account_id) > 256
+            or not isinstance(credential_handle, str)
+            or not credential_handle.strip()
+            or len(credential_handle) > 256
+        ):
+            raise ChannelActivationDenied("Invalid channel provider account or credential reference")
+        await self._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=installation_id,
+            action="channel.provision", plan=authorized_plan,
+        )
+        if self._kernel.get_channel_activation_manifest(installation_id) is None:
+            raise ChannelActivationDenied(
+                "Channel installation is unavailable or manually disabled"
+            )
+        if self._credential_authorizer is None:
+            raise ChannelActivationDenied("Host credential authority is not connected")
+        permitted = await self._credential_authorizer(
+            tenant_id=tenant_id, user_id=user_id,
+            installation_id=installation_id,
+            credential_handle=credential_handle,
+        )
+        if permitted is not True:
+            raise ChannelActivationDenied("Credential reference is not approved for tenant")
+        connection = await self._repository.create_connection(
+            tenant_id=tenant_id, installation_id=installation_id,
+            provider_account_id=provider_account_id,
+            credential_handle=credential_handle,
+        )
+        if connection is None:
+            raise ChannelActivationConflict("Channel account already exists for tenant")
+        if connection.enabled or connection.revision != 1 or connection.tenant_id != tenant_id:
+            raise ChannelActivationConflict("Provisioned connection contract mismatch")
+        logger.info(
+            "channel.connection.provisioned",
+            extra={
+                "tenant_id": tenant_id, "user_id": user_id,
+                "connection_id": connection.connection_id,
+                "installation_id": installation_id,
+                "revision": connection.revision,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            },
+        )
+        return connection
 
     async def activate(
         self, *, tenant_id: str, connection_id: str,
