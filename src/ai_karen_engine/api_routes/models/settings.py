@@ -39,6 +39,7 @@ from ai_karen_engine.config.llm_provider_config import (
     get_provider_config_manager,
     get_provider_execution_spec,
     is_docker,
+    resolve_provider_name,
 )
 from ai_karen_engine.core.model_runtime.model_discovery_service import (
     get_model_discovery_service,
@@ -874,7 +875,9 @@ async def build_model_settings_payload() -> Dict[str, Any]:
 
 
 def _normalize_provider_id(pid: Any) -> str:
-    return str(pid or "").lower().replace("-", "_").replace(" ", "_")
+    """Keep registered provider IDs intact, including hyphenated IDs."""
+    identifier = str(pid or "").strip().lower().replace(" ", "_")
+    return resolve_provider_name(identifier)
 
 
 def _get_provider_override(provider_name: str) -> Dict[str, Any]:
