@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   normalizeDiscoveredProviderModels,
+  normalizeModelSettingsResponse,
+  normalizeRuntimeProviderCatalogResponse,
   reconcileDiscoveredModelSelection,
 } from '@/lib/model-runtime-inventory';
 
@@ -29,5 +31,71 @@ describe('managed provider model discovery', () => {
       { id: 'saved-only', name: 'Saved only' },
     ])).toEqual([]);
     expect(reconcileDiscoveredModelSelection('saved-only', [])).toBe('');
+  });
+});
+
+
+describe('saved model identifiers are not runtime inventory', () => {
+  it('does not offer a previously selected Ollama model before live discovery', () => {
+    const response = normalizeModelSettingsResponse({
+      selected_provider: 'ollama',
+      selected_model: 'not-installed:latest',
+      providers: [{
+        id: 'ollama',
+        display_name: 'Ollama',
+        provider_type: 'local',
+        selected_model: 'not-installed:latest',
+        models: [],
+      }],
+    });
+    expect(response.providers[0].models).toEqual([]);
+    expect(response.selected_model).toBe('');
+  });
+
+  it('does not manufacture models for managed hyphenated cloud providers', () => {
+    const response = normalizeModelSettingsResponse({
+      selected_provider: 'gmi-cloud',
+      selected_model: 'old-model',
+      providers: [{
+        id: 'gmi-cloud',
+        display_name: 'GMI Cloud',
+        provider_type: 'external',
+        selected_model: 'old-model',
+        models: [],
+      }],
+    });
+    expect(response.providers[0].models).toEqual([]);
+    expect(response.selected_model).toBe('');
+  });
+
+  it('keeps manual model entry only for custom providers', () => {
+    const response = normalizeModelSettingsResponse({
+      selected_provider: 'custom',
+      selected_model: 'tenant-model',
+      providers: [{
+        id: 'custom',
+        display_name: 'Custom',
+        provider_type: 'custom',
+        selected_model: 'tenant-model',
+        models: [],
+      }],
+    });
+    expect(response.providers[0].models.map((model) => model.id)).toEqual(['tenant-model']);
+    expect(response.selected_model).toBe('tenant-model');
+  });
+
+  it('does not invent catalog inventory for managed providers', () => {
+    const response = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'gmi-cloud',
+      default_model: 'stale-default',
+      providers: [{
+        id: 'gmi-cloud',
+        label: 'GMI Cloud',
+        category: 'external',
+        default_model: 'stale-default',
+        models: [],
+      }],
+    });
+    expect(response.providers[0].models).toEqual([]);
   });
 });
