@@ -1891,3 +1891,40 @@ async def test_colloquial_news_request_without_authorized_search_reports_unavail
     assert result.source == "capability_unavailable"
     assert "not authorized" in result.text.lower()
     assert "cnn" not in result.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_live_news_stays_direct_when_intelligence_proposes_incidental_reasoning() -> None:
+    analysis = _analysis()
+    analysis.reasoning_modes = ["verification"]
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(return_value=analysis)
+    )
+
+    decision = await decider.decide(_request("Whats the latest news in detroit?"))
+
+    assert decision.intent == "search.general"
+    assert decision.topology is ExecutionTopology.DIRECT
+    assert decision.is_graph_required is False
+    assert decision.reasoning_modes == []
+    assert "direct_live_capability_over_incidental_reasoning" in decision.reason_codes
+    assert DirectCapabilityExecutor().can_handle(decision)
+
+
+@pytest.mark.asyncio
+async def test_live_news_does_not_override_explicit_multi_step_workflow() -> None:
+    analysis = _analysis()
+    analysis.reasoning_modes = ["verification"]
+    analysis.topology_signals = {"multiple_actions": True, "dependency_chain": True}
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(return_value=analysis)
+    )
+
+    decision = await decider.decide(_request("Whats the latest news in detroit?"))
+
+    assert decision.intent == "search.general"
+    assert decision.is_graph_required is True
+    assert decision.reasoning_modes
+    assert DirectCapabilityExecutor().can_handle(decision) is False
