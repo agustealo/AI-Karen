@@ -1756,6 +1756,11 @@ class ChatRuntime:
             memory_recall_meta["memory_projection_failures"] = int(
                 result.get("projection_failures") or 0
             )
+            # Presentation-only summary from governed formation receipts.
+            # Never surface raw receipts, personal fact values or exception text.
+            memory_recall_meta["memory_projection_targets"] = list(
+                result.get("projection_targets") or []
+            )
             memory_recall_meta["memory_write_authority"] = str(
                 result.get("write_authority") or "unknown"
             )
@@ -3205,6 +3210,9 @@ class ChatRuntime:
             ),
             "memory_formation_reason": memory_recall_meta.get(
                 "memory_formation_reason"
+            ),
+            "memory_projection_targets": list(
+                memory_recall_meta.get("memory_projection_targets") or []
             ),
             "consumer_insights": build_consumer_insights(
                 prompt_telemetry=provider_meta.get("prompt_telemetry"),
