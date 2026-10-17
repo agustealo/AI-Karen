@@ -810,15 +810,18 @@ class ChatRuntime:
 
             fallback: Optional[ChatExecutionResult] = None
             try:
-                fallback = await build_runtime_fallback(
-                    runtime=self,
-                    request=request,
-                    failure=exc,
-                    correlation_id=ctx.correlation_id,
-                    conversation_id=conversation_id,
-                    start_time=stream_start,
-                    decision=decision,
-                )
+                # Fallback can replace an empty stream, never content already
+                # delivered to the client by a different provider/model.
+                if not streamed_text.strip():
+                    fallback = await build_runtime_fallback(
+                        runtime=self,
+                        request=request,
+                        failure=exc,
+                        correlation_id=ctx.correlation_id,
+                        conversation_id=conversation_id,
+                        start_time=stream_start,
+                        decision=decision,
+                    )
             except Exception as fallback_exc:
                 logger.error(
                     "ChatRuntime stream fallback failed",
