@@ -60,6 +60,7 @@ class _Vault:
 class _Projector:
     def __init__(self):
         self.calls = []
+        self.projection_target_names = frozenset({"redis", "memory_graph"})
 
     async def project(self, **kwargs):
         self.calls.append(kwargs)
@@ -584,7 +585,9 @@ def test_projection_target_summary_exposes_only_stage_counts():
         },
     ]
 
-    observed = _projection_target_health(receipts)
+    observed = _projection_target_health(
+        receipts, allowed_targets=frozenset({"stm", "memory_graph"})
+    )
 
     assert observed == [
         {"target": "memory_graph", "success_count": 1, "failure_count": 1},
@@ -606,3 +609,33 @@ def test_projection_target_summary_does_not_expose_unsafe_target_names():
         {"target": "unidentified_projection", "success_count": 0, "failure_count": 1},
     ]
     assert "private-secret" not in str(result)
+
+
+def test_projection_target_summary_rejects_unregistered_but_well_formed_name():
+    from ai_karen_engine.core.memory.formation.service import (
+        _projection_target_health,
+    )
+
+    result = _projection_target_health(
+        [{"projection_results": {"some_personal_value": True, "stm": False}}],
+        allowed_targets=frozenset({"stm", "memory_graph"}),
+    )
+
+    assert result == [
+        {"target": "stm", "success_count": 0, "failure_count": 1},
+        {"target": "unidentified_projection", "success_count": 1, "failure_count": 0},
+    ]
+    assert "some_personal_value" not in str(result)
+
+
+def test_projection_target_summary_retains_internal_pipeline_failures():
+    from ai_karen_engine.core.memory.formation.service import (
+        _projection_target_health,
+    )
+
+    assert _projection_target_health(
+        [{"projection_results": {"projection_pipeline": False}}],
+        allowed_targets=frozenset({"stm", "memory_graph"}),
+    ) == [
+        {"target": "projection_pipeline", "success_count": 0, "failure_count": 1},
+    ]
