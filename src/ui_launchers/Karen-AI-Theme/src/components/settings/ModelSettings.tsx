@@ -44,6 +44,7 @@ import {
   normalizeDiscoveredProviderModels,
   reconcileDiscoveredModelSelection,
   canSaveProviderModelSelection,
+  getProviderModelDiscoveryNotice,
 } from '@/lib/model-runtime-inventory';
 
 interface ProviderModel {
@@ -269,13 +270,7 @@ export default function ModelSettings() {
       const response = await apiClient.get<ProviderModelsResponse>(`/api/settings/model/providers/${encodeURIComponent(providerId)}/models${query}`);
       if (requestId !== modelDiscoveryRequestId.current) return;
       const discovered = normalizeDiscoveredProviderModels(providerId, response.models || []);
-      setModelDiscoveryNotice(
-        response.discovery_status === 'catalog_only'
-          ? 'Showing configured catalog models. Live provider availability is not verified.'
-          : response.inventory_source === 'mixed'
-            ? 'Some models come from the configured catalog and are not verified by live discovery.'
-            : '',
-      );
+      setModelDiscoveryNotice(getProviderModelDiscoveryNotice(response));
       setAvailableModels(discovered);
       setSelectedModel((previous) => reconcileDiscoveredModelSelection(previous, discovered));
     } catch (error) {
