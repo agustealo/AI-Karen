@@ -180,7 +180,7 @@ class SqlChannelRepository:
                     )
                     SELECT c.tenant_id, c.connection_id, c.revision,
                            u.user_id, :digest,
-                           clock_timestamp() + make_interval(secs => :ttl)
+                           now() + make_interval(secs => :ttl)
                     FROM public.channel_connections c
                     JOIN public.auth_users u ON u.tenant_id = c.tenant_id
                     WHERE c.tenant_id = CAST(:tenant AS uuid)
