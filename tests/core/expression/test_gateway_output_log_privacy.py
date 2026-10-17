@@ -2,12 +2,13 @@
 
 import ast
 import inspect
+import textwrap
 
 from ai_karen_engine.core.expression.gateway import ExpressionGateway
 
 
 def test_expression_gateway_never_logs_generated_response_text() -> None:
-    tree = ast.parse(inspect.getsource(ExpressionGateway.generate))
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ExpressionGateway.generate)))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
