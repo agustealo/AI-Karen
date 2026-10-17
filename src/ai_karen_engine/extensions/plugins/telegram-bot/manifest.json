@@ -1,0 +1,53 @@
+{
+  "name": "telegram-bot",
+  "version": "1.0.0",
+  "display_name": "Telegram Bot Channel",
+  "description": "Optional, authenticated Telegram Bot API text transport. Karen's host Gateway owns identities, ChatRuntime calls, admission, and delivery.",
+  "author": "AI Karen",
+  "license": "MIT",
+  "category": "communication",
+  "entrypoint": "handler:MainExtension",
+  "tags": [
+    "telegram",
+    "messaging",
+    "communication",
+    "channel"
+  ],
+  "api_version": "1.0",
+  "capabilities": {
+    "provides_ui": false,
+    "provides_api": false,
+    "provides_background_tasks": false,
+    "provides_webhooks": true,
+    "prompt_first": true,
+    "communication_channel": {
+      "version": "1.0.0",
+      "transport": "telegram-bot",
+      "ingress": [
+        "webhook"
+      ],
+      "inbound": [
+        "text"
+      ],
+      "outbound": [
+        "text"
+      ],
+      "authentication": "token",
+      "supports_edits": false,
+      "supports_streaming": false,
+      "supports_media": false,
+      "supports_delivery_receipts": false
+    }
+  },
+  "permissions": {
+    "network_access": [
+      "api.telegram.org"
+    ]
+  },
+  "rbac": {
+    "allowed_roles": [
+      "admin"
+    ],
+    "default_enabled": false
+  }
+}
