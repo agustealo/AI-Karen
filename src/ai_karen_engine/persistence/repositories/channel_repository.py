@@ -479,6 +479,61 @@ class SqlChannelRepository:
             inserted=inserted,
         )
 
+    async def list_recoverable_inbound(
+        self, *, tenant_id: str, connection_id: str, limit: int = 100,
+    ) -> list[InboundAdmission]:
+        """Enumerate recoverable receipts only within an explicitly scoped connection.
+
+        This is NOT a startup resume authority. A host supervisor may invoke it
+        only after obtaining fresh authorization for the requested tenant and
+        connection. Claims remain atomic in claim_inbound; enumeration does not
+        reserve messages or bypass tenant RLS.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Connection scope is required for inbox recovery")
+        if not 1 <= limit <= 1000:
+            raise ValueError("Recovery limit must be 1..1000")
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT i.inbox_id, i.correlation_id, i.tenant_id,
+                           i.user_id, i.binding_id
+                    FROM public.channel_inbox i
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = i.tenant_id
+                     AND c.connection_id = i.connection_id
+                     AND c.revision = i.connection_revision
+                    JOIN public.channel_identity_bindings b
+                      ON b.tenant_id = i.tenant_id
+                     AND b.connection_id = i.connection_id
+                     AND b.binding_id = i.binding_id
+                     AND b.user_id = i.user_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = i.tenant_id
+                     AND u.user_id = i.user_id
+                    WHERE i.tenant_id = CAST(:tenant AS uuid)
+                      AND i.connection_id = :connection
+                      AND c.enabled = true
+                      AND b.revoked_at IS NULL
+                      AND u.is_active = true AND u.is_verified = true
+                      AND i.message_kind = 'text'
+                      AND i.message_text IS NOT NULL
+                      AND (
+                          (i.status = 'pending' AND i.claim_token IS NULL)
+                          OR (
+                              i.status = 'processing'
+                              AND i.claim_token IS NOT NULL
+                              AND i.claim_expires_at <= clock_timestamp()
+                          )
+                      )
+                    ORDER BY i.created_at, i.inbox_id
+                    LIMIT :limit
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "limit": limit},
+            )).mappings().all()
+        return [self._admission_from_row(row, inserted=False) for row in rows]
+
     async def claim_inbound(
         self, *, tenant_id: str, inbox_id: str, lease_seconds: int,
     ) -> tuple[str, InboundAdmission] | None:
