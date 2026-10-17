@@ -44,6 +44,10 @@ from ai_karen_engine.config.llm_provider_config import (
 from ai_karen_engine.core.model_runtime.model_discovery_service import (
     get_model_discovery_service,
 )
+from ai_karen_engine.core.model_runtime.ollama_model_inventory import (
+    discover_installed_ollama_models,
+    resolve_ollama_inventory_endpoint,
+)
 from ai_karen_engine.integrations.llm_registry import get_registry
 from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
 from ai_karen_engine.core.security.secrets.secrets import get_secret_manager
@@ -579,17 +583,25 @@ async def get_provider_models(
     if not provider.enabled:
         raise HTTPException(status_code=409, detail="Model provider is disabled")
 
-    saved_endpoint = _get_provider_override(normalized_id).get("base_url")
+    override = _get_provider_override(normalized_id)
+    saved_endpoint = override.get("base_url")
     configured_endpoint = provider.endpoint.base_url if provider.endpoint else None
     allowed_endpoints = {
         value for value in (saved_endpoint, configured_endpoint) if value
     }
+    ollama_options = []
     if normalized_id == "ollama":
-        allowed_endpoints.update(
-            option.base_url for option in await _get_ollama_runtime_options()
-        )
+        ollama_options = await _get_ollama_runtime_options()
+        allowed_endpoints.update(option.base_url for option in ollama_options)
 
-    target_url = base_url or saved_endpoint or configured_endpoint
+    target_url = base_url or (
+        resolve_ollama_inventory_endpoint(
+            saved_base_url=saved_endpoint,
+            configured_base_url=configured_endpoint,
+            runtime_source=override.get("runtime_source"),
+            runtime_options=ollama_options,
+        ) if normalized_id == "ollama" else saved_endpoint or configured_endpoint
+    )
     if base_url:
         requested_key = _discovery_url_key(base_url, ollama=normalized_id == "ollama")
         authorized_keys = {
@@ -620,11 +632,8 @@ async def get_provider_models(
     if normalized_id == "ollama":
         if not target_url:
             raise HTTPException(status_code=503, detail="Ollama endpoint is not configured")
-        from ai_karen_engine.integrations.providers.ollama_provider import OllamaProvider
-
         try:
-            client = OllamaProvider(base_url=target_url, timeout=3, max_retries=0)
-            names = await asyncio.to_thread(client.get_models)
+            names = await discover_installed_ollama_models(target_url)
         except Exception as exc:
             logger.warning("Ollama model discovery unavailable", exc_info=True)
             raise HTTPException(
