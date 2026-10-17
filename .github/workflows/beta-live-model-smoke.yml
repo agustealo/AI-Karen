@@ -8,6 +8,8 @@ on:
     paths:
       - "scripts/beta_live_model_smoke.py"
       - "scripts/ci/production-first-boot-smoke.sh"
+      - "scripts/ci/ollama_settings_live_proof.py"
+      - "src/ai_karen_engine/api_routes/models/settings.py"
       - "src/ai_karen_engine/api_routes/chat/**"
       - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
       - "src/ai_karen_engine/core/runtime/**"
