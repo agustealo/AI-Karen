@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeRuntimeProviderCatalogResponse } from '@/lib/model-runtime-inventory';
+import { normalizeRuntimeProviderCatalogResponse, resolveChatProviderModelSelection } from '@/lib/model-runtime-inventory';
 
 describe('runtime provider catalog normalization', () => {
   it('keeps one canonical catalog and preserves provider configuration gaps', () => {
@@ -71,5 +71,69 @@ describe('runtime provider catalog normalization', () => {
     // A configured selection is not evidence that Ollama has the model installed.
     expect(ollama?.selected_model).toBe('qwen3:4b');
     expect(ollama?.models).toEqual([]);
+  });
+});
+
+
+describe('chat provider/model selector reflects Application Settings discovery', () => {
+  const selectedModel = 'goekdenizguelmez/JOSIEFIED-Qwen3:8b';
+  const secondModel = 'qwen2.5:7b';
+  const inventory = normalizeRuntimeProviderCatalogResponse({
+    default_provider: 'ollama',
+    default_model: selectedModel,
+    providers: [{
+      id: 'ollama',
+      label: 'Ollama',
+      category: 'local',
+      enabled: true,
+      configured: true,
+      healthy: true,
+      selected_model: selectedModel,
+      models: [
+        { id: secondModel, label: secondModel, available: true },
+        { id: selectedModel, label: selectedModel, available: true },
+      ],
+    }],
+  });
+
+  it('shows installed Ollama models in chat and selects the saved model by default', () => {
+    const provider = inventory.selectableProviders.find((item) => item.id === 'ollama');
+    expect(provider?.models.map((model) => model.id)).toEqual([selectedModel, secondModel]);
+    expect(inventory.selected_provider).toBe('ollama');
+    expect(inventory.selected_model).toBe(selectedModel);
+    expect(resolveChatProviderModelSelection(inventory, '', '')).toEqual({
+      provider: 'ollama', model: selectedModel, preferenceUnavailable: false,
+    });
+  });
+
+  it('allows a user to select another installed model from chat', () => {
+    expect(resolveChatProviderModelSelection(inventory, 'ollama-local', secondModel)).toEqual({
+      provider: 'ollama', model: secondModel, preferenceUnavailable: false,
+    });
+  });
+
+  it('does not select a removed model from an outdated user preference', () => {
+    expect(resolveChatProviderModelSelection(inventory, 'ollama', 'removed:latest')).toEqual({
+      provider: 'ollama', model: selectedModel, preferenceUnavailable: false,
+    });
+  });
+
+  it('does not manufacture an installed model from a saved default after discovery fails', () => {
+    const empty = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'ollama',
+      default_model: selectedModel,
+      providers: [{
+        id: 'ollama',
+        label: 'Ollama',
+        category: 'local',
+        enabled: true,
+        configured: true,
+        healthy: false,
+        selected_model: selectedModel,
+        models: [],
+      }],
+    });
+    expect(empty.providers[0].models).toEqual([]);
+    expect(resolveChatProviderModelSelection(empty, 'ollama', selectedModel).model).toBe('');
   });
 });
