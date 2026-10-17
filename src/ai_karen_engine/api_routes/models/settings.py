@@ -782,9 +782,16 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             
         # Local providers like Ollama are only configured if they have available runtime options
         # or if a base_url has been manually set.
-        if provider.name == "ollama" and not override.get("base_url"):
-             if runtime_options and not any(opt.available for opt in runtime_options):
-                 is_configured = False
+        if provider.name == "ollama" and runtime_options:
+            active_source = override.get("runtime_source") or "host"
+            active_option = next(
+                (opt for opt in runtime_options if opt.source == active_source),
+                None,
+            )
+            if active_option is None or not active_option.available:
+                is_configured = False
+                healthy = False
+                degraded_reason = "Selected Ollama runtime is unavailable"
 
         # Required config fields
         required_fields = []
@@ -991,7 +998,7 @@ async def _probe_ollama_health(base_url: str) -> bool:
     """Probe an Ollama endpoint for health."""
     try:
         # Strip /v1 for health check if present
-        health_url = base_url.replace("/v1", "") + "/api/tags"
+        health_url = _discovery_url_key(base_url, ollama=True) + "/api/tags"
         
         loop = asyncio.get_event_loop()
         def _check():
