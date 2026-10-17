@@ -150,7 +150,22 @@ async def test_failed_memory_scope_remains_unresolved_and_degraded() -> None:
     assert resolved.unresolved_sources == [EvidenceSource.MEMORY.value]
     assert resolved.metadata["memory_recall_status"] == "failed"
     assert resolved.metadata["memory_degraded"] is True
-    assert "non-default tenant_id" in resolved.metadata["memory_degradation_reason"]
+    assert resolved.metadata["memory_degradation_reason"] == "memory_retrieval_unavailable"
+    assert "tenant_id" not in str(resolved.metadata["memory_degradation_reason"])
+
+
+@pytest.mark.asyncio
+async def test_memory_recall_exceptions_never_enter_client_metadata_or_logs(caplog) -> None:
+    class _SecretFailure:
+        async def recall_context(self, **kwargs: object) -> dict[str, object]:
+            raise RuntimeError("secret_database_password=never-log-this")
+
+    resolver = RuntimeEvidenceResolver(memory_manager=_SecretFailure())
+    resolved = await resolver.resolve(_request(), _authorized_context(_request()))
+    assert resolved.metadata["memory_recall_status"] == "failed"
+    assert resolved.metadata["memory_degradation_reason"] == "memory_retrieval_unavailable"
+    assert "never-log-this" not in str(resolved.metadata)
+    assert "never-log-this" not in caplog.text
 
 
 def test_cortex_stage_2_carries_same_resolved_context() -> None:
