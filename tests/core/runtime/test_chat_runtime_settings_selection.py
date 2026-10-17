@@ -124,3 +124,35 @@ def test_disabled_provider_cannot_be_forced_by_saved_configuration(
     ChatRuntime._apply_selected_model_settings(request)
     assert request.preferred_provider is None
     assert request.preferred_model is None
+
+
+def test_stream_error_events_include_canonical_failure_provenance() -> None:
+    """Both error branches must expose backend execution truth to stream consumers."""
+    import ast
+    import inspect
+
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    tree = ast.parse(inspect.getsource(chat_runtime))
+    required = {
+        "requested_provider", "requested_model", "actual_provider", "actual_model",
+        "runtime_engine", "response_source", "fallback_level", "degraded_mode",
+        "degradation_reason", "fallback_reason",
+    }
+    error_metadata = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "ChatStreamChunk":
+            continue
+        arguments = {kw.arg: kw.value for kw in node.keywords}
+        kind = arguments.get("type")
+        if not (isinstance(kind, ast.Constant) and kind.value == "error") and not (
+            isinstance(kind, ast.Attribute) and kind.attr == "ERROR"
+        ):
+            continue
+        metadata = arguments.get("metadata")
+        if isinstance(metadata, ast.Dict):
+            error_metadata.append({key.value for key in metadata.keys if isinstance(key, ast.Constant)})
+    assert len(error_metadata) >= 2
+    assert all(required.issubset(keys) for keys in error_metadata)
