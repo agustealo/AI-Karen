@@ -128,7 +128,11 @@ class ChannelIngressService:
         return (
             event.message_kind == "text"
             and isinstance(event.text, str)
-            and re.match(r"^/link(?:\s|$)", event.text) is not None
+            and re.match(
+                r"^\s*/link(?:@[A-Za-z0-9_]{1,32})?(?:\s|$)",
+                event.text,
+                flags=re.IGNORECASE,
+            ) is not None
         )
 
     async def _admit_event(
