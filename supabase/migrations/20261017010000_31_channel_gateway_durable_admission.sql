@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS public.channel_inbox (
     inbox_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     connection_id text NOT NULL,
+    connection_revision bigint NOT NULL CHECK (connection_revision >= 1),
     external_event_id text NOT NULL,
     external_sender_id text NOT NULL,
     external_conversation_id text NOT NULL,
