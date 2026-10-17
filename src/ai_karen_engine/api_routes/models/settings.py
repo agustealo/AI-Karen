@@ -45,8 +45,10 @@ from ai_karen_engine.core.model_runtime.model_discovery_service import (
     get_model_discovery_service,
 )
 from ai_karen_engine.core.model_runtime.ollama_model_inventory import (
-    discover_installed_ollama_models,
     resolve_ollama_inventory_endpoint,
+)
+from ai_karen_engine.integrations.providers.ollama_provider import (
+    discover_installed_ollama_models,
 )
 from ai_karen_engine.integrations.llm_registry import get_registry
 from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
