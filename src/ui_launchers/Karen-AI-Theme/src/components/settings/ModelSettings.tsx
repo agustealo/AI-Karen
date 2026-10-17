@@ -41,6 +41,8 @@ import {
   normalizeModelSettingsResponse,
   type RuntimeSettingsResponse,
   sortProviderModels,
+  normalizeDiscoveredProviderModels,
+  reconcileDiscoveredModelSelection,
 } from '@/lib/model-runtime-inventory';
 
 interface ProviderModel {
@@ -260,15 +262,9 @@ export default function ModelSettings() {
       const query = providerBaseUrl?.trim() ? `?base_url=${encodeURIComponent(providerBaseUrl.trim())}` : '';
       const response = await apiClient.get<ProviderModelsResponse>(`/api/settings/model/providers/${encodeURIComponent(providerId)}/models${query}`);
       if (requestId !== modelDiscoveryRequestId.current) return;
-      const discovered = sortProviderModels(
-        providerId === 'ollama'
-          ? (response.models || []).filter((entry) => entry.is_installed === true)
-          : response.models || [],
-      );
+      const discovered = normalizeDiscoveredProviderModels(providerId, response.models || []);
       setAvailableModels(discovered);
-      setSelectedModel((previous) =>
-        discovered.some((entry) => entry.id === previous) ? previous : (discovered[0]?.id ?? ''),
-      );
+      setSelectedModel((previous) => reconcileDiscoveredModelSelection(previous, discovered));
     } catch (error) {
       if (requestId !== modelDiscoveryRequestId.current) return;
       const message = formatErrorMessage(error, `Karen could not refresh models for ${providerId}.`);
