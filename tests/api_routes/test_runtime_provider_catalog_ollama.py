@@ -84,5 +84,7 @@ async def test_chat_catalog_fails_closed_when_ollama_discovery_is_unavailable(
     assert ollama.models == []
     assert ollama.selected_model is None
     assert ollama.degradation_reason == "Ollama installed-model inventory unavailable"
+    assert ollama.healthy is False
+    assert ollama.health.status == "degraded"
     assert catalog.default_model == "auto"
     assert catalog.default_provider == "ollama"
