@@ -137,3 +137,41 @@ describe('chat provider/model selector reflects Application Settings discovery',
     expect(resolveChatProviderModelSelection(empty, 'ollama', selectedModel).model).toBe('');
   });
 });
+
+
+describe('empty runtime inventory is not a selectable Chat provider', () => {
+  it('keeps degraded Ollama diagnostics but prevents selection of empty models', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'ollama',
+      default_model: 'auto',
+      providers: [{
+        id: 'ollama', label: 'Ollama', category: 'local', enabled: true,
+        configured: true, healthy: false,
+        degradation_reason: 'Ollama installed-model inventory unavailable',
+        selected_model: null, models: [],
+      }],
+    });
+    expect(inventory.providers).toHaveLength(1);
+    expect(inventory.providers[0].degradation_reason).toContain('unavailable');
+    expect(inventory.selectableProviders).toEqual([]);
+    expect(resolveChatProviderModelSelection(inventory, 'ollama', 'auto')).toEqual({
+      provider: '', model: '', preferenceUnavailable: true,
+    });
+  });
+
+  it('excludes the unverified bootstrap provider without losing its health state', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'builtin_transformers',
+      default_model: 'auto',
+      providers: [{
+        id: 'builtin_transformers', label: 'Transformers', category: 'builtin',
+        enabled: true, configured: false, healthy: false,
+        selected_model: null, models: [],
+      }],
+    });
+    expect(inventory.systemFallbackProvider?.healthy).toBe(false);
+    expect(inventory.selectableProviders).toHaveLength(0);
+    expect(inventory.selected_provider).toBe('');
+    expect(inventory.selected_model).toBe('');
+  });
+});

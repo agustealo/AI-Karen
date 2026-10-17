@@ -504,7 +504,9 @@ export function normalizeRuntimeProviderCatalogResponse(
       getRuntimeDisplayName(a.id, a.display_name).localeCompare(getRuntimeDisplayName(b.id, b.display_name))
     );
 
-  const selectableProviders = providers.filter((provider) => isProviderSelectable(provider));
+  const selectableProviders = providers.filter((provider) =>
+    isProviderSelectable(provider) && provider.models.length > 0
+  );
   const builtInProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'builtIn');
   const localProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'local');
   const customProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'custom');
