@@ -246,3 +246,111 @@ async def test_hyphenated_provider_selection_persists_under_canonical_id(
     assert stored["provider"] == "gmi-cloud"
     assert stored["model_providers.gmi-cloud.last_model"] == "meta-llama/Llama-3.1-70B-Instruct"
     assert saved == [True]
+
+
+@pytest.mark.asyncio
+async def test_remote_provider_discovery_tracks_live_and_configured_model_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.integrations.providers import openai_compatible_provider
+
+    provider = SimpleNamespace(
+        name="gmi-cloud",
+        enabled=True,
+        endpoint=SimpleNamespace(base_url="https://models.example.invalid/v1"),
+        provider_type=ProviderType.REMOTE,
+        models=[
+            SimpleNamespace(id="catalog-only", name="Catalog only", family="cloud", capabilities=[]),
+            SimpleNamespace(id="live-model", name="Catalog name", family="cloud", capabilities=[]),
+        ],
+    )
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: provider if name == "gmi-cloud" else None,
+            get_api_key=lambda name: None,
+        ),
+    )
+    monkeypatch.setattr(settings_routes, "_get_provider_override", lambda name: {})
+
+    async def no_local_models(*, runtime: str) -> list[object]:
+        return []
+
+    monkeypatch.setattr(
+        settings_routes, "get_model_discovery_service",
+        lambda: SimpleNamespace(get_models_async=no_local_models),
+    )
+
+    class RemoteCatalog:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["base_url"] == "https://models.example.invalid/v1"
+
+        def get_models(self) -> list[str]:
+            return ["live-model", "new-live-model"]
+
+    monkeypatch.setattr(openai_compatible_provider, "OpenAICompatibleProvider", RemoteCatalog)
+    response = await settings_routes.get_provider_models(
+        "gmi-cloud", current_user={"roles": ["admin"]},
+    )
+
+    assert response["discovery_status"] == "ready"
+    assert response["inventory_source"] == "mixed"
+    assert response["live_discovery_failed"] is False
+    by_id = {model.id: model for model in response["models"]}
+    assert by_id["catalog-only"].source == "configured_catalog"
+    assert by_id["live-model"].source == "provider_live"
+    assert by_id["new-live-model"].source == "provider_live"
+    assert all(model.is_installed is False for model in by_id.values())
+    serialized = settings_routes.ProviderModelsResponse(**response).model_dump()
+    assert serialized["inventory_source"] == "mixed"
+    assert serialized["models"][1]["source"] == "provider_live"
+
+
+@pytest.mark.asyncio
+async def test_remote_outage_returns_honest_catalog_status_not_live_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.integrations.providers import openai_compatible_provider
+
+    provider = SimpleNamespace(
+        name="gmi-cloud",
+        enabled=True,
+        endpoint=SimpleNamespace(base_url="https://models.example.invalid/v1"),
+        provider_type=ProviderType.REMOTE,
+        models=[SimpleNamespace(id="saved-catalog", name="Saved catalog", family="cloud", capabilities=[])],
+    )
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: provider if name == "gmi-cloud" else None,
+            get_api_key=lambda name: None,
+        ),
+    )
+    monkeypatch.setattr(settings_routes, "_get_provider_override", lambda name: {})
+
+    async def no_local_models(*, runtime: str) -> list[object]:
+        return []
+
+    monkeypatch.setattr(
+        settings_routes, "get_model_discovery_service",
+        lambda: SimpleNamespace(get_models_async=no_local_models),
+    )
+
+    class UnreachableProvider:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def get_models(self) -> list[str]:
+            raise ConnectionError("provider unavailable")
+
+    monkeypatch.setattr(openai_compatible_provider, "OpenAICompatibleProvider", UnreachableProvider)
+    response = await settings_routes.get_provider_models(
+        "gmi-cloud", current_user={"roles": ["admin"]},
+    )
+
+    assert response["discovery_status"] == "catalog_only"
+    assert response["inventory_source"] == "configured_catalog"
+    assert response["live_discovery_failed"] is True
+    assert [(item.id, item.source, item.is_installed) for item in response["models"]] == [
+        ("saved-catalog", "configured_catalog", False),
+    ]
