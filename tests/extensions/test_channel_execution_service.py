@@ -1,5 +1,6 @@
 """KOC-04B: claimed external events execute only as verified ChatRuntime turns."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -161,7 +162,5 @@ def test_stable_session_is_tenant_and_principal_scoped():
     scope = _stable_channel_session(item)
     assert scope == _stable_channel_session(item)
     assert scope != _stable_channel_session(
-        ClaimedChannelMessage(
-            **{**item.__dict__, "user_id": "22222222-2222-2222-2222-222222222222"}
-        )
+        replace(item, user_id="22222222-2222-2222-2222-222222222222")
     )
