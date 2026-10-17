@@ -73,3 +73,44 @@ async def test_unreachable_daemon_fails_without_saved_default_fallback(
     monkeypatch.setattr(OllamaProvider, "get_models", unavailable)
     with pytest.raises(ConnectionError, match="unreachable"):
         await discover_installed_ollama_models("http://localhost:11434/v1")
+
+
+@pytest.mark.parametrize(
+    ("done_reason", "expected_truncated"),
+    [("stop", False), ("length", True), (None, False)],
+)
+def test_ollama_native_completion_reason_is_preserved(
+    done_reason: str | None,
+    expected_truncated: bool,
+) -> None:
+    provider = OllamaProvider(model="qwen3:4b", base_url="http://localhost:11434")
+    provider._record_usage({
+        "prompt_eval_count": 12,
+        "eval_count": 24,
+        "done_reason": done_reason,
+    })
+    assert provider.last_usage["input_tokens"] == 12
+    assert provider.last_usage["output_tokens"] == 24
+    assert provider.last_usage["finish_reason"] == done_reason
+    assert provider.last_usage["output_truncated"] is expected_truncated
+
+
+@pytest.mark.parametrize(
+    ("done_reason", "truncated"),
+    [("stop", False), ("length", True)],
+)
+def test_ollama_generate_text_records_native_completion_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    done_reason: str,
+    truncated: bool,
+) -> None:
+    provider = OllamaProvider(model="qwen3:4b", base_url="http://localhost:11434")
+    monkeypatch.setattr(provider, "_request", lambda path, payload: {
+        "message": {"content": "Partial model output"},
+        "prompt_eval_count": 7,
+        "eval_count": 18,
+        "done_reason": done_reason,
+    })
+    assert provider.generate_text([{"role": "user", "content": "Explain this"}]) == "Partial model output"
+    assert provider.last_usage["finish_reason"] == done_reason
+    assert provider.last_usage["output_truncated"] is truncated

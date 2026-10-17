@@ -155,6 +155,8 @@ class OllamaProvider(LLMProviderBase):
             "total_tokens": prompt_tokens + completion_tokens,
             "latency_seconds": total_duration_s,
             "tokens_per_second": tokens_per_second,
+            "finish_reason": str(result.get("done_reason") or "").strip() or None,
+            "output_truncated": result.get("done_reason") == "length",
         }
 
     def generate_text(
