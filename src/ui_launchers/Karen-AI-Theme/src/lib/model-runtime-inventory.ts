@@ -426,7 +426,7 @@ export function normalizeRuntimeProviderCatalogResponse(
     .map((provider) => {
       const normalizedModels = sortProviderModels(
         (provider.models || [])
-          .filter((model) => provider.id !== 'ollama' || model.available !== false)
+          .filter((model) => model.available !== false)
           .map((model) => ({
           id: model.id,
           name: model.label || model.id,
