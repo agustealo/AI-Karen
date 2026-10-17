@@ -41,11 +41,14 @@ import {
   normalizeModelSettingsResponse,
   type RuntimeSettingsResponse,
   sortProviderModels,
+  normalizeDiscoveredProviderModels,
+  reconcileDiscoveredModelSelection,
 } from '@/lib/model-runtime-inventory';
 
 interface ProviderModel {
   id: string;
   name: string;
+  is_installed?: boolean;
   family?: string;
   source?: string;
   compatible_runtimes?: string[];
@@ -140,6 +143,8 @@ export default function ModelSettings() {
   const [apiKeyHeader, setApiKeyHeader] = useState('Authorization');
   const [apiKeyPrefix, setApiKeyPrefix] = useState('Bearer');
   const [availableModels, setAvailableModels] = useState<ProviderModel[]>([]);
+  const [modelDiscoveryError, setModelDiscoveryError] = useState('');
+  const modelDiscoveryRequestId = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -201,6 +206,10 @@ export default function ModelSettings() {
     return selectedProviderDetails?.runtime_options?.find((option) => option.source === runtimeSource) ?? null;
   }, [selectedProviderDetails, runtimeSource, usesRuntimeOptions]);
 
+  const requiresLiveModelInventory = selectedProvider === 'ollama';
+  const canEnterModelManually = selectedProviderDetails?.provider_type === 'custom'
+    || selectedProviderDetails?.supports_manual_model_entry === true;
+
   const fallbackProviderModels = useMemo(
     () =>
       (selectedProviderDetails?.models ?? []).map((model) => ({
@@ -246,20 +255,36 @@ export default function ModelSettings() {
     fallbackModels: ProviderModel[] = [],
   ) => {
     if (!providerId) return;
+    const requestId = ++modelDiscoveryRequestId.current;
+    setModelDiscoveryError('');
     setIsLoadingModels(true);
     try {
       const query = providerBaseUrl?.trim() ? `?base_url=${encodeURIComponent(providerBaseUrl.trim())}` : '';
       const response = await apiClient.get<ProviderModelsResponse>(`/api/settings/model/providers/${encodeURIComponent(providerId)}/models${query}`);
-      setAvailableModels(sortProviderModels(response.models || []));
+      if (requestId !== modelDiscoveryRequestId.current) return;
+      const discovered = normalizeDiscoveredProviderModels(providerId, response.models || []);
+      setAvailableModels(discovered);
+      setSelectedModel((previous) => reconcileDiscoveredModelSelection(previous, discovered));
     } catch (error) {
-      setAvailableModels(fallbackModels);
+      if (requestId !== modelDiscoveryRequestId.current) return;
+      const message = formatErrorMessage(error, `Karen could not refresh models for ${providerId}.`);
+      setModelDiscoveryError(message);
+      // A saved default is not proof that the Ollama model exists.
+      if (providerId === 'ollama') {
+        setAvailableModels([]);
+        setSelectedModel('');
+      } else {
+        setAvailableModels(fallbackModels);
+      }
       toast({
         title: 'Model discovery failed',
-        description: formatErrorMessage(error, `Karen could not refresh models for ${providerId}.`),
+        description: message,
         variant: 'destructive',
       });
     } finally {
-      setIsLoadingModels(false);
+      if (requestId === modelDiscoveryRequestId.current) {
+        setIsLoadingModels(false);
+      }
     }
   }, [toast]);
 
@@ -268,11 +293,15 @@ export default function ModelSettings() {
   useEffect(() => {
     if (!selectedProviderDetails) return;
     const providerDefaultModel = selectedProviderDetails.selected_model || selectedProviderDetails.default_model || selectedProviderDetails.models[0]?.id || '';
-    const providerBaseUrl = usesRuntimeOptions
-      ? normalizeDisplayBaseUrl(selectedProviderDetails.base_url || selectedProviderDetails.default_base_url || '')
+    const selectedSource = selectedProviderDetails.runtime_source === 'container' ? 'container' : 'host';
+    const runtimeEndpoint = usesRuntimeOptions
+      ? selectedProviderDetails.runtime_options?.find((option) => option.source === selectedSource)?.base_url
+      : undefined;
+    const providerBaseUrl = runtimeEndpoint
+      ? normalizeDisplayBaseUrl(runtimeEndpoint)
       : (selectedProviderDetails.base_url || selectedProviderDetails.default_base_url || '');
     if (usesRuntimeOptions) {
-      setRuntimeSource(selectedProviderDetails.runtime_source === 'container' ? 'container' : 'host');
+      setRuntimeSource(selectedSource);
     }
     setBaseUrl(usesRuntimeOptions ? providerBaseUrl : normalizeDisplayBaseUrl(providerBaseUrl));
     setApiKey('');
@@ -281,10 +310,10 @@ export default function ModelSettings() {
     setApiKeyValidationMessage('');
     setApiKeyHeader(selectedProviderDetails.api_key_header || 'Authorization');
     setApiKeyPrefix(selectedProviderDetails.api_key_prefix ?? 'Bearer');
-    setAvailableModels(fallbackProviderModels);
+    setAvailableModels(requiresLiveModelInventory ? [] : fallbackProviderModels);
     setSelectedModel(providerDefaultModel);
     void loadProviderModels(selectedProviderDetails.id, providerBaseUrl, fallbackProviderModels);
-  }, [fallbackProviderModels, loadProviderModels, selectedProviderDetails, usesRuntimeOptions]);
+  }, [fallbackProviderModels, loadProviderModels, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
 
   useEffect(() => {
     if (!usesRuntimeOptions) return;
@@ -791,6 +820,8 @@ export default function ModelSettings() {
                               value={runtimeSource}
                               onValueChange={(value: 'host' | 'container') => {
                                 setRuntimeSource(value);
+                                setAvailableModels([]);
+                                setSelectedModel('');
                                 const nextOption = selectedProviderDetails.runtime_options?.find((option) => option.source === value);
                                 if (nextOption) {
                                   const nextBaseUrl = normalizeDisplayBaseUrl(nextOption.base_url);
@@ -808,7 +839,7 @@ export default function ModelSettings() {
                               </SelectTrigger>
                               <SelectContent>
                                 {(selectedProviderDetails.runtime_options ?? []).map((option) => (
-                                  <SelectItem key={option.source} value={option.source}>
+                                  <SelectItem key={option.source} value={option.source} disabled={!option.available}>
                                     {option.label}
                                   </SelectItem>
                                 ))}
@@ -872,7 +903,7 @@ export default function ModelSettings() {
                         
                         <div className="space-y-3 md:self-start">
                           <div className="flex items-center justify-between">
-                            <Label htmlFor="model-picker" className="font-semibold">Model Identification</Label>
+                            <Label htmlFor="model-picker" className="font-semibold">{canEnterModelManually ? "Model Identification" : "Available Models"}</Label>
                             {selectedProviderDetails.supports_model_discovery && (
                               <Button
                                 variant="outline"
@@ -895,8 +926,17 @@ export default function ModelSettings() {
                                 {availableModels.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
                               </SelectContent>
                             </Select>
+                          ) : canEnterModelManually ? (
+                            <Input id="model-picker" value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} placeholder="Enter your custom provider's model ID" className="h-11 bg-muted/20 font-mono" />
                           ) : (
-                            <Input id="model-picker" value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} placeholder="Type model id (e.g. gpt-4o)" className="h-11 bg-muted/20 font-mono" />
+                            <div role="status" className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm text-muted-foreground">
+                              {isLoadingModels ? 'Discovering provider models…'
+                                : modelDiscoveryError ? 'Model discovery unavailable. Refresh to retry.'
+                                  : 'No models available on this provider.'}
+                            </div>
+                          )}
+                          {modelDiscoveryError && (
+                            <p role="alert" className="text-xs text-destructive">{modelDiscoveryError}</p>
                           )}
                         </div>
                       </div>

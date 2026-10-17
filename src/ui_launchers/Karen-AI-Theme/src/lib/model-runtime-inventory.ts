@@ -4,6 +4,7 @@ import { getRuntimeDisplayName, getRuntimeGroupLabel, isBuiltInRuntimeProvider }
 export interface RuntimeProviderModel {
   id: string;
   name: string;
+  is_installed?: boolean;
   family?: string;
   source?: string;
   size_bytes?: number | null;
@@ -208,6 +209,29 @@ export const sortProviderModels = <T extends RuntimeProviderModel>(
     return leftName.localeCompare(rightName);
   });
 };
+
+/**
+ * The selected Ollama daemon is authoritative for its installed models.
+ * Configured defaults and stale saved IDs are not installed inventory.
+ */
+export function normalizeDiscoveredProviderModels<T extends RuntimeProviderModel>(
+  providerId: string,
+  models: T[],
+): T[] {
+  const candidates = providerId === 'ollama'
+    ? models.filter((model) => model.is_installed === true)
+    : models;
+  return sortProviderModels(candidates);
+}
+
+export function reconcileDiscoveredModelSelection<T extends RuntimeProviderModel>(
+  previouslySelected: string,
+  models: T[],
+): string {
+  return models.some((model) => model.id === previouslySelected)
+    ? previouslySelected
+    : (models[0]?.id ?? '');
+}
 
 export const getRuntimeProviderBucket = (
   provider: RuntimeProviderDetails,

@@ -247,8 +247,11 @@ def resolve_provider_execution(provider_id: str) -> Optional[ProviderExecutionSp
             notes=notes,
         )
 
-    if canonical_id in LOCAL_ENDPOINT_SPECS:
-        spec = LOCAL_ENDPOINT_SPECS[canonical_id]
+    # Settings persist "ollama"; the endpoint registry historically uses
+    # "ollama-local". Both identify the same execution implementation.
+    endpoint_spec_id = "ollama-local" if canonical_id == "ollama" else canonical_id
+    if endpoint_spec_id in LOCAL_ENDPOINT_SPECS:
+        spec = LOCAL_ENDPOINT_SPECS[endpoint_spec_id]
         adapter_class = spec["adapter_class"]
         adapter_module = spec["adapter_module"]
         execution_family = spec["execution_family"]
