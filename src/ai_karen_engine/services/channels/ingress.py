@@ -148,7 +148,13 @@ class ChannelIngressService:
         )
         if self._on_admitted is not None:
             try:
-                await self._on_admitted(admission)
+                scheduled = await self._on_admitted(admission)
+                if scheduled is not True:
+                    logger.warning(
+                        "channel.ingress.worker_deferred",
+                        extra={"tenant_id": admission.tenant_id,
+                               "inbox_id": admission.inbox_id},
+                    )
             except Exception as exc:
                 # Inbox is committed. Never turn valid ingress into an HTTP
                 # retry storm when the process-local worker is unavailable.
