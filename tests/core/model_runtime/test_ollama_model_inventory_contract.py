@@ -7,8 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from ai_karen_engine.core.model_runtime.ollama_model_inventory import (
-    discover_installed_ollama_models,
     resolve_ollama_inventory_endpoint,
+)
+from ai_karen_engine.integrations.providers.ollama_provider import (
+    discover_installed_ollama_models,
 )
 from ai_karen_engine.integrations.providers.ollama_provider import OllamaProvider
 
