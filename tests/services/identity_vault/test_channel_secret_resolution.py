@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ai_karen_engine.core.security.encryption_utils import encrypt_data
-from ai_karen_engine.database.models.identity_vault import AuditEventType
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
     CredentialVaultService,
 )
