@@ -237,8 +237,15 @@ async def get_runtime_provider_catalog(
                 runtime_config_hash=runtime_config_hash,
             ))
 
-        default_provider = settings_response.get("default_provider") or settings_response.get("selected_provider") or "builtin_transformers"
-        default_model = settings_response.get("default_model") or settings_response.get("selected_model") or "auto"
+        # The administrator's saved choice is the active application default.
+        # A registry fallback is not the user's selected model.
+        default_provider = settings_response.get("selected_provider") or settings_response.get("default_provider") or "builtin_transformers"
+        selected = next((item for item in catalog_providers if item.id == default_provider), None)
+        default_model = (
+            selected.selected_model or selected.models[0].id
+            if selected and selected.models
+            else "auto"
+        )
         fallback_order = settings_response.get("fallback_hierarchy") or ["builtin_transformers", "openai", "gemini"]
 
         if not catalog_providers:
