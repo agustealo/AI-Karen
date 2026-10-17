@@ -20,6 +20,67 @@ _RUNTIME_ATTACHED_STATE_KEY = "_canonical_runtime_attached"
 _RUNTIME_SHUTDOWN_STATE_KEY = "_canonical_runtime_shutdown"
 
 
+async def initialize_application_channel_host(app: FastAPI) -> None:
+    """Attach explicitly opted-in channel transport dependencies, never activate tenants."""
+    from ai_karen_engine.config.channels import load_channel_host_settings
+
+    settings = load_channel_host_settings()
+    # Keep the public provider webhook entirely unavailable by default.
+    app.state.channel_ingress_service = None
+    app.state.channel_host_services = None
+    if not settings.enabled:
+        return
+
+    import httpx
+
+    from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+    from ai_karen_engine.persistence.repositories.channel_repository import (
+        SqlChannelRepository,
+    )
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+    from ai_karen_engine.services.identity_vault.credential_vault_service import (
+        CredentialVaultService,
+    )
+
+    existing_kernel = getattr(app.state, "plugin_kernel", None)
+    existing_vault = getattr(app.state, "credential_vault_service", None)
+    if existing_kernel is not None and not isinstance(existing_kernel, PluginKernel):
+        raise RuntimeError("Canonical PluginKernel ownership is invalid")
+    if existing_vault is not None and not isinstance(
+        existing_vault, CredentialVaultService
+    ):
+        raise RuntimeError("Canonical Identity Vault ownership is invalid")
+    kernel = existing_kernel or PluginKernel(PluginKernel.canonical_extensions_root())
+    vault = existing_vault or CredentialVaultService()
+    client = httpx.AsyncClient(
+        timeout=settings.http_timeout_seconds,
+        trust_env=False,
+        follow_redirects=False,
+    )
+    host = ChannelHostServices(
+        settings=settings, kernel=kernel, vault=vault,
+        repository=SqlChannelRepository(), http_client=client,
+        owns_kernel=existing_kernel is None,
+        owns_vault=existing_vault is None,
+    )
+    await host.initialize()
+    if host.ingress is None or host.activation is None:
+        await host.shutdown()
+        raise RuntimeError("Configured channel host did not attach its services")
+
+    # Mount only after every configured adapter is verified and bound. HTTP
+    # requests never select a plugin, vault actor, model, or generic executor.
+    app.state.plugin_kernel = kernel
+    app.state.credential_vault_service = vault
+    app.state.channel_host_services = host
+    app.state.channel_ingress_service = host.ingress
+    logger.info(
+        "Canonical channel host attached",
+        extra={"installed_transports": len(settings.installations),
+               "tenant_connections_auto_started": 0},
+    )
+
+
 async def initialize_application_runtime(app: FastAPI) -> None:
     """Attach canonical Runtime services to the application lifecycle."""
     if getattr(app.state, _RUNTIME_ATTACHED_STATE_KEY, False) and not getattr(
@@ -66,6 +127,12 @@ async def initialize_application_runtime(app: FastAPI) -> None:
     app.state.model_download_control_service = model_download_service
     app.state.model_download_worker = model_download_worker
     setattr(app.state, _RUNTIME_SHUTDOWN_STATE_KEY, False)
+    try:
+        await initialize_application_channel_host(app)
+    except BaseException:
+        # Startup failure must not leak the already-started model download worker.
+        await shutdown_application_runtime(app)
+        raise
     setattr(app.state, _RUNTIME_ATTACHED_STATE_KEY, True)
 
     logger.info("Canonical application Runtime services attached")
@@ -75,6 +142,20 @@ async def shutdown_application_runtime(app: FastAPI) -> None:
     """Stop application-owned Runtime and database resources exactly once."""
     if getattr(app.state, _RUNTIME_SHUTDOWN_STATE_KEY, False):
         return
+
+    # Revoke ingress synchronously before any transport or database teardown.
+    # Old public routes then return 503 even during shutdown/draining.
+    app.state.channel_ingress_service = None
+    host = getattr(app.state, "channel_host_services", None)
+    app.state.channel_host_services = None
+    if host is not None:
+        try:
+            await host.shutdown()
+        except Exception as exc:
+            logger.warning(
+                "Channel host shutdown degraded",
+                extra={"error_type": type(exc).__name__},
+            )
 
     model_download_worker = getattr(app.state, "model_download_worker", None)
     if model_download_worker is not None:
@@ -122,6 +203,7 @@ def create_application_lifespan(settings: Any):
 
 __all__ = [
     "create_application_lifespan",
+    "initialize_application_channel_host",
     "initialize_application_runtime",
     "shutdown_application_runtime",
 ]
