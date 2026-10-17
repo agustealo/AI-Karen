@@ -28,6 +28,7 @@ from ai_karen_engine.extensions.platform.core.host.base import (
 )
 
 _SECRET_TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+_BOT_TOKEN = re.compile(r"^[0-9]{6,20}:[A-Za-z0-9_-]{20,128}$")
 _TELEGRAM_API_BASE = "https://api.telegram.org"
 _MAX_NATIVE_BYTES = 65_536
 _MAX_TEXT_LENGTH = 4_096
@@ -46,7 +47,7 @@ class MainExtension(ExtensionBase):
         super().__init__(manifest, context)
         self._secret_resolver: HostSecretResolver | None = None
         self._http_client: httpx.AsyncClient | None = None
-        self._started: set[str] = set()
+        self._started: set[tuple[str, str, int]] = set()
 
     def bind_host_services(
         self, *, secret_resolver: HostSecretResolver, http_client: httpx.AsyncClient,
@@ -94,17 +95,19 @@ class MainExtension(ExtensionBase):
             not isinstance(webhook_secret, str)
             or _SECRET_TOKEN.fullmatch(webhook_secret) is None
             or not isinstance(bot_token, str)
-            or ":" not in bot_token
-            or not bot_token.split(":", 1)[0].isdigit()
-            or any(c.isspace() for c in bot_token)
+            or _BOT_TOKEN.fullmatch(bot_token) is None
         ):
             raise PermissionError("Telegram channel credentials are incomplete")
         return webhook_secret, bot_token
 
+    @staticmethod
+    def _activation_key(connection: ChannelConnection) -> tuple[str, str, int]:
+        return connection.tenant_id, connection.connection_id, connection.revision
+
     def _require_active(self, connection: ChannelConnection) -> None:
         if (
             not connection.enabled
-            or connection.connection_id not in self._started
+            or self._activation_key(connection) not in self._started
             or self._http_client is None
         ):
             raise PermissionError("Telegram channel is not active in the governed host")
@@ -113,15 +116,18 @@ class MainExtension(ExtensionBase):
         if not connection.enabled or self._http_client is None:
             raise PermissionError("Host must provision an enabled connection and network client")
         await self._secrets(connection)
-        self._started.add(connection.connection_id)
+        self._started.add(self._activation_key(connection))
 
     async def stop(self, *, connection: ChannelConnection) -> None:
-        self._started.discard(connection.connection_id)
+        self._started = {
+            key for key in self._started
+            if key[:2] != (connection.tenant_id, connection.connection_id)
+        }
 
     async def health(self, *, connection: ChannelConnection) -> Mapping[str, Any]:
         return {
             "transport": "telegram-bot",
-            "running": connection.enabled and connection.connection_id in self._started,
+            "running": connection.enabled and self._activation_key(connection) in self._started,
             "host_services_bound": self._secret_resolver is not None and self._http_client is not None,
         }
 
