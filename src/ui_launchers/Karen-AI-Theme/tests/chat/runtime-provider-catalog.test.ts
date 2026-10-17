@@ -234,3 +234,41 @@ describe('custom-provider unavailable model protection', () => {
     });
   });
 });
+
+
+describe('custom-provider model provenance', () => {
+  it('preserves backend-confirmed manual configuration as distinct from live discovery', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'custom', default_model: 'my-inference-model',
+      providers: [{
+        id: 'custom', label: 'Custom', category: 'custom',
+        enabled: true, configured: true, healthy: true,
+        selected_model: 'my-inference-model',
+        models: [{
+          id: 'my-inference-model', label: 'my-inference-model',
+          available: true, source: 'manual_configured',
+        }],
+      }],
+    });
+    expect(inventory.selectableProviders[0].models[0].source).toBe('manual_configured');
+    expect(resolveChatProviderModelSelection(inventory, '', '')).toEqual({
+      provider: 'custom', model: 'my-inference-model', preferenceUnavailable: false,
+    });
+  });
+
+  it('does not synthesize a custom model from a default when backend inventory is empty', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'custom', default_model: 'unverified-model',
+      providers: [{
+        id: 'custom', label: 'Custom', category: 'custom',
+        enabled: true, configured: false, healthy: false,
+        selected_model: 'unverified-model', models: [],
+      }],
+    });
+    expect(inventory.selectableProviders).toEqual([]);
+    expect(inventory.providers[0].models).toEqual([]);
+    expect(resolveChatProviderModelSelection(inventory, 'custom', 'unverified-model')).toEqual({
+      provider: '', model: '', preferenceUnavailable: true,
+    });
+  });
+});

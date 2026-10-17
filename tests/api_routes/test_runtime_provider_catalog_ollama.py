@@ -122,3 +122,81 @@ async def test_empty_provider_settings_do_not_advertise_available_models(
     catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
     assert catalog.catalog_version == "bootstrap"
     assert not any(model.available for provider in catalog.providers for model in provider.models)
+
+
+@pytest.mark.asyncio
+async def test_custom_manual_model_is_marked_configured_not_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def payload() -> dict[str, object]:
+        return {
+            "providers": [{
+                "id": "custom", "display_name": "Custom endpoint",
+                "provider_type": "custom", "enabled": True,
+                "is_configured": True, "healthy": True,
+                "selected_model": "my-inference-model", "models": [],
+            }],
+            "selected_provider": "custom",
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    provider = next(item for item in catalog.providers if item.id == "custom")
+    assert len(provider.models) == 1
+    assert provider.models[0].id == "my-inference-model"
+    assert provider.models[0].source == "manual_configured"
+    assert provider.models[0].available is True
+    assert catalog.default_model == "my-inference-model"
+
+
+
+@pytest.mark.asyncio
+async def test_saved_custom_model_is_added_alongside_static_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def payload() -> dict[str, object]:
+        return {
+            "providers": [{
+                "id": "custom", "display_name": "Custom endpoint",
+                "provider_type": "custom", "enabled": True,
+                "is_configured": True, "healthy": True,
+                "selected_model": "user-model",
+                "models": [{
+                    "id": "custom-model", "name": "Default catalog model",
+                    "is_installed": False,
+                }],
+            }],
+            "selected_provider": "custom",
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    provider = next(item for item in catalog.providers if item.id == "custom")
+    assert {model.id for model in provider.models} == {"custom-model", "user-model"}
+    saved = next(model for model in provider.models if model.id == "user-model")
+    assert saved.source == "manual_configured"
+    assert saved.available is True
+    assert provider.selected_model == "user-model"
+    assert catalog.default_model == "user-model"
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_custom_provider_does_not_claim_saved_manual_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def payload() -> dict[str, object]:
+        return {
+            "providers": [{
+                "id": "custom", "display_name": "Custom endpoint",
+                "provider_type": "custom", "enabled": True,
+                "is_configured": False, "healthy": False,
+                "selected_model": "user-model", "models": [],
+            }],
+            "selected_provider": "custom",
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    provider = next(item for item in catalog.providers if item.id == "custom")
+    assert provider.models == []
+    assert provider.healthy is False

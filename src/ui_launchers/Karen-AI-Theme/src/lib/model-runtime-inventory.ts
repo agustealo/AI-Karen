@@ -86,6 +86,7 @@ export interface RuntimeSettingsResponse {
 export interface RuntimeProviderCatalogModel {
   id: string;
   label: string;
+  source?: string;
   available?: boolean;
   default?: boolean;
   capabilities?: string[];
@@ -431,32 +432,15 @@ export function normalizeRuntimeProviderCatalogResponse(
           id: model.id,
           name: model.label || model.id,
           family: provider.category || 'runtime',
-          source: provider.runtime_engine || 'catalog',
+          source: model.source || 'configured_catalog',
           capabilities: model.capabilities || [],
           preferred_runtime: provider.runtime_engine || provider.category || undefined,
         })),
       );
-      const fallbackModelId =
-        provider.selected_model ||
-        provider.default_model ||
-        response.default_model ||
-        '';
+      // The backend alone owns manually configured model entries. Never
+      // reconstruct a model from default_model when inventory is empty.
       const diagnostic = provider.safe_diagnostic_metadata || {};
-      const isCustomProvider = provider.id === 'custom' || provider.category === 'custom';
-      const resolvedModels: RuntimeProviderModel[] =
-        normalizedModels.length > 0 || !isCustomProvider || (provider.models || []).length > 0
-          ? normalizedModels
-          : fallbackModelId
-            ? [{
-                id: fallbackModelId,
-                name: fallbackModelId,
-                family: provider.category || 'runtime',
-                source: provider.runtime_engine || 'catalog',
-                capabilities: ['chat'],
-                preferred_runtime: provider.runtime_engine || provider.category || undefined,
-                default: true,
-              }]
-            : [];
+      const resolvedModels: RuntimeProviderModel[] = normalizedModels;
 
       const normalizedProvider: NormalizedRuntimeProvider = {
         id: provider.id,
