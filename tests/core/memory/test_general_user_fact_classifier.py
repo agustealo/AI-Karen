@@ -193,3 +193,34 @@ def test_profile_recall_prioritizes_explicit_question_attribute() -> None:
     assert retriever._preferred_attribute("Where was I born?") == "birthplace"
     assert retriever._preferred_attribute("Where do I live?") == "residence_location"
     assert retriever._preferred_attribute("What's the weather?") is None
+
+
+def test_origin_disclosure_excludes_trailing_conversational_qualifiers() -> None:
+    for statement in (
+        "I'm from Jamaica though",
+        "I'm from Jamaica, though.",
+        "I'm from Jamaica, by the way.",
+        "I'm from Jamaica however.",
+    ):
+        facts = classify_general_user_facts(statement)
+        origin = [
+            item for item in facts
+            if item.metadata.get("attribute") == "origin_location"
+        ]
+        assert len(origin) == 1, statement
+        assert origin[0].metadata["normalized_value"] == "Jamaica", statement
+        # The supporting utterance must remain available as evidence.
+        assert "Jamaica" in origin[0].text
+
+
+def test_location_names_remain_intact_with_internal_connectives() -> None:
+    facts = classify_general_user_facts(
+        "I was born in Trinidad and Tobago. I'm from Port of Spain."
+    )
+    found = {
+        item.metadata.get("attribute"): item.metadata.get("normalized_value")
+        for item in facts
+        if item.metadata.get("category") == "location"
+    }
+    assert found["birthplace"] == "Trinidad and Tobago"
+    assert found["origin_location"] == "Port of Spain"
