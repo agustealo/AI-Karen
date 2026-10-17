@@ -10,6 +10,7 @@ import pytest
 
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection,
+    ChannelDeliveryRequest,
     InboundChannelEvent,
 )
 from ai_karen_engine.persistence.repositories import channel_repository as module
@@ -188,6 +189,72 @@ async def test_claim_leases_require_bounded_duration():
             await SqlChannelRepository().claim_inbound(
                 tenant_id=TENANT, inbox_id=INBOX, lease_seconds=seconds,
             )
+
+
+class ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class ScalarSession:
+    def __init__(self, value):
+        self.value = value
+        self.calls = []
+
+    async def execute(self, statement, args):
+        self.calls.append((str(statement), dict(args)))
+        return ScalarResult(self.value)
+
+
+def delivery_request():
+    return ChannelDeliveryRequest(
+        delivery_id="11111111-1111-1111-1111-111111111111",
+        connection_id="connection-a",
+        destination_id="native-chat",
+        idempotency_key="inbox-corr-1",
+        message_kind="text",
+        text="Canonical ChatRuntime answer",
+    )
+
+
+@pytest.mark.asyncio
+async def test_completion_and_outbox_stage_are_one_fenced_transaction(monkeypatch):
+    session = ScalarSession("11111111-1111-1111-1111-111111111111")
+    install_scope(monkeypatch, session)
+
+    committed = await SqlChannelRepository().complete_and_stage_delivery(
+        tenant_id=TENANT, inbox_id=INBOX, claim_token=BINDING,
+        delivery=delivery_request(),
+    )
+
+    assert committed is True
+    assert len(session.calls) == 1
+    sql, args = session.calls[0]
+    assert "WITH completed AS" in sql
+    assert "UPDATE public.channel_inbox" in sql
+    assert "INSERT INTO public.channel_outbox" in sql
+    assert "claim_token = CAST(:token AS uuid)" in sql
+    assert "claim_expires_at > clock_timestamp()" in sql
+    assert "ON CONFLICT" not in sql
+    assert "'accepted'" in sql
+    assert args["tenant"] == TENANT
+    assert args["body"] == "Canonical ChatRuntime answer"
+
+
+@pytest.mark.asyncio
+async def test_lost_inbox_lease_cannot_publish_a_delivery(monkeypatch):
+    session = ScalarSession(None)
+    install_scope(monkeypatch, session)
+
+    committed = await SqlChannelRepository().complete_and_stage_delivery(
+        tenant_id=TENANT, inbox_id=INBOX, claim_token=BINDING,
+        delivery=delivery_request(),
+    )
+
+    assert committed is False
 
 
 def test_admission_digest_does_not_serialize_external_metadata():
