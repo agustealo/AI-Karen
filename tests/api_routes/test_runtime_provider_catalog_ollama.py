@@ -5,9 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
-
-from ai_karen_engine.api_routes.models import runtime_api, settings as settings_routes
+from ai_karen_engine.api_routes.models import runtime_api
 
 
 def _settings_payload() -> dict[str, object]:
@@ -20,6 +18,12 @@ def _settings_payload() -> dict[str, object]:
             "is_configured": True,
             "healthy": True,
             "selected_model": "goekdenizguelmez/JOSIEFIED-Qwen3:8b",
+            "runtime_source": "host",
+            "runtime_options": [{
+                "source": "host",
+                "available": True,
+                "base_url": "http://host.docker.internal:11434/v1",
+            }],
             "models": [{
                 "id": "not-installed:latest",
                 "name": "Old configured default",
@@ -44,21 +48,12 @@ async def test_chat_catalog_lists_live_installed_ollama_models(
     selected = "goekdenizguelmez/JOSIEFIED-Qwen3:8b"
     alt = "qwen2.5:7b"
 
-    async def inventory(*, provider_id: str, current_user: object) -> dict[str, object]:
-        assert provider_id == "ollama"
-        return {
-            "models": [
-                settings_routes.ProviderModelPayload(
-                    id=selected, name=selected, family='ollama', capabilities=[], is_installed=True,
-                ),
-                settings_routes.ProviderModelPayload(
-                    id=alt, name=alt, family='ollama', capabilities=[], is_installed=True,
-                ),
-            ],
-        }
+    async def inventory(base_url: str) -> list[str]:
+        assert base_url == "http://host.docker.internal:11434/v1"
+        return [selected, alt]
 
     monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
-    monkeypatch.setattr(runtime_api, "get_provider_models", inventory)
+    monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", inventory)
     current_user = SimpleNamespace(user_id="user-1", tenant_id="tenant-1")
     catalog = await runtime_api.get_runtime_provider_catalog(current_user=current_user)
 
@@ -78,11 +73,11 @@ async def test_chat_catalog_fails_closed_when_ollama_discovery_is_unavailable(
     async def payload() -> dict[str, object]:
         return _settings_payload()
 
-    async def unavailable(*, provider_id: str, current_user: object) -> dict[str, object]:
-        raise HTTPException(status_code=503, detail="Native Ollama unavailable")
+    async def unavailable(base_url: str) -> list[str]:
+        raise ConnectionError("Native Ollama unavailable")
 
     monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
-    monkeypatch.setattr(runtime_api, "get_provider_models", unavailable)
+    monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", unavailable)
 
     catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
     ollama = next(provider for provider in catalog.providers if provider.id == "ollama")
