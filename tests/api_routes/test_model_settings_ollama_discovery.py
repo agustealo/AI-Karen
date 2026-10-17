@@ -354,3 +354,28 @@ async def test_remote_outage_returns_honest_catalog_status_not_live_discovery(
     assert [(item.id, item.source, item.is_installed) for item in response["models"]] == [
         ("saved-catalog", "configured_catalog", False),
     ]
+
+
+@pytest.mark.asyncio
+async def test_empty_ollama_inventory_serializes_with_timestamp(
+    ollama_endpoint: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(OllamaProvider, "get_models", lambda self: [])
+    response = await settings_routes.get_provider_models(
+        "ollama", current_user={"roles": ["admin"]},
+    )
+    serialized = settings_routes.ProviderModelsResponse(**response).model_dump()
+    assert serialized["models"] == []
+    assert serialized["discovery_status"] == "empty"
+    assert serialized["inventory_source"] == "ollama_native"
+    assert serialized["discovered_at"]
+
+
+def test_discovery_response_contract_rejects_missing_timestamp() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        settings_routes.ProviderModelsResponse(
+            provider="ollama", models=[], discovery_status="empty",
+        )
