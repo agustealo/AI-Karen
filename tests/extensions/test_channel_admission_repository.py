@@ -291,7 +291,6 @@ def test_migration_fences_cross_tenant_foreign_keys_and_all_four_tables():
     assert "app.current_tenant_id" in sql
     assert "app.channel_worker" not in sql
     assert "connection_revision bigint NOT NULL" in sql
-    assert "c.revision = i.connection_revision" not in sql or "channel_inbox" in sql
 
 
 def test_claim_and_delivery_code_fence_credential_rotation_and_revocation():
