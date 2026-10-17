@@ -25,6 +25,8 @@ from ai_karen_engine.extensions.contracts import (
     ExtensionManifest as RuntimeExtensionManifestBase,
     ExtensionRegistration,
     RiskClass,
+    ResultTrust,
+    SideEffectLevel,
     TenantScope,
     TrustTier,
 )
@@ -348,9 +350,12 @@ class PluginKernel:
                 instance=_LazyRuntimeInstanceAdapter(self.loader, plugin_id),
             )
             await runtime_registry.register(registration)
+            # Channel transports must remain inactive until the governed
+            # Gateway supplies admission, identity binding and delivery fencing.
             target = (
                 ExtensionLifecycleState.DISABLED
                 if plugin_id in self._disabled
+                or catalog_manifest.capabilities.communication_channel is not None
                 or not catalog_manifest.rbac.default_enabled
                 else ExtensionLifecycleState.ENABLED
             )
@@ -419,19 +424,43 @@ class PluginKernel:
             for role in (manifest.rbac.allowed_roles or [])
         ]
         required_permissions = self._declared_permissions(manifest)
-        capability = ExtensionCapability(
-            id=self.EXECUTE_CAPABILITY,
-            input_schema=schema,
-            required_permissions=required_permissions,
-            required_roles=roles,
-            risk_class=RiskClass.LOW,
-            data_classification=DataClassification.PUBLIC,
-            provides_ui=manifest.capabilities.provides_ui,
-            provides_api=manifest.capabilities.provides_api,
-            provides_background_tasks=manifest.capabilities.provides_background_tasks,
-            provides_webhooks=manifest.capabilities.provides_webhooks,
-            prompt_contract_id=manifest.prompt_files.contract_id,
-        )
+        channel = manifest.capabilities.communication_channel
+        if channel is None:
+            capabilities = [
+                ExtensionCapability(
+                    id=self.EXECUTE_CAPABILITY,
+                    input_schema=schema,
+                    required_permissions=required_permissions,
+                    required_roles=roles,
+                    risk_class=RiskClass.LOW,
+                    data_classification=DataClassification.PUBLIC,
+                    provides_ui=manifest.capabilities.provides_ui,
+                    provides_api=manifest.capabilities.provides_api,
+                    provides_background_tasks=manifest.capabilities.provides_background_tasks,
+                    provides_webhooks=manifest.capabilities.provides_webhooks,
+                    prompt_contract_id=manifest.prompt_files.contract_id,
+                )
+            ]
+        else:
+            # Host-discovered transport contract, never generic plugin execute.
+            # This remains disabled until a separate governed Gateway exists.
+            capabilities = [
+                ExtensionCapability(
+                    id="communication_channel",
+                    version=channel.version,
+                    required_permissions=required_permissions,
+                    required_roles=roles,
+                    risk_class=RiskClass.HIGH,
+                    data_classification=DataClassification.CONFIDENTIAL,
+                    side_effect_level=SideEffectLevel.EXTERNAL,
+                    result_trust=ResultTrust.UNTRUSTED_EXTERNAL,
+                    requires_network=bool(manifest.permissions.network_access),
+                    requires_credentials=True,
+                    supports_streaming=channel.supports_streaming,
+                    provides_webhooks="webhook" in channel.ingress,
+                )
+            ]
+
         metadata = {
             "display_name": manifest.display_name,
             "author": manifest.author,
@@ -440,6 +469,8 @@ class PluginKernel:
             "tags": list(manifest.tags),
             "catalog_api_version": manifest.api_version,
         }
+        if channel is not None:
+            metadata["communication_channel"] = channel.model_dump()
         trust_tier = (
             TrustTier.FIRST_PARTY if self._is_builtin_root() else TrustTier.UNTRUSTED
         )
@@ -450,18 +481,30 @@ class PluginKernel:
             plugin_api_version=manifest.api_version,
             description=manifest.description,
             entrypoint=manifest.entrypoint or "handler:MainExtension",
-            capabilities=[capability],
+            capabilities=capabilities,
             required_permissions=required_permissions,
             required_roles=roles,
             tenant_scope=TenantScope.SINGLE,
             input_schema=schema,
             prompt_contract_id=manifest.prompt_files.contract_id,
-            enabled_by_default=manifest.rbac.default_enabled,
+            enabled_by_default=manifest.rbac.default_enabled and channel is None,
             trusted_ui=False,
             trust_tier=trust_tier,
             metadata=metadata,
-            risk_class=RiskClass.LOW,
-            data_classification=DataClassification.PUBLIC,
+            risk_class=RiskClass.HIGH if channel is not None else RiskClass.LOW,
+            data_classification=(
+                DataClassification.CONFIDENTIAL if channel is not None
+                else DataClassification.PUBLIC
+            ),
+            side_effect_level=(
+                SideEffectLevel.EXTERNAL if channel is not None
+                else SideEffectLevel.NONE
+            ),
+            requires_network=(
+                bool(manifest.permissions.network_access) if channel is not None
+                else False
+            ),
+            requires_credentials=channel is not None,
         )
 
     def get_catalog_manifest(self, plugin_id: str) -> Optional[CatalogExtensionManifest]:
@@ -510,6 +553,13 @@ class PluginKernel:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
+        if any(
+            capability.id == "communication_channel"
+            for capability in getattr(registration.manifest, "capabilities", ())
+        ):
+            raise ValueError(
+                "Communication channel activation requires the governed Channel Gateway"
+            )
         marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
         # A successful explicit enable must be durable across restart.
         if marker.is_symlink():
