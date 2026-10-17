@@ -564,3 +564,45 @@ async def test_missing_durable_event_receipt_does_not_mask_projection_failure():
     assert "projection:missing_event_id" in result["errors"]
     assert result["receipts"][0]["projection_results"] == {"projection_pipeline": False}
     assert projector.calls == []
+
+
+def test_projection_target_summary_exposes_only_stage_counts():
+    from ai_karen_engine.core.memory.formation.service import (
+        _projection_target_health,
+    )
+
+    receipts = [
+        {
+            "memory_id": "private-memory-id",
+            "event_id": "private-event-id",
+            "projection_results": {"stm": True, "memory_graph": False},
+        },
+        {
+            "memory_id": "other-private-memory-id",
+            "event_id": "other-private-event-id",
+            "projection_results": {"stm": True, "memory_graph": True},
+        },
+    ]
+
+    observed = _projection_target_health(receipts)
+
+    assert observed == [
+        {"target": "memory_graph", "success_count": 1, "failure_count": 1},
+        {"target": "stm", "success_count": 2, "failure_count": 0},
+    ]
+    assert "private" not in str(observed)
+
+
+def test_projection_target_summary_does_not_expose_unsafe_target_names():
+    from ai_karen_engine.core.memory.formation.service import (
+        _projection_target_health,
+    )
+
+    result = _projection_target_health([
+        {"projection_results": {"password=private-secret": False}},
+    ])
+
+    assert result == [
+        {"target": "unidentified_projection", "success_count": 0, "failure_count": 1},
+    ]
+    assert "private-secret" not in str(result)
