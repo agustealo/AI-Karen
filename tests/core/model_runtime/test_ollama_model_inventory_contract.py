@@ -50,7 +50,7 @@ def test_unavailable_selected_runtime_never_becomes_confirmed_inventory() -> Non
         configured_base_url="http://localhost:11434/v1",
         runtime_source="container",
         runtime_options=[{"source": "container", "available": False, "base_url": "http://ollama:11434"}],
-    ) == "http://localhost:11434/v1"
+    ) is None
 
 
 @pytest.mark.asyncio
