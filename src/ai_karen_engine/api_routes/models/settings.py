@@ -556,108 +556,124 @@ async def get_provider_models(
     base_url: Optional[str] = None,
     current_user: Any = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Discover models for a specific provider."""
-    try:
+    """List models from the selected, authorized provider endpoint.
+
+    Local Ollama installations are authoritative for Ollama's inventory.
+    A configured/default model is not evidence that its weights are installed.
+    """
+    normalized_id = _normalize_provider_id(provider_id)
+    provider_manager = get_provider_config_manager()
+    provider = provider_manager.get_provider(normalized_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Unknown model provider")
+    if not provider.enabled:
+        raise HTTPException(status_code=409, detail="Model provider is disabled")
+
+    saved_endpoint = _get_provider_override(normalized_id).get("base_url")
+    configured_endpoint = provider.endpoint.base_url if provider.endpoint else None
+    allowed_endpoints = {
+        value for value in (saved_endpoint, configured_endpoint) if value
+    }
+    if normalized_id == "ollama":
+        allowed_endpoints.update(
+            option.base_url for option in await _get_ollama_runtime_options()
+        )
+
+    target_url = base_url or saved_endpoint or configured_endpoint
+    if base_url:
+        requested_key = _discovery_url_key(base_url, ollama=normalized_id == "ollama")
+        authorized_keys = {
+            _discovery_url_key(value, ollama=normalized_id == "ollama")
+            for value in allowed_endpoints
+        }
+        if requested_key not in authorized_keys:
+            raise HTTPException(
+                status_code=403,
+                detail="Model discovery requires a configured provider endpoint",
+            )
+
+    # Never turn a configured model into a claim of installation.
+    by_id: Dict[str, ProviderModelPayload] = {
+        model.id: ProviderModelPayload(
+            id=model.id,
+            name=model.name,
+            family=model.family or "unknown",
+            capabilities=list(model.capabilities or []),
+            is_installed=False,
+        )
+        for model in (provider.models or [])
+    }
+
+    # Ollama's native model inventory is the source of truth. A failure must
+    # be visible instead of silently replacing the inventory with defaults.
+    if normalized_id == "ollama":
+        if not target_url:
+            raise HTTPException(status_code=503, detail="Ollama endpoint is not configured")
+        from ai_karen_engine.integrations.providers.ollama_provider import OllamaProvider
+
+        try:
+            client = OllamaProvider(base_url=target_url, timeout=3, max_retries=0)
+            names = await asyncio.to_thread(client.get_models)
+        except Exception as exc:
+            logger.warning("Ollama model discovery unavailable", exc_info=True)
+            raise HTTPException(
+                status_code=503, detail="Unable to retrieve installed Ollama models"
+            ) from exc
+        # A provider's configured default must not masquerade as an installed
+        # model when its native API reports no matching model.
+        by_id = {
+            name: ProviderModelPayload(
+                id=name,
+                name=name,
+                family="ollama",
+                capabilities=[],
+                is_installed=True,
+            )
+            for name in names
+        }
+    else:
         discovery_service = get_model_discovery_service()
-        provider_manager = get_provider_config_manager()
-
-        # Normalize provider ID
-        normalized_id = _normalize_provider_id(provider_id)
-
-        # Get provider config
-        provider = provider_manager.get_provider(normalized_id)
-        if not provider:
-            # Try to find by display name or other matches if ID doesn't hit directly
-            all_providers = provider_manager.list_providers()
-            for p in all_providers:
-                if _normalize_provider_id(p.name) == normalized_id:
-                    provider = p
-                    break
-
-        p_models = []
-
-        # 1. Add static models from config if found
-        if provider:
-            for m in (provider.models or []):
-                p_models.append(
-                    ProviderModelPayload(
-                        id=m.id,
-                        name=m.name,
-                        family=m.family or "unknown",
-                        capabilities=list(m.capabilities or []),
-                        is_installed=True,
-                    )
+        try:
+            discovered = await discovery_service.get_models_async(runtime=normalized_id)
+            for item in discovered:
+                by_id[item.model_id] = ProviderModelPayload(
+                    id=item.model_id,
+                    name=item.display_name or item.name,
+                    family=item.model_type or "unknown",
+                    capabilities=list(item.capabilities),
+                    size_gb=float(item.size_bytes / (1024 ** 3))
+                    if item.size_bytes else None,
+                    is_installed=bool(item.weights_present),
                 )
+        except Exception:
+            logger.warning("Local model discovery unavailable for %s", normalized_id, exc_info=True)
 
-        # 2. Add models from discovery service
-        discovery_models = []
-        try:
-            discovery_models = await discovery_service.get_models_async(runtime=normalized_id)
-        except Exception as e:
-            logger.warning(f"Model discovery failed for {normalized_id}: {e}")
-
-        # 3. Special handling for dynamic discovery (Ollama and OpenAI-compatible/vLLM)
-        dynamic_model_names = []
-        try:
-            target_url = base_url
-            if not target_url and provider and provider.endpoint:
-                target_url = provider.endpoint.base_url
-
-            if target_url:
-                if normalized_id == "ollama":
-                    from ai_karen_engine.integrations.providers.ollama_provider import OllamaProvider
-                    ollama = OllamaProvider(base_url=target_url, timeout=2, max_retries=0)
-                    loop = asyncio.get_running_loop()
-                    dynamic_model_names = await loop.run_in_executor(None, ollama.get_models)
-                elif provider and provider.provider_type.value in ["remote", "hybrid"]:
-                    # Try generic OpenAI compatible discovery
-                    from ai_karen_engine.integrations.providers.openai_compatible_provider import OpenAICompatibleProvider
-                    
-                    # Prepare API key if available
-                    api_key = None
-                    if provider and provider.name:
-                        api_key = provider_manager.get_api_key(provider.name)
-                        
-                    client = OpenAICompatibleProvider(base_url=target_url, api_key=api_key, timeout=2, max_retries=0)
-                    loop = asyncio.get_running_loop()
-                    dynamic_model_names = await loop.run_in_executor(None, client.get_models)
-
-                for name in dynamic_model_names:
-                    if not any(m.id == name for m in p_models):
-                        p_models.append(ProviderModelPayload(
+        if target_url and provider.provider_type in {ProviderType.REMOTE, ProviderType.HYBRID, ProviderType.CUSTOM}:
+            from ai_karen_engine.integrations.providers.openai_compatible_provider import OpenAICompatibleProvider
+            try:
+                api_key = provider_manager.get_api_key(provider.name)
+                client = OpenAICompatibleProvider(
+                    base_url=target_url, api_key=api_key, timeout=3, max_retries=0
+                )
+                for name in await asyncio.to_thread(client.get_models):
+                    if name not in by_id:
+                        by_id[name] = ProviderModelPayload(
                             id=name,
                             name=name,
                             family=normalized_id,
-                            capabilities=["text", "chat_completion", "streaming"],
-                            is_installed=True
-                        ))
-        except Exception as e:
-            logger.warning(f"Dynamic model discovery failed for {normalized_id}: {e}")
+                            capabilities=[],
+                            is_installed=False,
+                        )
+            except Exception:
+                logger.warning("Remote model discovery unavailable for %s", normalized_id, exc_info=True)
 
-        for dm in discovery_models:
-            if not any(m.id == dm.model_id for m in p_models):
-                p_models.append(
-                    ProviderModelPayload(
-                        id=dm.model_id,
-                        name=dm.display_name or dm.name,
-                        family=dm.model_type or "unknown",
-                        capabilities=list(dm.capabilities),
-                        size_gb=float(dm.size_bytes / (1024**3))
-                        if dm.size_bytes
-                        else None,
-                        is_installed=bool(dm.weights_present),
-                    )
-                )
-
-        return {
-            "provider": provider_id,
-            "base_url": base_url,
-            "models": p_models,
-            "discovered_at": datetime.now(timezone.utc).isoformat(),
-        }
-    except Exception as e:
-        logger.exception(f"Failed to get models for provider {provider_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "provider": normalized_id,
+        "base_url": target_url,
+        "models": list(by_id.values()),
+        "discovered_at": datetime.now(timezone.utc).isoformat(),
+        "discovery_status": "ready",
+    }
 
 
 @router.post("/validate")
@@ -877,6 +893,19 @@ def _get_saved_api_key(provider_name: str, provider: ProviderConfig) -> Optional
     if secret_name:
         return secret_manager.get_secret(secret_name)
     return None
+
+
+def _discovery_url_key(base_url: str, *, ollama: bool = False) -> str:
+    """Compare only authorized model endpoints; reject URL credential tricks."""
+    parsed = urlparse(str(base_url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid model discovery endpoint")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise HTTPException(status_code=400, detail="Invalid model discovery endpoint")
+    path = parsed.path.rstrip("/")
+    if ollama and path.endswith(("/v1", "/api")):
+        path = path.rsplit("/", 1)[0]
+    return urlunparse((parsed.scheme, parsed.netloc.lower(), path, "", "", ""))
 
 
 def _normalize_base_url(url: Optional[str]) -> Optional[str]:
