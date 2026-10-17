@@ -137,6 +137,7 @@ async def test_host_binds_canonical_adapter_and_never_auto_starts_tenant_connect
     assert host.activation is not None
     assert host.delivery is not None
     assert host.execution is None  # No runtime injected in this isolated test.
+    assert host.worker is None
     assert host.ingress.max_native_body_bytes == 65_536
     assert adapter.bind_host_services.call_count == 1
     bound = adapter.bind_host_services.call_args.kwargs
@@ -155,6 +156,7 @@ async def test_host_binds_canonical_adapter_and_never_auto_starts_tenant_connect
     client.aclose.assert_awaited_once()
     assert host.ingress is None and host.activation is None
     assert host.execution is None and host.delivery is None
+    assert host.worker is None
 
 
 @pytest.mark.asyncio
@@ -257,6 +259,8 @@ async def test_host_binds_existing_runtime_execution_without_starting_worker():
     await host.initialize()
     assert host.execution is not None
     assert host.execution._chat_runtime is runtime
+    assert host.worker is not None
+    assert host.ingress._on_admitted is not None
     assert host.execution._repository is host.repository
     assert host.delivery is not None
     assert host.delivery._repository is host.repository
@@ -267,3 +271,4 @@ async def test_host_binds_existing_runtime_execution_without_starting_worker():
     await host.shutdown()
     assert host.execution is None
     assert host.delivery is None
+    assert host.worker is None
