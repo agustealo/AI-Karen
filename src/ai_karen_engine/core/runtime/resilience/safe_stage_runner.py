@@ -137,8 +137,11 @@ class SafeStageRunner:
                         reason="timeout"
                     )
                 retries_left -= 1
-            except Exception as e:
-                last_error = str(e)
+            except Exception as exc:
+                # Stage errors can include connection credentials, personal
+                # memory, or private backend query text. Preserve a stable
+                # diagnostic type, never a raw exception message in telemetry.
+                last_error = type(exc).__name__
                 logger.error(f"Stage '{stage_name}' failed: {last_error}")
                 breaker.record_failure()
                 _emit_resilience_event(
