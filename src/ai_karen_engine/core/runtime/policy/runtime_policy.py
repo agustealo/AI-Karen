@@ -268,6 +268,30 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # Transport side effects must never be granted simply because the
+        # caller requested a capability or named an installed plugin.
+        # Only trusted ingress-authenticated permission context may authorize
+        # these high-impact channel actions. Transport adapters cannot supply
+        # that context and RuntimePolicy remains the single decision owner.
+        channel_actions = {"channel.send", "channel.recover"}
+        requested_channel_actions = channel_actions.intersection(
+            request.requested_capabilities
+        )
+        missing_channel_permissions = requested_channel_actions.difference(
+            request.permissions
+        )
+        if missing_channel_permissions:
+            return PolicyDecision(
+                decision_id=decision_id,
+                policy_version=policy_version,
+                allowed=False,
+                reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                denied_capabilities=sorted(missing_channel_permissions),
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
+                risk_level="high",
+                evaluated_at=evaluated_at,
+            )
+
         forbidden = set(request.forbidden_capabilities)
         for cap in request.requested_capabilities:
             if cap in forbidden:
