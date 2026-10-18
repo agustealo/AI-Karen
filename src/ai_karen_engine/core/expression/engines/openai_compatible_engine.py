@@ -150,6 +150,8 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             "degradation_reason": degradation_reason,
             "provider_attempts": attempts,
             "usage": provider_usage,
+            "finish_reason": execution.finish_reason,
+            "output_truncated": execution.finish_reason == "length",
         }
 
         return ExpressionResult(

@@ -189,3 +189,31 @@ async def test_repository_rejects_unproven_success_without_sql():
                     provider_message_id=mid, provider_receipt_id=rid,
                 ),
             )
+
+
+@pytest.mark.asyncio
+async def test_preflight_refuses_already_attempted_accepted_delivery(monkeypatch):
+    session = FakeSession(RowResult(row=None))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().get_delivery_preflight(
+        tenant_id=TENANT, delivery_id=DELIVERY,
+    ) is None
+    sql, args = session.calls[0]
+    assert "o.attempt_count = 0" in sql
+    assert "o.claim_token IS NULL" in sql
+    assert "o.claim_expires_at IS NULL" in sql
+    assert "o.status = 'accepted'" in sql
+    assert args["tenant"] == TENANT
+
+
+@pytest.mark.asyncio
+async def test_outbound_claim_rejects_every_prior_attempt_even_if_claim_cleared(monkeypatch):
+    session = FakeSession(RowResult(row=None))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().claim_outbound(
+        tenant_id=TENANT, delivery_id=DELIVERY, lease_seconds=90,
+    ) is None
+    sql, _ = session.calls[0]
+    assert "o.attempt_count = 0" in sql
+    assert "o.claim_expires_at IS NULL" in sql
+    assert "u.is_verified = true" in sql

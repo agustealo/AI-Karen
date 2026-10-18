@@ -57,3 +57,37 @@ def test_explicit_ollama_override_path_remains_authoritative(monkeypatch) -> Non
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434/custom-openai/v1/")
 
     assert _resolve_base_url(endpoint) == "http://ollama:11434/custom-openai/v1"
+
+
+def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
+    import json
+    from contextlib import contextmanager
+
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    class Response:
+        def read(self) -> bytes:
+            return json.dumps({
+                "choices": [{
+                    "message": {"content": "A partial response"},
+                    "finish_reason": "length",
+                }],
+                "model": "qwen3:4b",
+                "usage": {"completion_tokens": 32},
+            }).encode()
+
+    @contextmanager
+    def fake_urlopen(request, timeout):
+        yield Response()
+
+    monkeypatch.setattr(provider_execution, "urlopen", fake_urlopen)
+    result = provider_execution._sync_openai_compatible_request(
+        _endpoint("ollama-local"),
+        messages=[{"role": "user", "content": "Explain"}],
+        model="qwen3:4b",
+        max_tokens=32,
+        temperature=0.2,
+    )
+    assert result.text == "A partial response"
+    assert result.finish_reason == "length"
+    assert result.usage == {"completion_tokens": 32}

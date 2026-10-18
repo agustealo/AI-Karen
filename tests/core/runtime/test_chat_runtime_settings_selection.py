@@ -160,14 +160,45 @@ def test_stream_error_events_include_canonical_failure_provenance() -> None:
     assert all(required.issubset(keys) for keys in error_metadata)
 
 
+def test_stream_fallback_only_allowed_before_any_primary_token() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import _stream_fallback_allowed
+
+    assert _stream_fallback_allowed("") is True
+    assert _stream_fallback_allowed("partial answer") is False
+    assert _stream_fallback_allowed(" ") is False
+    assert _stream_fallback_allowed("\\n") is False
+
+def test_completion_truth_fields_are_carried_from_gateway_to_terminal() -> None:
+    """Guard the canonical runtime metadata handoff against accidental removal."""
+    import ast
+    import inspect
+    import textwrap
+
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    def dictionary_keys(method: object) -> set[str]:
+        parsed = ast.parse(textwrap.dedent(inspect.getsource(method)))
+        return {
+            key.value
+            for node in ast.walk(parsed)
+            if isinstance(node, ast.Dict)
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+
+    required = {"finish_reason", "output_truncated"}
+    assert required.issubset(dictionary_keys(ChatRuntime._run_simple))
+    assert required.issubset(dictionary_keys(ChatRuntime._build_stream_terminal_metadata))
+
 def test_stream_gate_provenance_is_explicitly_non_executed() -> None:
     """Early service gates report no provider or model execution."""
     import ast
     import inspect
+    import textwrap
 
     from ai_karen_engine.core.runtime import chat_runtime
 
-    tree = ast.parse(inspect.getsource(chat_runtime.ChatRuntime.execute_stream))
+    tree = ast.parse(textwrap.dedent(inspect.getsource(chat_runtime.ChatRuntime.execute_stream)))
     gate_metadata = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.Assign)

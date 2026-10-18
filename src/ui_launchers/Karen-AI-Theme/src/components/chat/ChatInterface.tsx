@@ -1243,6 +1243,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         ? metadata.personal_recall_grounded : undefined,
       evidenceCount: typeof metadata.evidence_count === 'number' ? metadata.evidence_count : undefined,
       degradedMode: Boolean(metadata.degraded_mode),
+      outputTruncated: metadata.output_truncated === true,
       degradedReason,
       degradationType: asText(metadata.degradation_type),
       latencyMs:
@@ -2374,6 +2375,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           latencyMs={latestAssistantMetadata.latencyMs}
         />
       </div>
+
+      {latestAssistantMetadata.outputTruncated && (
+        <div role="status" aria-live="polite" className="rounded-md border border-amber-500/40 px-3 py-2 text-sm">
+          This answer stopped at the model's output-token limit and may be incomplete.
+          You can ask Karen to continue.
+        </div>
+      )}
 
       <CircuitBreakerWarning
         show={latestAssistantMetadata.showCircuitWarning}

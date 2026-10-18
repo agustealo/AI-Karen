@@ -302,3 +302,122 @@ def test_claim_and_delivery_code_fence_credential_rotation_and_revocation():
     assert "claim_expires_at > clock_timestamp()" in source
     assert "INSERT INTO public.channel_outbox" in source
 
+
+
+class RecoveryResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self.rows
+
+
+class RecoverySession:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    async def execute(self, statement, args):
+        self.calls.append((str(statement), dict(args)))
+        return RecoveryResult(self.rows)
+
+
+@pytest.mark.asyncio
+async def test_recovery_enumeration_is_tenant_connection_and_identity_scoped(monkeypatch):
+    session = RecoverySession([committed_row()])
+    install_scope(monkeypatch, session)
+    recovered = await SqlChannelRepository().list_recoverable_inbound(
+        tenant_id=TENANT, connection_id="connection-a", limit=12,
+    )
+    assert len(recovered) == 1
+    assert recovered[0].inbox_id == INBOX
+    assert recovered[0].inserted is False
+    sql, args = session.calls[0]
+    assert args == {"tenant": TENANT, "connection": "connection-a", "limit": 12}
+    assert "c.revision = i.connection_revision" in sql
+    assert "i.connection_id = :connection" in sql
+    assert "b.revoked_at IS NULL" in sql
+    assert "u.is_active = true AND u.is_verified = true" in sql
+    assert "i.claim_expires_at <= clock_timestamp()" in sql
+    assert "i.status = 'pending'" in sql
+    assert "i.status = 'processing'" in sql
+    assert "i.status = 'completed'" not in sql
+    assert "i.status = 'failed'" not in sql
+
+
+@pytest.mark.asyncio
+async def test_recovery_scope_and_budget_are_required():
+    for connection_id, limit in (("", 1), (" ", 1), ("connection-a", 0),
+                                 ("connection-a", 1001)):
+        with pytest.raises(ValueError):
+            await SqlChannelRepository().list_recoverable_inbound(
+                tenant_id=TENANT, connection_id=connection_id, limit=limit,
+            )
+
+
+def test_claim_revalidates_active_verified_user_inside_atomic_sql():
+    from inspect import getsource
+    source = getsource(SqlChannelRepository.claim_inbound)
+    assert "JOIN public.auth_users u" in source
+    assert "u.tenant_id = i.tenant_id" in source
+    assert "u.user_id = i.user_id" in source
+    assert "u.is_active = true AND u.is_verified = true" in source
+    assert "c.revision = i.connection_revision" in source
+    assert "b.revoked_at IS NULL" in source
+
+
+@pytest.mark.asyncio
+async def test_unattempted_outbox_recovery_is_tenant_scoped_and_never_replays_claims(monkeypatch):
+    delivery = "11111111-1111-1111-1111-111111111111"
+    session = RecoverySession([])
+    install_scope(monkeypatch, session)
+
+    class ScalarRows:
+        def scalars(self):
+            return self
+        def all(self):
+            return [delivery]
+
+    async def execute(statement, args):
+        session.calls.append((str(statement), dict(args)))
+        return ScalarRows()
+
+    session.execute = execute
+    rows = await SqlChannelRepository().list_unattempted_outbound(
+        tenant_id=TENANT, connection_id="connection-a", limit=25,
+    )
+    assert rows == [delivery]
+    sql, args = session.calls[0]
+    assert args == {"tenant": TENANT, "connection": "connection-a", "limit": 25}
+    assert "o.status = 'accepted'" in sql
+    assert "o.claim_token IS NULL" in sql
+    assert "o.claim_expires_at IS NULL" in sql
+    assert "o.attempt_count = 0" in sql
+    assert "c.revision = i.connection_revision" in sql
+    assert "b.revoked_at IS NULL" in sql
+    assert "u.is_active = true AND u.is_verified = true" in sql
+    assert "o.connection_id = :connection" in sql
+    assert "status = 'unknown'" not in sql
+
+
+@pytest.mark.asyncio
+async def test_outbox_recovery_requires_bounded_explicit_connection_scope():
+    for connection_id, limit in (("", 1), (" ", 1), ("connection-a", 0),
+                                 ("connection-a", 1001)):
+        with pytest.raises(ValueError):
+            await SqlChannelRepository().list_unattempted_outbound(
+                tenant_id=TENANT, connection_id=connection_id, limit=limit,
+            )
+
+
+def test_atomic_outbound_claim_excludes_every_previously_attempted_row():
+    from inspect import getsource
+    source = getsource(SqlChannelRepository.claim_outbound)
+    assert "o.attempt_count = 0" in source
+    assert "o.claim_token IS NULL" in source
+    assert "o.claim_expires_at IS NULL" in source
+    assert "u.is_active = true AND u.is_verified = true" in source
+    assert "c.revision = i.connection_revision" in source

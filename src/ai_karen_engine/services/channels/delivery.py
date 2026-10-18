@@ -85,8 +85,9 @@ class ChannelDeliveryService:
                 session_id=session_id,
             )
             and installation_id in plan.allowed_plugins
+            and "channel.send" in plan.allowed_capabilities
             and not plan.approval_requirements
-            and await ActionExecutionGate.authorize(plan, installation_id)
+            and await ActionExecutionGate.authorize(plan, "channel.send")
         )
 
     @staticmethod

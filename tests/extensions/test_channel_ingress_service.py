@@ -188,3 +188,74 @@ async def test_unregistered_adapter_cannot_bypass_host_native_signature_gate():
     impostor.verify_event.assert_not_awaited()
     canonical.verify_event.assert_not_awaited()
     repo.admit_verified_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_admission_schedules_persisted_receipt_not_native_payload():
+    service, adapter, repo, _ = components()
+    schedule = AsyncMock(return_value=True)
+    service._on_admitted = schedule
+    result = await service.verify_and_admit(
+        tenant_id=TENANT, connection_id="connection-a",
+        adapter=adapter, headers={"X-Signature": "signed"}, body=b"native",
+    )
+    repo.admit_verified_inbound.assert_awaited_once()
+    schedule.assert_awaited_once_with(result)
+
+
+@pytest.mark.asyncio
+async def test_invalid_signature_cannot_schedule_worker():
+    service, adapter, repo, _ = components(verified=False)
+    schedule = AsyncMock(return_value=True)
+    service._on_admitted = schedule
+    with pytest.raises(ChannelAdmissionDenied):
+        await service.verify_and_admit(
+            tenant_id=TENANT, connection_id="connection-a",
+            adapter=adapter, headers={}, body=b"forged",
+        )
+    schedule.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_schedule_failure_preserves_committed_inbox_receipt():
+    service, adapter, repo, _ = components()
+    service._on_admitted = AsyncMock(side_effect=RuntimeError("worker unavailable"))
+    result = await service.verify_and_admit(
+        tenant_id=TENANT, connection_id="connection-a",
+        adapter=adapter, headers={}, body=b"native",
+    )
+    assert result is repo.admit_verified_inbound.return_value
+    repo.admit_verified_inbound.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_replayed_receipt_is_scheduled_for_claim_revalidation():
+    service, adapter, repo, _ = components()
+    original = repo.admit_verified_inbound.return_value
+    repo.admit_verified_inbound.return_value = InboundAdmission(
+        inbox_id=original.inbox_id, correlation_id=original.correlation_id,
+        tenant_id=original.tenant_id, user_id=original.user_id,
+        binding_id=original.binding_id, inserted=False,
+    )
+    schedule = AsyncMock(return_value=True)
+    service._on_admitted = schedule
+    result = await service.verify_and_admit(
+        tenant_id=TENANT, connection_id="connection-a",
+        adapter=adapter, headers={}, body=b"native",
+    )
+    assert result.inserted is False
+    schedule.assert_awaited_once_with(result)
+
+
+@pytest.mark.asyncio
+async def test_worker_saturation_is_logged_as_deferred_not_processed(caplog):
+    service, adapter, repo, _ = components()
+    callback = AsyncMock(return_value=False)
+    service._on_admitted = callback
+    result = await service.verify_and_admit(
+        tenant_id=TENANT, connection_id="connection-a",
+        adapter=adapter, headers={}, body=b"native",
+    )
+    assert result is repo.admit_verified_inbound.return_value
+    callback.assert_awaited_once_with(result)
+    assert "channel.ingress.worker_deferred" in caplog.text

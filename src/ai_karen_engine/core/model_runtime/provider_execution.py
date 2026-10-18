@@ -27,6 +27,7 @@ class ProviderExecutionResult:
     provider_id: str
     runtime_engine: str | None
     usage: dict[str, int] | None = None
+    finish_reason: str | None = None
 
 
 class ProviderExecutionError(RuntimeError):
@@ -184,6 +185,8 @@ def _sync_openai_compatible_request(
         provider_id=endpoint.provider_id,
         runtime_engine=endpoint.runtime_engine.value,
         usage=usage,
+        finish_reason=(str(first.get("finish_reason")).strip() or None)
+        if first.get("finish_reason") is not None else None,
     )
 
 

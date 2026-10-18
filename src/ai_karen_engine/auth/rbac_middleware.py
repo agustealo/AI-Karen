@@ -123,6 +123,14 @@ class Permission(str, Enum):
     ROUTING_AUDIT = "routing:audit"
     ROUTING_DRY_RUN = "routing:dry_run"
 
+    # Channel transport effects. Central RBAC owns entitlement resolution;
+    # transport plugins, prompts and API request bodies cannot grant these.
+    CHANNEL_PROVISION = "channel.provision"
+    CHANNEL_ACTIVATE = "channel.activate"
+    CHANNEL_DEACTIVATE = "channel.deactivate"
+    CHANNEL_RECOVER = "channel.recover"
+    CHANNEL_SEND = "channel.send"
+
 
 class Role(str, Enum):
     """System roles."""

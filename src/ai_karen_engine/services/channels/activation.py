@@ -15,6 +15,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from ai_karen_engine.auth.auth_service import get_auth_service
+from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyEvaluationRequest, RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan
 from ai_karen_engine.extensions.channels.contracts import ChannelAdapter, ChannelConnection
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
@@ -106,6 +110,85 @@ class ChannelActivationService:
             or not await ActionExecutionGate.authorize(plan, action)
         ):
             raise ChannelActivationDenied("RuntimePolicy did not approve channel action")
+
+    async def issue_action_plan(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        installation_id: str, action: str,
+    ) -> AuthorizedExecutionPlan:
+        """Resolve current RBAC entitlement and ask canonical RuntimePolicy.
+
+        Unlike a caller-supplied plan, permissions here derive exclusively from
+        the freshly loaded tenant principal's durable roles and the canonical
+        RBAC registry. Preferences, request claims, native events and plugin
+        output are never interpreted as grants.
+        """
+        if action not in {
+            "channel.send", "channel.recover", "channel.provision",
+            "channel.activate", "channel.deactivate",
+        }:
+            raise ChannelActivationDenied("Unknown channel action")
+        if not tenant_id or not user_id or not session_id:
+            raise ChannelActivationDenied("Scoped channel principal required")
+        catalog = self._kernel.get_catalog_manifest(installation_id)
+        record = self._kernel.get_record(installation_id)
+        if (
+            catalog is None or record is None or record["is_valid"] is not True
+            or catalog.capabilities.communication_channel is None
+            or self._kernel.get_channel_activation_manifest(installation_id) is None
+        ):
+            raise ChannelActivationDenied("Communication installation is unavailable")
+        principal = await self._principal_lookup(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        if (
+            principal is None
+            or getattr(principal, "status", None) is not UserStatus.ACTIVE
+            or str(getattr(principal, "tenant_id", "")) != tenant_id
+            or str(getattr(principal, "id", "")) != user_id
+            or getattr(principal, "is_verified", False) is not True
+        ):
+            raise ChannelActivationDenied("Active verified tenant principal required")
+        roles = {
+            str(getattr(role, "value", role))
+            for role in (getattr(principal, "roles", None) or ())
+        }
+        catalog_roles = {
+            str(getattr(role, "value", role))
+            for role in (catalog.rbac.allowed_roles or ())
+        }
+        if not roles.intersection(catalog_roles):
+            raise ChannelActivationDenied("Channel manifest denies operator role")
+        granted = get_rbac_manager().get_user_permissions({
+            "user_id": user_id, "tenant_id": tenant_id,
+            "roles": sorted(roles), "permissions": [],
+        })
+        if Permission(action) not in granted:
+            raise ChannelActivationDenied("Canonical RBAC denies channel action")
+        decision = await RuntimePolicyEnforcer().evaluate(PolicyEvaluationRequest(
+            user_id=user_id, tenant_id=tenant_id, session_id=session_id,
+            roles=sorted(roles),
+            permissions=sorted(permission.value for permission in granted),
+            action=action,
+            requested_capabilities=[action], extension_id=installation_id,
+        ))
+        if not decision.allowed:
+            raise ChannelActivationDenied("RuntimePolicy denies channel action")
+        plan = decision.to_authorized_plan()
+        # Revalidate at the existing activation action gate. This is also the
+        # policy/RBAC path used by external provision/activate/deactivate calls.
+        await self._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=installation_id, action=action, plan=plan,
+        )
+        logger.info(
+            "channel.action.policy_authorized",
+            extra={
+                "tenant_id": tenant_id, "user_id": user_id,
+                "installation_id": installation_id, "action": action,
+                "policy_decision_id": plan.policy_decision_id,
+            },
+        )
+        return plan
 
     def _host_adapter(self, installation_id: str, adapter: ChannelAdapter) -> None:
         """Do not accept a user/provider-chosen adapter substituted at ingress."""

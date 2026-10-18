@@ -109,6 +109,7 @@ def authorization(*, user_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
         authorized_user_id=user_id,
         authorized_tenant_id=tenant_id,
         allowed_plugins=["channel-plugin"] if allowed else [],
+        allowed_capabilities=["channel.send"],
     )
 
 
@@ -316,4 +317,32 @@ async def test_unregistered_adapter_cannot_send_under_an_enabled_connection():
         )
     impostor.send.assert_not_awaited()
     canonical.send.assert_not_awaited()
+    repo.claim_outbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_plugin_eligibility_alone_cannot_authorize_external_send():
+    service, repo, adapter, _ = create_components()
+    plan = authorization()
+    plan.allowed_capabilities = []
+    with pytest.raises(ChannelDeliveryDenied, match="not authorized"):
+        await service.dispatch(
+            tenant_id=TENANT, delivery_id=DELIVERY,
+            adapter=adapter, authorized_plan=plan,
+        )
+    adapter.send.assert_not_awaited()
+    repo.claim_outbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_capability_cannot_authorize_external_send():
+    service, repo, adapter, _ = create_components()
+    plan = authorization()
+    plan.allowed_capabilities = ["channel.recover"]
+    with pytest.raises(ChannelDeliveryDenied, match="not authorized"):
+        await service.dispatch(
+            tenant_id=TENANT, delivery_id=DELIVERY,
+            adapter=adapter, authorized_plan=plan,
+        )
+    adapter.send.assert_not_awaited()
     repo.claim_outbound.assert_not_awaited()

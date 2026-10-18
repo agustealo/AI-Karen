@@ -250,7 +250,11 @@ class MainExtension(ExtensionBase):
                 error_code="telegram_receipt_unverified",
             )
         sent = result.get("result")
-        if not isinstance(sent, dict) or type(sent.get("message_id")) is not int:
+        if (
+            not isinstance(sent, dict)
+            or type(sent.get("message_id")) is not int
+            or sent["message_id"] <= 0
+        ):
             return ChannelDeliveryReceipt(
                 delivery_id=delivery.delivery_id,
                 state=ChannelDeliveryState.UNKNOWN,
