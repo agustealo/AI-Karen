@@ -40,6 +40,36 @@ Use the already-owned Playwright browser config at `src/ui_launchers/Karen-AI-Th
 
 For every defect, record: tested user action, expected outcome, observed result, current app revision, environment, screenshot path, trace path, correlation/request ID (redacted), responsible source file, severity, and retest outcome. A screenshot on its own is not evidence that streaming or persistence succeeded.
 
+### Video and animation evidence
+
+The canonical generic Playwright config now supports **opt-in full-session video recording** while retaining its existing failure-only default. Video is test evidence for user journeys, never proof of runtime persistence by itself.
+
+Run against an **approved, authenticated, sanitized demo** with the real backend and no personal or production account data:
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme
+KAREN_BASE_URL='https://approved-sanitized-demo.example' \
+KAREN_E2E_CAPTURE_VIDEO=true \
+npx playwright test --config=e2e/playwright.config.ts
+```
+
+Replace the illustrative URL with the actual approved demo endpoint; it is not a configured host. With the opt-in flag, Playwright records browser video for each executed test and saves it with Playwright test results. Without the flag, it retains videos only when tests fail. The `trace: retain-on-failure` setting is unchanged. Check actual test-result location and attachment names in the test report rather than assuming fixed filenames.
+
+**Required capture choreography:**
+
+| Recording | Required scene | Proof beyond video |
+|---|---|---|
+| 01-compose.webm | Type multiple lines, Shift+Enter, Enter to send | Actual submitted request and one request ID |
+| 02-stream-stop.webm | Show streamed text, press Stop, type next draft | Abort/terminal events and absence of late completion |
+| 03-recovery.webm | Refresh/reopen, compare restored transcript | Persisted message identities, ordering and server response |
+| 04-responsive.webm | Exercise composer and Stop at mobile/tablet/desktop viewports | Viewport metadata, focus and overflow assertions |
+
+Names above are **desired curated labels**, not files this audit generated. Playwright's raw recordings are implementation artifacts and should remain private until reviewed.
+
+**Motion for documentation:** After sanitization and a successful real-browser acceptance run, a short muted WebM/MP4 walkthrough or cropped, optimized animated GIF can illustrate a feature. Prefer a linked MP4/WebM for long interactions; use GIF only for a very brief loop because it is larger and less accessible. Provide a static poster/thumbnail and concise captions or text descriptions for accessibility. Do not use animation to invent successful provider output or to conceal errors. If adding published video assets, extend the governed publication rules explicitly; the five-PNG screenshot manifest is not a video publishing authority.
+
+**Safety and provenance:** Capture only on sanitized accounts, review every frame for names, messages, tokens, URLs and IDs, preserve the exact app revision and browser/viewport metadata, and keep unreviewed video/traces out of the curated `docs/assets/screenshots/` gallery. The trusted showcase capture remains screenshots-only; its `video: off` setting is intentional.
+
 ### Screenshot reuse policy
 
 1. Prefer linking existing governed screenshots instead of duplicating binary files.
