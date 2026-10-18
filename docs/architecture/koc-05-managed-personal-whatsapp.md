@@ -97,3 +97,23 @@ It reports a policy-version-matching, unrevoked acknowledgement only.
 Neither acknowledged nor revoked consent establishes a real QR session.
 The response explicitly reports paired=false and provider_unlinked=false;
 provider status must be a separate verified transport-owned observation.
+
+## Provider-evidenced QR lifecycle contract (pure reducer)
+
+The new personal_pairing_lifecycle module is a **pure transition validator**.
+It neither runs Baileys nor issues QR codes. Only a verified provider adapter
+may create authenticated observations, and the existing ChannelHost must commit
+them through a durable connection-revision/sequence compare-and-swap after
+revalidating active consent and provider eligibility.
+
+States: ready, qr_available, connected, disconnect_pending, disconnected,
+unknown. QR receipt is short-lived (five minutes maximum) and bound to
+connection revision. A linked state requires a nonempty verified provider
+receipt while the QR is still live. Disconnect requested never means unlink
+confirmed; the latter requires a distinct provider receipt. Failure or
+uncertain status remains unknown, without silent retries or optimistic UI.
+
+Do not publish these states as live provider truth until session persistence,
+signed provider events, actual managed operator health, replay fencing,
+credential revocation and one-use QR retrieval are implemented and tested.
+A pure reducer alone is never a complete connection lifecycle.
