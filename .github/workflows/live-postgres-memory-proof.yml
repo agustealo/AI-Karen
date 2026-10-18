@@ -4,6 +4,23 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - "src/ai_karen_engine/core/memory/**"
+      - "src/ai_karen_engine/platform/memory/**"
+      - "src/ai_karen_engine/persistence/**"
+      - "src/ai_karen_engine/core/runtime/**"
+      - "src/ai_karen_engine/core/cortex/**"
+      - "src/ai_karen_engine/api_routes/chat/**"
+      - "src/ai_karen_engine/services/memory/**"
+      - "supabase/migrations/**"
+      - "scripts/ci/start-postgres-container.sh"
+      - "tests/core/memory/**"
+      - "tests/platform/memory/**"
+      - "tests/memory/**"
+      - "tests/architecture/test_*memory*.py"
+      - "tests/integration/test_*memory*.py"
+      - "requirements/ci/chat.txt"
+      - ".github/workflows/live-postgres-memory-proof.yml"
   workflow_dispatch:
 
 permissions:
