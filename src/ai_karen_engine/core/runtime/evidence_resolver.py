@@ -400,7 +400,7 @@ class RuntimeEvidenceResolver:
             }
         )
 
-    def _recover_ingress_conversation(
+    async def _recover_ingress_conversation(
         self,
         request: ChatExecutionRequest,
         cognitive_context: CognitiveContext,
@@ -423,6 +423,16 @@ class RuntimeEvidenceResolver:
         ):
             return
         if int(requirement.max_items or 0) <= 0:
+            return
+        # RuntimePolicy's source grant is not evidence that this particular
+        # conversation belongs to the caller. A failed transcript fetch may
+        # recover ingress turns only when the canonical repository can still
+        # affirm tenant/user ownership. Fail closed if it cannot.
+        gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+        try:
+            await gateway.require_owned_conversation(ctx)
+        except (PermissionError, RuntimeError, ValueError) as exc:
+            cognitive_context.metadata["conversation_ingress_fallback_denied"] = type(exc).__name__
             return
         prior = [
             (index, message)
@@ -518,7 +528,7 @@ class RuntimeEvidenceResolver:
                     "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
                 }
             )
-            self._recover_ingress_conversation(request, cognitive_context, requirement)
+            await self._recover_ingress_conversation(request, cognitive_context, requirement)
             return
 
         cognitive_context.metadata.update(result.to_metadata())
@@ -537,7 +547,7 @@ class RuntimeEvidenceResolver:
             # A repository ownership rejection is an authorization boundary,
             # never a transient failure eligible for ingress fallback.
             if result.status == "failed":
-                self._recover_ingress_conversation(request, cognitive_context, requirement)
+                await self._recover_ingress_conversation(request, cognitive_context, requirement)
             return
 
         now = datetime.now(timezone.utc)
