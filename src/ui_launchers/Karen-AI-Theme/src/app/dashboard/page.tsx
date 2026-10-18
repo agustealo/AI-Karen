@@ -64,6 +64,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger as AppSidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 
@@ -98,6 +99,24 @@ type NavSubgroup = {
   icon: React.ComponentType<{ className?: string }>;
   items: NavItem[];
 };
+
+function DashboardNavigationContent({ children }: { children: React.ReactNode }) {
+  const { isMobile, setOpenMobile } = useSidebar();
+
+  const handleNavigationClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isMobile) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('[data-sidebar="menu-button"]')) {
+      setOpenMobile(false);
+    }
+  };
+
+  return (
+    <AppSidebarContent onClick={handleNavigationClick} className="space-y-4 p-2">
+      {children}
+    </AppSidebarContent>
+  );
+}
 
 const MAX_BACKEND_RETRIES = 10;
 const BACKOFF_BASE_MS = 1000;
@@ -450,7 +469,7 @@ export default function DashboardPage() {
 
               <Separator className="my-1" />
 
-              <AppSidebarContent className="space-y-4 p-2">
+              <DashboardNavigationContent>
                 {PRIMARY_NAV.map((group, groupIndex) => (
                   <div key={group.section}>
                     <SidebarGroup>
@@ -575,7 +594,7 @@ export default function DashboardPage() {
                     </div>
                   </div>
                 </SidebarGroup>
-              </AppSidebarContent>
+              </DashboardNavigationContent>
 
               <AppSidebarFooter className="relative overflow-visible border-t border-sidebar-border/70 bg-sidebar/70 p-3">
                 <div className="flex flex-col items-center gap-1.5 text-center">
