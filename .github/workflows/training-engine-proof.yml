@@ -3,8 +3,24 @@ name: Training Engine Proof
 on:
   pull_request:
     branches: [main]
+    paths:
+      - "src/ai_karen_engine/core/intelligence/ml/**"
+      - "src/ai_karen_engine/core/intelligence/training/**"
+      - "tests/core/intelligence/test_*training*"
+      - "tests/core/intelligence/test_*worker*"
+      - "tests/unit/core/intelligence/ml/**"
+      - "requirements/ci/runtime-contract.txt"
+      - ".github/workflows/training-engine-proof.yml"
   push:
     branches: [main]
+    paths:
+      - "src/ai_karen_engine/core/intelligence/ml/**"
+      - "src/ai_karen_engine/core/intelligence/training/**"
+      - "tests/core/intelligence/test_*training*"
+      - "tests/core/intelligence/test_*worker*"
+      - "tests/unit/core/intelligence/ml/**"
+      - "requirements/ci/runtime-contract.txt"
+      - ".github/workflows/training-engine-proof.yml"
   workflow_dispatch:
 
 permissions:
