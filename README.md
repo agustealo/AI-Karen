@@ -46,6 +46,8 @@ The images below are **real browser captures of the real authenticated applicati
 
 > **Screenshot provenance:** these previews come from the governed October 2, 2026 capture at target revision `9980fb0bbcf52d162c53278d759c6632dc416a24` using a sanitized demo account. Images from that historical capture with failed/loading states are deliberately **not promoted here**. The application has also evolved since that capture, so a fresh governed five-screen capture is still required before consumer-release visual signoff. See [screenshot provenance](docs/assets/screenshots/README.md).
 
+For the chat screen's **historical screenshot**, the interaction acceptance matrix, and the requirements for fresh browser captures, see [Chat journey verification and screenshot evidence](docs/ux/chat-journey-verification.md). The archived chat image is for dated comparison only, not proof of the current composer or persistence behavior.
+
 ## What you can do with KAREN
 
 ### Talk to an assistant that can actually use the system
