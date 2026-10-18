@@ -277,3 +277,21 @@ strongly validated `PersonalPairingQR`, `PersonalSessionHealth` and
   authenticated host, Vault, RuntimePolicy and durable tenant scope remain
   authoritative. Do not expose these records directly to a browser or
   instantiate a managed vendor until its native API is verified.
+
+## Host-side managed transport evidence freshness gate
+
+The typed vendor interface is not sufficient to assert real connectivity. The
+pure `personal_transport_evidence.py` validator now requires exact host-held
+provider, connection, revision and provider-issued session scope, an aware
+nonfuture timestamp and bounded freshness. QR must remain unexpired; health
+observations are limited to 60 seconds by default; unlink receipts are
+limited to five minutes. A receipt confirms only the vendor operation it
+attests, never credential or data deletion.
+
+These helpers do not authenticate native webhook signatures, deliver QR
+payloads, execute lifecycle transitions, enable providers or replace ChannelHost
+admission. When an approved vendor adapter is implemented, ChannelHost must
+invoke them only **after** native authentication and must enforce current
+consent, RBAC, Vault, one-time QR retrieval and durable CAS separately.
+
+Proof: `pytest -q tests/extensions/test_personal_transport_evidence.py`.
