@@ -567,3 +567,82 @@ async def test_forged_outbound_session_never_triggers_policy_issuance():
     host.activation.issue_action_plan.assert_not_awaited()
     host.repository.get_enabled_connection.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_outbox_recovery_authorizes_before_enumeration_and_sends_only_owner():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    session = ChannelDeliveryService._session_id(
+        tenant_id=tenant, user_id=user, connection_id="conn",
+        external_conversation_id="room",
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="conn", tenant_id=tenant, installation_id="telegram-bot",
+        provider_account_id="account", credential_handle="vault://ref",
+        enabled=True, revision=3,
+    ))
+    host.repository.list_unattempted_outbound = AsyncMock(return_value=[
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ])
+    host.repository.get_delivery_preflight = AsyncMock(side_effect=[
+        SimpleNamespace(connection_id="conn", user_id=user,
+                        external_conversation_id="room"),
+        SimpleNamespace(connection_id="conn", user_id="foreign",
+                        external_conversation_id="room"),
+    ])
+    plan = AuthorizedExecutionPlan(
+        execution_id="e", policy_decision_id="p",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        authorized_session_id=session,
+        allowed_plugins=["telegram-bot"], allowed_capabilities=["channel.send"],
+    )
+    host.activation.issue_action_plan = AsyncMock(side_effect=PermissionError("denied"))
+    host.dispatch_authorized_outbox = AsyncMock(return_value=True)
+    with pytest.raises(PermissionError, match="denied"):
+        await host.recover_outbox(
+            tenant_id=tenant, connection_id="conn", user_id=user,
+            session_id=session,
+        )
+    host.repository.list_unattempted_outbound.assert_not_awaited()
+    host.dispatch_authorized_outbox.assert_not_awaited()
+    host.activation.issue_action_plan.side_effect = None
+    host.activation.issue_action_plan.return_value = plan
+    assert await host.recover_outbox(
+        tenant_id=tenant, connection_id="conn", user_id=user,
+        session_id=session,
+    ) == (2, 1)
+    host.dispatch_authorized_outbox.assert_awaited_once_with(
+        tenant_id=tenant, delivery_id="11111111-1111-1111-1111-111111111111",
+        user_id=user, session_id=session,
+    )
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_outbox_recovery_denies_cross_tenant_connection_before_enumeration():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="conn", tenant_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", enabled=True, revision=3,
+    ))
+    host.repository.list_unattempted_outbound = AsyncMock()
+    host.activation.issue_action_plan = AsyncMock()
+    with pytest.raises(PermissionError):
+        await host.recover_outbox(
+            tenant_id=tenant, connection_id="conn", user_id="user",
+            session_id="channel-session",
+        )
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.repository.list_unattempted_outbound.assert_not_awaited()
+    await host.shutdown()
