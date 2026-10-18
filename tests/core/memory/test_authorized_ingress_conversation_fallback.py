@@ -199,3 +199,19 @@ def test_metadata_cannot_supply_roles_or_evidence_identity():
     assert len(cognitive.evidence) == 1
     assert all(e.scope.tenant_id == "tenant-a" for e in cognitive.evidence)
     assert all(e.provenance.retrieval_method == "authorized_request_ingress" for e in cognitive.evidence)
+
+
+def test_conversation_ownership_exception_fails_closed():
+    request, cognitive, requirement = context_and_request([
+        {"role": "user", "content": "My name is Zeus"},
+    ])
+    resolver = RuntimeEvidenceResolver(
+        conversation_gateway=SimpleNamespace(
+            load_history=AsyncMock(side_effect=PermissionError("conversation_user_mismatch"))
+        ),
+    )
+    asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
+    assert cognitive.evidence == []
+    assert EvidenceSource.CONVERSATION.value in cognitive.unresolved_sources
+    assert cognitive.metadata["conversation_history_status"] == "rejected"
+    assert cognitive.metadata["conversation_history_error_type"] == "PermissionError"
