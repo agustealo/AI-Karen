@@ -151,6 +151,50 @@ class ChannelHostServices:
             credential_handle=credential_handle,
         )
 
+    async def assign_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str,
+        owner_user_id: str, operator_user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Explicit operator action; never inferred from QR, user consent or UI.
+
+        Ownership is immutable in this first slice. Reassignment requires
+        a separately audited lifecycle with consent revocation and session
+        unlink proof, not a generic upsert.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel ownership authority unavailable")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel connection not available for ownership")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=operator_user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.provision", plan=authorized_plan,
+        )
+        assigned = await self.repository.assign_personal_connection_owner(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=owner_user_id,
+        )
+        logger.info(
+            "channel.connection.owner_assignment",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "user_id": operator_user_id,
+                "owner_user_id": owner_user_id,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+                "status": "assigned" if assigned else "unchanged_or_denied",
+            },
+        )
+        return assigned
+
     async def _authorize_personal_pairing_consent(
         self, *, tenant_id: str, connection_id: str,
         user_id: str, session_id: str,
