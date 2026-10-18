@@ -383,9 +383,19 @@ async def test_host_dispatch_uses_only_bound_adapter_and_caller_policy_plan():
         authorized_tenant_id=tenant, allowed_plugins=["telegram-bot"],
         allowed_capabilities=["channel.send"],
     )
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    user_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    session_id = ChannelDeliveryService._session_id(
+        tenant_id=tenant, user_id=user_id, connection_id="conn",
+        external_conversation_id="native-room",
+    )
     assert await host.dispatch_outbox(
-        tenant_id=tenant, delivery_id=delivery_id,
-        authorized_plan=plan, lease_seconds=45,
+        tenant_id=tenant, delivery_id=delivery_id, user_id=user_id,
+        session_id=session_id, authorized_plan=plan, lease_seconds=45,
+    )
+    host.activation._authorize.assert_awaited_once_with(
+        tenant_id=tenant, user_id=user_id, session_id=session_id,
+        installation_id="telegram-bot", action="channel.send", plan=plan,
     )
     host.delivery.dispatch.assert_awaited_once_with(
         tenant_id=tenant, delivery_id=delivery_id, adapter=adapter,
@@ -396,7 +406,7 @@ async def test_host_dispatch_uses_only_bound_adapter_and_caller_policy_plan():
     with pytest.raises(PermissionError):
         await host.dispatch_outbox(
             tenant_id=tenant, delivery_id=delivery_id,
-            authorized_plan=plan,
+            user_id=user_id, session_id=session_id, authorized_plan=plan,
         )
 
 
@@ -433,11 +443,17 @@ async def test_host_outbound_denies_before_dispatch_when_plan_missing_or_connect
         authorized_user_id=other, authorized_tenant_id=tenant,
         allowed_plugins=["telegram-bot"],
     )
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    session_id = ChannelDeliveryService._session_id(
+        tenant_id=tenant,
+        user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        connection_id="conn", external_conversation_id="native-room",
+    )
     with pytest.raises(PermissionError, match="connection"):
         await host.dispatch_outbox(
             tenant_id=tenant, delivery_id=other,
             user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
-            session_id="wrong", authorized_plan=plan,
+            session_id=session_id, authorized_plan=plan,
         )
     host.delivery.dispatch.assert_not_awaited()
     adapter.send.assert_not_awaited()
