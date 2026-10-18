@@ -153,6 +153,52 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert await SqlChannelRepository().list_unattempted_outbound(
             tenant_id=str(tenant_a), connection_id=connection_id,
         ) == []
+
+        # Independent inbox workers race for a separate pending receipt.
+        pending_inbox = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id,tenant_id,connection_id,connection_revision,
+                external_event_id,external_sender_id,external_conversation_id,
+                message_kind,message_text,event_digest,status,binding_id,user_id)
+               VALUES ($1,$2,$3,1,'event-pending','sender','room',
+                       'text','pending',$4,'pending',$5,$6)""",
+            pending_inbox, tenant_a, connection_id, "b" * 64, binding, user,
+        )
+        inbound_a, inbound_b = await asyncio.gather(
+            SqlChannelRepository().claim_inbound(
+                tenant_id=str(tenant_a), inbox_id=str(pending_inbox),
+                lease_seconds=90,
+            ),
+            SqlChannelRepository().claim_inbound(
+                tenant_id=str(tenant_a), inbox_id=str(pending_inbox),
+                lease_seconds=90,
+            ),
+        )
+        assert sum(result is not None for result in (inbound_a, inbound_b)) == 1
+        assert await SqlChannelRepository().claim_inbound(
+            tenant_id=str(tenant_b), inbox_id=str(pending_inbox),
+            lease_seconds=90,
+        ) is None
+        # A revoked native sender may not claim any fresh pending work.
+        await raw.execute(
+            "UPDATE public.channel_identity_bindings SET revoked_at=now() "
+            "WHERE binding_id=$1", binding,
+        )
+        after_revoke = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id,tenant_id,connection_id,connection_revision,
+                external_event_id,external_sender_id,external_conversation_id,
+                message_kind,message_text,event_digest,status,binding_id,user_id)
+               VALUES ($1,$2,$3,1,'event-revoked','sender','room',
+                       'text','blocked',$4,'pending',$5,$6)""",
+            after_revoke, tenant_a, connection_id, "c" * 64, binding, user,
+        )
+        assert await SqlChannelRepository().claim_inbound(
+            tenant_id=str(tenant_a), inbox_id=str(after_revoke),
+            lease_seconds=90,
+        ) is None
     finally:
         if engine is not None:
             await engine.dispose()
