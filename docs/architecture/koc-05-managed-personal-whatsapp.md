@@ -234,3 +234,23 @@ or switch operator identity merely by changing provider_id in the URL.
 After provider disablement, reading or revoking previously recorded consent
 remains available, so users are not locked out of their audit and privacy
 controls. Revoke still does **not** attest remote provider unlink.
+
+## User-visible read-only pairing state
+
+GET /api/channels/personal/{connection_id}/{provider_id}/status authenticates
+the current user, verifies persisted connection ownership, mints a fresh
+channel.consent plan and delegates through ChannelHost to the canonical
+tenant-scoped pairing repository.
+
+- availability=unavailable when the installed personal provider is not
+  explicitly configured and Vault signing secret is not declared.
+- last_observed_phase is only the last persisted, revision-matching event,
+  **not** a live managed-provider connectivity probe.
+- live_connected and qr_available stay false until a dedicated, current,
+  authenticated provider session/QR retrieval protocol exists.
+- provider_unlinked is true only for a persisted DISCONNECTED event that
+  contains a provider unlink receipt. This confirms the accepted callback
+  evidence, not independently audited remote credential erasure.
+- Provider status failures never become optimistic UI connected badges.
+- No QR contents, provider tokens, stored receipt IDs, or other tenants'
+  pairing records are returned in the API response.
