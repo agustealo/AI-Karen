@@ -166,3 +166,75 @@ def test_invalid_scheduled_budget_is_denied():
                 max_inflight=4,
                 max_scheduled=budget,
             )
+
+
+@pytest.mark.asyncio
+async def test_committed_inbox_stages_then_dispatches_using_persisted_preflight():
+    import uuid
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    worker, repo, execution = make_worker()
+    dispatch = AsyncMock(return_value=True)
+    worker._dispatch_outbox = dispatch
+    repo.get_delivery_preflight = AsyncMock(return_value=SimpleNamespace(
+        user_id=USER, connection_id="conn-a", external_conversation_id="room-a",
+    ))
+    assert await worker.submit(admission())
+    await asyncio.gather(*tuple(worker._tasks))
+    delivery_id = str(uuid.uuid5(
+        uuid.NAMESPACE_URL, f"karen-channel-delivery:{INBOX}",
+    ))
+    session_id = ChannelDeliveryService._session_id(
+        tenant_id=TENANT, user_id=USER, connection_id="conn-a",
+        external_conversation_id="room-a",
+    )
+    repo.get_delivery_preflight.assert_awaited_once_with(
+        tenant_id=TENANT, delivery_id=delivery_id,
+    )
+    dispatch.assert_awaited_once_with(
+        tenant_id=TENANT, delivery_id=delivery_id,
+        user_id=USER, session_id=session_id,
+    )
+    await worker.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_uncommitted_execution_never_dispatches_outbound():
+    worker, repo, execution = make_worker()
+    dispatch = AsyncMock()
+    worker._dispatch_outbox = dispatch
+    execution.execute_claimed_text.return_value = False
+    repo.get_delivery_preflight = AsyncMock()
+    await worker.submit(admission())
+    await asyncio.gather(*tuple(worker._tasks))
+    repo.get_delivery_preflight.assert_not_awaited()
+    dispatch.assert_not_awaited()
+    await worker.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_outbox_preflight_principal_mismatch_never_dispatches():
+    worker, repo, execution = make_worker()
+    dispatch = AsyncMock()
+    worker._dispatch_outbox = dispatch
+    repo.get_delivery_preflight = AsyncMock(return_value=SimpleNamespace(
+        user_id="99999999-9999-9999-9999-999999999999",
+        connection_id="conn-a", external_conversation_id="room-a",
+    ))
+    await worker.submit(admission())
+    await asyncio.gather(*tuple(worker._tasks))
+    dispatch.assert_not_awaited()
+    await worker.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_outbound_policy_denial_never_reexecutes_chat_runtime():
+    worker, repo, execution = make_worker()
+    worker._dispatch_outbox = AsyncMock(side_effect=PermissionError("RBAC revoked"))
+    repo.get_delivery_preflight = AsyncMock(return_value=SimpleNamespace(
+        user_id=USER, connection_id="conn-a", external_conversation_id="room-a",
+    ))
+    await worker.submit(admission())
+    await asyncio.gather(*tuple(worker._tasks))
+    execution.execute_claimed_text.assert_awaited_once()
+    repo.claim_inbound.assert_awaited_once()
+    await worker.shutdown()
