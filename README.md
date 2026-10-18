@@ -46,6 +46,10 @@ The images below are **real browser captures of the real authenticated applicati
 
 > **Screenshot provenance:** these previews come from the governed October 2, 2026 capture at target revision `9980fb0bbcf52d162c53278d759c6632dc416a24` using a sanitized demo account. Images from that historical capture with failed/loading states are deliberately **not promoted here**. The application has also evolved since that capture, so a fresh governed five-screen capture is still required before consumer-release visual signoff. See [screenshot provenance](docs/assets/screenshots/README.md).
 
+## User-journey UX verification
+
+Product screenshots are not substitutes for completed user actions. The [user-journey UX audit and evidence register](docs/ux/user-journey-audit.md) records the actions, expected and observed results, responsible source files, and screenshot or trace evidence required for first-run, chat, memory, providers, agents, plugins, communications, mobile, accessibility, and failure recovery. Entries remain **NOT RUN** until verified against a live installation. The curated gallery remains governed by the [screenshot provenance policy](docs/assets/screenshots/README.md); the two historical images above are illustrative, not evidence of current release readiness.
+
 ## What you can do with KAREN
 
 ### Talk to an assistant that can actually use the system
