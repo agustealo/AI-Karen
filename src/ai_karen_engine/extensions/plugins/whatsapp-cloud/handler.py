@@ -16,7 +16,7 @@ from ai_karen_engine.extensions.platform.core.host.base import (
     ExtensionBase, HookContext, HookPoint,
 )
 
-_GRAPH_VERSION = re.compile(r"^v[0-9]{1,3}\\.[0-9]{1,2}$")
+_GRAPH_VERSION = re.compile(r"^v[0-9]{1,3}\.[0-9]{1,2}$")
 _PHONE_ID = re.compile(r"^[0-9]{1,32}$")
 _ACCESS_TOKEN = re.compile(r"^[A-Za-z0-9|._-]{20,1024}$")
 _SIGNATURE = re.compile(r"^sha256=[0-9a-f]{64}$")
