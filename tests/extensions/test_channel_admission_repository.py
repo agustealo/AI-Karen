@@ -411,3 +411,13 @@ async def test_outbox_recovery_requires_bounded_explicit_connection_scope():
             await SqlChannelRepository().list_unattempted_outbound(
                 tenant_id=TENANT, connection_id=connection_id, limit=limit,
             )
+
+
+def test_atomic_outbound_claim_excludes_every_previously_attempted_row():
+    from inspect import getsource
+    source = getsource(SqlChannelRepository.claim_outbound)
+    assert "o.attempt_count = 0" in source
+    assert "o.claim_token IS NULL" in source
+    assert "o.claim_expires_at IS NULL" in source
+    assert "u.is_active = true AND u.is_verified = true" in source
+    assert "c.revision = i.connection_revision" in source
