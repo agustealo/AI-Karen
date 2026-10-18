@@ -151,6 +151,78 @@ class ChannelHostServices:
             credential_handle=credential_handle,
         )
 
+    async def admit_signed_personal_pairing_event(
+        self, *, tenant_id: str, connection_id: str,
+        headers: dict[str, str], body: bytes,
+    ):
+        """Admit an installed, explicitly vetted provider's signed event.
+
+        Not an HTTP endpoint. Provider transport must pass the original bytes
+        unchanged; user/browser requests cannot select an installed adapter.
+        No personal pairing provider is enabled in default configuration.
+        """
+        from datetime import datetime, timezone
+
+        from ai_karen_engine.services.channels.personal_pairing_callback import (
+            verify_personal_pairing_callback,
+        )
+        from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+            PairingEvidenceDenied,
+        )
+
+        if not self._initialized or self._closed or not self.settings.enabled:
+            raise PairingEvidenceDenied("Pairing gateway unavailable")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if connection is None or connection.tenant_id != tenant_id:
+            raise PairingEvidenceDenied("Unrecognized pairing connection")
+        installation_id = connection.installation_id
+        provider_id = self.settings.personal_pairing_providers.get(installation_id)
+        resolver = self._resolvers.get(installation_id)
+        if (
+            not provider_id or resolver is None
+            or installation_id not in self._installed
+            or self.kernel.get_channel_activation_manifest(installation_id) is None
+            or "pairing_webhook_secret" not in self.settings.installations[installation_id]
+            or not self.kernel.is_canonical_channel_adapter(
+                installation_id, self._installed[installation_id],
+            )
+        ):
+            raise PairingEvidenceDenied("No vetted pairing transport is enabled")
+        owner = await self.repository.get_personal_connection_owner(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if not owner:
+            raise PairingEvidenceDenied("No authorized connection owner")
+        secrets = await resolver(
+            tenant_id=tenant_id, credential_handle=connection.credential_handle,
+        )
+        secret = secrets.get("pairing_webhook_secret")
+        if not secret:
+            raise PairingEvidenceDenied("Missing managed-provider signing secret")
+        observation = verify_personal_pairing_callback(
+            body=body, headers=headers, signing_secret=secret,
+            tenant_id=tenant_id, connection_id=connection_id,
+            provider_id=provider_id, now=datetime.now(timezone.utc),
+        )
+        result = await self.repository.commit_personal_pairing_observation(
+            observation=observation, user_id=owner,
+            provider_vetted_and_enabled=True,
+        )
+        logger.info(
+            "channel.personal_pairing.observation_committed",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "provider_id": provider_id,
+                "connection_revision": result.connection_revision,
+                "sequence": result.sequence,
+                "phase": result.phase.value,
+            },
+        )
+        return result
+
     async def assign_personal_connection_owner(
         self, *, tenant_id: str, connection_id: str,
         owner_user_id: str, operator_user_id: str, session_id: str,
