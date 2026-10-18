@@ -167,3 +167,25 @@ def test_stream_fallback_only_allowed_before_any_primary_token() -> None:
     assert _stream_fallback_allowed("partial answer") is False
     assert _stream_fallback_allowed(" ") is False
     assert _stream_fallback_allowed("\\n") is False
+
+def test_completion_truth_fields_are_carried_from_gateway_to_terminal() -> None:
+    """Guard the canonical runtime metadata handoff against accidental removal."""
+    import ast
+    import inspect
+    import textwrap
+
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    def dictionary_keys(method: object) -> set[str]:
+        parsed = ast.parse(textwrap.dedent(inspect.getsource(method)))
+        return {
+            key.value
+            for node in ast.walk(parsed)
+            if isinstance(node, ast.Dict)
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+
+    required = {"finish_reason", "output_truncated"}
+    assert required.issubset(dictionary_keys(ChatRuntime._run_simple))
+    assert required.issubset(dictionary_keys(ChatRuntime._build_stream_terminal_metadata))
