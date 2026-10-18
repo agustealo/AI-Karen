@@ -81,3 +81,27 @@ empty in default runtime. The existing internal HMAC contract is a
 canonical integration boundary, **not evidence any candidate implements it**.
 Choose a provider only after steps 1 and 2. Do not build an adapter using
 guessed native endpoint schemas or spoofed statuses.
+
+## Canonical adapter capability contract (implemented, not activated)
+
+The existing `extensions/channels/contracts.py` now declares the optional
+`PersonalPairingTransport` interface. It is intentionally separate from
+ordinary `ChannelAdapter` message operations. Managed vendor implementations
+must translate their *native authenticated* results into the canonical
+`PersonalPairingQR`, `PersonalSessionHealth` and
+`PersonalSessionUnlinkReceipt` records.
+
+These models require scoped provider/connection/revision/session identity.
+QR payload is a Pydantic `SecretStr` and the evidence window is capped at
+300 seconds. An adapter must **not** persist or log the raw QR value.
+A provider-connected health response requires a nonempty native receipt,
+and remote-unlink acknowledgement requires its own receipt. Neither the
+typed model nor a provider receipt by itself authenticates the source;
+`ChannelHost` must still verify installation, session scope, Vault-backed
+auth, RuntimePolicy/RBAC, clock freshness, ownership and current consent.
+The host must also enforce single-use QR delivery independently of the type.
+Remote session unlink and vendor credential erasure are separate claims.
+
+These are strict transport **contracts**, not a selected vendor implementation
+and not a public endpoint. No production vendor implements this interface
+yet and all consumer connection/QR capabilities remain unavailable.
