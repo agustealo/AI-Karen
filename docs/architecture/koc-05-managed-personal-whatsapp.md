@@ -254,3 +254,26 @@ tenant-scoped pairing repository.
 - Provider status failures never become optimistic UI connected badges.
 - No QR contents, provider tokens, stored receipt IDs, or other tenants'
   pairing records are returned in the API response.
+
+## Optional managed pairing transport interface (contract only)
+
+The existing `extensions/channels/contracts.py` now defines a separate
+`PersonalPairingTransport` capability with three optional provider operations:
+`issue_qr`, `live_session_health` and `unlink_session`. These return
+strongly validated `PersonalPairingQR`, `PersonalSessionHealth` and
+`PersonalSessionUnlinkReceipt` records, respectively.
+
+- QR payload uses `SecretStr` and a bounded timezone-aware lifetime of at
+  most five minutes; raw QR contents must never enter logging, SQL, telemetry
+  or chat transcripts. Actual transport APIs, one-time retrieval and issuance
+  authorization have not been implemented.
+- Live health uses an explicit connected/disconnected/unknown enum and
+  requires a provider receipt for a connected observation. A model object
+  alone does not authenticate a provider, and its timestamps need host
+  freshness checks before consumption.
+- Unlink has a distinct provider receipt and timestamp. Remote unlink receipt
+  is **not equivalent** to independently verified credential erasure.
+- Optional protocols grant no activation: the PluginKernel catalog,
+  authenticated host, Vault, RuntimePolicy and durable tenant scope remain
+  authoritative. Do not expose these records directly to a browser or
+  instantiate a managed vendor until its native API is verified.
