@@ -32,7 +32,11 @@ export default defineConfig({
     headless: !!process.env.CI,
     viewport: { width: 1280, height: 720 },
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    // Opt in only on an approved sanitized test installation. Full-session
+    // recordings may contain sensitive conversation text or browser state.
+    video: process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'
+      ? 'on'
+      : 'retain-on-failure',
     trace: 'retain-on-failure',
     actionTimeout: 15000,
     navigationTimeout: 30000,
