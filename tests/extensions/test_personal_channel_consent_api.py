@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
-from pydantic import ValidationError
 
 from ai_karen_engine.api_routes.channels import personal_consent as api
 from ai_karen_engine.auth.models import UserData
