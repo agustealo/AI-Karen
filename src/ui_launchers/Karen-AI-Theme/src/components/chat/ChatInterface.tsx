@@ -1145,8 +1145,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const { stopActiveRequest } = useRequestHandlers(
     submitInFlightRef,
     activeRequestControllerRef,
-    setIsLoading,
     setProcessingStatus,
+    setIsLoading,
   );
 
   const { scrollChatToBottom } = useScrollManagement(
@@ -1420,6 +1420,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           setIsLocalRecoveryUnconfirmed(true);
         }
       } finally {
+        if (!cancelled && persisted?.inFlight && !activeRequestControllerRef.current) {
+          // Recovery polling has no active browser request to finish cleanup.
+          // Expiry, exhausted polling, or server errors must not strand the lock.
+          submitInFlightRef.current = false;
+          setIsLoading(false);
+          setProcessingStatus('');
+        }
         if (!cancelled) {
           await refreshActionableApprovals(sessionId);
         }
@@ -1541,11 +1548,12 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     };
 
     const attemptStream = async (attempt: number): Promise<void> => {
+      if (activeRequestControllerRef.current?.signal.aborted) return;
+      const controller = new AbortController();
+      activeRequestControllerRef.current = controller;
       try {
         streamFailureMessage = '';
         let completionContent = '';
-        const controller = new AbortController();
-        activeRequestControllerRef.current = controller;
         const collectedAgentSteps: AgentStepEvent[] = [];
         let collectedCitations: Citation[] = [];
         let degradedModeSnapshot = {
@@ -1678,6 +1686,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         },
         controller.signal,
       );
+
+         if (controller.signal.aborted) return;
 
          if (streamFailed) {
            const errorMessage = streamFailureMessage || processingStatus || 'Streaming endpoint reported an error';
@@ -1838,7 +1848,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         });
         scrollChatToBottom('smooth');
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
           return;
         }
 
@@ -1866,6 +1876,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
           console.log(`Retrying stream attempt ${attempt + 1}/${MAX_RETRIES} after ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
+          if (controller.signal.aborted) return;
           return attemptStream(attempt + 1);
         }
 
@@ -1951,7 +1962,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       submitInFlightRef.current = false;
       activeRequestControllerRef.current = null;
       setIsLoading(false);
-        setProcessingStatus('');
+      setProcessingStatus('');
       setStreamedContent('');
       setStreamingMetrics(null);
     }
