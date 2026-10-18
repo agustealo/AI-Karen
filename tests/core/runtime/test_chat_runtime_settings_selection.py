@@ -158,3 +158,30 @@ def test_stream_error_events_include_canonical_failure_provenance() -> None:
                 error_metadata.append(keys)
     assert len(error_metadata) >= 2
     assert all(required.issubset(keys) for keys in error_metadata)
+
+
+def test_stream_gate_provenance_is_explicitly_non_executed() -> None:
+    """Early service gates report no provider or model execution."""
+    import ast
+    import inspect
+
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    tree = ast.parse(inspect.getsource(chat_runtime.ChatRuntime.execute_stream))
+    gate_metadata = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "gate_metadata" for target in node.targets)
+    )
+    assert isinstance(gate_metadata.value, ast.Dict)
+    fields = {
+        key.value: value for key, value in zip(gate_metadata.value.keys, gate_metadata.value.values)
+        if isinstance(key, ast.Constant)
+    }
+    assert {"requested_provider", "requested_model", "actual_provider", "actual_model",
+            "runtime_engine", "response_source", "fallback_level", "fallback_reason",
+            "degraded_mode", "degradation_reason", "error_code"}.issubset(fields)
+    for key in ("actual_provider", "actual_model", "runtime_engine", "response_source", "fallback_reason"):
+        assert isinstance(fields[key], ast.Constant) and fields[key].value is None
+    assert isinstance(fields["fallback_level"], ast.Constant) and fields["fallback_level"].value == 0
+    assert isinstance(fields["degraded_mode"], ast.Constant) and fields["degraded_mode"].value is True
