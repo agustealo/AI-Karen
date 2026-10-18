@@ -151,6 +151,69 @@ class ChannelHostServices:
             credential_handle=credential_handle,
         )
 
+    async def _authorize_personal_pairing_consent(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> None:
+        """Canonical live principal and policy gate before consent SQL."""
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel consent authority unavailable")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel connection not available for consent")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.provision", plan=authorized_plan,
+        )
+
+    async def acknowledge_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str, provider_id: str,
+        accepted: bool, policy_version: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Record explicit risk agreement, never generate a QR or pair a device."""
+        from ai_karen_engine.services.channels.personal_pairing_policy import (
+            PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+
+        if accepted is not True or policy_version != PERSONAL_WHATSAPP_CONSENT_VERSION:
+            raise PermissionError("Current personal pairing risk acknowledgement required")
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        return await self.repository.acknowledge_personal_pairing_risk(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+            policy_version=policy_version,
+        )
+
+    async def revoke_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str, provider_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Revoke consent; does NOT falsely assert provider session unlink."""
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        return await self.repository.revoke_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+        )
+
     async def recover_inbox(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,
