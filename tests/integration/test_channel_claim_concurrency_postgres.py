@@ -201,65 +201,6 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert len(rows) == 2
         assert sum(row["revoked_at"] is None for row in rows) == 1
 
-        # Prove FORCE RLS using a genuinely non-owner database role. A
-        # superuser's tenant-filtered SELECT would not exercise PostgreSQL
-        # row-level security and is insufficient evidence of isolation.
-        await raw.execute("CREATE ROLE karen_channel_rls_probe NOLOGIN")
-        await raw.execute(
-            "GRANT USAGE ON SCHEMA public TO karen_channel_rls_probe"
-        )
-        await raw.execute(
-            "GRANT SELECT ON public.channel_inbox, public.channel_outbox, "
-            "public.channel_personal_pairing_consents, public.channel_connection_owners, "
-            "public.channel_personal_pairing_state "
-            "TO karen_channel_rls_probe"
-        )
-        async with raw.transaction():
-            await raw.execute("SET LOCAL ROLE karen_channel_rls_probe")
-            await raw.execute(
-                "SELECT set_config('app.current_tenant_id', $1, true)",
-                str(tenant_a),
-            )
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_inbox"
-            ) == 1
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_outbox"
-            ) == 1
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_personal_pairing_consents"
-            ) == 2
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_personal_pairing_state"
-            ) == 0
-            await raw.execute(
-                "SELECT set_config('app.current_tenant_id', $1, true)",
-                str(tenant_b),
-            )
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_inbox"
-            ) == 0
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_outbox"
-            ) == 0
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_personal_pairing_consents"
-            ) == 0
-            assert await raw.fetchval(
-                "SELECT count(*) FROM public.channel_personal_pairing_state"
-            ) == 0
-        await raw.execute(
-            "REVOKE SELECT ON public.channel_inbox, public.channel_outbox, "
-            "public.channel_personal_pairing_consents, public.channel_connection_owners, "
-            "public.channel_personal_pairing_state "
-            "FROM karen_channel_rls_probe"
-        )
-        await raw.execute(
-            "REVOKE USAGE ON SCHEMA public FROM karen_channel_rls_probe"
-        )
-        await raw.execute("DROP ROLE karen_channel_rls_probe")
-
-
         # Two independently opened SQL sessions race to write the same QR
         # event. Only one may win the locked-connection/sequence transition.
         from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
@@ -364,6 +305,66 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 ),
                 user_id=str(user), provider_vetted_and_enabled=True,
             )
+
+        # Prove FORCE RLS using a genuinely non-owner database role. A
+        # superuser's tenant-filtered SELECT would not exercise PostgreSQL
+        # row-level security and is insufficient evidence of isolation.
+        await raw.execute("CREATE ROLE karen_channel_rls_probe NOLOGIN")
+        await raw.execute(
+            "GRANT USAGE ON SCHEMA public TO karen_channel_rls_probe"
+        )
+        await raw.execute(
+            "GRANT SELECT ON public.channel_inbox, public.channel_outbox, "
+            "public.channel_personal_pairing_consents, public.channel_connection_owners, "
+            "public.channel_personal_pairing_state "
+            "TO karen_channel_rls_probe"
+        )
+        async with raw.transaction():
+            await raw.execute("SET LOCAL ROLE karen_channel_rls_probe")
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_a),
+            )
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_inbox"
+            ) == 1
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_outbox"
+            ) == 1
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_consents"
+            ) == 3
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_state"
+            ) == 1
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_b),
+            )
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_inbox"
+            ) == 0
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_outbox"
+            ) == 0
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_consents"
+            ) == 0
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_state"
+            ) == 0
+        await raw.execute(
+            "REVOKE SELECT ON public.channel_inbox, public.channel_outbox, "
+            "public.channel_personal_pairing_consents, public.channel_connection_owners, "
+            "public.channel_personal_pairing_state "
+            "FROM karen_channel_rls_probe"
+        )
+        await raw.execute(
+            "REVOKE USAGE ON SCHEMA public FROM karen_channel_rls_probe"
+        )
+        await raw.execute("DROP ROLE karen_channel_rls_probe")
+
+
 
         first, second = await asyncio.gather(
             SqlChannelRepository().claim_outbound(
