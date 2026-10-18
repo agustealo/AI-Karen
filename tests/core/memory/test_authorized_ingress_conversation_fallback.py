@@ -145,3 +145,19 @@ def test_cross_tenant_scope_cannot_read_ingress_fact():
         attribute="preferred_name",
     )
     assert result.status is EvidenceSufficiencyStatus.MISSING
+
+def test_explicit_repository_rejection_does_not_enable_ingress_fallback():
+    request, cognitive, requirement = context_and_request([
+        {"role": "user", "content": "My name is Zeus"},
+    ])
+    result = SimpleNamespace(
+        status="rejected", error_type="TenantScopeDenied",
+        to_metadata=lambda: {"conversation_history_status": "rejected"},
+    )
+    resolver = RuntimeEvidenceResolver(
+        conversation_gateway=SimpleNamespace(load_history=AsyncMock(return_value=result)),
+    )
+    asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
+    assert cognitive.evidence == []
+    assert EvidenceSource.CONVERSATION.value in cognitive.unresolved_sources
+    assert cognitive.metadata["conversation_history_degraded"] is True
