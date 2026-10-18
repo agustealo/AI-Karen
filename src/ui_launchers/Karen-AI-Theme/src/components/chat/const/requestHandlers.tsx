@@ -11,6 +11,7 @@ export function useRequestHandlers(
   submitInFlightRef: React.MutableRefObject<boolean>,
   activeRequestControllerRef: React.MutableRefObject<AbortController | null>,
   setProcessingStatus: React.Dispatch<React.SetStateAction<string>>,
+  setIsLoading: React.Dispatch<React.SetStateAction<boolean>>,
 ) {
   const stopActiveRequest = useCallback(() => {
     if (!submitInFlightRef.current) {
@@ -18,13 +19,22 @@ export function useRequestHandlers(
     }
 
     const controller = activeRequestControllerRef.current;
-    if (controller && !controller.signal.aborted) {
+    if (!controller) {
+      // Restored local in-flight snapshots have no fetch to abort and no
+      // request finally block to release the lock. Unlock that orphan only.
+      submitInFlightRef.current = false;
+      setIsLoading(false);
+      setProcessingStatus('');
+      return;
+    }
+
+    if (!controller.signal.aborted) {
       controller.abort();
     }
 
-    // No timer: status cleanup belongs to the same request that owns the lock.
+    // A live request still owns its eventual finally cleanup.
     setProcessingStatus(REQUEST_CANCELLED_MESSAGE);
-  }, [submitInFlightRef, activeRequestControllerRef, setProcessingStatus]);
+  }, [submitInFlightRef, activeRequestControllerRef, setProcessingStatus, setIsLoading]);
 
   return { stopActiveRequest };
 }
