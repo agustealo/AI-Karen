@@ -686,6 +686,14 @@ async def test_personal_pairing_consent_requires_current_policy_and_persisted_co
     )
 
     host, _, _, _, _ = fake_components()
+    host.settings = ChannelHostSettings(
+        enabled=True,
+        installations={"telegram-bot": frozenset({
+            "bot_token", "webhook_secret", "pairing_webhook_secret",
+        })},
+        personal_pairing_providers={"telegram-bot": "approved-operator"},
+        service_principal_id="channel-host-runtime",
+    ).validate()
     await host.initialize()
     tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
