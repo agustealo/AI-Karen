@@ -18,8 +18,6 @@ CREATE TABLE IF NOT EXISTS public.channel_personal_pairing_consents (
     CONSTRAINT channel_pairing_consent_user
         FOREIGN KEY (tenant_id, user_id)
         REFERENCES public.auth_users(tenant_id, user_id) ON DELETE CASCADE,
-    CONSTRAINT channel_pairing_consent_unique_scope
-        UNIQUE (tenant_id, connection_id, user_id, provider_id, policy_version),
     CONSTRAINT channel_pairing_consent_provider_nonempty
         CHECK (length(trim(provider_id)) BETWEEN 1 AND 128),
     CONSTRAINT channel_pairing_consent_policy_nonempty
@@ -28,7 +26,7 @@ CREATE TABLE IF NOT EXISTS public.channel_personal_pairing_consents (
         CHECK (revoked_at IS NULL OR revoked_at >= accepted_at)
 );
 
-CREATE INDEX IF NOT EXISTS idx_channel_pairing_consent_current
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_pairing_consent_current
     ON public.channel_personal_pairing_consents (tenant_id, connection_id, user_id, provider_id)
     WHERE revoked_at IS NULL;
 
