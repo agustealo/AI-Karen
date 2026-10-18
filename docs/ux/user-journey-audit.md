@@ -86,6 +86,7 @@ P0 means a core journey fails or displays fabricated success. P1 means a major t
 cd src/ui_launchers/Karen-AI-Theme
 npm run lint
 npm run typecheck
+npx vitest run tests/api-stream-incomplete.test.ts
 npm run test:e2e
 # Real user-journey smoke: no mocked APIs; sign-in requires a sanitized account.
 KAREN_UX_EMAIL='<sanitized-test-email>' \
@@ -98,7 +99,7 @@ npx playwright test e2e/ux-user-journeys.spec.ts --config=e2e/playwright.config.
 npm run showcase:capture
 ```
 
-The executable smoke covers UX-01, UX-02, UX-04 (both user prompt and exact assistant reply after reload), the composer portion of UX-10, keyboard focus for UX-11, and a controlled failed-transport scenario for UX-12. The other journeys, including transport interruption *after* partial content, memory/persistence degradation, and complete mobile response, remain outstanding. UX-04 verifies the exact rendered assistant reply after reload but does not prove cross-device sync. UX-12 aborts the stream connection before a response, so it is a truthful transport-failure proof rather than a partial-stream splice proof. UX-11 verifies composer keyboard focus only; it is not a complete screen-reader audit. Execution artifacts contain screenshot plus structured action/expected/observed metadata. Screenshots are evidence, not permission to promote the image to the README. The credentials are never logged or included in attachments.
+The executable smoke covers UX-01, UX-02, UX-04 (both user prompt and exact assistant reply after reload), the composer portion of UX-10, keyboard focus for UX-11, and a controlled failed-transport scenario for UX-12. A deterministic API stream-contract regression now covers content followed by EOF, a premature DONE sentinel, and a truncated terminal record in `tests/api-stream-incomplete.test.ts`. It asserts no completion callback, explicit `CHAT_STREAM_INCOMPLETE` error provenance and a real terminal-completion control case. This synthetic fault is unit-test evidence, **not** an authenticated browser journey or product screenshot. Browser-level partial-stream interruption, memory/persistence degradation, and complete mobile response remain outstanding. UX-04 verifies the exact rendered assistant reply after reload but does not prove cross-device sync. UX-12 aborts the stream connection before a response, so it is a truthful transport-failure proof rather than a partial-stream splice proof. UX-11 verifies composer keyboard focus only; it is not a complete screen-reader audit. Execution artifacts contain screenshot plus structured action/expected/observed metadata. Screenshots are evidence, not permission to promote the image to the README. The credentials are never logged or included in attachments.
 
 The default generic Playwright config uses `KAREN_BASE_URL` and saves failure screenshots/videos/traces. The governed showcase uses `KAREN_SHOWCASE_BASE_URL`, a sanitized account, and revision attestation. See [capture instructions](../assets/screenshots/README.md) before invoking it.
 
