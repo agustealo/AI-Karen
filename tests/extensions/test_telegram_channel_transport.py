@@ -328,6 +328,18 @@ async def test_real_telegram_adapter_receipt_flows_through_canonical_delivery_se
         if status == 200 else httpx.Response(status)
     )
     kernel, adapter, _, client = load_transport(response=response)
+    # This unit integration supplies the host-validated installation snapshot.
+    # The separate PluginKernel lifecycle contracts prove the real registration
+    # gate; loading an adapter alone does not activate that registry.
+    manifest = kernel.loader.load_manifest("telegram-bot")
+    monkeypatch.setattr(
+        kernel, "get_channel_activation_manifest",
+        lambda plugin_id: manifest if plugin_id == "telegram-bot" else None,
+    )
+    monkeypatch.setattr(
+        kernel, "is_canonical_channel_adapter",
+        lambda plugin_id, value: plugin_id == "telegram-bot" and value is adapter,
+    )
     await adapter.start(connection=connection())
     user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     outbox = delivery()
