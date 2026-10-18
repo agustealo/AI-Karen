@@ -151,6 +151,16 @@ jobs:
             --timeout=300 \
             --tb=short
 
+      - name: Live PostgreSQL channel claim concurrency
+        env:
+          PGPASSWORD: postgres
+          CHANNEL_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/karen_channel_test
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          # Dedicated disposable DB: the live proof recreates its own schema.
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE karen_channel_test'
+          pytest tests/integration/test_channel_claim_concurrency_postgres.py -q --timeout=120 --tb=short
+
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@v4

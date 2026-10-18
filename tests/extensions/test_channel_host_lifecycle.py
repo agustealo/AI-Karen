@@ -135,6 +135,9 @@ async def test_host_binds_canonical_adapter_and_never_auto_starts_tenant_connect
     adapter.initialize.assert_awaited_once()
     assert host.ingress is not None
     assert host.activation is not None
+    assert host.delivery is not None
+    assert host.execution is None  # No runtime injected in this isolated test.
+    assert host.worker is None
     assert host.ingress.max_native_body_bytes == 65_536
     assert adapter.bind_host_services.call_count == 1
     bound = adapter.bind_host_services.call_args.kwargs
@@ -152,6 +155,8 @@ async def test_host_binds_canonical_adapter_and_never_auto_starts_tenant_connect
     kernel.cleanup.assert_awaited_once()
     client.aclose.assert_awaited_once()
     assert host.ingress is None and host.activation is None
+    assert host.execution is None and host.delivery is None
+    assert host.worker is None
 
 
 @pytest.mark.asyncio
@@ -244,3 +249,400 @@ async def test_application_shutdown_revokes_ingress_before_database_cleanup(monk
     assert seen == ["channel_stopped", "db"]
     assert app.state.channel_host_services is None
     fake_host.shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_host_binds_existing_runtime_execution_without_starting_worker():
+    host, _, _, _, adapter = fake_components()
+    runtime = SimpleNamespace(execute=AsyncMock())
+    host._chat_runtime = runtime
+    await host.initialize()
+    assert host.execution is not None
+    assert host.execution._chat_runtime is runtime
+    assert host.worker is not None
+    assert host.ingress._on_admitted is not None
+    assert host.execution._repository is host.repository
+    assert host.delivery is not None
+    assert host.delivery._repository is host.repository
+    assert host.delivery._kernel is host.kernel
+    runtime.execute.assert_not_awaited()
+    adapter.start.assert_not_awaited()
+    adapter.send.assert_not_awaited()
+    await host.shutdown()
+    assert host.execution is None
+    assert host.delivery is None
+    assert host.worker is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_recovery_requires_policy_before_reading_backlog():
+    host, _, _, _, _ = fake_components()
+    host._chat_runtime = SimpleNamespace(execute=AsyncMock())
+    await host.initialize()
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.persistence.repositories.channel_repository import InboundAdmission
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    connection = ChannelConnection(
+        connection_id="c1", tenant_id=tenant, installation_id="telegram-bot",
+        provider_account_id="account", credential_handle="vault://ref",
+        revision=3, enabled=True,
+    )
+    receipt = InboundAdmission(
+        inbox_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        correlation_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        tenant_id=tenant, user_id=user,
+        binding_id="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        inserted=False,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=connection)
+    host.repository.list_recoverable_inbound = AsyncMock(return_value=[receipt])
+    host.worker.submit = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock(side_effect=PermissionError("denied"))
+    plan = AuthorizedExecutionPlan(
+        execution_id="recovery-1", policy_decision_id="policy-1",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.recover"],
+    )
+    with pytest.raises(PermissionError, match="denied"):
+        await host.recover_inbox(
+            tenant_id=tenant, connection_id="c1", user_id=user,
+            session_id="session", authorized_plan=plan,
+        )
+    host.repository.list_recoverable_inbound.assert_not_awaited()
+    host.worker.submit.assert_not_awaited()
+    host.activation._authorize.side_effect = None
+    assert await host.recover_inbox(
+        tenant_id=tenant, connection_id="c1", user_id=user,
+        session_id="session", authorized_plan=plan,
+    ) == 1
+    host.activation._authorize.assert_awaited_with(
+        tenant_id=tenant, user_id=user, session_id="session",
+        installation_id="telegram-bot", action="channel.recover", plan=plan,
+    )
+    host.repository.list_recoverable_inbound.assert_awaited_once_with(
+        tenant_id=tenant, connection_id="c1", limit=100,
+    )
+    host.worker.submit.assert_awaited_once_with(receipt)
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_recovery_refuses_disabled_or_cross_tenant_connection_before_policy():
+    host, _, _, _, _ = fake_components()
+    host._chat_runtime = SimpleNamespace(execute=AsyncMock())
+    await host.initialize()
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="c1", tenant_id=other, installation_id="telegram-bot",
+        provider_account_id="account", credential_handle="vault://ref",
+        revision=3, enabled=True,
+    ))
+    host.repository.list_recoverable_inbound = AsyncMock()
+    host.activation._authorize = AsyncMock()
+    with pytest.raises(PermissionError):
+        await host.recover_inbox(
+            tenant_id=tenant, connection_id="c1", user_id=other,
+            session_id="session", authorized_plan=None,
+        )
+    host.activation._authorize.assert_not_awaited()
+    host.repository.list_recoverable_inbound.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_host_dispatch_uses_only_bound_adapter_and_caller_policy_plan():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    delivery_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_delivery_preflight = AsyncMock(
+        return_value=SimpleNamespace(
+            connection_id="conn", user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            external_conversation_id="native-room",
+        ),
+    )
+    host.repository.get_enabled_connection = AsyncMock(
+        return_value=ChannelConnection(
+            connection_id="conn", tenant_id=tenant,
+            installation_id="telegram-bot", provider_account_id="account",
+            credential_handle="vault://ref", revision=2, enabled=True,
+        ),
+    )
+    host.delivery.dispatch = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock()
+    plan = AuthorizedExecutionPlan(
+        execution_id="delivery-1", policy_decision_id="policy-1",
+        authorized_user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        authorized_tenant_id=tenant, allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.send"],
+    )
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    user_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    session_id = ChannelDeliveryService._session_id(
+        tenant_id=tenant, user_id=user_id, connection_id="conn",
+        external_conversation_id="native-room",
+    )
+    assert await host.dispatch_outbox(
+        tenant_id=tenant, delivery_id=delivery_id, user_id=user_id,
+        session_id=session_id, authorized_plan=plan, lease_seconds=45,
+    )
+    host.activation._authorize.assert_awaited_once_with(
+        tenant_id=tenant, user_id=user_id, session_id=session_id,
+        installation_id="telegram-bot", action="channel.send", plan=plan,
+    )
+    host.delivery.dispatch.assert_awaited_once_with(
+        tenant_id=tenant, delivery_id=delivery_id, adapter=adapter,
+        authorized_plan=plan, lease_seconds=45,
+    )
+    adapter.send.assert_not_awaited()
+    await host.shutdown()
+    with pytest.raises(PermissionError):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id=delivery_id,
+            user_id=user_id, session_id=session_id, authorized_plan=plan,
+        )
+
+
+@pytest.mark.asyncio
+async def test_host_outbound_denies_before_dispatch_when_plan_missing_or_connection_foreign():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_delivery_preflight = AsyncMock(
+        return_value=SimpleNamespace(
+            connection_id="conn", user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            external_conversation_id="native-room",
+        ),
+    )
+    host.repository.get_enabled_connection = AsyncMock(
+        return_value=ChannelConnection(
+            connection_id="conn", tenant_id=other,
+            installation_id="telegram-bot", provider_account_id="account",
+            credential_handle="vault://ref", revision=2, enabled=True,
+        ),
+    )
+    host.delivery.dispatch = AsyncMock()
+    with pytest.raises(PermissionError, match="plan"):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id=other,
+            user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            session_id="wrong", authorized_plan=None,
+        )
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    plan = AuthorizedExecutionPlan(
+        execution_id="delivery-2", policy_decision_id="policy-2",
+        authorized_user_id=other, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"],
+    )
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    session_id = ChannelDeliveryService._session_id(
+        tenant_id=tenant,
+        user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        connection_id="conn", external_conversation_id="native-room",
+    )
+    with pytest.raises(PermissionError, match="connection"):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id=other,
+            user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            session_id=session_id, authorized_plan=plan,
+        )
+    host.delivery.dispatch.assert_not_awaited()
+    adapter.send.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_host_outbound_denies_foreign_principal_and_session_before_policy():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_delivery_preflight = AsyncMock(return_value=SimpleNamespace(
+        connection_id="conn", user_id=user, external_conversation_id="native-room",
+    ))
+    host.repository.get_enabled_connection = AsyncMock()
+    host.activation._authorize = AsyncMock()
+    host.delivery.dispatch = AsyncMock()
+    plan = AuthorizedExecutionPlan(
+        execution_id="delivery-3", policy_decision_id="policy-3",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"], allowed_capabilities=["channel.send"],
+    )
+    with pytest.raises(PermissionError, match="principal"):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            user_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+            session_id="anything", authorized_plan=plan,
+        )
+    with pytest.raises(PermissionError, match="session"):
+        await host.dispatch_outbox(
+            tenant_id=tenant, delivery_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            user_id=user, session_id="wrong", authorized_plan=plan,
+        )
+    host.repository.get_enabled_connection.assert_not_awaited()
+    host.activation._authorize.assert_not_awaited()
+    host.delivery.dispatch.assert_not_awaited()
+    adapter.send.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_host_issues_fresh_runtime_policy_before_outbound_dispatch():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    delivery = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    session = ChannelDeliveryService._session_id(
+        tenant_id=tenant, user_id=user, connection_id="conn",
+        external_conversation_id="chat",
+    )
+    host.repository.get_delivery_preflight = AsyncMock(return_value=SimpleNamespace(
+        connection_id="conn", user_id=user, external_conversation_id="chat",
+    ))
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="conn", tenant_id=tenant, installation_id="telegram-bot",
+        provider_account_id="account", credential_handle="vault://ref",
+        revision=2, enabled=True,
+    ))
+    plan = AuthorizedExecutionPlan(
+        execution_id="exec", policy_decision_id="policy",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        authorized_session_id=session, allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.send"],
+    )
+    host.activation.issue_action_plan = AsyncMock(return_value=plan)
+    host.dispatch_outbox = AsyncMock(return_value=True)
+    assert await host.dispatch_authorized_outbox(
+        tenant_id=tenant, delivery_id=delivery, user_id=user,
+        session_id=session,
+    )
+    host.activation.issue_action_plan.assert_awaited_once_with(
+        tenant_id=tenant, user_id=user, session_id=session,
+        installation_id="telegram-bot", action="channel.send",
+    )
+    host.dispatch_outbox.assert_awaited_once_with(
+        tenant_id=tenant, delivery_id=delivery, user_id=user,
+        session_id=session, authorized_plan=plan, lease_seconds=90,
+    )
+    host.activation.issue_action_plan.side_effect = PermissionError("RBAC denied")
+    host.dispatch_outbox.reset_mock()
+    with pytest.raises(PermissionError, match="RBAC denied"):
+        await host.dispatch_authorized_outbox(
+            tenant_id=tenant, delivery_id=delivery, user_id=user,
+            session_id=session,
+        )
+    host.dispatch_outbox.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_forged_outbound_session_never_triggers_policy_issuance():
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    host.repository.get_delivery_preflight = AsyncMock(return_value=SimpleNamespace(
+        connection_id="conn", user_id="user", external_conversation_id="chat",
+    ))
+    host.repository.get_enabled_connection = AsyncMock()
+    host.activation.issue_action_plan = AsyncMock()
+    with pytest.raises(PermissionError, match="session"):
+        await host.dispatch_authorized_outbox(
+            tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            delivery_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            user_id="user", session_id="forged",
+        )
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.repository.get_enabled_connection.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_outbox_recovery_authorizes_before_enumeration_and_sends_only_owner():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    session = ChannelDeliveryService._session_id(
+        tenant_id=tenant, user_id=user, connection_id="conn",
+        external_conversation_id="room",
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="conn", tenant_id=tenant, installation_id="telegram-bot",
+        provider_account_id="account", credential_handle="vault://ref",
+        enabled=True, revision=3,
+    ))
+    host.repository.list_unattempted_outbound = AsyncMock(return_value=[
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ])
+    host.repository.get_delivery_preflight = AsyncMock(side_effect=[
+        SimpleNamespace(connection_id="conn", user_id=user,
+                        external_conversation_id="room"),
+        SimpleNamespace(connection_id="conn", user_id="foreign",
+                        external_conversation_id="room"),
+    ])
+    plan = AuthorizedExecutionPlan(
+        execution_id="e", policy_decision_id="p",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        authorized_session_id=session,
+        allowed_plugins=["telegram-bot"], allowed_capabilities=["channel.send"],
+    )
+    host.activation.issue_action_plan = AsyncMock(side_effect=PermissionError("denied"))
+    host.dispatch_authorized_outbox = AsyncMock(return_value=True)
+    with pytest.raises(PermissionError, match="denied"):
+        await host.recover_outbox(
+            tenant_id=tenant, connection_id="conn", user_id=user,
+            session_id=session,
+        )
+    host.repository.list_unattempted_outbound.assert_not_awaited()
+    host.dispatch_authorized_outbox.assert_not_awaited()
+    host.activation.issue_action_plan.side_effect = None
+    host.activation.issue_action_plan.return_value = plan
+    assert await host.recover_outbox(
+        tenant_id=tenant, connection_id="conn", user_id=user,
+        session_id=session,
+    ) == (2, 1)
+    host.dispatch_authorized_outbox.assert_awaited_once_with(
+        tenant_id=tenant, delivery_id="11111111-1111-1111-1111-111111111111",
+        user_id=user, session_id=session,
+    )
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_outbox_recovery_denies_cross_tenant_connection_before_enumeration():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="conn", tenant_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", enabled=True, revision=3,
+    ))
+    host.repository.list_unattempted_outbound = AsyncMock()
+    host.activation.issue_action_plan = AsyncMock()
+    with pytest.raises(PermissionError):
+        await host.recover_outbox(
+            tenant_id=tenant, connection_id="conn", user_id="user",
+            session_id="channel-session",
+        )
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.repository.list_unattempted_outbound.assert_not_awaited()
+    await host.shutdown()

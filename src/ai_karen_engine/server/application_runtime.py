@@ -60,11 +60,13 @@ async def initialize_application_channel_host(app: FastAPI) -> None:
     host = ChannelHostServices(
         settings=settings, kernel=kernel, vault=vault,
         repository=SqlChannelRepository(), http_client=client,
+        chat_runtime=getattr(app.state, "chat_runtime", None),
         owns_kernel=existing_kernel is None,
         owns_vault=existing_vault is None,
     )
     await host.initialize()
-    if host.ingress is None or host.activation is None:
+    if (host.ingress is None or host.activation is None
+            or host.execution is None or host.delivery is None):
         await host.shutdown()
         raise RuntimeError("Configured channel host did not attach its services")
 

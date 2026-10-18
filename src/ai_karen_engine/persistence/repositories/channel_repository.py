@@ -479,6 +479,61 @@ class SqlChannelRepository:
             inserted=inserted,
         )
 
+    async def list_recoverable_inbound(
+        self, *, tenant_id: str, connection_id: str, limit: int = 100,
+    ) -> list[InboundAdmission]:
+        """Enumerate recoverable receipts only within an explicitly scoped connection.
+
+        This is NOT a startup resume authority. A host supervisor may invoke it
+        only after obtaining fresh authorization for the requested tenant and
+        connection. Claims remain atomic in claim_inbound; enumeration does not
+        reserve messages or bypass tenant RLS.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Connection scope is required for inbox recovery")
+        if not 1 <= limit <= 1000:
+            raise ValueError("Recovery limit must be 1..1000")
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT i.inbox_id, i.correlation_id, i.tenant_id,
+                           i.user_id, i.binding_id
+                    FROM public.channel_inbox i
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = i.tenant_id
+                     AND c.connection_id = i.connection_id
+                     AND c.revision = i.connection_revision
+                    JOIN public.channel_identity_bindings b
+                      ON b.tenant_id = i.tenant_id
+                     AND b.connection_id = i.connection_id
+                     AND b.binding_id = i.binding_id
+                     AND b.user_id = i.user_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = i.tenant_id
+                     AND u.user_id = i.user_id
+                    WHERE i.tenant_id = CAST(:tenant AS uuid)
+                      AND i.connection_id = :connection
+                      AND c.enabled = true
+                      AND b.revoked_at IS NULL
+                      AND u.is_active = true AND u.is_verified = true
+                      AND i.message_kind = 'text'
+                      AND i.message_text IS NOT NULL
+                      AND (
+                          (i.status = 'pending' AND i.claim_token IS NULL)
+                          OR (
+                              i.status = 'processing'
+                              AND i.claim_token IS NOT NULL
+                              AND i.claim_expires_at <= clock_timestamp()
+                          )
+                      )
+                    ORDER BY i.created_at, i.inbox_id
+                    LIMIT :limit
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "limit": limit},
+            )).mappings().all()
+        return [self._admission_from_row(row, inserted=False) for row in rows]
+
     async def claim_inbound(
         self, *, tenant_id: str, inbox_id: str, lease_seconds: int,
     ) -> tuple[str, InboundAdmission] | None:
@@ -511,7 +566,11 @@ class SqlChannelRepository:
                           JOIN public.channel_identity_bindings b
                             ON b.tenant_id = c.tenant_id
                            AND b.connection_id = c.connection_id
+                          JOIN public.auth_users u
+                            ON u.tenant_id = i.tenant_id
+                           AND u.user_id = i.user_id
                           WHERE c.tenant_id = i.tenant_id
+                            AND u.is_active = true AND u.is_verified = true
                             AND c.connection_id = i.connection_id
                             AND c.enabled = true
                             AND c.revision = i.connection_revision
@@ -683,6 +742,58 @@ class SqlChannelRepository:
             inserted = result.scalar_one_or_none()
         return inserted is not None
 
+    async def list_unattempted_outbound(
+        self, *, tenant_id: str, connection_id: str, limit: int = 100,
+    ) -> list[str]:
+        """Enumerate only accepted, NEVER CLAIMED deliveries in one tenant account.
+
+        This read is not an authorization grant or a send. Recovery callers
+        require a fresh channel.send policy plan and dispatch must consume the
+        existing one-use claim. Expired claims are NOT eligible for replay:
+        quarantine_expired_outbound_claims owns their unknown outcome.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Outbound recovery requires connection scope")
+        if not 1 <= limit <= 1000:
+            raise ValueError("Outbound recovery limit must be 1..1000")
+        async with async_transaction_scope(tenant_id) as session:
+            values = (await session.execute(
+                text("""
+                    SELECT o.delivery_id
+                    FROM public.channel_outbox o
+                    JOIN public.channel_inbox i
+                      ON i.tenant_id = o.tenant_id
+                     AND i.connection_id = o.connection_id
+                     AND i.inbox_id = o.inbox_id
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = i.tenant_id
+                     AND c.connection_id = i.connection_id
+                     AND c.revision = i.connection_revision
+                    JOIN public.channel_identity_bindings b
+                      ON b.tenant_id = i.tenant_id
+                     AND b.connection_id = i.connection_id
+                     AND b.binding_id = i.binding_id
+                     AND b.user_id = i.user_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = i.tenant_id AND u.user_id = i.user_id
+                    WHERE o.tenant_id = CAST(:tenant AS uuid)
+                      AND o.connection_id = :connection
+                      AND o.status = 'accepted'
+                      AND o.claim_token IS NULL
+                      AND o.claim_expires_at IS NULL
+                      AND o.attempt_count = 0
+                      AND i.status = 'completed'
+                      AND c.enabled = true
+                      AND b.revoked_at IS NULL
+                      AND u.is_active = true AND u.is_verified = true
+                    ORDER BY o.created_at, o.delivery_id
+                    LIMIT :limit
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "limit": limit},
+            )).scalars().all()
+        return [str(value) for value in values]
+
     async def get_delivery_preflight(
         self, *, tenant_id: str, delivery_id: str,
     ) -> ChannelDeliveryPreflight | None:
@@ -700,7 +811,9 @@ class SqlChannelRepository:
                     WHERE o.tenant_id = CAST(:tenant AS uuid)
                       AND o.delivery_id = CAST(:delivery AS uuid)
                       AND o.status = 'accepted'
+                      AND o.attempt_count = 0
                       AND o.claim_token IS NULL
+                      AND o.claim_expires_at IS NULL
                 """),
                 {"tenant": tenant_id, "delivery": str(uuid.UUID(delivery_id))},
             )).mappings().one_or_none()
@@ -739,6 +852,7 @@ class SqlChannelRepository:
                           AND o.status = 'accepted'
                           AND o.claim_token IS NULL
                           AND o.claim_expires_at IS NULL
+                          AND o.attempt_count = 0
                           AND EXISTS (
                               SELECT 1 FROM public.channel_inbox i
                               JOIN public.channel_connections c
@@ -758,7 +872,7 @@ class SqlChannelRepository:
                                 AND i.status = 'completed'
                                 AND c.enabled = true
                                 AND b.revoked_at IS NULL
-                                AND u.is_active = true
+                                AND u.is_active = true AND u.is_verified = true
                           )
                         RETURNING *
                     )
