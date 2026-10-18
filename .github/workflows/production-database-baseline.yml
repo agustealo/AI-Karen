@@ -3,6 +3,7 @@ name: Production Database Baseline Contract
 
 on:
   push:
+    branches: [main]
     paths:
       - "supabase/migrations/**"
       - "supabase/README.md"
