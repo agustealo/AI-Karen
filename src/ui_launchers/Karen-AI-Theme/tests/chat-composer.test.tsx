@@ -22,12 +22,9 @@ function renderComposer(overrides: Partial<React.ComponentProps<typeof ChatInput
       onSubmit={onSubmit}
       displayedInputValue="Hello Karen"
       onInputChange={onInputChange}
-      onKeyDown={vi.fn()}
-      onPaste={vi.fn()}
       isLoading={false}
       isAuthLoading={false}
       isRecording={false}
-      isEditingDuringProcessing={false}
       isBackendOffline={false}
       speechRecognitionSupported={false}
       showStopButton={false}
@@ -61,6 +58,46 @@ function renderComposer(overrides: Partial<React.ComponentProps<typeof ChatInput
 afterEach(() => vi.restoreAllMocks());
 
 describe('Karen multiline composer', () => {
+  it('preserves the next-message draft while a response streams', () => {
+    const { onInputChange } = renderComposer({
+      displayedInputValue: 'Draft for the next message',
+      isLoading: true,
+      showStopButton: true,
+      streamingStatus: 'Generating response',
+    });
+    const input = screen.getByRole('textbox', { name: 'Chat message input' }) as HTMLTextAreaElement;
+    expect(input.value).toBe('Draft for the next message');
+    expect(screen.getByRole('status').textContent).toContain('Generating response');
+    fireEvent.change(input, { target: { value: 'Another draft' } });
+    expect(onInputChange).toHaveBeenCalledWith('Another draft');
+  });
+
+  it('does not substitute processing status for an empty user draft', () => {
+    renderComposer({
+      displayedInputValue: '',
+      isLoading: true,
+      showStopButton: true,
+      streamingStatus: 'Searching for context',
+    });
+    const input = screen.getByRole('textbox', { name: 'Chat message input' }) as HTMLTextAreaElement;
+    expect(input.value).toBe('');
+    expect(input.placeholder).toBe('Ask Karen anything...');
+    expect(screen.getByRole('status').textContent).toContain('Searching for context');
+  });
+
+  it('retains an existing next-message draft after Stop', () => {
+    const { onStopRequest } = renderComposer({
+      displayedInputValue: 'Important unsent draft',
+      isLoading: true,
+      showStopButton: true,
+      streamingStatus: 'Generating response',
+    });
+    const input = screen.getByRole('textbox', { name: 'Chat message input' }) as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Stop current response generation' }));
+    expect(onStopRequest).toHaveBeenCalledOnce();
+    expect(input.value).toBe('Important unsent draft');
+  });
+
   it('renders a multiline textbox with matching keyboard guidance', () => {
     renderComposer();
     const input = screen.getByRole('textbox', { name: 'Chat message input' });
@@ -91,7 +128,6 @@ describe('Karen multiline composer', () => {
     const { onSubmit, onStopRequest } = renderComposer({
       isLoading: true,
       showStopButton: true,
-      isEditingDuringProcessing: true,
     });
     const input = screen.getByRole('textbox', { name: 'Chat message input' });
     fireEvent.keyDown(input, { key: 'Enter' });

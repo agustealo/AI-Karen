@@ -12,14 +12,11 @@ interface ChatInputProps {
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   displayedInputValue: string;
   onInputChange: (value: string) => void;
-  onKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
-  onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
 
   // Button states
   isLoading: boolean;
   isAuthLoading: boolean;
   isRecording: boolean;
-  isEditingDuringProcessing: boolean;
   isBackendOffline: boolean;
   speechRecognitionSupported: boolean;
   showStopButton: boolean;
@@ -57,20 +54,15 @@ interface ChatInputProps {
 
 const DEFAULT_INPUT_PLACEHOLDER = 'Ask Karen anything...';
 const AUTH_LOADING_PLACEHOLDER = 'Loading your profile...';
-const EDIT_DURING_PROCESSING_PLACEHOLDER =
-  'Type while Karen is still processing...';
 const OFFLINE_PLACEHOLDER = 'Offline mode - limited functionality';
 
 export function ChatInput({
   onSubmit,
   displayedInputValue,
   onInputChange,
-  onKeyDown,
-  onPaste,
   isLoading,
   isAuthLoading,
   isRecording,
-  isEditingDuringProcessing,
   isBackendOffline,
   speechRecognitionSupported,
   showStopButton,
@@ -102,34 +94,20 @@ export function ChatInput({
   const trimmedInput = displayedInputValue.trim();
 
   const inputPlaceholder = useMemo(() => {
-    /*
-     * Placeholder priority mirrors runtime state:
-     * auth loading > editable streaming state > offline warning > live streaming status > normal prompt.
-     * This keeps transient streaming status visible without hiding hard blockers.
-     */
+    // Placeholder describes the composer, never transient runtime execution.
     if (isAuthLoading) {
       return AUTH_LOADING_PLACEHOLDER;
-    }
-
-    if (isLoading && isEditingDuringProcessing) {
-      return EDIT_DURING_PROCESSING_PLACEHOLDER;
     }
 
     if (isBackendOffline) {
       return OFFLINE_PLACEHOLDER;
     }
 
-    return streamingStatus || DEFAULT_INPUT_PLACEHOLDER;
+    return DEFAULT_INPUT_PLACEHOLDER;
   }, [
     isAuthLoading,
-    isLoading,
-    isEditingDuringProcessing,
     isBackendOffline,
-    streamingStatus,
   ]);
-
-  const canEditInput =
-    !isAuthLoading && (!showStopButton || isEditingDuringProcessing);
 
   const canUseMic =
     !isLoading && !isAuthLoading && !isBackendOffline && speechRecognitionSupported;
@@ -145,20 +123,10 @@ export function ChatInput({
     : 'Send message';
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    /*
-     * While Karen is streaming, the parent may allow edit-during-processing.
-     * If not enabled, we freeze input edits so the user cannot accidentally
-     * mutate the prompt attached to the active request.
-     */
-    if (!canEditInput) {
-      return;
-    }
-
     onInputChange(event.target.value);
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    onKeyDown(event);
     if (event.defaultPrevented || event.key !== 'Enter' || event.shiftKey ||
         event.altKey || event.ctrlKey || event.metaKey ||
         event.nativeEvent.isComposing || event.keyCode === 229) {
@@ -250,6 +218,12 @@ export function ChatInput({
           </div>
         </div>
 
+        {isLoading && streamingStatus && (
+          <div role="status" aria-live="polite" className="mb-2 text-xs text-muted-foreground" data-testid="chat-processing-status">
+            {streamingStatus}
+          </div>
+        )}
+
         <form
           onSubmit={onSubmit}
           className="flex w-full items-center gap-2 sm:gap-3"
@@ -279,7 +253,6 @@ export function ChatInput({
             value={displayedInputValue}
             onChange={handleInputChange}
             onKeyDown={handleComposerKeyDown}
-            onPaste={onPaste}
             placeholder={inputPlaceholder}
             className="min-h-12 max-h-40 flex-1 resize-y overflow-y-auto border-border/80 bg-card/70 text-sm shadow-inner sm:text-[15px]"
             data-testid="chat-input"
