@@ -106,6 +106,112 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def get_personal_pairing_consent(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str,
+    ):
+        """Read only the latest ACTIVE policy acknowledgement from tenant RLS."""
+        from ai_karen_engine.services.channels.personal_pairing_policy import (
+            PersonalPairingConsent,
+        )
+
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not connection_id or not provider_id:
+            raise ValueError("Consent lookup requires connection and provider")
+        async with async_transaction_scope(tenant_id) as session:
+            record = (await session.execute(
+                text("""
+                    SELECT tenant_id, connection_id, user_id, provider_id,
+                           policy_version, accepted_at, revoked_at
+                    FROM public.channel_personal_pairing_consents
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                      AND provider_id = :provider
+                      AND revoked_at IS NULL
+                    ORDER BY accepted_at DESC
+                    LIMIT 1
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id, "provider": provider_id},
+            )).mappings().one_or_none()
+        return (
+            PersonalPairingConsent(
+                tenant_id=str(record["tenant_id"]),
+                connection_id=record["connection_id"],
+                user_id=str(record["user_id"]),
+                provider_id=record["provider_id"],
+                policy_version=record["policy_version"],
+                accepted_at=record["accepted_at"],
+                revoked_at=record["revoked_at"],
+            ) if record else None
+        )
+
+    async def acknowledge_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str, policy_version: str,
+    ) -> bool:
+        """Persist explicit user acceptance only for own existing connection.
+
+        No native provider content, browser flags or arbitrary tenant principal
+        are trusted. Host must authorize the actor BEFORE calling this method.
+        Revoked consent history is never overwritten or destroyed.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not all(isinstance(v, str) and v.strip() and len(v) <= 128
+                   for v in (connection_id, provider_id, policy_version)):
+            raise ValueError("Invalid pairing risk consent scope")
+        async with async_transaction_scope(tenant_id) as session:
+            record = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_personal_pairing_consents
+                        (tenant_id, connection_id, user_id, provider_id, policy_version)
+                    SELECT c.tenant_id, c.connection_id, u.user_id,
+                           :provider, :version
+                    FROM public.channel_connections c
+                    JOIN public.auth_users u ON u.tenant_id = c.tenant_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND u.user_id = CAST(:user AS uuid)
+                      AND u.is_active = true AND u.is_verified = true
+                    ON CONFLICT DO NOTHING
+                    RETURNING consent_id
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id, "provider": provider_id,
+                 "version": policy_version},
+            )).scalar_one_or_none()
+        return record is not None
+
+    async def revoke_personal_pairing_consent(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str,
+    ) -> bool:
+        """Revoke active consent atomically, preserving its historical record."""
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not connection_id or not provider_id:
+            raise ValueError("Consent revocation requires connection and provider")
+        async with async_transaction_scope(tenant_id) as session:
+            record = (await session.execute(
+                text("""
+                    UPDATE public.channel_personal_pairing_consents
+                    SET revoked_at = clock_timestamp(),
+                        updated_at = clock_timestamp()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                      AND provider_id = :provider
+                      AND revoked_at IS NULL
+                    RETURNING consent_id
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id, "provider": provider_id},
+            )).scalar_one_or_none()
+        return record is not None
+
     async def create_connection(
         self, *, tenant_id: str, installation_id: str,
         provider_account_id: str, credential_handle: str,
