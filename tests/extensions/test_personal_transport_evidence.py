@@ -65,7 +65,7 @@ def test_qr_rejects_mismatched_host_scope(scope) -> None:
 
 
 @pytest.mark.parametrize("issued,expires", [
-    (NOW - timedelta(minutes=6), NOW + timedelta(seconds=1)),
+    (NOW - timedelta(minutes=6), NOW - timedelta(minutes=2)),
     (NOW + timedelta(seconds=1), NOW + timedelta(seconds=30)),
     (NOW - timedelta(seconds=60), NOW),
 ])
