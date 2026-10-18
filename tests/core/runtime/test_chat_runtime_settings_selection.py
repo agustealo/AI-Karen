@@ -185,3 +185,43 @@ def test_stream_gate_provenance_is_explicitly_non_executed() -> None:
         assert isinstance(fields[key], ast.Constant) and fields[key].value is None
     assert isinstance(fields["fallback_level"], ast.Constant) and fields["fallback_level"].value == 0
     assert isinstance(fields["degraded_mode"], ast.Constant) and fields["degraded_mode"].value is True
+
+
+@pytest.mark.asyncio
+async def test_gated_stream_emits_no_execution_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the gated async generator, including its terminal envelope."""
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    emitted: list[object] = []
+    runtime = object.__new__(ChatRuntime)
+    runtime._emitter = SimpleNamespace(emit=lambda *args, **kwargs: emitted.append((args, kwargs)))
+    monkeypatch.setattr(runtime, "_bind_observability_context", lambda ctx: None)
+    monkeypatch.setattr(
+        runtime, "_resolve_gate",
+        lambda ctx: _gate(),
+    )
+    monkeypatch.setattr(
+        runtime, "_enrich_chunk",
+        lambda chunk, *args: chunk,
+    )
+    request = _request("ollama", "selected:latest")
+    chunks = [chunk async for chunk in runtime.execute_stream(request)]
+    assert [chunk.type for chunk in chunks] == ["error", "complete"]
+    assert chunks[0].metadata == chunks[1].metadata
+    metadata = chunks[0].metadata
+    assert metadata["requested_provider"] == "ollama"
+    assert metadata["requested_model"] == "selected:latest"
+    assert metadata["actual_provider"] is None
+    assert metadata["actual_model"] is None
+    assert metadata["runtime_engine"] is None
+    assert metadata["response_source"] is None
+    assert metadata["fallback_level"] == 0
+    assert metadata["degraded_mode"] is True
+    assert metadata["error_code"] == "CHAT_RUNTIME_GATED"
+    assert any(item[1].get("status") == "gate" for item in emitted)
+
+
+async def _gate() -> SimpleNamespace:
+    return SimpleNamespace(mode="unavailable", message="Runtime unavailable")
