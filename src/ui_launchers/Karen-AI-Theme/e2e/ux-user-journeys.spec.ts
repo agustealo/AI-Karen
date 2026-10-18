@@ -98,8 +98,8 @@ test('UX-02: authenticated user sends a message and sees a finished assistant re
   const priorCount = await messages.locator('.user-bubble').count();
   const prompt = 'Please reply with a brief greeting.';
 
-  await expect(submit).toBeEnabled({ timeout: 30_000 });
   await input.fill(prompt);
+  await expect(submit).toBeEnabled({ timeout: 30_000 });
   await submit.click();
   await expect(messages.getByText(prompt, { exact: true })).toBeVisible();
   await expect
@@ -141,5 +141,72 @@ test('UX-10: mobile viewport retains an operable chat composer', async ({ page }
     'Open chat at 390 x 844 and enter text',
     'Composer and send control remain visible and operable',
     'Composer visible and send control enabled; no message submitted',
+  );
+});
+
+test('UX-04: completed conversation survives a browser reload', async ({ page }, testInfo) => {
+  test.skip(!hasCredentials, 'Requires a sanitized account and a healthy real backend.');
+  await signIn(page);
+
+  const input = page.getByTestId('chat-input');
+  const submit = page.getByTestId('chat-submit');
+  const messages = page.getByRole('log', { name: 'Chat messages' });
+  const marker = `UX04-persistence-${Date.now()}`;
+  const prompt = `Please acknowledge this conversation marker: ${marker}`;
+  const oldCount = await messages.locator('.user-bubble').count();
+
+  await input.fill(prompt);
+  await expect(submit).toBeEnabled({ timeout: 30_000 });
+  await submit.click();
+
+  await expect(messages.getByText(prompt, { exact: true })).toBeVisible();
+  await expect
+    .poll(() => messages.locator('.user-bubble').count(), { timeout: 90_000 })
+    .toBeGreaterThanOrEqual(oldCount + 2);
+  await expect(submit).toHaveAttribute('aria-label', 'Send message', { timeout: 90_000 });
+
+  // The active conversation must be server-backed. Reload discards component state,
+  // so a message that exists only in memory cannot pass this assertion.
+  await page.reload();
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
+  const restoredMessages = page.getByRole('log', { name: 'Chat messages' });
+  await expect(restoredMessages.getByText(prompt, { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-04',
+    'Send a real prompt and reload the authenticated browser page',
+    'Previously sent prompt is restored from the active server-backed conversation',
+    `Conversation marker ${marker} remained visible after reload`,
+  );
+});
+
+test('UX-11: keyboard can focus the chat composer and send control', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires a sanitized account and a real deployment.');
+  await signIn(page);
+
+  const input = page.getByRole('textbox', { name: 'Chat message input' });
+  const submit = page.getByRole('button', { name: 'Send message' });
+  await input.focus();
+  await expect(input).toBeFocused();
+  await page.keyboard.type('Keyboard navigation check');
+  await expect(submit).toBeEnabled({ timeout: 30_000 });
+
+  // Focus the actual control using native keyboard navigation.
+  await page.keyboard.press('Tab');
+  await expect(submit).toBeFocused();
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-11',
+    'Type into chat with keyboard and Tab to the send control',
+    'Keyboard focus reaches the enabled send control with an accessible name',
+    'Chat input accepted keyboard text and Tab moved focus to Send message',
   );
 });
