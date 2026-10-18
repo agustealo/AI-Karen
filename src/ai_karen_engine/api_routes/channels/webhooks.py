@@ -30,6 +30,17 @@ _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 _NATIVE_PATH = re.compile(
     rf"^/api/channels/webhooks/{_UUID}/{_UUID}$"
 )
+_PAIRING_PATH = re.compile(
+    rf"^/api/channels/personal/callbacks/{_UUID}/{_UUID}$"
+)
+_PERSONAL_CALLBACK_LIMIT = 16_384
+
+
+def is_personal_pairing_callback_path(path: str, method: str) -> bool:
+    """The sole unsigned-session route for provider-signed pairing evidence."""
+    return method == "POST" and _PAIRING_PATH.fullmatch(path) is not None
+
+
 
 
 def is_native_channel_webhook_path(path: str, method: str) -> bool:
@@ -55,6 +66,49 @@ async def _read_bounded_body(request: Request, limit: int) -> bytes:
     if total == 0:
         raise HTTPException(status_code=400, detail="Empty native event")
     return b"".join(chunks)
+
+
+@router.post("/api/channels/personal/callbacks/{tenant_id}/{connection_id}")
+async def receive_signed_personal_pairing_callback(
+    tenant_id: UUID, connection_id: UUID, request: Request,
+) -> JSONResponse:
+    """Narrow signed ingress; Host verifies Vault key and persists evidence."""
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+    from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+        PairingEvidenceDenied,
+    )
+
+    if not is_personal_pairing_callback_path(
+        request.url.path, request.method,
+    ):
+        raise HTTPException(status_code=404, detail="Not found")
+    host = getattr(request.app.state, "channel_host_services", None)
+    if not isinstance(host, ChannelHostServices):
+        raise HTTPException(status_code=503, detail="Pairing admission unavailable")
+    body = await _read_bounded_body(request, _PERSONAL_CALLBACK_LIMIT)
+    try:
+        await host.admit_signed_personal_pairing_event(
+            tenant_id=str(tenant_id), connection_id=str(connection_id),
+            headers=request.headers, body=body,
+        )
+    except (PairingEvidenceDenied, PermissionError, ValueError):
+        # Never surface provider identifiers, receipt IDs, or secret details.
+        raise HTTPException(
+            status_code=403, detail="Personal pairing event rejected",
+        ) from None
+    except Exception as exc:
+        logger.error(
+            "channel.personal_pairing.admission_unavailable",
+            extra={
+                "error_type": type(exc).__name__,
+                "tenant_id": str(tenant_id),
+                "connection_id": str(connection_id),
+            },
+        )
+        raise HTTPException(
+            status_code=503, detail="Pairing admission unavailable",
+        ) from None
+    return JSONResponse(status_code=202, content={"accepted": True})
 
 
 @router.post("/api/channels/webhooks/{tenant_id}/{connection_id}")
@@ -105,6 +159,8 @@ async def receive_signed_channel_event(
 
 __all__ = [
     "is_native_channel_webhook_path",
+    "is_personal_pairing_callback_path",
+    "receive_signed_personal_pairing_callback",
     "receive_signed_channel_event",
     "router",
 ]

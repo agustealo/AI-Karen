@@ -52,7 +52,8 @@
       "permissions": [
         "chat:use",
         "data:read_own",
-        "profile:manage_own"
+        "profile:manage_own",
+        "channel.consent"
       ],
       "inherits_from": "readonly"
     }

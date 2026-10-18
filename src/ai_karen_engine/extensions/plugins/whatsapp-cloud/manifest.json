@@ -1,0 +1,53 @@
+{
+  "name": "whatsapp-cloud",
+  "version": "1.0.0",
+  "display_name": "WhatsApp Cloud API Channel",
+  "description": "Optional Meta-hosted WhatsApp Business Cloud API text adapter; identity, policy, durable delivery and ChatRuntime remain host-owned.",
+  "author": "AI Karen",
+  "license": "MIT",
+  "category": "communication",
+  "entrypoint": "handler:MainExtension",
+  "tags": [
+    "whatsapp",
+    "communication",
+    "channel",
+    "managed"
+  ],
+  "api_version": "1.0",
+  "capabilities": {
+    "provides_ui": false,
+    "provides_api": false,
+    "provides_background_tasks": false,
+    "provides_webhooks": true,
+    "prompt_first": true,
+    "communication_channel": {
+      "version": "1.0.0",
+      "transport": "whatsapp-cloud",
+      "ingress": [
+        "webhook"
+      ],
+      "inbound": [
+        "text"
+      ],
+      "outbound": [
+        "text"
+      ],
+      "authentication": "token",
+      "supports_edits": false,
+      "supports_streaming": false,
+      "supports_media": false,
+      "supports_delivery_receipts": false
+    }
+  },
+  "permissions": {
+    "network_access": [
+      "graph.facebook.com"
+    ]
+  },
+  "rbac": {
+    "allowed_roles": [
+      "admin"
+    ],
+    "default_enabled": false
+  }
+}

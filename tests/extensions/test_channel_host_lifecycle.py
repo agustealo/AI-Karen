@@ -82,6 +82,35 @@ async def test_disabled_app_lifecycle_does_not_start_any_channel(monkeypatch):
     assert app.state.channel_host_services is None
 
 
+def test_personal_pairing_registry_is_explicit_and_requires_signing_secret(monkeypatch):
+    monkeypatch.setenv("KAREN_CHANNEL_HOST_ENABLED", "true")
+    monkeypatch.setenv("KAREN_CHANNEL_SERVICE_PRINCIPAL_ID", "channel-host-runtime")
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_HOST_INSTALLATIONS_JSON",
+        '{"telegram-bot":["webhook_secret","bot_token"]}',
+    )
+    monkeypatch.delenv("KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON", raising=False)
+    assert load_channel_host_settings().personal_pairing_providers == {}
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON",
+        '{"telegram-bot":"managed-operator"}',
+    )
+    with pytest.raises(ValueError, match="signing secret"):
+        load_channel_host_settings()
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_HOST_INSTALLATIONS_JSON",
+        '{"telegram-bot":["webhook_secret","bot_token","pairing_webhook_secret"]}',
+    )
+    actual = load_channel_host_settings()
+    assert actual.personal_pairing_providers == {"telegram-bot": "managed-operator"}
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON",
+        '{"not-installed":"managed-operator"}',
+    )
+    with pytest.raises(ValueError, match="signing secret"):
+        load_channel_host_settings()
+
+
 def test_enabled_host_needs_configured_operator_and_transport_registry(monkeypatch):
     monkeypatch.setenv("KAREN_CHANNEL_HOST_ENABLED", "true")
     monkeypatch.setenv("KAREN_CHANNEL_HOST_INSTALLATIONS_JSON", "{}")
@@ -645,4 +674,293 @@ async def test_outbox_recovery_denies_cross_tenant_connection_before_enumeration
         )
     host.activation.issue_action_plan.assert_not_awaited()
     host.repository.list_unattempted_outbound.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_personal_pairing_consent_requires_current_policy_and_persisted_connection():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+
+    host, _, _, _, _ = fake_components()
+    host.settings = ChannelHostSettings(
+        enabled=True,
+        installations={"telegram-bot": frozenset({
+            "bot_token", "webhook_secret", "pairing_webhook_secret",
+        })},
+        personal_pairing_providers={"telegram-bot": "approved-operator"},
+        service_principal_id="channel-host-runtime",
+    ).validate()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    account = ChannelConnection(
+        connection_id="personal-1", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    )
+    host.repository.get_connection = AsyncMock(return_value=account)
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=True)
+    host.repository.acknowledge_personal_pairing_risk = AsyncMock(return_value=True)
+    host.repository.revoke_personal_pairing_consent = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock(side_effect=PermissionError("denied"))
+    plan = AuthorizedExecutionPlan(
+        execution_id="consent-1", policy_decision_id="decision-1",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.consent"],
+    )
+    values = dict(
+        tenant_id=tenant, connection_id="personal-1",
+        user_id=user, session_id="session",
+        provider_id="approved-operator", authorized_plan=plan,
+    )
+    with pytest.raises(PermissionError, match="acknowledgement"):
+        await host.acknowledge_personal_pairing_risk(
+            **values, accepted=False,
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+    host.repository.get_connection.assert_not_awaited()
+    with pytest.raises(PermissionError, match="denied"):
+        await host.acknowledge_personal_pairing_risk(
+            **values, accepted=True,
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+    host.repository.acknowledge_personal_pairing_risk.assert_not_awaited()
+    host.activation._authorize.side_effect = None
+    assert await host.acknowledge_personal_pairing_risk(
+        **values, accepted=True,
+        policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+    host.repository.acknowledge_personal_pairing_risk.assert_awaited_once_with(
+        tenant_id=tenant, connection_id="personal-1",
+        user_id=user, provider_id="approved-operator",
+        policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+    # Revocation works on disabled connections and never claims provider unlink.
+    assert await host.revoke_personal_pairing_risk(**values)
+    host.repository.revoke_personal_pairing_consent.assert_awaited_once_with(
+        tenant_id=tenant, connection_id="personal-1",
+        user_id=user, provider_id="approved-operator",
+    )
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_personal_risk_consent_rejects_unconfigured_provider_but_allows_revoke():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="personal-1", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=True)
+    host.repository.acknowledge_personal_pairing_risk = AsyncMock()
+    host.repository.revoke_personal_pairing_consent = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock()
+    args = dict(
+        tenant_id=tenant, connection_id="personal-1", user_id=user,
+        session_id="session", provider_id="unregistered-provider",
+        authorized_plan=AuthorizedExecutionPlan(
+            execution_id="consent-unregistered",
+            policy_decision_id="decision-unregistered",
+            authorized_user_id=user, authorized_tenant_id=tenant,
+            allowed_plugins=["telegram-bot"],
+            allowed_capabilities=["channel.consent"],
+        ),
+    )
+    with pytest.raises(PermissionError, match="not configured"):
+        await host.acknowledge_personal_pairing_risk(
+            **args, accepted=True,
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+    host.repository.acknowledge_personal_pairing_risk.assert_not_awaited()
+    assert await host.revoke_personal_pairing_risk(**args)
+    host.repository.revoke_personal_pairing_consent.assert_awaited_once()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_personal_pairing_consent_cannot_cross_tenants():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    other = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=True)
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="personal-1", tenant_id=other,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.activation._authorize = AsyncMock()
+    host.repository.acknowledge_personal_pairing_risk = AsyncMock()
+    with pytest.raises(PermissionError, match="not available"):
+        await host.acknowledge_personal_pairing_risk(
+            tenant_id=tenant, connection_id="personal-1",
+            user_id=user, session_id="session", provider_id="approved-operator",
+            accepted=True, policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+            authorized_plan=AuthorizedExecutionPlan(
+                execution_id="consent-2", policy_decision_id="decision-2",
+                authorized_user_id=user, authorized_tenant_id=tenant,
+                allowed_plugins=["telegram-bot"],
+                allowed_capabilities=["channel.consent"],
+            ),
+        )
+    host.activation._authorize.assert_not_awaited()
+    host.repository.acknowledge_personal_pairing_risk.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_self_consent_refuses_other_connection_owner_even_with_valid_plan():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="personal-1", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=False)
+    host.repository.acknowledge_personal_pairing_risk = AsyncMock()
+    host.activation._authorize = AsyncMock()
+    plan = AuthorizedExecutionPlan(
+        execution_id="consent-owner-check", policy_decision_id="decision-owner",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.consent"],
+    )
+    with pytest.raises(PermissionError, match="connection owner"):
+        await host.acknowledge_personal_pairing_risk(
+            tenant_id=tenant, connection_id="personal-1",
+            user_id=user, session_id="session", provider_id="approved-operator",
+            accepted=True, policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+            authorized_plan=plan,
+        )
+    host.activation._authorize.assert_not_awaited()
+    host.repository.acknowledge_personal_pairing_risk.assert_not_awaited()
+    await host.shutdown()
+
+
+def test_normal_user_has_consent_but_no_channel_admin_rights():
+    from ai_karen_engine.auth.rbac_middleware import (
+        Permission, get_rbac_manager,
+    )
+
+    permissions = get_rbac_manager().get_user_permissions({
+        "user_id": "user-1", "tenant_id": "tenant-1",
+        "roles": ["user"], "permissions": [],
+    })
+    assert Permission.CHANNEL_CONSENT in permissions
+    # The deployed shared config, not only Python fallback defaults,
+    # must grant self-consent without transport administration.
+    from ai_karen_engine.auth.rbac_middleware import ROLE_PERMISSIONS, Role
+    assert Permission.CHANNEL_CONSENT in ROLE_PERMISSIONS[Role.USER].permissions
+    for forbidden in (
+        Permission.CHANNEL_PROVISION, Permission.CHANNEL_ACTIVATE,
+        Permission.CHANNEL_DEACTIVATE, Permission.CHANNEL_RECOVER,
+        Permission.CHANNEL_SEND,
+    ):
+        assert forbidden not in permissions
+
+
+@pytest.mark.asyncio
+async def test_only_authorized_operator_can_assign_channel_owner():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    owner = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    operator = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="account-1", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.assign_personal_connection_owner = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock(side_effect=PermissionError("denied"))
+    plan = AuthorizedExecutionPlan(
+        execution_id="assign-owner", policy_decision_id="operator-policy",
+        authorized_user_id=operator, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"], allowed_capabilities=["channel.provision"],
+    )
+    values = dict(
+        tenant_id=tenant, connection_id="account-1", owner_user_id=owner,
+        operator_user_id=operator, session_id="admin-session",
+        authorized_plan=plan,
+    )
+    with pytest.raises(PermissionError, match="denied"):
+        await host.assign_personal_connection_owner(**values)
+    host.repository.assign_personal_connection_owner.assert_not_awaited()
+    host.activation._authorize.side_effect = None
+    assert await host.assign_personal_connection_owner(**values)
+    host.activation._authorize.assert_awaited_with(
+        tenant_id=tenant, user_id=operator, session_id="admin-session",
+        installation_id="telegram-bot", action="channel.provision", plan=plan,
+    )
+    host.repository.assign_personal_connection_owner.assert_awaited_once_with(
+        tenant_id=tenant, connection_id="account-1", user_id=owner,
+    )
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_assign_owner_to_foreign_connection():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    owner = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    operator = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="account-1",
+        tenant_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.assign_personal_connection_owner = AsyncMock()
+    host.activation._authorize = AsyncMock()
+    with pytest.raises(PermissionError, match="not available"):
+        await host.assign_personal_connection_owner(
+            tenant_id=tenant, connection_id="account-1", owner_user_id=owner,
+            operator_user_id=operator, session_id="admin-session",
+            authorized_plan=AuthorizedExecutionPlan(
+                execution_id="foreign-owner", policy_decision_id="policy-foreign",
+                authorized_user_id=operator, authorized_tenant_id=tenant,
+                allowed_plugins=["telegram-bot"],
+                allowed_capabilities=["channel.provision"],
+            ),
+        )
+    host.activation._authorize.assert_not_awaited()
+    host.repository.assign_personal_connection_owner.assert_not_awaited()
     await host.shutdown()

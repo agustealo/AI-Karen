@@ -2392,7 +2392,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
       {latestAssistantMetadata.outputTruncated && (
         <div role="status" aria-live="polite" className="rounded-md border border-amber-500/40 px-3 py-2 text-sm">
-          This answer stopped at the model's output-token limit and may be incomplete.
+          This answer stopped at the model&apos;s output-token limit and may be incomplete.
           You can ask Karen to continue.
         </div>
       )}
