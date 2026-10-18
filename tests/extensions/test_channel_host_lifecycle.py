@@ -827,6 +827,10 @@ def test_normal_user_has_consent_but_no_channel_admin_rights():
         "roles": ["user"], "permissions": [],
     })
     assert Permission.CHANNEL_CONSENT in permissions
+    # The deployed shared config, not only Python fallback defaults,
+    # must grant self-consent without transport administration.
+    from ai_karen_engine.auth.rbac_middleware import ROLE_PERMISSIONS, Role
+    assert Permission.CHANNEL_CONSENT in ROLE_PERMISSIONS[Role.USER].permissions
     for forbidden in (
         Permission.CHANNEL_PROVISION, Permission.CHANNEL_ACTIVATE,
         Permission.CHANNEL_DEACTIVATE, Permission.CHANNEL_RECOVER,
