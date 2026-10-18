@@ -98,7 +98,7 @@ npx playwright test e2e/ux-user-journeys.spec.ts --config=e2e/playwright.config.
 npm run showcase:capture
 ```
 
-The initial executable smoke covers UX-01, UX-02 and the composer portion of UX-10. The other journeys, including complete mobile response and persistence, remain outstanding. Execution artifacts contain screenshot plus structured action/expected/observed metadata. Screenshots are evidence, not permission to promote the image to the README. The credentials are never logged or included in attachments.
+The executable smoke covers UX-01, UX-02, UX-04, the composer portion of UX-10, and keyboard focus for UX-11. The other journeys, including interrupted-stream failure proof, truthful failure/recovery proof, and complete mobile response, remain outstanding. UX-04 specifically verifies prompt persistence across browser reload, but does not yet prove assistant message persistence or cross-device sync. UX-11 verifies composer keyboard focus only; it is not a complete screen-reader audit. Execution artifacts contain screenshot plus structured action/expected/observed metadata. Screenshots are evidence, not permission to promote the image to the README. The credentials are never logged or included in attachments.
 
 The default generic Playwright config uses `KAREN_BASE_URL` and saves failure screenshots/videos/traces. The governed showcase uses `KAREN_SHOWCASE_BASE_URL`, a sanitized account, and revision attestation. See [capture instructions](../assets/screenshots/README.md) before invoking it.
 
