@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 
 import pytest
 
