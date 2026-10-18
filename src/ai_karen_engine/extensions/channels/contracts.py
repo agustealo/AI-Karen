@@ -172,6 +172,36 @@ class PersonalSessionUnlinkReceipt(_ChannelRecord):
         return self
 
 
+class PersonalCredentialErasureReceipt(_ChannelRecord):
+    """Vendor claim of credential deletion; independent verification is required.
+
+    A signed vendor acknowledgement is evidence of a request's outcome,
+    not proof that backups, retained media or third-party copies are erased.
+    Only a reviewed adapter may map native provider responses to this record.
+    """
+
+    provider_id: str = Field(min_length=1, max_length=128)
+    connection_id: str = Field(min_length=1)
+    connection_revision: int = Field(ge=1)
+    session_reference: str = Field(min_length=1, max_length=256)
+    deletion_request_id: str = Field(min_length=1, max_length=256)
+    provider_receipt_id: str = Field(min_length=1, max_length=256)
+    credential_scope: str = Field(min_length=1, max_length=128)
+    erased_at: datetime
+
+    @model_validator(mode="after")
+    def validate_erasure_claim(self) -> "PersonalCredentialErasureReceipt":
+        if self.erased_at.tzinfo is None or self.erased_at.utcoffset() is None:
+            raise ValueError("Credential erasure claim must be timezone-aware")
+        if any(not value.strip() for value in (
+            self.deletion_request_id,
+            self.provider_receipt_id,
+            self.credential_scope,
+        )):
+            raise ValueError("Credential erasure claim requires substantive identifiers")
+        return self
+
+
 class PersonalPairingTransport(Protocol):
     """Optional managed-provider capability, separate from normal channel send.
 
@@ -234,6 +264,7 @@ __all__ = [
     "ChannelDeliveryReceipt",
     "ChannelDeliveryRequest",
     "ChannelDeliveryState",
+    "PersonalCredentialErasureReceipt",
     "PersonalPairingQR",
     "PersonalPairingTransport",
     "PersonalSessionHealth",
