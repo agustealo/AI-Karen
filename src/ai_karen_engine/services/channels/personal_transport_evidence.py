@@ -5,7 +5,7 @@ authenticate a provider, grant a runtime plan, or confirm credential erasure.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection,
@@ -27,7 +27,7 @@ def _require_time(value: datetime, *, now: datetime, max_age: timedelta) -> None
         or not timedelta(0) < max_age <= timedelta(minutes=5)
     ):
         raise PersonalTransportEvidenceDenied("Aware timestamps and bounded evidence age required")
-    if not now.utcoffset() is not None or not value.utcoffset() is not None:
+    if now.utcoffset() is None or value.utcoffset() is None:
         raise PersonalTransportEvidenceDenied("Invalid timestamp")
     if value > now or now - value > max_age:
         raise PersonalTransportEvidenceDenied("Provider evidence is stale or in the future")
