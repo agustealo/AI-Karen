@@ -850,6 +850,7 @@ class SqlChannelRepository:
                           AND o.status = 'accepted'
                           AND o.claim_token IS NULL
                           AND o.claim_expires_at IS NULL
+                          AND o.attempt_count = 0
                           AND EXISTS (
                               SELECT 1 FROM public.channel_inbox i
                               JOIN public.channel_connections c
@@ -869,7 +870,7 @@ class SqlChannelRepository:
                                 AND i.status = 'completed'
                                 AND c.enabled = true
                                 AND b.revoked_at IS NULL
-                                AND u.is_active = true
+                                AND u.is_active = true AND u.is_verified = true
                           )
                         RETURNING *
                     )
