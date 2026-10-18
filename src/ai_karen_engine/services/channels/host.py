@@ -222,6 +222,22 @@ class ChannelHostServices:
             action="channel.consent", plan=authorized_plan,
         )
 
+    async def get_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str, provider_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ):
+        """Read current scoped consent; never expose provider or session secrets."""
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        return await self.repository.get_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+        )
+
     async def acknowledge_personal_pairing_risk(
         self, *, tenant_id: str, connection_id: str,
         user_id: str, session_id: str, provider_id: str,
