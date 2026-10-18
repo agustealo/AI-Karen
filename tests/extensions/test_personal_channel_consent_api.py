@@ -37,6 +37,11 @@ def host_context(*, owner=True):
         is_personal_connection_owner=AsyncMock(return_value=owner),
     )
     host.get_personal_pairing_risk = AsyncMock(return_value=None)
+    host.get_personal_pairing_status = AsyncMock(return_value={
+        "availability": "unavailable", "last_observed_phase": None,
+        "live_connected": False, "qr_available": False,
+        "provider_unlinked": False,
+    })
     host.acknowledge_personal_pairing_risk = AsyncMock(return_value=True)
     host.revoke_personal_pairing_risk = AsyncMock(return_value=True)
     return host, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
@@ -184,3 +189,31 @@ async def test_unowned_connection_cannot_read_consent_record():
         )
     assert error.value.status_code == 403
     host.get_personal_pairing_risk.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pairing_status_never_promotes_saved_receipt_to_live_connected():
+    host, request = host_context()
+    result = await api.get_personal_whatsapp_pairing_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert result.availability == "unavailable"
+    assert result.live_connected is False
+    assert result.qr_available is False
+    host.get_personal_pairing_status.assert_awaited_once()
+    kwargs = host.get_personal_pairing_status.await_args.kwargs
+    assert kwargs["tenant_id"] == TENANT and kwargs["user_id"] == USER
+    assert kwargs["authorized_plan"] == "trusted-plan"
+
+
+@pytest.mark.asyncio
+async def test_foreign_owner_cannot_query_pairing_status():
+    host, request = host_context(owner=False)
+    with pytest.raises(HTTPException) as exc:
+        await api.get_personal_whatsapp_pairing_status(
+            connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+            request=request, user=actor(),
+        )
+    assert exc.value.status_code == 403
+    host.get_personal_pairing_status.assert_not_awaited()
