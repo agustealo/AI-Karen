@@ -1147,6 +1147,11 @@ class ModelDownloadControlService:
         if error.code == E_NET:
             detail = str(error.details.get("error_type") or "")
             http_status = error.details.get("http_status")
+            if detail == "OfflineModeIsEnabled":
+                return (
+                    "Backend Hugging Face Hub offline mode is enabled. Set HF_HUB_OFFLINE=0 "
+                    "(and DISABLE_HUGGINGFACE_HUB=0) for the API service and restart it."
+                )
             if detail in {"ConnectTimeout", "ReadTimeout", "TimeoutException", "Timeout"}:
                 return "Model source metadata request timed out. Check backend proxy and source reachability."
             if detail in {"SSLError", "SSLCertVerificationError", "SSLCertError"}:

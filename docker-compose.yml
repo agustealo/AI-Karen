@@ -463,15 +463,20 @@ services:
       AUTH_ENABLE_SESSION_VALIDATION: "false"
       # NLP startup tuning: avoid spaCy download on boot in dev
       SPACY_DOWNLOAD_MISSING: "false"
-      # Transformers offline to avoid model downloads on startup
+      # Transformers offline to avoid implicit model downloads on startup.
+      # Runtime loaders read from local install paths only.
       TRANSFORMERS_OFFLINE: "true"
       TRANSFORMERS_CACHE_DIR: "./models/transformers"
-      HF_HUB_OFFLINE: "1"
+      # The Hub client must stay ONLINE: the Model Downloads control plane
+      # (first-run recommendations, license verification, snapshot downloads)
+      # uses huggingface_hub directly. HF_HUB_OFFLINE=1 makes every metadata
+      # request fail with OfflineModeIsEnabled before touching the network.
+      HF_HUB_OFFLINE: "0"
       TOKENIZERS_PARALLELISM: "false"
       # Additional offline settings for sentence-transformers
       HF_DATASETS_OFFLINE: "1"
       SENTENCE_TRANSFORMERS_OFFLINE: "true"
-      DISABLE_HUGGINGFACE_HUB: "1"
+      DISABLE_HUGGINGFACE_HUB: "0"
       # Enable heavy NLP helpers (DistilBERT, spaCy, etc.)
       KARI_ENABLE_DEGRADED_HELPERS: "1"
       # Model Orchestrator Plugin Configuration

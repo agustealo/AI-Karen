@@ -111,9 +111,10 @@ class EmbeddingManager:
             start_time = time.time()
 
             # Check if we're in offline mode and try to load from local cache
+            _truthy = {"1", "true", "yes", "on"}
             offline_mode = (
-                os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
-                or os.getenv("HF_HUB_OFFLINE", "0") == "1"
+                os.getenv("TRANSFORMERS_OFFLINE", "0").strip().lower() in _truthy
+                or os.getenv("HF_HUB_OFFLINE", "0").strip().lower() in _truthy
             )
 
             if offline_mode:

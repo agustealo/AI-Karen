@@ -457,7 +457,10 @@ class ModelOrchestratorService:
             raise
         except Exception as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
-            if status_code in (401, 403):
+            if type(exc).__name__ == "OfflineModeIsEnabled":
+                code = E_NET
+                message = "Hugging Face Hub offline mode is enabled (HF_HUB_OFFLINE)"
+            elif status_code in (401, 403):
                 code = E_PERM
                 message = "Model source credentials or access are insufficient"
             elif status_code == 404:
