@@ -92,6 +92,44 @@ def test_no_history_is_not_invented_from_the_current_question():
     assert EvidenceSource.CONVERSATION.value in context.unresolved_sources
 
 
+
+def test_history_limit_zero_disables_ingress_recovery():
+    resolver, request, context, requirement = _scenario()
+    requirement.max_items = 0
+    asyncio.run(resolver._resolve_conversation(request, context, requirement))
+    assert not context.evidence
+    assert EvidenceSource.CONVERSATION.value in context.unresolved_sources
+
+
+def test_repository_ownership_rejection_never_recovers_client_history():
+    resolver, request, context, requirement = _scenario()
+    resolver._conversation_gateway.load_history = AsyncMock(
+        return_value=SimpleNamespace(
+            status="rejected",
+            error_type="conversation_user_mismatch",
+            to_metadata=lambda: {"conversation_history_status": "rejected"},
+        )
+    )
+    asyncio.run(resolver._resolve_conversation(request, context, requirement))
+    assert not context.evidence
+    assert EvidenceSource.CONVERSATION.value in context.unresolved_sources
+    assert context.metadata["conversation_history_status"] == "rejected"
+
+
+def test_repository_reported_failure_can_recover_only_authorized_ingress():
+    resolver, request, context, requirement = _scenario()
+    resolver._conversation_gateway.load_history = AsyncMock(
+        return_value=SimpleNamespace(
+            status="failed",
+            error_type="database_unavailable",
+            to_metadata=lambda: {"conversation_history_status": "failed"},
+        )
+    )
+    asyncio.run(resolver._resolve_conversation(request, context, requirement))
+    assert len(context.evidence) == 1
+    assert context.metadata["conversation_history_degraded"] is True
+
+
 def test_previous_assistant_claim_is_not_user_identity_evidence():
     resolver, request, context, requirement = _scenario()
     request.messages = [
