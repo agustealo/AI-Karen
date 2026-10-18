@@ -256,3 +256,35 @@ async def test_gated_stream_emits_no_execution_provenance(
 
 async def _gate() -> SimpleNamespace:
     return SimpleNamespace(mode="unavailable", message="Runtime unavailable")
+
+def test_early_stream_gate_provenance_is_explicitly_non_execution() -> None:
+    """Both pre-execution stream events must carry the same failure receipt."""
+    import ast
+    import inspect
+
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    from textwrap import dedent
+
+    tree = ast.parse(dedent(inspect.getsource(chat_runtime.ChatRuntime.execute_stream)))
+    gate_receipts = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "gate_metadata" for target in node.targets)
+    ]
+    assert len(gate_receipts) == 1
+    receipt = gate_receipts[0].value
+    assert isinstance(receipt, ast.Dict)
+    fields = {key.value: value for key, value in zip(receipt.keys, receipt.values) if isinstance(key, ast.Constant)}
+    assert {"error_code", "requested_provider", "requested_model", "actual_provider",
+            "actual_model", "response_source", "fallback_level", "degraded_mode"}.issubset(fields)
+    assert isinstance(fields["actual_provider"], ast.Constant) and fields["actual_provider"].value is None
+    assert isinstance(fields["actual_model"], ast.Constant) and fields["actual_model"].value is None
+    assert isinstance(fields["fallback_level"], ast.Constant) and fields["fallback_level"].value == 0
+    assert isinstance(fields["response_source"], ast.Constant) and fields["response_source"].value == "runtime_gate"
+    assert isinstance(fields["degraded_mode"], ast.Constant) and fields["degraded_mode"].value is True
+    chunk_receipts = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Name) and node.func.id == "ChatStreamChunk"
+                      and any(kw.arg == "metadata" and isinstance(kw.value, ast.Name)
+                              and kw.value.id == "gate_metadata" for kw in node.keywords)]
+    assert len(chunk_receipts) == 2
