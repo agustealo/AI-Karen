@@ -25,6 +25,10 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionCont
         ("Where did I grow up?", "upbringing_location"),
         ("Where I grew up?", "upbringing_location"),
         ("Tell me about myself", None),
+        ("Tell me about me", None),
+        ("What can you share about me?", None),
+        ("What do you know about me?", None),
+        ("Remind me about me", None),
         ("Whats my name, tell me about myself", None),
     ],
 )
@@ -85,3 +89,14 @@ def test_user_statement_is_not_forced_into_personal_recall(statement):
     decision = asyncio.run(decider.decide(request))
     assert decision.intent != "memory.recall"
     assert decision.policy_constraints.get("personal_evidence_attribute") is None
+
+
+@pytest.mark.parametrize("message", [
+    "Hello",
+    "My name is Zeus",
+    "Help me write a message",
+    "Tell me about the city of Detroit",
+])
+def test_profile_summary_intent_does_not_capture_unrelated_user_requests(message):
+    from ai_karen_engine.core.intelligence.profile_attribute import is_profile_summary_request
+    assert is_profile_summary_request(message) is False
