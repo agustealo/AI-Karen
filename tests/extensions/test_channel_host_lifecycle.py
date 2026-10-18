@@ -804,3 +804,79 @@ def test_normal_user_has_consent_but_no_channel_admin_rights():
         Permission.CHANNEL_SEND,
     ):
         assert forbidden not in permissions
+
+
+@pytest.mark.asyncio
+async def test_only_authorized_operator_can_assign_channel_owner():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    owner = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    operator = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="account-1", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.assign_personal_connection_owner = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock(side_effect=PermissionError("denied"))
+    plan = AuthorizedExecutionPlan(
+        execution_id="assign-owner", policy_decision_id="operator-policy",
+        authorized_user_id=operator, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"], allowed_capabilities=["channel.provision"],
+    )
+    values = dict(
+        tenant_id=tenant, connection_id="account-1", owner_user_id=owner,
+        operator_user_id=operator, session_id="admin-session",
+        authorized_plan=plan,
+    )
+    with pytest.raises(PermissionError, match="denied"):
+        await host.assign_personal_connection_owner(**values)
+    host.repository.assign_personal_connection_owner.assert_not_awaited()
+    host.activation._authorize.side_effect = None
+    assert await host.assign_personal_connection_owner(**values)
+    host.activation._authorize.assert_awaited_with(
+        tenant_id=tenant, user_id=operator, session_id="admin-session",
+        installation_id="telegram-bot", action="channel.provision", plan=plan,
+    )
+    host.repository.assign_personal_connection_owner.assert_awaited_once_with(
+        tenant_id=tenant, connection_id="account-1", user_id=owner,
+    )
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_assign_owner_to_foreign_connection():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    owner = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    operator = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="account-1",
+        tenant_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.assign_personal_connection_owner = AsyncMock()
+    host.activation._authorize = AsyncMock()
+    with pytest.raises(PermissionError, match="not available"):
+        await host.assign_personal_connection_owner(
+            tenant_id=tenant, connection_id="account-1", owner_user_id=owner,
+            operator_user_id=operator, session_id="admin-session",
+            authorized_plan=AuthorizedExecutionPlan(
+                execution_id="foreign-owner", policy_decision_id="policy-foreign",
+                authorized_user_id=operator, authorized_tenant_id=tenant,
+                allowed_plugins=["telegram-bot"],
+                allowed_capabilities=["channel.provision"],
+            ),
+        )
+    host.activation._authorize.assert_not_awaited()
+    host.repository.assign_personal_connection_owner.assert_not_awaited()
+    await host.shutdown()
