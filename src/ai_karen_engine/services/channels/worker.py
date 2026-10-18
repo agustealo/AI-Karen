@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from collections.abc import Awaitable, Callable
 
 from ai_karen_engine.persistence.repositories.channel_repository import (
     InboundAdmission,
     SqlChannelRepository,
 )
 from ai_karen_engine.services.channels.execution import ChannelExecutionService
+from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ class ChannelInboxWorker:
         max_inflight: int = 4,
         lease_seconds: int = 90,
         max_scheduled: int = 64,
+        dispatch_outbox: Callable[..., Awaitable[bool]] | None = None,
     ) -> None:
         if not 1 <= max_inflight <= 64:
             raise ValueError("Channel worker concurrency must be 1..64")
@@ -42,6 +46,7 @@ class ChannelInboxWorker:
         self._execution = execution
         self._lease_seconds = lease_seconds
         self._max_scheduled = max_scheduled
+        self._dispatch_outbox = dispatch_outbox
         self._limit = asyncio.Semaphore(max_inflight)
         self._tasks: set[asyncio.Task[None]] = set()
         self._scheduled: set[tuple[str, str]] = set()
@@ -109,12 +114,42 @@ class ChannelInboxWorker:
                                "inbox_id": admission.inbox_id},
                     )
                     return
-                await self._execution.execute_claimed_text(
+                committed = await self._execution.execute_claimed_text(
                     tenant_id=admission.tenant_id,
                     inbox_id=admission.inbox_id,
                     claim_token=token,
                     lease_seconds=self._lease_seconds,
                 )
+                if committed is True and self._dispatch_outbox is not None and self._running:
+                    # Deterministic, inbox-bound delivery identity is owned by
+                    # ChannelExecutionService. Re-read persisted preflight
+                    # instead of trusting a provider or the incoming receipt.
+                    delivery_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"karen-channel-delivery:{admission.inbox_id}",
+                    ))
+                    preflight = await self._repository.get_delivery_preflight(
+                        tenant_id=admission.tenant_id, delivery_id=delivery_id,
+                    )
+                    if preflight is None or preflight.user_id != admission.user_id:
+                        logger.warning(
+                            "channel.worker.outbox_preflight_unavailable",
+                            extra={"tenant_id": admission.tenant_id,
+                                   "inbox_id": admission.inbox_id,
+                                   "delivery_id": delivery_id},
+                        )
+                        return
+                    session_id = ChannelDeliveryService._session_id(
+                        tenant_id=admission.tenant_id, user_id=preflight.user_id,
+                        connection_id=preflight.connection_id,
+                        external_conversation_id=preflight.external_conversation_id,
+                    )
+                    await self._dispatch_outbox(
+                        tenant_id=admission.tenant_id,
+                        delivery_id=delivery_id,
+                        user_id=preflight.user_id,
+                        session_id=session_id,
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
