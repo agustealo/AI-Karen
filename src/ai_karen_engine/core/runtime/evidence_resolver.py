@@ -400,6 +400,77 @@ class RuntimeEvidenceResolver:
             }
         )
 
+    def _recover_ingress_conversation(
+        self,
+        request: ChatExecutionRequest,
+        cognitive_context: CognitiveContext,
+        requirement: ContextRequirement,
+    ) -> None:
+        """Use only earlier, directly supplied user turns when durable history fails.
+
+        This is provisional, request-local conversation context, not a durable
+        recall result. RuntimePolicy must already authorize CONVERSATION. The
+        trusted execution context determines tenant, user and conversation
+        scope; client-supplied metadata never does.
+        """
+        ctx = request.context
+        if (
+            cognitive_context.tenant_id != ctx.tenant_id
+            or cognitive_context.user_id != ctx.user_id
+            or cognitive_context.requirements.conversation_id != ctx.conversation_id
+            or EvidenceSource.CONVERSATION.value not in cognitive_context.authorized_sources
+            or EvidenceSource.CONVERSATION.value in cognitive_context.denied_sources
+        ):
+            return
+        prior = [
+            (index, message)
+            for index, message in enumerate(request.messages[:-1])
+            if isinstance(message, dict)
+            and str(message.get("role", "")).lower() == "user"
+            and isinstance(message.get("content"), str)
+            and 0 < len(message["content"].strip()) <= 500
+        ]
+        if not prior:
+            return
+        now = datetime.now(timezone.utc)
+        limit = max(0, int(requirement.max_items or 0))
+        if limit:
+            prior = prior[-limit:]
+        for index, message in prior:
+            evidence_id = f"ingress:{ctx.correlation_id}:{index}"
+            cognitive_context.evidence.append(
+                ContextEvidence(
+                    evidence_id=evidence_id,
+                    source=EvidenceSource.CONVERSATION,
+                    content=message["content"].strip(),
+                    source_ref=evidence_id,
+                    relevance=1.0,
+                    confidence=1.0,
+                    provenance=EvidenceProvenance(
+                        source_ref=evidence_id,
+                        source_record_id=evidence_id,
+                        resolver_id=self.CONVERSATION_RESOLVER_ID,
+                        resolver_version=self.RESOLVER_VERSION,
+                        retrieval_method="request_ingress_not_durable",
+                        retrieved_at=now,
+                        reason_codes=("degraded_history", "request_supplied_user_turn"),
+                    ),
+                    scope=EvidenceScope(
+                        tenant_id=ctx.tenant_id,
+                        user_id=ctx.user_id,
+                        session_id=ctx.session_id,
+                        conversation_id=ctx.conversation_id,
+                    ),
+                    metadata={"role": "user", "ingress_only": True},
+                )
+            )
+        # The source was satisfied by bounded ingress evidence, not a
+        # successful durable history lookup. Keep degradation explicit.
+        self._mark_resolved(cognitive_context, EvidenceSource.CONVERSATION)
+        cognitive_context.metadata["conversation_ingress_fallback_count"] = len(prior)
+        cognitive_context.metadata["conversation_history_degraded"] = True
+        cognitive_context.metadata["conversation_history_source"] = "request_ingress_not_durable"
+
     async def _resolve_conversation(
         self,
         request: ChatExecutionRequest,
@@ -433,6 +504,7 @@ class RuntimeEvidenceResolver:
                     "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
                 }
             )
+            self._recover_ingress_conversation(request, cognitive_context, requirement)
             return
 
         cognitive_context.metadata.update(result.to_metadata())
@@ -446,6 +518,7 @@ class RuntimeEvidenceResolver:
                 cognitive_context.metadata["conversation_history_error_type"] = (
                     result.error_type
                 )
+            self._recover_ingress_conversation(request, cognitive_context, requirement)
             return
 
         now = datetime.now(timezone.utc)
