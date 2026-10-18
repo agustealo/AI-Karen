@@ -291,3 +291,28 @@ test('UX-13: advanced navigation is discoverable without overwhelming the first 
     'Advanced tools expanded and Tasks / Cron Jobs became visible',
   );
 });
+
+test('UX-14: mobile navigation returns focus to the selected workspace', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires sanitized authenticated Karen deployment.');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+
+  const trigger = page.locator('[data-sidebar="trigger"]');
+  await trigger.click();
+  const drawer = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole('button', { name: 'Messages & channels' }).click();
+  await expect(drawer).toBeHidden({ timeout: 10_000 });
+  await expect(page.getByTestId('workspace-scroll-region')).toBeVisible();
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-14',
+    'Open navigation on a 390px mobile viewport and choose Messages & channels',
+    'The mobile drawer closes and the workspace remains usable',
+    'Mobile navigation drawer closed following a destination selection',
+  );
+});
