@@ -15,10 +15,10 @@ PROFILE_WORKFLOWS = (
 )
 
 RUNTIME_MANIFEST_WORKFLOWS = (
-    ".github/workflows/agent-system-burn.yml",
+    ".github/workflows/medusa-core-ci.yml",
 )
 
-CANONICAL_WORKFLOWS = PROFILE_WORKFLOWS + RUNTIME_MANIFEST_WORKFLOWS
+CANONICAL_WORKFLOWS = PROFILE_WORKFLOWS
 
 ALLOWED_PIP_INSTALL_PREFIXES = (
     "python -m pip install --upgrade pip",
@@ -96,3 +96,17 @@ def test_classifier_burn_is_owned_by_main_quality_gate() -> None:
     assert "pytest tests/core/intelligence/test_intent_classifier_burn.py -q" in workflow
     assert "pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q" in workflow
     assert "pytest tests/architecture/test_classifier_authority_contract.py -q" in workflow
+
+def test_agent_burn_has_single_medusa_core_ci_owner() -> None:
+    """Retired Agent System Burn tests and tenant guard remain centrally covered."""
+    assert not (ROOT / ".github/workflows/agent-system-burn.yml").exists()
+    workflow = _workflow_text(".github/workflows/medusa-core-ci.yml")
+    assert "tests/agent_medusa/" in workflow
+    assert "tests/agent_medusa/**" in workflow
+    assert "Reject legacy tenant sentinels at LangGraph boundary" in workflow
+    assert "legacy tenant fallback returned" in workflow
+
+
+def test_cognitive_benchmark_policy_proof_has_one_execution() -> None:
+    workflow = _workflow_text(".github/workflows/cognitive-proof-ci.yml")
+    assert workflow.count("pytest tests/benchmarks/cognitive/test_proof_gates.py") == 1
