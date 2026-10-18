@@ -6,7 +6,7 @@
 
 ![Historical KAREN chat runtime, captured October 2, 2026](../assets/screenshots/01-chat-runtime.png)
 
-*Historical capture only. Manifest: [capture-manifest.json](../assets/screenshots/capture-manifest.json). Target application revision: `9980fb0bbcf52d162c53278d759c6632dc416a24`, operator-attested. Capture harness revision: `87213d021e4f30987c222fa716ddce8c9fc`. Chromium 147, viewport 1600 × 1000, dark scheme, sanitized-demo account. A current screenshot must replace the baseline for current-feature claims.*
+*Historical capture only. Manifest: [capture-manifest.json](../assets/screenshots/capture-manifest.json). Target application revision: `9980fb0bbcf52d162c53278d759c6632dc416a24`, operator-attested. Capture harness revision: `87213d021e4f30987c222fa716ddce3edce8c9fc`. Chromium 147, viewport 1600 × 1000, dark scheme, sanitized-demo account. A current screenshot must replace the baseline for current-feature claims.*
 
 Do **not** copy this historical capture to a new filename or imply it depicts the changes merged via [#475](https://github.com/agustealo/AI-Karen/pull/475), [#476](https://github.com/agustealo/AI-Karen/pull/476), or [#477](https://github.com/agustealo/AI-Karen/pull/477).
 
