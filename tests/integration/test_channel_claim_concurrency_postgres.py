@@ -103,6 +103,18 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             delivery, tenant_a, connection_id, inbox,
         )
 
+        await raw.execute(
+            """INSERT INTO public.channel_connection_owners
+               (tenant_id,connection_id,user_id) VALUES ($1,$2,$3)""",
+            tenant_a, connection_id, user,
+        )
+        assert await SqlChannelRepository().is_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=connection_id, user_id=str(user),
+        )
+        assert not await SqlChannelRepository().is_personal_connection_owner(
+            tenant_id=str(tenant_b), connection_id=connection_id, user_id=str(user),
+        )
+
         # Exercise actual SQL consent acceptance, scope and durable revocation.
         from ai_karen_engine.services.channels.personal_pairing_policy import (
             PERSONAL_WHATSAPP_CONSENT_VERSION,
@@ -150,7 +162,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         )
         await raw.execute(
             "GRANT SELECT ON public.channel_inbox, public.channel_outbox, "
-            "public.channel_personal_pairing_consents "
+            "public.channel_personal_pairing_consents, public.channel_connection_owners "
             "TO karen_channel_rls_probe"
         )
         async with raw.transaction():
@@ -183,7 +195,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             ) == 0
         await raw.execute(
             "REVOKE SELECT ON public.channel_inbox, public.channel_outbox, "
-            "public.channel_personal_pairing_consents "
+            "public.channel_personal_pairing_consents, public.channel_connection_owners "
             "FROM karen_channel_rls_probe"
         )
         await raw.execute(
