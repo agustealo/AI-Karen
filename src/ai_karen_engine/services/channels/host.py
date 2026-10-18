@@ -328,6 +328,19 @@ class ChannelHostServices:
             user_id=user_id, session_id=session_id,
             authorized_plan=authorized_plan,
         )
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None
+            or self.settings.personal_pairing_providers.get(
+                connection.installation_id,
+            ) != provider_id
+            or "pairing_webhook_secret" not in self.settings.installations.get(
+                connection.installation_id, frozenset(),
+            )
+        ):
+            raise PermissionError("Managed personal pairing provider not configured")
         return await self.repository.acknowledge_personal_pairing_risk(
             tenant_id=tenant_id, connection_id=connection_id,
             user_id=user_id, provider_id=provider_id,
