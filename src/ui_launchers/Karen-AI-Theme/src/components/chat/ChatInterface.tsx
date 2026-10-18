@@ -2415,6 +2415,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         onActionClick={handleActionClick}
         viewportRef={viewportRef}
         messagesContainerRef={messagesContainerRef}
+        showWelcome={!isLoadingSessions && !isAuthLoading && !isLoading}
+        onPromptSelect={setInput}
       />
 
       {agentSteps.length > 0 && (
