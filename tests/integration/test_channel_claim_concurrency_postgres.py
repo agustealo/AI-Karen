@@ -211,6 +211,9 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_personal_pairing_consents"
             ) == 2
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_state"
+            ) == 0
             await raw.execute(
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_b),
@@ -224,9 +227,13 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_personal_pairing_consents"
             ) == 0
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_state"
+            ) == 0
         await raw.execute(
             "REVOKE SELECT ON public.channel_inbox, public.channel_outbox, "
-            "public.channel_personal_pairing_consents, public.channel_connection_owners "
+            "public.channel_personal_pairing_consents, public.channel_connection_owners, "
+            "public.channel_personal_pairing_state "
             "FROM karen_channel_rls_probe"
         )
         await raw.execute(
