@@ -47,7 +47,8 @@ def _scenario(*, authorized=True, tenant="tenant-a", contextual_tenant="tenant-a
     )
     resolver = RuntimeEvidenceResolver.__new__(RuntimeEvidenceResolver)
     resolver._conversation_gateway = SimpleNamespace(
-        load_history=AsyncMock(side_effect=RuntimeError("database temporarily unavailable"))
+        load_history=AsyncMock(side_effect=RuntimeError("database temporarily unavailable")),
+        require_owned_conversation=AsyncMock(return_value=SimpleNamespace(id="conversation-a")),
     )
     return resolver, request, context, requirement
 
@@ -91,6 +92,27 @@ def test_no_history_is_not_invented_from_the_current_question():
     assert not context.evidence
     assert EvidenceSource.CONVERSATION.value in context.unresolved_sources
 
+
+
+def test_no_owned_conversation_blocks_recovery_even_during_history_outage():
+    resolver, request, context, requirement = _scenario()
+    resolver._conversation_gateway.require_owned_conversation = AsyncMock(
+        side_effect=PermissionError("conversation_user_mismatch")
+    )
+    asyncio.run(resolver._resolve_conversation(request, context, requirement))
+    assert not context.evidence
+    assert EvidenceSource.CONVERSATION.value in context.unresolved_sources
+    assert context.metadata["conversation_ingress_fallback_denied"] == "PermissionError"
+
+
+def test_owner_lookup_outage_does_not_authorize_ingress_history():
+    resolver, request, context, requirement = _scenario()
+    resolver._conversation_gateway.require_owned_conversation = AsyncMock(
+        side_effect=RuntimeError("database offline")
+    )
+    asyncio.run(resolver._resolve_conversation(request, context, requirement))
+    assert not context.evidence
+    assert EvidenceSource.CONVERSATION.value in context.unresolved_sources
 
 
 def test_history_limit_zero_disables_ingress_recovery():
