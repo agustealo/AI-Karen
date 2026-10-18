@@ -277,6 +277,50 @@ class ChannelHostServices:
             lease_seconds=lease_seconds,
         )
 
+    async def dispatch_authorized_outbox(
+        self, *, tenant_id: str, delivery_id: str, user_id: str,
+        session_id: str, lease_seconds: int = 90,
+    ) -> bool:
+        """Use fresh canonical RBAC and RuntimePolicy for one staged delivery.
+
+        The host never accepts an untrusted permission list or a native
+        transport-supplied plan. No background transport is auto-activated.
+        """
+        if (
+            not self._initialized or self._closed or self.delivery is None
+            or self.activation is None
+        ):
+            raise PermissionError("Channel outbound host is unavailable")
+        preflight = await self.repository.get_delivery_preflight(
+            tenant_id=tenant_id, delivery_id=delivery_id,
+        )
+        if preflight is None:
+            return False
+        if preflight.user_id != user_id:
+            raise PermissionError("Channel delivery principal mismatch")
+        canonical_session = ChannelDeliveryService._session_id(
+            tenant_id=tenant_id, user_id=user_id,
+            connection_id=preflight.connection_id,
+            external_conversation_id=preflight.external_conversation_id,
+        )
+        if canonical_session != session_id:
+            raise PermissionError("Channel delivery session mismatch")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=preflight.connection_id,
+        )
+        if connection is None or connection.tenant_id != tenant_id:
+            raise PermissionError("Channel outbound connection is unavailable")
+        plan = await self.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.send",
+        )
+        return await self.dispatch_outbox(
+            tenant_id=tenant_id, delivery_id=delivery_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=plan, lease_seconds=lease_seconds,
+        )
+
     async def shutdown(self) -> None:
         """Revoke process-local transport capability before database cleanup."""
         if self._closed:
