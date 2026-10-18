@@ -433,9 +433,9 @@ class RuntimeEvidenceResolver:
         if not prior:
             return
         now = datetime.now(timezone.utc)
-        limit = max(0, int(requirement.max_items or 0))
-        if limit:
-            prior = prior[-limit:]
+        # No unbounded ingress fallback: even unspecified max_items is capped.
+        limit = min(max(1, int(requirement.max_items or 20)), 20)
+        prior = prior[-limit:]
         for index, message in prior:
             evidence_id = f"ingress:{ctx.correlation_id}:{index}"
             cognitive_context.evidence.append(
