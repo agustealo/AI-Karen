@@ -254,6 +254,11 @@ class ExpressionGateway:
                 )
 
                 if has_text and is_valid and has_model_source:
+                    # A token-limited answer is usable partial output, not a
+                    # normally completed model response or a fallback trigger.
+                    if (result.metadata or {}).get("output_truncated") is True:
+                        result.degraded = True
+                        result.degradation_reason = "output_token_limit"
                     self.circuits.mark_success(f"expression.engine.{engine_id}")
                     result.metadata = {
                         **(result.metadata or {}),

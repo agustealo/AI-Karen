@@ -131,8 +131,28 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
         )
     if metadata.get("response_source") in {"emergency", "unavailable", "mock", "static"}:
         raise LiveProofError("ChatRuntime reported a non-model response source")
-    if metadata.get("degraded_mode") is True or int(metadata.get("fallback_level") or 0) != 0:
-        raise LiveProofError("ChatRuntime took a degraded or fallback path")
+    fallback_level = int(metadata.get("fallback_level") or 0)
+    truncated = metadata.get("finish_reason") == "length" and metadata.get("output_truncated") is True
+    expected_truncation = (
+        truncated and metadata.get("degraded_mode") is True
+        and metadata.get("degradation_reason") == "output_token_limit"
+    )
+    if (
+        fallback_level != 0
+        or (metadata.get("degraded_mode") is True and not expected_truncation)
+        or (truncated and not expected_truncation)
+        or (metadata.get("output_truncated") is True and not expected_truncation)
+    ):
+        diagnostic = {
+            "degradation_reason": metadata.get("degradation_reason"),
+            "finish_reason": metadata.get("finish_reason"),
+            "output_truncated": metadata.get("output_truncated"),
+            "fallback_level": fallback_level,
+        }
+        raise LiveProofError(
+            "ChatRuntime took an unverified degraded or fallback path: "
+            + json.dumps(diagnostic, sort_keys=True, default=str)
+        )
     return {"actual_provider": provider, "actual_model": actual_model}
 
 
@@ -241,7 +261,7 @@ def run(
         body={
             "messages": [{"content": "Reply with a short greeting.", "message_type": "user"}],
             "session_id": f"ollama_settings_{uuid.uuid4().hex}",
-            "max_tokens": 96,
+            "max_tokens": 512,
             "temperature": 0.0,
             "stream": False,
         },

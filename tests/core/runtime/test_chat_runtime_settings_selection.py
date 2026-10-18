@@ -167,3 +167,92 @@ def test_stream_fallback_only_allowed_before_any_primary_token() -> None:
     assert _stream_fallback_allowed("partial answer") is False
     assert _stream_fallback_allowed(" ") is False
     assert _stream_fallback_allowed("\\n") is False
+
+def test_completion_truth_fields_are_carried_from_gateway_to_terminal() -> None:
+    """Guard the canonical runtime metadata handoff against accidental removal."""
+    import ast
+    import inspect
+    import textwrap
+
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    def dictionary_keys(method: object) -> set[str]:
+        parsed = ast.parse(textwrap.dedent(inspect.getsource(method)))
+        return {
+            key.value
+            for node in ast.walk(parsed)
+            if isinstance(node, ast.Dict)
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+
+    required = {"finish_reason", "output_truncated"}
+    assert required.issubset(dictionary_keys(ChatRuntime._run_simple))
+    assert required.issubset(dictionary_keys(ChatRuntime._build_stream_terminal_metadata))
+
+def test_stream_gate_provenance_is_explicitly_non_executed() -> None:
+    """Early service gates report no provider or model execution."""
+    import ast
+    import inspect
+    import textwrap
+
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(chat_runtime.ChatRuntime.execute_stream)))
+    gate_metadata = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "gate_metadata" for target in node.targets)
+    )
+    assert isinstance(gate_metadata.value, ast.Dict)
+    fields = {
+        key.value: value for key, value in zip(gate_metadata.value.keys, gate_metadata.value.values)
+        if isinstance(key, ast.Constant)
+    }
+    assert {"requested_provider", "requested_model", "actual_provider", "actual_model",
+            "runtime_engine", "response_source", "fallback_level", "fallback_reason",
+            "degraded_mode", "degradation_reason", "error_code"}.issubset(fields)
+    for key in ("actual_provider", "actual_model", "runtime_engine", "response_source", "fallback_reason"):
+        assert isinstance(fields[key], ast.Constant) and fields[key].value is None
+    assert isinstance(fields["fallback_level"], ast.Constant) and fields["fallback_level"].value == 0
+    assert isinstance(fields["degraded_mode"], ast.Constant) and fields["degraded_mode"].value is True
+
+
+@pytest.mark.asyncio
+async def test_gated_stream_emits_no_execution_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the gated async generator, including its terminal envelope."""
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    emitted: list[object] = []
+    runtime = object.__new__(ChatRuntime)
+    runtime._emitter = SimpleNamespace(emit=lambda *args, **kwargs: emitted.append((args, kwargs)))
+    monkeypatch.setattr(runtime, "_bind_observability_context", lambda ctx: None)
+    monkeypatch.setattr(
+        runtime, "_resolve_gate",
+        lambda ctx: _gate(),
+    )
+    monkeypatch.setattr(
+        runtime, "_enrich_chunk",
+        lambda chunk, *args: chunk,
+    )
+    request = _request("ollama", "selected:latest")
+    chunks = [chunk async for chunk in runtime.execute_stream(request)]
+    assert [chunk.type for chunk in chunks] == ["error", "complete"]
+    assert chunks[0].metadata == chunks[1].metadata
+    metadata = chunks[0].metadata
+    assert metadata["requested_provider"] == "ollama"
+    assert metadata["requested_model"] == "selected:latest"
+    assert metadata["actual_provider"] is None
+    assert metadata["actual_model"] is None
+    assert metadata["runtime_engine"] is None
+    assert metadata["response_source"] is None
+    assert metadata["fallback_level"] == 0
+    assert metadata["degraded_mode"] is True
+    assert metadata["error_code"] == "CHAT_RUNTIME_GATED"
+    assert any(item[1].get("status") == "gate" for item in emitted)
+
+
+async def _gate() -> SimpleNamespace:
+    return SimpleNamespace(mode="unavailable", message="Runtime unavailable")

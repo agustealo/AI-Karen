@@ -211,10 +211,26 @@ class ChatRuntime:
 
         gate = await self._resolve_gate(ctx)
         if gate is not None:
+            gate_mode = getattr(gate, "mode", "gate")
+            gate_metadata = {
+                "gate": gate_mode,
+                "error_code": "CHAT_RUNTIME_GATED",
+                "requested_provider": request.preferred_provider,
+                "requested_model": request.preferred_model,
+                "actual_provider": None,
+                "actual_model": None,
+                "runtime_engine": None,
+                "response_source": None,
+                "fallback_level": 0,
+                "fallback_reason": None,
+                "degraded_mode": True,
+                "degradation_reason": "runtime_gate",
+                "correlation_id": ctx.correlation_id,
+            }
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
                 status="gate",
-                metadata={"gate_mode": getattr(gate, "mode", "gate")},
+                metadata={"gate_mode": gate_mode, **gate_metadata},
             )
             return ChatExecutionResult(
                 answer="",
@@ -532,17 +548,33 @@ class ChatRuntime:
 
         gate = await self._resolve_gate(ctx)
         if gate is not None:
+            gate_mode = getattr(gate, "mode", "gate")
+            gate_metadata = {
+                "gate": gate_mode,
+                "error_code": "CHAT_RUNTIME_GATED",
+                "requested_provider": request.preferred_provider,
+                "requested_model": request.preferred_model,
+                "actual_provider": None,
+                "actual_model": None,
+                "runtime_engine": None,
+                "response_source": None,
+                "fallback_level": 0,
+                "fallback_reason": None,
+                "degraded_mode": True,
+                "degradation_reason": "runtime_gate",
+                "correlation_id": ctx.correlation_id,
+            }
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
                 status="gate",
-                metadata={"gate_mode": getattr(gate, "mode", "gate")},
+                metadata={"gate_mode": gate_mode, **gate_metadata},
             )
             yield self._enrich_chunk(
                 ChatStreamChunk(
                     type="error",
                     content=getattr(gate, "message", "Service unavailable"),
                     correlation_id=ctx.correlation_id,
-                    metadata={"gate": getattr(gate, "mode", "gate")},
+                    metadata=gate_metadata,
                 ),
                 sequence,
                 request_id,
@@ -555,7 +587,7 @@ class ChatRuntime:
                     type="complete",
                     content="",
                     correlation_id=ctx.correlation_id,
-                    metadata={"gate": getattr(gate, "mode", "gate")},
+                    metadata=gate_metadata,
                 ),
                 sequence,
                 request_id,
@@ -2487,6 +2519,8 @@ class ChatRuntime:
             "degradation_type": (result.metadata or {}).get("degradation_type"),
             "provider_attempts": getattr(result, "attempts", []) or [],
             "usage": dict((result.metadata or {}).get("usage") or {}),
+            "finish_reason": (result.metadata or {}).get("finish_reason"),
+            "output_truncated": (result.metadata or {}).get("output_truncated") is True,
             "prompt_telemetry": prompt_telemetry,
             "execution_spans": [
                 {
@@ -3281,6 +3315,8 @@ class ChatRuntime:
             "protocol": provider_meta.get("protocol"),
             "locality": provider_meta.get("locality"),
             "response_source": provider_meta.get("response_source"),
+            "finish_reason": provider_meta.get("finish_reason"),
+            "output_truncated": provider_meta.get("output_truncated") is True,
             "fallback_level": provider_meta.get("fallback_level", 0),
             "fallback_reason": provider_meta.get("fallback_reason"),
             "failure_category": self._map_failure_category(provider_meta),
