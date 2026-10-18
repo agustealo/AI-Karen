@@ -504,14 +504,23 @@ class RuntimeEvidenceResolver:
         limit = max(0, min(int(requirement.max_items or 0), 40))
         if limit == 0:
             return []
-        candidates = [
-            (index, message.get("content"))
+        # The thin SSE ingress validates these bounded, user-authored turns.
+        # Do not accept client-provided roles, IDs, tenant, or persistence state.
+        recent = request.metadata.get("ingress_recent_user_messages", [])
+        previous = (
+            [(index, content) for index, content in enumerate(recent)
+             if isinstance(content, str) and 0 < len(content.strip()) <= 500]
+            if isinstance(recent, list) and len(recent) <= 12 else []
+        )
+        current = [
+            (len(previous) + index, message.get("content"))
             for index, message in enumerate(request.messages)
             if isinstance(message, dict)
             and str(message.get("role", "")).lower() == "user"
             and isinstance(message.get("content"), str)
             and 0 < len(message["content"].strip()) <= 500
-        ][-limit:]
+        ]
+        candidates = (previous + current)[-limit:]
         now = datetime.now(timezone.utc)
         return [
             ContextEvidence(
