@@ -86,6 +86,40 @@ def _translate(exc: Exception) -> HTTPException:
     return HTTPException(503, "Personal channel consent unavailable")
 
 
+class PersonalPairingStatus(BaseModel):
+    availability: str
+    last_observed_phase: str | None = None
+    live_connected: bool = False
+    qr_available: bool = False
+    provider_unlinked: bool = False
+
+
+@router.get("/{connection_id}/{provider_id}/status", response_model=PersonalPairingStatus)
+async def get_personal_whatsapp_pairing_status(
+    connection_id: UUID,
+    provider_id: str,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> PersonalPairingStatus:
+    """Read history without implying managed-provider health or a live QR."""
+    if not provider_id or len(provider_id) > 128:
+        raise HTTPException(422, "Invalid managed provider identifier")
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        session_id, plan = await _authorize(
+            host=host, tenant_id=tenant_id, user_id=user_id,
+            connection_id=str(connection_id),
+        )
+        result = await host.get_personal_pairing_status(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            provider_id=provider_id, user_id=user_id,
+            session_id=session_id, authorized_plan=plan,
+        )
+    except Exception as exc:
+        raise _translate(exc) from None
+    return PersonalPairingStatus(**result)
+
+
 class ConsentStatus(BaseModel):
     acknowledged: bool
     policy_version: str
