@@ -41,6 +41,7 @@ Record genuine broken/loading-state screenshots **as defect attachments**, never
 | UX-11 | Operate without a mouse | Navigate chat/settings with keyboard and screen reader | Visible focus, meaningful labels, dialog focus management, accessible errors | NOT RUN | Shared UI components and tested screen | Pending |
 | UX-12 | Trust the result | Inspect degraded/failed tool, model and persistence scenarios | Honest state, actionable recovery, no false saved/success indication | NOT RUN | Chat runtime and UI projections | Pending |
 | UX-13 | Discover advanced controls | Open dashboard, identify primary destinations, expand Advanced tools | Clear core navigation; all advanced routes still reachable | NOT RUN | `src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx` | Pending |
+| UX-14 | Mobile navigation | Open sidebar on 390 x 844 viewport, reveal core and advanced destinations | Primary routes readable; advanced destinations accessible in mobile sheet | NOT RUN | `src/ui_launchers/Karen-AI-Theme/src/components/ui/sidebar.tsx`; dashboard | Pending |
 | UX-14 | Navigate on mobile | Open sidebar at 390px, choose Messages & channels | Drawer closes and workspace remains available | NOT RUN | `src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx` | Pending |
 
 ### Defect entry format
