@@ -118,6 +118,11 @@ _CANONICAL_META_KEYS = (
 )
 
 
+def _stream_fallback_allowed(emitted_text: str) -> bool:
+    """Never mix primary streamed output with another provider's response."""
+    return not emitted_text
+
+
 class ChatRuntime:
     """Single authoritative chat execution runtime."""
 
@@ -810,15 +815,18 @@ class ChatRuntime:
 
             fallback: Optional[ChatExecutionResult] = None
             try:
-                fallback = await build_runtime_fallback(
-                    runtime=self,
-                    request=request,
-                    failure=exc,
-                    correlation_id=ctx.correlation_id,
-                    conversation_id=conversation_id,
-                    start_time=stream_start,
-                    decision=decision,
-                )
+                # Fallback can replace an empty stream, never content already
+                # delivered to the client by a different provider/model.
+                if _stream_fallback_allowed(streamed_text):
+                    fallback = await build_runtime_fallback(
+                        runtime=self,
+                        request=request,
+                        failure=exc,
+                        correlation_id=ctx.correlation_id,
+                        conversation_id=conversation_id,
+                        start_time=stream_start,
+                        decision=decision,
+                    )
             except Exception as fallback_exc:
                 logger.error(
                     "ChatRuntime stream fallback failed",
@@ -834,7 +842,9 @@ class ChatRuntime:
                     metadata={"error_code": "CHAT_STREAM_FALLBACK_FAILED"},
                 )
 
-            if fallback is not None and fallback.answer:
+            if fallback is not None and fallback.answer and _stream_fallback_allowed(streamed_text):
+                # A partial primary answer has already reached the client.
+                # Never append fallback text and attribute their mixture to one model.
                 fallback_meta = fallback.metadata.to_dict()
                 for key in _CANONICAL_META_KEYS:
                     value = fallback_meta.get(key)

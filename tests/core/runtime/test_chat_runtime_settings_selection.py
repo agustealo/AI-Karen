@@ -158,3 +158,12 @@ def test_stream_error_events_include_canonical_failure_provenance() -> None:
                 error_metadata.append(keys)
     assert len(error_metadata) >= 2
     assert all(required.issubset(keys) for keys in error_metadata)
+
+
+def test_stream_fallback_only_allowed_before_any_primary_token() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import _stream_fallback_allowed
+
+    assert _stream_fallback_allowed("") is True
+    assert _stream_fallback_allowed("partial answer") is False
+    assert _stream_fallback_allowed(" ") is False
+    assert _stream_fallback_allowed("\\n") is False
