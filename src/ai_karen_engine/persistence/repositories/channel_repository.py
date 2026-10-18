@@ -117,8 +117,6 @@ class SqlChannelRepository:
         the provider's signature and operator eligibility before invocation.
         No HTTP route exposes this method or makes a QR/session.
         """
-        from datetime import datetime, timezone
-
         from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
             PairingEvidenceDenied, PairingPhase, PairingSnapshot,
             apply_pairing_observation,
