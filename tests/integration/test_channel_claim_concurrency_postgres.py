@@ -109,6 +109,24 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             delivery, tenant_a, connection_id, inbox,
         )
 
+        engine = create_async_engine(
+            "postgresql+asyncpg://" + dsn.split("://", 1)[1],
+            pool_size=4, max_overflow=0,
+        )
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+
+        @asynccontextmanager
+        async def real_scope(tenant_id: str):
+            async with factory() as session:
+                async with session.begin():
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        {"tenant": tenant_id},
+                    )
+                    yield session
+
+        monkeypatch.setattr(module, "async_transaction_scope", real_scope)
+
         # Governed repository only assigns the first active verified owner.
         owner_repo = SqlChannelRepository()
         assert await owner_repo.assign_personal_connection_owner(
@@ -241,23 +259,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         )
         await raw.execute("DROP ROLE karen_channel_rls_probe")
 
-        engine = create_async_engine(
-            "postgresql+asyncpg://" + dsn.split("://", 1)[1],
-            pool_size=4, max_overflow=0,
-        )
-        factory = async_sessionmaker(engine, expire_on_commit=False)
 
-        @asynccontextmanager
-        async def real_scope(tenant_id: str):
-            async with factory() as session:
-                async with session.begin():
-                    await session.execute(
-                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
-                        {"tenant": tenant_id},
-                    )
-                    yield session
-
-        monkeypatch.setattr(module, "async_transaction_scope", real_scope)
         # Two independently opened SQL sessions race to write the same QR
         # event. Only one may win the locked-connection/sequence transition.
         from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
