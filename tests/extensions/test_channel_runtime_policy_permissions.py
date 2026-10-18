@@ -12,7 +12,7 @@ from ai_karen_engine.core.runtime.policy.runtime_policy import (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["channel.send", "channel.recover"])
+@pytest.mark.parametrize("action", ["channel.send", "channel.recover", "channel.provision", "channel.activate", "channel.deactivate"])
 async def test_requested_channel_capability_without_permission_is_denied(action):
     policy = RuntimePolicyEnforcer()
     decision = await policy.evaluate(PolicyEvaluationRequest(
@@ -77,3 +77,27 @@ async def test_unrelated_capabilities_remain_owned_by_existing_policy():
     ))
     assert decision.allowed is True
     assert decision.allowed_capabilities == ["general_assist"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_id_and_admin_role_strings_do_not_self_authorize_channel():
+    decision = await RuntimePolicyEnforcer().evaluate(PolicyEvaluationRequest(
+        user_id="principal-a", tenant_id="tenant-a",
+        roles=["admin"], plugin_id="telegram-bot",
+        requested_capabilities=["channel.activate"],
+        permissions=["admin"],
+    ))
+    assert decision.allowed is False
+    assert "channel.activate" in decision.denied_capabilities
+
+
+@pytest.mark.asyncio
+async def test_unknown_channel_extension_action_also_defaults_to_denied():
+    decision = await RuntimePolicyEnforcer().evaluate(PolicyEvaluationRequest(
+        user_id="principal-a", tenant_id="tenant-a",
+        plugin_id="telegram-bot",
+        requested_capabilities=["channel.some_future_mutation"],
+        permissions=[],
+    ))
+    assert decision.allowed is False
+    assert "channel.some_future_mutation" in decision.denied_capabilities
