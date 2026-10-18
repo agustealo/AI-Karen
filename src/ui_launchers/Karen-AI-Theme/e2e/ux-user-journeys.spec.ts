@@ -316,3 +316,36 @@ test('UX-14: mobile navigation returns focus to the selected workspace', async (
     'Mobile navigation drawer closed following a destination selection',
   );
 });
+
+test('UX-14: mobile sidebar reveals primary and advanced navigation', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires sanitized authenticated Karen deployment.');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+
+  const sidebarTrigger = page.getByRole('button', { name: 'Toggle Sidebar' });
+  await expect(sidebarTrigger).toBeInViewport();
+  await sidebarTrigger.click();
+
+  const mobileNav = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
+  await expect(mobileNav).toBeVisible();
+  await expect(mobileNav.getByText('Start here')).toBeVisible();
+  await expect(mobileNav.getByText('Messages & channels', { exact: true })).toBeVisible();
+  await expect(mobileNav.getByText('Tools & plugins', { exact: true })).toBeVisible();
+
+  const advanced = mobileNav.getByTestId('advanced-tools-toggle');
+  await expect(advanced).toHaveAttribute('aria-expanded', 'false');
+  await advanced.click();
+  await expect(advanced).toHaveAttribute('aria-expanded', 'true');
+  await expect(mobileNav.getByText('Cron Jobs', { exact: true })).toBeVisible();
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-14',
+    'Open mobile navigation at 390 x 844 and expand advanced destinations',
+    'Readable primary navigation and discoverable advanced sections in mobile sheet',
+    'Mobile sheet and advanced destinations rendered; navigation not submitted',
+  );
+});
