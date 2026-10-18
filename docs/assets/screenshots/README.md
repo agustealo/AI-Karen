@@ -2,6 +2,8 @@
 
 This directory contains public-facing product captures. Images here are evidence, not decoration.
 
+For user-action acceptance evidence beyond static captures, use the [UX journey audit register](../../ux/user-journey-audit.md). Do not treat a beautiful screenshot as proof that a workflow succeeded.
+
 ## Hard rule
 
 Only real browser captures of the real KAREN UI may be committed as product screenshots. Do not place generated dashboards, design mockups, edited feature composites, generic Playwright reports, or static test substitutes here and present them as application truth.
