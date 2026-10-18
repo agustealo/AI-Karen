@@ -145,3 +145,39 @@ rejection, foreign owner denial, explicit link and unlink receipt recording,
 and safe revocation. Those tests must pass CI on the current commit before
 this slice can be considered verified. Vendor/operator and UI state remain
 blocked until real provider evidence exists.
+
+## Signed provider callback admission (KOC-05)
+
+A separate **managed-operator callback envelope**, not the WhatsApp Linked
+Devices protocol itself, is now implemented in personal_pairing_callback.py.
+It accepts exact UTF-8 JSON fields, a bounded body (16 KiB), and an
+X-Karen-Pairing-Signature header (HMAC-SHA256 of the original bytes). It rejects
+duplicate JSON keys, unknown fields, wrong scope, malformed values, clock
+skew beyond five minutes, unsigned or altered bytes and bad signatures. It
+does not trust caller-supplied "authenticated" Boolean fields.
+
+ChannelHost.admit_signed_personal_pairing_event is deliberately an **internal
+method only**, not a publicly reachable or authorized pairing HTTP endpoint.
+It retrieves the durable connection, confirms its installed canonical adapter
+and operator allowlist, loads its secret through the existing tenant-scoped
+CredentialVault resolver, authenticates the callback, looks up the actual
+operator-assigned connection owner and calls the durable, revision-fenced
+repository. Raw QR, session credentials and callback bodies are not logged.
+
+Optional validated config:
+- KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON is an installation-to-provider
+  ID mapping, default empty. It is an operator-approval allowlist, not a way
+  for users or provider events to register their own trusted service.
+- An explicitly approved installation requires pairing_webhook_secret among
+  its host-configured Vault secret types. A malformed or uninstalled provider
+  declaration fails startup validation.
+- Only explicit operator approval of the deployment and independently vetted
+  managed-provider signing/key-rotation protocol permits enabling this mapping.
+
+**Not operational:** No candidate operator is yet approved or connected to
+the envelope contract. No public callback route, provider-specific delivery
+adapter, QR payload retrieval, live signature interoperability test, customer
+connection or authenticated device unlink is implemented. Never display
+"connected" based on a persisted HMAC envelope alone; real operator
+provenance, session state, expiry, credential unlink and deletion verification
+must be proven with end-to-end tests before enabling this configuration.
