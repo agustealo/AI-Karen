@@ -165,6 +165,12 @@ test('UX-04: completed conversation survives a browser reload', async ({ page },
     .toBeGreaterThanOrEqual(oldCount + 2);
   await expect(submit).toHaveAttribute('aria-label', 'Send message', { timeout: 90_000 });
 
+  const assistantContent = messages.getByTestId('chat-message-assistant')
+    .last().getByTestId('chat-message-content');
+  await expect(assistantContent).not.toBeEmpty();
+  const answer = (await assistantContent.innerText()).trim();
+  expect(answer.length).toBeGreaterThan(0);
+
   // The active conversation must be server-backed. Reload discards component state,
   // so a message that exists only in memory cannot pass this assertion.
   await page.reload();
@@ -173,14 +179,17 @@ test('UX-04: completed conversation survives a browser reload', async ({ page },
   await expect(restoredMessages.getByText(prompt, { exact: true })).toBeVisible({
     timeout: 30_000,
   });
+  const restoredAssistant = restoredMessages.getByTestId('chat-message-assistant')
+    .last().getByTestId('chat-message-content');
+  await expect(restoredAssistant).toHaveText(answer, { timeout: 30_000 });
 
   await captureEvidence(
     page,
     testInfo,
     'UX-04',
     'Send a real prompt and reload the authenticated browser page',
-    'Previously sent prompt is restored from the active server-backed conversation',
-    `Conversation marker ${marker} remained visible after reload`,
+    'Previously sent prompt and exact assistant response are restored from the server-backed conversation',
+    `Conversation marker ${marker} and the exact assistant response remained visible after reload`,
   );
 });
 
@@ -208,5 +217,45 @@ test('UX-11: keyboard can focus the chat composer and send control', async ({
     'Type into chat with keyboard and Tab to the send control',
     'Keyboard focus reaches the enabled send control with an accessible name',
     'Chat input accepted keyboard text and Tab moved focus to Send message',
+  );
+});
+
+test('UX-12: transport failure is reported without inventing an assistant answer', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires a sanitized real-deployment account.');
+  await signIn(page);
+
+  // Deliberately fail the browser transport, not the model or its runtime.
+  // This is failure injection, never a mocked completion or canned AI response.
+  await page.route('**/api/chat/stream', async (route) => {
+    await route.abort('failed');
+  });
+
+  const input = page.getByTestId('chat-input');
+  const submit = page.getByTestId('chat-submit');
+  const messages = page.getByRole('log', { name: 'Chat messages' });
+  const initialAssistantCount = await messages.getByTestId('chat-message-assistant').count();
+  const prompt = `UX12-transport-failure-${Date.now()}`;
+
+  await input.fill(prompt);
+  await expect(submit).toBeEnabled({ timeout: 30_000 });
+  await submit.click();
+
+  await expect(messages.getByText(prompt, { exact: true })).toBeVisible();
+  await expect(page.getByText('Chat request failed', { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(submit).toHaveAttribute('aria-label', 'Send message', { timeout: 30_000 });
+  expect(await messages.getByTestId('chat-message-assistant').count())
+    .toBe(initialAssistantCount);
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-12',
+    'Abort the outgoing stream transport and send a real prompt',
+    'Visible failure notice; no fabricated assistant completion',
+    'Chat request failed notice appeared and assistant count did not increase',
   );
 });
