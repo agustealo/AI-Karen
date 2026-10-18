@@ -106,6 +106,24 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def get_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str,
+    ) -> str | None:
+        """Host-only lookup of exact operator-assigned owner under tenant RLS."""
+        tenant_id = _tenant_uuid(tenant_id)
+        if not connection_id:
+            raise ValueError("Connection required")
+        async with async_transaction_scope(tenant_id) as session:
+            owner = (await session.execute(
+                text("""
+                    SELECT user_id FROM public.channel_connection_owners
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                """),
+                {"tenant": tenant_id, "connection": connection_id},
+            )).scalar_one_or_none()
+        return str(owner) if owner is not None else None
+
     async def commit_personal_pairing_observation(
         self, *, observation, user_id: str,
         provider_vetted_and_enabled: bool,
