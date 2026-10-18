@@ -407,12 +407,48 @@ class RuntimeEvidenceResolver:
         requirement: ContextRequirement,
     ) -> None:
         ctx = request.context
+        # RuntimePolicy already authorized this source for the authenticated
+        # tenant/user. Ingress user assertions are conversation evidence, even
+        # when the separate durable repository is unavailable. They are never
+        # represented as persisted or server-verified facts.
+        ingress = self._ingress_user_evidence(request, requirement)
+
+        async def retain_authorized_ingress() -> None:
+            if not ingress:
+                return
+            # Source permission is not conversation ownership. Independently
+            # verify the current conversation's tenant/user when history fails.
+            gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+            try:
+                await gateway.require_owned_conversation(ctx)
+            except Exception as exc:
+                cognitive_context.metadata["conversation_ingress_fallback_denied"] = (
+                    type(exc).__name__
+                )
+                return
+            cognitive_context.evidence.extend(ingress)
+            self._mark_resolved(cognitive_context, EvidenceSource.CONVERSATION)
+            cognitive_context.metadata["conversation_ingress_evidence_count"] = len(ingress)
+
         try:
             gateway = self._conversation_gateway or get_conversation_runtime_gateway()
             result = await gateway.load_history(
                 ctx,
                 limit=max(0, int(requirement.max_items or 0)),
             )
+        except PermissionError as exc:
+            # Authorization/ownership errors are not dependency degradation.
+            # Never promote request-local history under a rejected object scope.
+            cognitive_context.metadata.update(
+                {
+                    "conversation_history_status": "rejected",
+                    "conversation_history_count": 0,
+                    "conversation_history_degraded": True,
+                    "conversation_history_error_type": type(exc).__name__,
+                    "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
+                }
+            )
+            return
         except Exception as exc:
             logger.warning(
                 "Runtime durable conversation resolution failed: %s",
@@ -433,6 +469,7 @@ class RuntimeEvidenceResolver:
                     "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
                 }
             )
+            await retain_authorized_ingress()
             return
 
         cognitive_context.metadata.update(result.to_metadata())
@@ -446,6 +483,8 @@ class RuntimeEvidenceResolver:
                 cognitive_context.metadata["conversation_history_error_type"] = (
                     result.error_type
                 )
+            if result.status == "failed":
+                await retain_authorized_ingress()
             return
 
         now = datetime.now(timezone.utc)
@@ -468,6 +507,73 @@ class RuntimeEvidenceResolver:
         cognitive_context.metadata["conversation_history_injected_count"] = (
             len(result.messages) if injected else 0
         )
+
+    @classmethod
+    def _ingress_user_evidence(
+        cls,
+        request: ChatExecutionRequest,
+        requirement: ContextRequirement,
+    ) -> list[ContextEvidence]:
+        """Project bounded user-supplied turns, not fabricated durable history.
+
+        This method is reached only from the RuntimePolicy-authorized
+        conversation resolver. Never elevate assistant/system/tool text into
+        personal evidence; never accept externally supplied evidence IDs or
+        tenant scope from message dictionaries.
+        """
+        ctx = request.context
+        if not ctx.tenant_id or not ctx.user_id or not ctx.conversation_id:
+            return []
+        limit = max(0, min(int(requirement.max_items or 0), 40))
+        if limit == 0:
+            return []
+        # The thin SSE ingress validates these bounded, user-authored turns.
+        # Do not accept client-provided roles, IDs, tenant, or persistence state.
+        recent = request.metadata.get("ingress_recent_user_messages", [])
+        previous = (
+            [(index, content) for index, content in enumerate(recent)
+             if isinstance(content, str) and 0 < len(content.strip()) <= 500]
+            if isinstance(recent, list) and len(recent) <= 12 else []
+        )
+        current = [
+            (len(previous) + index, message.get("content"))
+            for index, message in enumerate(request.messages)
+            if isinstance(message, dict)
+            and str(message.get("role", "")).lower() == "user"
+            and isinstance(message.get("content"), str)
+            and 0 < len(message["content"].strip()) <= 500
+        ]
+        candidates = (previous + current)[-limit:]
+        now = datetime.now(timezone.utc)
+        return [
+            ContextEvidence(
+                evidence_id=f"ingress:{ctx.correlation_id}:{index}",
+                source=EvidenceSource.CONVERSATION,
+                content=content.strip(),
+                source_ref=None,
+                relevance=1.0,
+                confidence=1.0,
+                provenance=EvidenceProvenance(
+                    resolver_id=cls.CONVERSATION_RESOLVER_ID,
+                    resolver_version=cls.RESOLVER_VERSION,
+                    retrieval_method="authorized_request_ingress",
+                    retrieved_at=now,
+                    reason_codes=("user_supplied_not_durable",),
+                ),
+                temporal=EvidenceTemporalContext(observed_at=now, as_of=now),
+                contradiction=EvidenceContradiction(
+                    status=EvidenceContradictionStatus.NONE,
+                ),
+                scope=EvidenceScope(
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    session_id=ctx.session_id,
+                    conversation_id=ctx.conversation_id,
+                ),
+                metadata={"role": "user", "durable": False, "origin": "ingress"},
+            )
+            for index, content in candidates
+        ]
 
     @staticmethod
     def _profile_fact_semantics(

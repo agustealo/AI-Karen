@@ -127,6 +127,9 @@ class ChatStreamRequest(BaseModel):
     """Compact request accepted by the canonical chat SSE route."""
 
     message: str = Field(..., min_length=1, max_length=10000)
+    # Provisional same-session user turns only. Durable history still comes
+    # exclusively from the conversation repository in the runtime.
+    recent_user_messages: List[str] = Field(default_factory=list, max_length=12)
     session_id: Optional[str] = Field(
         default=None,
         pattern=r"^[a-zA-Z0-9_-]+$",
@@ -157,6 +160,14 @@ class ChatStreamRequest(BaseModel):
     @classmethod
     def validate_message(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("recent_user_messages")
+    @classmethod
+    def validate_recent_user_messages(cls, values: List[str]) -> List[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value or len(value) > 500 for value in normalized):
+            raise ValueError("Recent user messages must contain 1-500 characters")
+        return normalized
 
 
 class SecurityValidator:
@@ -256,6 +267,10 @@ def _stream_execution_request(
         stream=True,
         metadata={
             "transport": "sse",
+            "ingress_recent_user_messages": [
+                SecurityValidator.validate_user_input(value, max_length=500)
+                for value in request.recent_user_messages
+            ],
             **({"user_timezone": request.timezone} if request.timezone else {}),
             **({"approval_id": request.approval_id} if request.approval_id else {}),
         },
