@@ -6,7 +6,6 @@ const CLEAR_CANCEL_STATUS_DELAY_MS = 2000;
 export function useRequestHandlers(
   submitInFlightRef: React.MutableRefObject<boolean>,
   activeRequestControllerRef: React.MutableRefObject<AbortController | null>,
-  setIsLoading: React.Dispatch<React.SetStateAction<boolean>>,
   setProcessingStatus: React.Dispatch<React.SetStateAction<string>>,
 ) {
   const clearStatusTimerRef = useRef<number | null>(null);
@@ -36,7 +35,8 @@ export function useRequestHandlers(
      * It must not invent provider/degraded metadata. Runtime truth still comes
      * from the backend response path when a request completes normally.
      */
-    submitInFlightRef.current = false;
+    // Keep the submit lock held until the stream's finally block.
+    if (!submitInFlightRef.current) return;
 
     const activeController = activeRequestControllerRef.current;
 
@@ -44,9 +44,6 @@ export function useRequestHandlers(
       activeController.abort();
     }
 
-    activeRequestControllerRef.current = null;
-
-    setIsLoading(false);
     setProcessingStatus(REQUEST_CANCELLED_MESSAGE);
 
     clearPendingStatusTimer();
@@ -60,7 +57,6 @@ export function useRequestHandlers(
   }, [
     activeRequestControllerRef,
     clearPendingStatusTimer,
-    setIsLoading,
     setProcessingStatus,
     submitInFlightRef,
   ]);
