@@ -259,3 +259,35 @@ test('UX-12: transport failure is reported without inventing an assistant answer
     'Chat request failed notice appeared and assistant count did not increase',
   );
 });
+
+test('UX-13: advanced navigation is discoverable without overwhelming the first screen', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires sanitized authenticated Karen deployment.');
+  await signIn(page);
+
+  const toggle = page.getByTestId('advanced-tools-toggle');
+  const advanced = page.getByTestId('advanced-tools-content');
+
+  await expect(page.getByText('Start here')).toBeVisible();
+  await expect(page.getByText('Explore', { exact: true })).toBeVisible();
+  await expect(page.getByText('Automations', { exact: true })).toBeVisible();
+  await expect(page.getByText('Tools & plugins', { exact: true })).toBeVisible();
+
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(advanced).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(advanced).toBeVisible();
+  await expect(advanced.getByText('Tasks', { exact: true })).toBeVisible();
+  await expect(advanced.getByText('Cron Jobs', { exact: true })).toBeVisible();
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-13',
+    'Open authenticated dashboard and expand Advanced tools',
+    'Core destinations visible; detailed routes discoverable but initially collapsed',
+    'Advanced tools expanded and Tasks / Cron Jobs became visible',
+  );
+});
