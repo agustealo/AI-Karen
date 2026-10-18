@@ -106,6 +106,166 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def commit_personal_pairing_observation(
+        self, *, observation, user_id: str,
+        provider_vetted_and_enabled: bool,
+    ):
+        """Atomically persist scoped, authenticated pairing evidence.
+
+        Internal ChannelHost-only entry point. A caller-provided authenticated
+        flag or vetted flag is never proof: the future host adapter MUST verify
+        the provider's signature and operator eligibility before invocation.
+        No HTTP route exposes this method or makes a QR/session.
+        """
+        from datetime import datetime, timezone
+
+        from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+            PairingEvidenceDenied, PairingPhase, PairingSnapshot,
+            apply_pairing_observation,
+        )
+        from ai_karen_engine.services.channels.personal_pairing_policy import (
+            PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+
+        tenant_id = _tenant_uuid(observation.tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if (
+            not isinstance(observation.connection_id, str)
+            or not observation.connection_id.strip()
+            or not isinstance(observation.provider_id, str)
+            or not 1 <= len(observation.provider_id.strip()) <= 128
+            or type(provider_vetted_and_enabled) is not bool
+            or observation.connection_revision < 1
+            or observation.sequence < 1
+        ):
+            raise PairingEvidenceDenied("Invalid pairing observation scope")
+        async with async_transaction_scope(tenant_id) as session:
+            # Serialize independently of provider_id, so revisions and owner
+            # removal cannot race a local state change.
+            connection = (await session.execute(
+                text("""
+                    SELECT c.revision, o.user_id
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND o.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c
+                """),
+                {"tenant": tenant_id, "connection": observation.connection_id,
+                 "user": user_id},
+            )).mappings().one_or_none()
+            if (
+                connection is None
+                or connection["revision"] != observation.connection_revision
+            ):
+                raise PairingEvidenceDenied("Connection owner or revision has changed")
+            consent = (await session.execute(
+                text("""
+                    SELECT accepted_at
+                    FROM public.channel_personal_pairing_consents
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                      AND provider_id = :provider
+                      AND policy_version = :version
+                      AND revoked_at IS NULL
+                    LIMIT 1
+                """),
+                {"tenant": tenant_id, "connection": observation.connection_id,
+                 "user": user_id, "provider": observation.provider_id,
+                 "version": PERSONAL_WHATSAPP_CONSENT_VERSION},
+            )).scalar_one_or_none()
+            record = (await session.execute(
+                text("""
+                    SELECT connection_revision, sequence, phase, qr_expires_at,
+                           provider_link_receipt_id, provider_unlink_receipt_id
+                    FROM public.channel_personal_pairing_state
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND provider_id = :provider
+                    FOR UPDATE
+                """),
+                {"tenant": tenant_id, "connection": observation.connection_id,
+                 "provider": observation.provider_id},
+            )).mappings().one_or_none()
+            if record is None:
+                prior = PairingSnapshot(
+                    tenant_id=tenant_id,
+                    connection_id=observation.connection_id,
+                    provider_id=observation.provider_id,
+                    connection_revision=observation.connection_revision,
+                )
+            else:
+                if record["connection_revision"] != observation.connection_revision:
+                    raise PairingEvidenceDenied("Stored pairing revision is stale")
+                prior = PairingSnapshot(
+                    tenant_id=tenant_id,
+                    connection_id=observation.connection_id,
+                    provider_id=observation.provider_id,
+                    connection_revision=record["connection_revision"],
+                    sequence=record["sequence"],
+                    phase=PairingPhase(record["phase"]),
+                    qr_expires_at=record["qr_expires_at"],
+                    provider_link_receipt_id=record["provider_link_receipt_id"],
+                    provider_unlink_receipt_id=record["provider_unlink_receipt_id"],
+                )
+            now = (await session.execute(
+                text("SELECT clock_timestamp()")
+            )).scalar_one()
+            updated = apply_pairing_observation(
+                prior, observation, now=now,
+                consent_current=consent is not None and consent <= now,
+                provider_vetted_and_enabled=provider_vetted_and_enabled,
+            )
+            args = {
+                "tenant": tenant_id, "connection": observation.connection_id,
+                "provider": observation.provider_id,
+                "revision": observation.connection_revision,
+                "previous_sequence": prior.sequence,
+                "sequence": updated.sequence, "phase": updated.phase.value,
+                "qr_expiry": updated.qr_expires_at,
+                "link_receipt": updated.provider_link_receipt_id,
+                "unlink_receipt": updated.provider_unlink_receipt_id,
+            }
+            if record is None:
+                written = (await session.execute(
+                    text("""
+                        INSERT INTO public.channel_personal_pairing_state
+                            (tenant_id, connection_id, provider_id,
+                             connection_revision, sequence, phase,
+                             qr_expires_at, provider_link_receipt_id,
+                             provider_unlink_receipt_id)
+                        VALUES (CAST(:tenant AS uuid), :connection, :provider,
+                                :revision, :sequence, :phase, :qr_expiry,
+                                :link_receipt, :unlink_receipt)
+                        ON CONFLICT DO NOTHING
+                        RETURNING sequence
+                    """), args,
+                )).scalar_one_or_none()
+            else:
+                written = (await session.execute(
+                    text("""
+                        UPDATE public.channel_personal_pairing_state
+                        SET sequence = :sequence, phase = :phase,
+                            qr_expires_at = :qr_expiry,
+                            provider_link_receipt_id = :link_receipt,
+                            provider_unlink_receipt_id = :unlink_receipt,
+                            updated_at = clock_timestamp()
+                        WHERE tenant_id = CAST(:tenant AS uuid)
+                          AND connection_id = :connection
+                          AND provider_id = :provider
+                          AND connection_revision = :revision
+                          AND sequence = :previous_sequence
+                        RETURNING sequence
+                    """), args,
+                )).scalar_one_or_none()
+            if written != updated.sequence:
+                raise PairingEvidenceDenied("Concurrent pairing event lost revision CAS")
+            return updated
+
     async def assign_personal_connection_owner(
         self, *, tenant_id: str, connection_id: str, user_id: str,
     ) -> bool:
