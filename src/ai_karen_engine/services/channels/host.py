@@ -116,6 +116,7 @@ class ChannelHostServices:
                 )
                 self.worker = ChannelInboxWorker(
                     repository=self.repository, execution=self.execution,
+                    dispatch_outbox=self.dispatch_authorized_outbox,
                 )
                 self.worker.start()
             self.ingress = ChannelIngressService(
