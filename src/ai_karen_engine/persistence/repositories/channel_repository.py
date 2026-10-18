@@ -1472,6 +1472,88 @@ class SqlChannelRepository:
         return value is not None
 
 
+    async def request_personal_credential_deletion(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str, connection_revision: int, session_reference: str,
+        credential_scope: str, idempotency_key: str,
+    ) -> dict[str, str]:
+        """Record one owner-scoped request, without invoking a vendor.
+
+        The connection row is locked so owner/revision checks and issuance
+        serialize with any concurrent channel state mutation.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        fields = (connection_id, provider_id, session_reference, credential_scope, idempotency_key)
+        limits = (256, 128, 256, 128, 128)
+        if (
+            type(connection_revision) is not int or connection_revision < 1
+            or any(not isinstance(x, str) or not 1 <= len(x.strip()) <= n
+                   for x, n in zip(fields, limits))
+        ):
+            raise ValueError("Invalid credential deletion request scope")
+        async with async_transaction_scope(tenant_id) as session:
+            owner = (await session.execute(
+                text("""
+                    SELECT c.revision
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND o.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "user": user_id},
+            )).scalar_one_or_none()
+            if owner != connection_revision:
+                raise ValueError("Credential deletion owner or revision rejected")
+            existing = (await session.execute(
+                text("""
+                    SELECT request_id, session_reference, credential_scope, status
+                    FROM public.channel_personal_credential_deletions
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND provider_id = :provider
+                      AND connection_revision = :revision
+                      AND idempotency_key = :idempotency
+                    FOR UPDATE
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "provider": provider_id, "revision": connection_revision,
+                 "idempotency": idempotency_key},
+            )).mappings().one_or_none()
+            if existing is not None:
+                if (existing["session_reference"], existing["credential_scope"]) != (
+                    session_reference, credential_scope
+                ):
+                    raise ValueError("Idempotency key reused with different deletion scope")
+                return {"request_id": str(existing["request_id"]), "status": existing["status"]}
+            request_id = str(uuid.uuid4())
+            row = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_personal_credential_deletions
+                        (tenant_id, request_id, connection_id, provider_id, user_id,
+                         connection_revision, session_reference, credential_scope, idempotency_key)
+                    VALUES
+                        (CAST(:tenant AS uuid), CAST(:request_id AS uuid), :connection,
+                         :provider, CAST(:user AS uuid), :revision, :session,
+                         :credential_scope, :idempotency)
+                    ON CONFLICT (tenant_id, connection_id, provider_id,
+                                 connection_revision, idempotency_key) DO NOTHING
+                    RETURNING request_id, status
+                """),
+                {"tenant": tenant_id, "request_id": request_id, "connection": connection_id,
+                 "provider": provider_id, "user": user_id, "revision": connection_revision,
+                 "session": session_reference, "credential_scope": credential_scope,
+                 "idempotency": idempotency_key},
+            )).mappings().one_or_none()
+            if row is None:
+                raise ValueError("Concurrent deletion request must be retried")
+            return {"request_id": str(row["request_id"]), "status": row["status"]}
+
+
 __all__ = [
     "ChannelAdmissionConflict",
     "ChannelAdmissionDenied",
