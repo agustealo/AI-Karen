@@ -31,7 +31,8 @@ Project: https://github.com/evolution-foundation/evolution-api
 - [x] Fail-closed eligibility and versioned consent scope evaluator with tests.
 - [x] Tenant-scoped consent store, versioned acknowledgement history and revocation repository.
 - [x] Dedicated channel.consent user permission and operator-assigned connection ownership gate.
-- [ ] Audited operator-only ownership assignment lifecycle and consumer endpoint; no self-assignment.
+- [x] Operator-gated one-time owner assignment through canonical ChannelHost + SQL, with audit event.
+- [ ] Authenticated consumer endpoint, live provider pairing and proof of operator/owner experience.
 - [ ] Qualified third-party provider and adapter with authenticated inbound webhook.
 - [ ] Live pairing, QR expiry/replay, reconnect, tenant, unlink and deletion proof.
 - [ ] One truthful Channels UI driven exclusively by backend connection state.
@@ -52,3 +53,17 @@ The owner is still assigned by a separate governed administrative process,
 which must be implemented and audited before a self-service QR UI goes live.
 A persisted acknowledgement is never sufficient to create a QR or claim a
 provider-linked session; no managed Baileys operator has been approved.
+
+## Owner assignment authority
+
+ChannelHost.assign_personal_connection_owner requires the canonical channel.provision
+operator authorization. SqlChannelRepository inserts a verified active user's
+ownership at most once for the tenant's existing connection. Conflicting
+owners and duplicate assignments do not overwrite existing owners, thereby
+preserving any consent bound by the foreign key. The user-facing channel.consent
+action only reads the assigned owner and cannot call owner assignment.
+
+Before consumer release, a distinct authenticated API handler must supply the
+verified actor identity/session (not a request body claim) and issue a fresh
+canonical action plan. Provider connection and managed session enrollment need
+independent acceptance gates and can never be assumed from an owner row.
