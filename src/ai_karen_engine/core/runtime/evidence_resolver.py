@@ -413,8 +413,18 @@ class RuntimeEvidenceResolver:
         # represented as persisted or server-verified facts.
         ingress = self._ingress_user_evidence(request, requirement)
 
-        def retain_authorized_ingress() -> None:
+        async def retain_authorized_ingress() -> None:
             if not ingress:
+                return
+            # Source permission is not conversation ownership. Independently
+            # verify the current conversation's tenant/user when history fails.
+            gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+            try:
+                await gateway.require_owned_conversation(ctx)
+            except Exception as exc:
+                cognitive_context.metadata["conversation_ingress_fallback_denied"] = (
+                    type(exc).__name__
+                )
                 return
             cognitive_context.evidence.extend(ingress)
             self._mark_resolved(cognitive_context, EvidenceSource.CONVERSATION)
@@ -459,7 +469,7 @@ class RuntimeEvidenceResolver:
                     "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
                 }
             )
-            retain_authorized_ingress()
+            await retain_authorized_ingress()
             return
 
         cognitive_context.metadata.update(result.to_metadata())
@@ -474,7 +484,7 @@ class RuntimeEvidenceResolver:
                     result.error_type
                 )
             if result.status == "failed":
-                retain_authorized_ingress()
+                await retain_authorized_ingress()
             return
 
         now = datetime.now(timezone.utc)
