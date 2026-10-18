@@ -37,6 +37,7 @@ def host_context(*, owner=True):
         )),
         is_personal_connection_owner=AsyncMock(return_value=owner),
     )
+    host.get_personal_pairing_risk = AsyncMock(return_value=None)
     host.acknowledge_personal_pairing_risk = AsyncMock(return_value=True)
     host.revoke_personal_pairing_risk = AsyncMock(return_value=True)
     return host, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
@@ -124,3 +125,63 @@ async def test_no_risk_acceptance_means_no_write():
     assert err.value.status_code == 422
     host.repository.get_connection.assert_not_awaited()
     host.acknowledge_personal_pairing_risk.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_consent_status_is_unacknowledged_when_sql_has_no_active_record():
+    host, request = host_context()
+    result = await api.get_personal_whatsapp_risk_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert result.acknowledged is False
+    assert result.paired is False
+    assert result.provider_unlinked is False
+    host.get_personal_pairing_risk.assert_awaited_once()
+    host.activation.issue_action_plan.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_consent_status_requires_current_scoped_unrevoked_evidence():
+    from datetime import datetime, timezone
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PersonalPairingConsent,
+    )
+
+    host, request = host_context()
+    valid = PersonalPairingConsent(
+        tenant_id=TENANT, user_id=USER, connection_id=CONNECTION,
+        provider_id=PROVIDER,
+        policy_version=api.PERSONAL_WHATSAPP_CONSENT_VERSION,
+        accepted_at=datetime(2026, 10, 18, tzinfo=timezone.utc),
+    )
+    host.get_personal_pairing_risk.return_value = valid
+    response = await api.get_personal_whatsapp_risk_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert response.acknowledged is True
+    assert response.paired is False
+    host.get_personal_pairing_risk.return_value = PersonalPairingConsent(
+        tenant_id=TENANT, user_id=USER, connection_id=CONNECTION,
+        provider_id="forged-provider",
+        policy_version=api.PERSONAL_WHATSAPP_CONSENT_VERSION,
+        accepted_at=valid.accepted_at,
+    )
+    response = await api.get_personal_whatsapp_risk_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert response.acknowledged is False
+
+
+@pytest.mark.asyncio
+async def test_unowned_connection_cannot_read_consent_record():
+    host, request = host_context(owner=False)
+    with pytest.raises(HTTPException) as error:
+        await api.get_personal_whatsapp_risk_status(
+            connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+            request=request, user=actor(),
+        )
+    assert error.value.status_code == 403
+    host.get_personal_pairing_risk.assert_not_awaited()
