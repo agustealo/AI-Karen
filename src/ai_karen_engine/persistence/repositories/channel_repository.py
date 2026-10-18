@@ -124,6 +124,53 @@ class SqlChannelRepository:
             )).scalar_one_or_none()
         return str(owner) if owner is not None else None
 
+    async def get_personal_pairing_snapshot(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, provider_id: str,
+    ):
+        """Read persisted provider evidence for the assigned user, not live health."""
+        from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+            PairingPhase, PairingSnapshot,
+        )
+
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not provider_id or len(provider_id) > 128 or not connection_id:
+            raise ValueError("Invalid personal pairing read scope")
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    SELECT s.connection_revision, s.sequence, s.phase,
+                           s.qr_expires_at, s.provider_link_receipt_id,
+                           s.provider_unlink_receipt_id
+                    FROM public.channel_personal_pairing_state s
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = s.tenant_id
+                     AND c.connection_id = s.connection_id
+                     AND c.revision = s.connection_revision
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = s.tenant_id
+                     AND o.connection_id = s.connection_id
+                    WHERE s.tenant_id = CAST(:tenant AS uuid)
+                      AND s.connection_id = :connection
+                      AND s.provider_id = :provider
+                      AND o.user_id = CAST(:user AS uuid)
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "provider": provider_id, "user": user_id},
+            )).mappings().one_or_none()
+        if row is None:
+            return None
+        return PairingSnapshot(
+            tenant_id=tenant_id, connection_id=connection_id,
+            provider_id=provider_id,
+            connection_revision=row["connection_revision"],
+            sequence=row["sequence"], phase=PairingPhase(row["phase"]),
+            qr_expires_at=row["qr_expires_at"],
+            provider_link_receipt_id=row["provider_link_receipt_id"],
+            provider_unlink_receipt_id=row["provider_unlink_receipt_id"],
+        )
+
     async def commit_personal_pairing_observation(
         self, *, observation, user_id: str,
         provider_vetted_and_enabled: bool,
