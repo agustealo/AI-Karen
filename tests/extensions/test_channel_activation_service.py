@@ -272,3 +272,55 @@ def test_kernel_exposes_channel_catalog_without_enabling_generic_execution(tmp_p
     # simultaneously granted the separate host transport authority.
     registration.state = ExtensionLifecycleState.ENABLED
     assert kernel.get_channel_activation_manifest("telegram-bot") is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_rbac_issues_scoped_runtime_policy_send_plan(monkeypatch):
+    from ai_karen_engine.auth.rbac_middleware import Permission
+    from ai_karen_engine.services.channels import activation as module
+    service, _, _, adapter, lookup, _ = components()
+    resolver = SimpleNamespace(
+        get_user_permissions=lambda data: (
+            {Permission.CHANNEL_SEND} if data["roles"] == ["admin"] else set()
+        ),
+    )
+    monkeypatch.setattr(module, "get_rbac_manager", lambda: resolver)
+    result = await service.issue_action_plan(
+        tenant_id=TENANT, user_id=USER, session_id=SESSION,
+        installation_id="telegram-bot", action="channel.send",
+    )
+    assert result.matches_execution_scope(
+        tenant_id=TENANT, user_id=USER, session_id=SESSION,
+    )
+    assert result.allowed_capabilities == ["channel.send"]
+    assert result.allowed_plugins == ["telegram-bot"]
+    assert result.policy_decision_id
+    lookup.assert_awaited_with(tenant_id=TENANT, user_id=USER)
+    adapter.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_fresh_rbac_permission_never_issues_send_plan(monkeypatch):
+    from ai_karen_engine.services.channels import activation as module
+    service, _, _, adapter, _, _ = components()
+    monkeypatch.setattr(
+        module, "get_rbac_manager",
+        lambda: SimpleNamespace(get_user_permissions=lambda data: set()),
+    )
+    with pytest.raises(ChannelActivationDenied, match="RBAC"):
+        await service.issue_action_plan(
+            tenant_id=TENANT, user_id=USER, session_id=SESSION,
+            installation_id="telegram-bot", action="channel.send",
+        )
+    adapter.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unverified_or_non_catalog_role_cannot_issue_policy_plan():
+    for options in ({"verified": False}, {"active": False}, {"role": "user"}):
+        service, _, _, _, _, _ = components(**options)
+        with pytest.raises(ChannelActivationDenied):
+            await service.issue_action_plan(
+                tenant_id=TENANT, user_id=USER, session_id=SESSION,
+                installation_id="telegram-bot", action="channel.send",
+            )
