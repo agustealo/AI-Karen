@@ -69,6 +69,7 @@ def test_health_requires_provider_receipt_for_connected():
 
 @pytest.mark.parametrize("changes", [
     {"state": "connected", "receipt_id": None},
+    {"state": "connected", "receipt_id": "   "},
     {"state": "invented", "receipt_id": "receipt"},
     {"observed_at": datetime(2026, 10, 18, 13, 30)},
     {"connection_revision": 0},
@@ -90,6 +91,7 @@ def test_unlink_is_not_deletion_and_requires_evidence():
 
 @pytest.mark.parametrize("changes", [
     {"provider_receipt_id": ""},
+    {"provider_receipt_id": "   "},
     {"unlinked_at": datetime(2026, 10, 18, 13, 30)},
     {"connection_revision": 0},
 ])
