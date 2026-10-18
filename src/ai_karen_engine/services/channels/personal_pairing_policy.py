@@ -7,7 +7,7 @@ after persisted consent has been verified by its canonical service.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import StrEnum
 from typing import Final
 
