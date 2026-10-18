@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -64,6 +65,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261018010000_33_channel_personal_pairing_consent.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(consent_migration)
+        pairing_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261018020000_34_channel_personal_pairing_state.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(pairing_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -186,7 +192,8 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         )
         await raw.execute(
             "GRANT SELECT ON public.channel_inbox, public.channel_outbox, "
-            "public.channel_personal_pairing_consents, public.channel_connection_owners "
+            "public.channel_personal_pairing_consents, public.channel_connection_owners, "
+            "public.channel_personal_pairing_state "
             "TO karen_channel_rls_probe"
         )
         async with raw.transaction():
@@ -244,6 +251,111 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                     yield session
 
         monkeypatch.setattr(module, "async_transaction_scope", real_scope)
+        # Two independently opened SQL sessions race to write the same QR
+        # event. Only one may win the locked-connection/sequence transition.
+        from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+            PairingEvent, PairingEvidenceDenied, PairingObservation, PairingPhase,
+        )
+
+        def pairing_event(sequence, kind, *, receipt=None, expiry=None):
+            return PairingObservation(
+                tenant_id=str(tenant_a),
+                connection_id=connection_id,
+                provider_id="approved-managed-connector",
+                connection_revision=1,
+                sequence=sequence,
+                event=kind,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=2),
+                authenticated=True,
+                provider_receipt_id=receipt,
+                qr_expires_at=expiry,
+            )
+
+        qr = pairing_event(
+            1, PairingEvent.QR_ISSUED,
+            expiry=datetime.now(timezone.utc) + timedelta(seconds=90),
+        )
+        attempts = await asyncio.gather(
+            SqlChannelRepository().commit_personal_pairing_observation(
+                observation=qr, user_id=str(user),
+                provider_vetted_and_enabled=True,
+            ),
+            SqlChannelRepository().commit_personal_pairing_observation(
+                observation=qr, user_id=str(user),
+                provider_vetted_and_enabled=True,
+            ),
+            return_exceptions=True,
+        )
+        assert sum(
+            not isinstance(result, Exception) for result in attempts
+        ) == 1
+        assert sum(
+            isinstance(result, PairingEvidenceDenied) for result in attempts
+        ) == 1
+        assert await raw.fetchval(
+            """SELECT sequence FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == 1
+        with pytest.raises(PairingEvidenceDenied):
+            await SqlChannelRepository().commit_personal_pairing_observation(
+                observation=pairing_event(
+                    2, PairingEvent.LINK_CONFIRMED,
+                    receipt="forged-foreign-tenant",
+                ),
+                user_id=str(another_user),
+                provider_vetted_and_enabled=True,
+            )
+        connected = await SqlChannelRepository().commit_personal_pairing_observation(
+            observation=pairing_event(
+                2, PairingEvent.LINK_CONFIRMED,
+                receipt="provider-link-evidence",
+            ),
+            user_id=str(user), provider_vetted_and_enabled=True,
+        )
+        assert connected.phase is PairingPhase.CONNECTED
+        assert connected.sequence == 2
+        assert connected.provider_link_receipt_id == "provider-link-evidence"
+        # Revoking consent must deny another QR, but never trap an existing
+        # linked device: authenticated teardown must still commit.
+        assert await SqlChannelRepository().revoke_personal_pairing_consent(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user), provider_id="approved-managed-connector",
+        )
+        pending = await SqlChannelRepository().commit_personal_pairing_observation(
+            observation=pairing_event(3, PairingEvent.DISCONNECT_REQUESTED),
+            user_id=str(user), provider_vetted_and_enabled=False,
+        )
+        assert pending.phase is PairingPhase.DISCONNECT_PENDING
+        assert pending.provider_unlink_receipt_id is None
+        unlinked = await SqlChannelRepository().commit_personal_pairing_observation(
+            observation=pairing_event(
+                4, PairingEvent.UNLINK_CONFIRMED,
+                receipt="provider-unlink-evidence",
+            ),
+            user_id=str(user), provider_vetted_and_enabled=False,
+        )
+        assert unlinked.phase is PairingPhase.DISCONNECTED
+        assert unlinked.provider_unlink_receipt_id == "provider-unlink-evidence"
+        assert await raw.fetchval(
+            """SELECT sequence FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == 4
+        # Reacceptance does not resurrect a disconnected session.
+        assert await SqlChannelRepository().acknowledge_personal_pairing_risk(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user), provider_id="approved-managed-connector",
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        with pytest.raises(PairingEvidenceDenied):
+            await SqlChannelRepository().commit_personal_pairing_observation(
+                observation=pairing_event(
+                    5, PairingEvent.LINK_CONFIRMED, receipt="replay-link",
+                ),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+
         first, second = await asyncio.gather(
             SqlChannelRepository().claim_outbound(
                 tenant_id=str(tenant_a), delivery_id=str(delivery), lease_seconds=90,
