@@ -50,6 +50,8 @@ The images below are **real browser captures of the real authenticated applicati
 
 Product screenshots are not substitutes for completed user actions. The [user-journey UX audit and evidence register](docs/ux/user-journey-audit.md) records the actions, expected and observed results, responsible source files, and screenshot or trace evidence required for first-run, chat, memory, providers, agents, plugins, communications, mobile, accessibility, and failure recovery. Entries remain **NOT RUN** until verified against a live installation. The curated gallery remains governed by the [screenshot provenance policy](docs/assets/screenshots/README.md); the two historical images above are illustrative, not evidence of current release readiness.
 
+For the chat screen's **historical screenshot**, the interaction acceptance matrix, and the requirements for fresh browser captures, see [Chat journey verification and screenshot evidence](docs/ux/chat-journey-verification.md). The archived chat image is for dated comparison only, not proof of the current composer or persistence behavior.
+
 ## What you can do with KAREN
 
 ### Talk to an assistant that can actually use the system
