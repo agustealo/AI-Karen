@@ -4,8 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "src/ai_karen_engine/core/intelligence/ml/**"
-      - "src/ai_karen_engine/core/intelligence/training/**"
+      - "src/ai_karen_engine/core/intelligence/**"
       - "tests/core/intelligence/test_*training*"
       - "tests/core/intelligence/test_*worker*"
       - "tests/unit/core/intelligence/ml/**"
@@ -14,8 +13,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/ai_karen_engine/core/intelligence/ml/**"
-      - "src/ai_karen_engine/core/intelligence/training/**"
+      - "src/ai_karen_engine/core/intelligence/**"
       - "tests/core/intelligence/test_*training*"
       - "tests/core/intelligence/test_*worker*"
       - "tests/unit/core/intelligence/ml/**"
