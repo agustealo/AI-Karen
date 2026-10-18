@@ -59,6 +59,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261017010000_31_channel_gateway_durable_admission.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(migration)
+        consent_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261018010000_33_channel_personal_pairing_consent.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(consent_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -98,6 +103,44 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             delivery, tenant_a, connection_id, inbox,
         )
 
+        # Exercise actual SQL consent acceptance, scope and durable revocation.
+        from ai_karen_engine.services.channels.personal_pairing_policy import (
+            PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        consent_repo = SqlChannelRepository()
+        consent_args = dict(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user), provider_id="approved-managed-connector",
+        )
+        assert await consent_repo.get_personal_pairing_consent(**consent_args) is None
+        assert await consent_repo.acknowledge_personal_pairing_risk(
+            **consent_args, policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        assert not await consent_repo.acknowledge_personal_pairing_risk(
+            **consent_args, policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        recorded = await consent_repo.get_personal_pairing_consent(**consent_args)
+        assert recorded is not None
+        assert recorded.user_id == str(user)
+        assert recorded.policy_version == PERSONAL_WHATSAPP_CONSENT_VERSION
+        assert await consent_repo.get_personal_pairing_consent(
+            **{**consent_args, "tenant_id": str(tenant_b)},
+        ) is None
+        assert await consent_repo.revoke_personal_pairing_consent(**consent_args)
+        assert await consent_repo.get_personal_pairing_consent(**consent_args) is None
+        # Reacceptance creates NEW historical evidence, never overwrites revocation.
+        assert await consent_repo.acknowledge_personal_pairing_risk(
+            **consent_args, policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        rows = await raw.fetch(
+            """SELECT revoked_at FROM public.channel_personal_pairing_consents
+               WHERE tenant_id=$1 AND connection_id=$2 AND user_id=$3
+               ORDER BY accepted_at, consent_id""",
+            tenant_a, connection_id, user,
+        )
+        assert len(rows) == 2
+        assert sum(row["revoked_at"] is None for row in rows) == 1
+
         # Prove FORCE RLS using a genuinely non-owner database role. A
         # superuser's tenant-filtered SELECT would not exercise PostgreSQL
         # row-level security and is insufficient evidence of isolation.
@@ -106,7 +149,8 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "GRANT USAGE ON SCHEMA public TO karen_channel_rls_probe"
         )
         await raw.execute(
-            "GRANT SELECT ON public.channel_inbox, public.channel_outbox "
+            "GRANT SELECT ON public.channel_inbox, public.channel_outbox, "
+            "public.channel_personal_pairing_consents "
             "TO karen_channel_rls_probe"
         )
         async with raw.transaction():
@@ -121,6 +165,9 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_outbox"
             ) == 1
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_consents"
+            ) == 2
             await raw.execute(
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_b),
@@ -131,8 +178,12 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_outbox"
             ) == 0
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_pairing_consents"
+            ) == 0
         await raw.execute(
-            "REVOKE SELECT ON public.channel_inbox, public.channel_outbox "
+            "REVOKE SELECT ON public.channel_inbox, public.channel_outbox, "
+            "public.channel_personal_pairing_consents "
             "FROM karen_channel_rls_probe"
         )
         await raw.execute(
