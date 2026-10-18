@@ -7,7 +7,6 @@ ROOT = Path(__file__).resolve().parents[2]
 
 PROFILE_WORKFLOWS = (
     ".github/workflows/main-quality-gate.yml",
-    ".github/workflows/classifier-burn.yml",
     ".github/workflows/chat-system-burn.yml",
     ".github/workflows/reasoning-smoke.yml",
     ".github/workflows/cognitive-proof-ci.yml",
@@ -88,3 +87,12 @@ def test_ci_dependency_profiles_have_single_documented_owner() -> None:
     }
     assert (ci_requirements / "README.md").is_file()
     assert expected_profiles <= {path.name for path in ci_requirements.glob("*.txt")}
+
+
+def test_classifier_burn_is_owned_by_main_quality_gate() -> None:
+    """Retired standalone classifier CI must not duplicate the canonical proof."""
+    assert not (ROOT / ".github/workflows/classifier-burn.yml").exists()
+    workflow = _workflow_text(".github/workflows/main-quality-gate.yml")
+    assert "pytest tests/core/intelligence/test_intent_classifier_burn.py -q" in workflow
+    assert "pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q" in workflow
+    assert "pytest tests/architecture/test_classifier_authority_contract.py -q" in workflow

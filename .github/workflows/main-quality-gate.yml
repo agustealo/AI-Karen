@@ -137,6 +137,14 @@ jobs:
           pytest tests/architecture/test_public_scheme_authority.py -q
           pytest tests/architecture/test_reward_progress_authority.py -q
 
+      - name: Model orchestration and LLM ingress authority contracts
+        run: |
+          python -m compileall -q src/ai_karen_engine/api_routes/models src/ai_karen_engine/core/model_runtime/management/model_orchestrator_service.py src/ai_karen_engine/server/routers.py
+          pytest tests/architecture/test_model_flow_route_authority.py -q
+          pytest tests/architecture/test_model_orchestrator_route_authority.py -q
+          pytest tests/core/model_runtime/test_model_orchestrator_remote_listing.py -q
+          pytest tests/architecture/test_llm_control_plane_authority.py -q
+
       - name: Runtime evidence authority proofs
         run: |
           pytest tests/core/runtime/test_context_evidence_contracts.py -q

@@ -4,6 +4,13 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - "src/ai_karen_engine/core/reasoning/**"
+      - "src/ai_karen_engine/core/cortex/**"
+      - "src/ai_karen_engine/core/runtime/**"
+      - "tests/core/reasoning/**"
+      - "requirements/ci/reasoning.txt"
+      - ".github/workflows/reasoning-smoke.yml"
   workflow_dispatch:
 
 permissions:
