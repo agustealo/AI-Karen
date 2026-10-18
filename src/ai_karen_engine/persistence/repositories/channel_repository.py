@@ -742,6 +742,58 @@ class SqlChannelRepository:
             inserted = result.scalar_one_or_none()
         return inserted is not None
 
+    async def list_unattempted_outbound(
+        self, *, tenant_id: str, connection_id: str, limit: int = 100,
+    ) -> list[str]:
+        """Enumerate only accepted, NEVER CLAIMED deliveries in one tenant account.
+
+        This read is not an authorization grant or a send. Recovery callers
+        require a fresh channel.send policy plan and dispatch must consume the
+        existing one-use claim. Expired claims are NOT eligible for replay:
+        quarantine_expired_outbound_claims owns their unknown outcome.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Outbound recovery requires connection scope")
+        if not 1 <= limit <= 1000:
+            raise ValueError("Outbound recovery limit must be 1..1000")
+        async with async_transaction_scope(tenant_id) as session:
+            values = (await session.execute(
+                text("""
+                    SELECT o.delivery_id
+                    FROM public.channel_outbox o
+                    JOIN public.channel_inbox i
+                      ON i.tenant_id = o.tenant_id
+                     AND i.connection_id = o.connection_id
+                     AND i.inbox_id = o.inbox_id
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = i.tenant_id
+                     AND c.connection_id = i.connection_id
+                     AND c.revision = i.connection_revision
+                    JOIN public.channel_identity_bindings b
+                      ON b.tenant_id = i.tenant_id
+                     AND b.connection_id = i.connection_id
+                     AND b.binding_id = i.binding_id
+                     AND b.user_id = i.user_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = i.tenant_id AND u.user_id = i.user_id
+                    WHERE o.tenant_id = CAST(:tenant AS uuid)
+                      AND o.connection_id = :connection
+                      AND o.status = 'accepted'
+                      AND o.claim_token IS NULL
+                      AND o.claim_expires_at IS NULL
+                      AND o.attempt_count = 0
+                      AND i.status = 'completed'
+                      AND c.enabled = true
+                      AND b.revoked_at IS NULL
+                      AND u.is_active = true AND u.is_verified = true
+                    ORDER BY o.created_at, o.delivery_id
+                    LIMIT :limit
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "limit": limit},
+            )).scalars().all()
+        return [str(value) for value in values]
+
     async def get_delivery_preflight(
         self, *, tenant_id: str, delivery_id: str,
     ) -> ChannelDeliveryPreflight | None:
