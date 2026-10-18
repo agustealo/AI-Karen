@@ -363,7 +363,10 @@ async def test_host_dispatch_uses_only_bound_adapter_and_caller_policy_plan():
     tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     delivery_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     host.repository.get_delivery_preflight = AsyncMock(
-        return_value=SimpleNamespace(\n            connection_id="conn", user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",\n            external_conversation_id="native-room",\n        ),
+        return_value=SimpleNamespace(
+            connection_id="conn", user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            external_conversation_id="native-room",
+        ),
     )
     host.repository.get_enabled_connection = AsyncMock(
         return_value=ChannelConnection(
@@ -372,7 +375,8 @@ async def test_host_dispatch_uses_only_bound_adapter_and_caller_policy_plan():
             credential_handle="vault://ref", revision=2, enabled=True,
         ),
     )
-    host.delivery.dispatch = AsyncMock(return_value=True)\n    host.activation._authorize = AsyncMock()
+    host.delivery.dispatch = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock()
     plan = AuthorizedExecutionPlan(
         execution_id="delivery-1", policy_decision_id="policy-1",
         authorized_user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
@@ -404,7 +408,10 @@ async def test_host_outbound_denies_before_dispatch_when_plan_missing_or_connect
     tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     host.repository.get_delivery_preflight = AsyncMock(
-        return_value=SimpleNamespace(\n            connection_id="conn", user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",\n            external_conversation_id="native-room",\n        ),
+        return_value=SimpleNamespace(
+            connection_id="conn", user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            external_conversation_id="native-room",
+        ),
     )
     host.repository.get_enabled_connection = AsyncMock(
         return_value=ChannelConnection(
@@ -416,7 +423,9 @@ async def test_host_outbound_denies_before_dispatch_when_plan_missing_or_connect
     host.delivery.dispatch = AsyncMock()
     with pytest.raises(PermissionError, match="plan"):
         await host.dispatch_outbox(
-            tenant_id=tenant, delivery_id=other,\n            user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",\n            session_id="wrong", authorized_plan=None,
+            tenant_id=tenant, delivery_id=other,
+            user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            session_id="wrong", authorized_plan=None,
         )
     from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
     plan = AuthorizedExecutionPlan(
@@ -426,7 +435,9 @@ async def test_host_outbound_denies_before_dispatch_when_plan_missing_or_connect
     )
     with pytest.raises(PermissionError, match="connection"):
         await host.dispatch_outbox(
-            tenant_id=tenant, delivery_id=other,\n            user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",\n            session_id="wrong", authorized_plan=plan,
+            tenant_id=tenant, delivery_id=other,
+            user_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            session_id="wrong", authorized_plan=plan,
         )
     host.delivery.dispatch.assert_not_awaited()
     adapter.send.assert_not_awaited()
