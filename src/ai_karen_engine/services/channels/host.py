@@ -168,10 +168,14 @@ class ChannelHostServices:
             or connection.installation_id not in self._installed
         ):
             raise PermissionError("Channel connection not available for consent")
+        if not await self.repository.is_personal_connection_owner(
+            tenant_id=tenant_id, connection_id=connection_id, user_id=user_id,
+        ):
+            raise PermissionError("User is not the verified connection owner")
         await self.activation._authorize(
             tenant_id=tenant_id, user_id=user_id, session_id=session_id,
             installation_id=connection.installation_id,
-            action="channel.provision", plan=authorized_plan,
+            action="channel.consent", plan=authorized_plan,
         )
 
     async def acknowledge_personal_pairing_risk(
