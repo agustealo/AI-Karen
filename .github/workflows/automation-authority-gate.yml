@@ -4,9 +4,39 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - "src/ai_karen_engine/api_routes/automation/**"
+      - "src/ai_karen_engine/services/automation/**"
+      - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/services/job_service.py"
+      - "src/ai_karen_engine/persistence/repositories/**"
+      - "src/ai_karen_engine/agent_medusa/**"
+      - "scripts/migrate_legacy_automation_jobs.py"
+      - "tests/services/automation/**"
+      - "tests/architecture/test_automation_authority.py"
+      - "tests/agent_medusa/test_governed_tool_receipts.py"
+      - "tests/services/test_governed_tool_cache_contract.py"
+      - "tests/api/test_task_definition_routes.py"
+      - "requirements/ci/quality.txt"
+      - ".github/workflows/automation-authority-gate.yml"
   push:
     branches:
       - main
+    paths:
+      - "src/ai_karen_engine/api_routes/automation/**"
+      - "src/ai_karen_engine/services/automation/**"
+      - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/services/job_service.py"
+      - "src/ai_karen_engine/persistence/repositories/**"
+      - "src/ai_karen_engine/agent_medusa/**"
+      - "scripts/migrate_legacy_automation_jobs.py"
+      - "tests/services/automation/**"
+      - "tests/architecture/test_automation_authority.py"
+      - "tests/agent_medusa/test_governed_tool_receipts.py"
+      - "tests/services/test_governed_tool_cache_contract.py"
+      - "tests/api/test_task_definition_routes.py"
+      - "requirements/ci/quality.txt"
+      - ".github/workflows/automation-authority-gate.yml"
   workflow_dispatch:
 
 permissions:
