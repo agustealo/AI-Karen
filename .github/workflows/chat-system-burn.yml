@@ -4,6 +4,36 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - "src/ai_karen_engine/api_routes/chat/**"
+      - "src/ai_karen_engine/core/runtime/**"
+      - "src/ai_karen_engine/core/cortex/**"
+      - "src/ai_karen_engine/core/memory/**"
+      - "src/ai_karen_engine/core/intelligence/**"
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/langgraph_orchestrator/**"
+      - "src/ai_karen_engine/platform/memory/**"
+      - "src/ai_karen_engine/persistence/**"
+      - "src/ai_karen_engine/auth/**"
+      - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/api_routes/auth/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/components/chat/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/lib/chat-response.ts"
+      - "tests/core/runtime/**"
+      - "tests/core/cortex/**"
+      - "tests/core/memory/**"
+      - "tests/core/intelligence/**"
+      - "tests/platform/memory/**"
+      - "tests/api_routes/test_profile_correction_ingress.py"
+      - "tests/architecture/test_*chat*.py"
+      - "tests/architecture/test_*stream*.py"
+      - "tests/architecture/test_*response*.py"
+      - "tests/architecture/test_*tenant*.py"
+      - "tests/architecture/test_*langgraph*.py"
+      - "tests/integration/test_chat_*.py"
+      - "scripts/ci/start-postgres-container.sh"
+      - "requirements/ci/chat.txt"
+      - ".github/workflows/chat-system-burn.yml"
   workflow_dispatch:
 
 permissions:
