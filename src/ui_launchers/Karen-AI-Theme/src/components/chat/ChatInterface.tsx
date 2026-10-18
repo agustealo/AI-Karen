@@ -1146,6 +1146,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     submitInFlightRef,
     activeRequestControllerRef,
     setProcessingStatus,
+    setIsLoading,
   );
 
   const { scrollChatToBottom } = useScrollManagement(
@@ -1419,6 +1420,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
           setIsLocalRecoveryUnconfirmed(true);
         }
       } finally {
+        if (!cancelled && persisted?.inFlight && !activeRequestControllerRef.current) {
+          // Recovery polling has no active browser request to finish cleanup.
+          // Expiry, exhausted polling, or server errors must not strand the lock.
+          submitInFlightRef.current = false;
+          setIsLoading(false);
+          setProcessingStatus('');
+        }
         if (!cancelled) {
           await refreshActionableApprovals(sessionId);
         }
