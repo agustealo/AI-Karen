@@ -1,65 +1,30 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback } from 'react';
 
 const REQUEST_CANCELLED_MESSAGE = 'Request cancelled by user.';
-const CLEAR_CANCEL_STATUS_DELAY_MS = 2000;
 
+/**
+ * UI cancellation only. The owning chat request's finally block is responsible
+ * for releasing the submit lock, controller reference, and loading state.
+ * Releasing them here would let a previous aborted request race with a new one.
+ */
 export function useRequestHandlers(
   submitInFlightRef: React.MutableRefObject<boolean>,
   activeRequestControllerRef: React.MutableRefObject<AbortController | null>,
   setProcessingStatus: React.Dispatch<React.SetStateAction<string>>,
 ) {
-  const clearStatusTimerRef = useRef<number | null>(null);
-
-  const clearPendingStatusTimer = useCallback(() => {
-    if (clearStatusTimerRef.current === null || typeof window === 'undefined') {
+  const stopActiveRequest = useCallback(() => {
+    if (!submitInFlightRef.current) {
       return;
     }
 
-    window.clearTimeout(clearStatusTimerRef.current);
-    clearStatusTimerRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      clearPendingStatusTimer();
-    };
-  }, [clearPendingStatusTimer]);
-
-  const stopActiveRequest = useCallback(() => {
-    /*
-     * This hook owns frontend cancellation only:
-     * - clear the local submit lock
-     * - abort the active fetch/SSE request
-     * - update transient UI status
-     *
-     * It must not invent provider/degraded metadata. Runtime truth still comes
-     * from the backend response path when a request completes normally.
-     */
-    // Keep the submit lock held until the stream's finally block.
-    if (!submitInFlightRef.current) return;
-
-    const activeController = activeRequestControllerRef.current;
-
-    if (activeController && !activeController.signal.aborted) {
-      activeController.abort();
+    const controller = activeRequestControllerRef.current;
+    if (controller && !controller.signal.aborted) {
+      controller.abort();
     }
 
+    // No timer: status cleanup belongs to the same request that owns the lock.
     setProcessingStatus(REQUEST_CANCELLED_MESSAGE);
-
-    clearPendingStatusTimer();
-
-    if (typeof window !== 'undefined') {
-      clearStatusTimerRef.current = window.setTimeout(() => {
-        setProcessingStatus('');
-        clearStatusTimerRef.current = null;
-      }, CLEAR_CANCEL_STATUS_DELAY_MS);
-    }
-  }, [
-    activeRequestControllerRef,
-    clearPendingStatusTimer,
-    setProcessingStatus,
-    submitInFlightRef,
-  ]);
+  }, [submitInFlightRef, activeRequestControllerRef, setProcessingStatus]);
 
   return { stopActiveRequest };
 }
