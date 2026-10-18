@@ -12,6 +12,7 @@ import Image from "next/image";
 import {
   Bell,
   Binary,
+  ChevronDown,
   Bot as BotIcon,
   LayoutGrid,
   Loader2,
@@ -107,10 +108,17 @@ const PRIMARY_NAV: Array<{
   items: NavItem[];
 }> = [
   {
-    section: "Assistant",
+    section: "Start here",
     items: [
       { key: "chat", label: "Chat", icon: MessageSquare },
-      { key: "commsCenter", label: "Comms Center", icon: Bell },
+      { key: "commsCenter", label: "Messages & channels", icon: Bell },
+    ],
+  },
+  {
+    section: "Explore",
+    items: [
+      { key: "agentsOverview", label: "Automations", icon: BotIcon },
+      { key: "pluginOverview", label: "Tools & plugins", icon: PlugZap },
     ],
   },
   {
@@ -132,7 +140,6 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
     label: "Agents & Workflows",
     icon: Binary,
     items: [
-      { key: "agentsOverview", label: "Automation Overview", icon: LayoutGrid },
       { key: "agents", label: "Agents", icon: BotIcon },
       { key: "tasks", label: "Tasks", icon: ScrollText },
       { key: "jobs", label: "Jobs", icon: LayoutGrid },
@@ -143,6 +150,7 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
+  const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
   const [backendCheckRetries, setBackendCheckRetries] = useState(0);
@@ -478,11 +486,27 @@ export default function DashboardPage() {
                 <Separator className="mx-2 bg-border/50" />
 
                 <SidebarGroup>
-                  <SidebarGroupLabel className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground/75">
-                    Agents & Plugins
-                  </SidebarGroupLabel>
+                  <button
+                    type="button"
+                    aria-expanded={advancedToolsOpen}
+                    aria-controls="karen-advanced-navigation"
+                    onClick={() => setAdvancedToolsOpen((open) => !open)}
+                    className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs font-semibold text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid="advanced-tools-toggle"
+                  >
+                    <span>Advanced tools</span>
+                    <ChevronDown
+                      aria-hidden="true"
+                      className={`h-4 w-4 transition-transform ${advancedToolsOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
 
-                  <div className="mt-4 space-y-4 px-2">
+                  <div
+                    id="karen-advanced-navigation"
+                    data-testid="advanced-tools-content"
+                    hidden={!advancedToolsOpen}
+                    className={advancedToolsOpen ? "mt-3 space-y-4 px-2" : "hidden"}
+                  >
                     {RUNTIME_SUBGROUPS.map((subgroup) => {
                       const SubgroupIcon = subgroup.icon;
 
@@ -518,21 +542,10 @@ export default function DashboardPage() {
                     <div>
                       <p className="mb-2 flex items-center text-[10px] font-semibold uppercase text-muted-foreground/60">
                         <PlugZap className="mr-1.5 h-3 w-3" />
-                        Plugins
+                        Plugin pages
                       </p>
 
                       <SidebarMenu>
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            onClick={() => setActiveMainView("pluginOverview")}
-                            isActive={activeMainView === "pluginOverview"}
-                            className="h-8 w-full text-xs"
-                          >
-                            <LayoutGrid className="h-3.5 w-3.5" />
-                            Plugin Overview
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-
                         {!pluginsLoading &&
                           sidebarEntries.map((entry) => (
                             <SidebarMenuItem key={entry.viewKey}>
