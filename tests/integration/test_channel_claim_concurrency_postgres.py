@@ -172,11 +172,43 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_id=str(tenant_b), delivery_id=str(delivery), lease_seconds=90,
         ) is None
 
+        # A second host cannot finalize the first host's reservation,
+        # even if it fabricates provider success evidence.
+        from ai_karen_engine.extensions.channels.contracts import (
+            ChannelDeliveryReceipt, ChannelDeliveryState,
+        )
+        false_receipt = ChannelDeliveryReceipt(
+            delivery_id=str(delivery),
+            state=ChannelDeliveryState.SENT,
+            provider_message_id="not-verified-by-this-claim",
+        )
+        assert await SqlChannelRepository().finalize_outbound_claim(
+            tenant_id=str(tenant_a),
+            claim_token=str(uuid.uuid4()),
+            receipt=false_receipt,
+        ) is False
+        assert await SqlChannelRepository().finalize_outbound_claim(
+            tenant_id=str(tenant_b),
+            claim_token=winner.claim_token,
+            receipt=false_receipt,
+        ) is False
+        assert await raw.fetchval(
+            "SELECT status FROM public.channel_outbox WHERE delivery_id=$1",
+            delivery,
+        ) == "accepted"
+
         await raw.execute(
             """UPDATE public.channel_outbox SET claim_expires_at =
                clock_timestamp() - interval '10 seconds'
                WHERE delivery_id = $1""", delivery,
         )
+        # Once the lease expires, even its original holder cannot
+        # manufacture a late SENT result. Quarantine owns the outcome.
+        assert await SqlChannelRepository().finalize_outbound_claim(
+            tenant_id=str(tenant_a),
+            claim_token=winner.claim_token,
+            receipt=false_receipt,
+        ) is False
         quarantined = await SqlChannelRepository().quarantine_expired_outbound_claims(
             tenant_id=str(tenant_a),
         )
