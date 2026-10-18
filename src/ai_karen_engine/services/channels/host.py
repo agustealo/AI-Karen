@@ -159,7 +159,7 @@ class ChannelHostServices:
         """Canonical live principal and policy gate before consent SQL."""
         if not self._initialized or self._closed or self.activation is None:
             raise PermissionError("Channel consent authority unavailable")
-        connection = await self.repository.get_enabled_connection(
+        connection = await self.repository.get_connection(
             tenant_id=tenant_id, connection_id=connection_id,
         )
         if (
