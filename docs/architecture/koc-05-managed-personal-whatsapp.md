@@ -87,3 +87,13 @@ independent acceptance gates and can never be assumed from an owner row.
   revoked=false on repeated revocation as a provider connection state.
 - A separately authenticated and audited operator provisioning endpoint and
   vetted managed provider are required before users can begin pairing.
+
+## Read-only consumer consent status
+
+GET /api/channels/personal/{connection_id}/{provider_id}/consent uses the
+same authenticated identity, exact persisted connection ownership, fresh
+channel.consent policy plan, and ChannelHost read authority as accept/revoke.
+It reports a policy-version-matching, unrevoked acknowledgement only.
+Neither acknowledged nor revoked consent establishes a real QR session.
+The response explicitly reports paired=false and provider_unlinked=false;
+provider status must be a separate verified transport-owned observation.
