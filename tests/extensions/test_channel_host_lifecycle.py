@@ -750,6 +750,49 @@ async def test_personal_pairing_consent_requires_current_policy_and_persisted_co
 
 
 @pytest.mark.asyncio
+async def test_personal_risk_consent_rejects_unconfigured_provider_but_allows_revoke():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="personal-1", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=True)
+    host.repository.acknowledge_personal_pairing_risk = AsyncMock()
+    host.repository.revoke_personal_pairing_consent = AsyncMock(return_value=True)
+    host.activation._authorize = AsyncMock()
+    args = dict(
+        tenant_id=tenant, connection_id="personal-1", user_id=user,
+        session_id="session", provider_id="unregistered-provider",
+        authorized_plan=AuthorizedExecutionPlan(
+            execution_id="consent-unregistered",
+            policy_decision_id="decision-unregistered",
+            authorized_user_id=user, authorized_tenant_id=tenant,
+            allowed_plugins=["telegram-bot"],
+            allowed_capabilities=["channel.consent"],
+        ),
+    )
+    with pytest.raises(PermissionError, match="not configured"):
+        await host.acknowledge_personal_pairing_risk(
+            **args, accepted=True,
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+    host.repository.acknowledge_personal_pairing_risk.assert_not_awaited()
+    assert await host.revoke_personal_pairing_risk(**args)
+    host.repository.revoke_personal_pairing_consent.assert_awaited_once()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_personal_pairing_consent_cannot_cross_tenants():
     from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
     from ai_karen_engine.extensions.channels.contracts import ChannelConnection
