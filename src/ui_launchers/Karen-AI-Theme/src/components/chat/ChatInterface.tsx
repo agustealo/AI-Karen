@@ -1033,7 +1033,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
   const [processingStatus, setProcessingStatus] = useState('');
   const [streamedContent, setStreamedContent] = useState('');
-  const [isEditingDuringProcessing, setIsEditingDuringProcessing] = useState(false);
   const activeRequestControllerRef = useRef<AbortController | null>(null);
   const processingStatusVariantRef = useRef<Record<string, number>>({});
   const [isBackendOffline, setIsBackendOffline] = useState(false);
@@ -1115,9 +1114,8 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   // Helper variables extracted for reuse
   const showStopButton = isLoading && submitInFlightRef.current;
 
-  const displayedInputValue = showStopButton && !isEditingDuringProcessing
-    ? processingStatus || DEFAULT_PROCESSING_MESSAGE
-    : input;
+  // The draft is always user-owned. Runtime status must never become input text.
+  const displayedInputValue = input;
 
 
 
@@ -1492,7 +1490,6 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
     setInput('');
     submitInFlightRef.current = true;
     setIsLoading(true);
-    setIsEditingDuringProcessing(false);
     processingStatusVariantRef.current = {};
     setProcessingStatus(resolveProcessingStatusMessage('initializing', DEFAULT_PROCESSING_MESSAGE));
     setStreamedContent('');
@@ -1954,13 +1951,12 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       submitInFlightRef.current = false;
       activeRequestControllerRef.current = null;
       setIsLoading(false);
-      setIsEditingDuringProcessing(false);
-      setProcessingStatus('');
+        setProcessingStatus('');
       setStreamedContent('');
       setStreamingMetrics(null);
     }
 
-  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, setInput, setMessages, setIsLoading, setIsEditingDuringProcessing, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, scrollChatToBottom, refreshActionableApprovals]);
+  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, setInput, setMessages, setIsLoading, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, scrollChatToBottom, refreshActionableApprovals]);
 
   // Process injected messages from other parts of the app
   useEffect(() => {
@@ -2413,28 +2409,9 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
         onSubmit={handleFormSubmit}
         displayedInputValue={displayedInputValue}
         onInputChange={setInput}
-        onKeyDown={(e) => {
-          if (
-            showStopButton &&
-            !isEditingDuringProcessing &&
-            (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete')
-          ) {
-            setIsEditingDuringProcessing(true);
-            setInput('');
-          }
-        }}
-        onPaste={(e) => {
-          if (showStopButton && !isEditingDuringProcessing) {
-            e.preventDefault();
-            const pastedText = e.clipboardData.getData('text');
-            setIsEditingDuringProcessing(true);
-            setInput(pastedText);
-          }
-        }}
         isLoading={isLoading}
         isAuthLoading={isAuthLoading}
         isRecording={isRecording}
-        isEditingDuringProcessing={isEditingDuringProcessing}
         isBackendOffline={isBackendOffline}
         speechRecognitionSupported={speechRecognitionSupported}
         showStopButton={showStopButton}
