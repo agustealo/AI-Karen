@@ -273,10 +273,10 @@ class RuntimePolicyEnforcer:
         # Only trusted ingress-authenticated permission context may authorize
         # these high-impact channel actions. Transport adapters cannot supply
         # that context and RuntimePolicy remains the single decision owner.
-        channel_actions = {"channel.send", "channel.recover"}
-        requested_channel_actions = channel_actions.intersection(
-            request.requested_capabilities
-        )
+        requested_channel_actions = {
+            capability for capability in request.requested_capabilities
+            if isinstance(capability, str) and capability.startswith("channel.")
+        }
         missing_channel_permissions = requested_channel_actions.difference(
             request.permissions
         )
