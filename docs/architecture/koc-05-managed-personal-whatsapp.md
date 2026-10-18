@@ -67,3 +67,23 @@ Before consumer release, a distinct authenticated API handler must supply the
 verified actor identity/session (not a request body claim) and issue a fresh
 canonical action plan. Provider connection and managed session enrollment need
 independent acceptance gates and can never be assumed from an owner row.
+
+## Authenticated user risk consent endpoints (implemented, provider still disabled)
+
+- POST /api/channels/personal/{connection_id}/{provider_id}/consent accepts only
+  explicit accepted=true and the current policy version.
+- POST /api/channels/personal/{connection_id}/{provider_id}/revoke revokes the
+  caller's risk acknowledgement without pretending a linked device was unpaired.
+- Both routes use the existing get_current_user authentication dependency and
+  resolve durable tenant and user UUIDs from that principal. No caller-supplied
+  actor, tenant, session ID, RBAC plan, or installation ID is trusted.
+- Each request creates a fresh server-side policy execution context and asks
+  ChannelActivationService.issue_action_plan for channel.consent. The host
+  revalidates owner, principal and plan before the repository side effect.
+- These endpoints do not provide a live provider token or QR; paired and
+  provider_unlinked remain explicitly false. Consent alone cannot create a
+  session and cannot initiate an outbound message.
+- The client must not treat acknowledged=false on repeated acceptance or
+  revoked=false on repeated revocation as a provider connection state.
+- A separately authenticated and audited operator provisioning endpoint and
+  vetted managed provider are required before users can begin pairing.
