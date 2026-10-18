@@ -76,8 +76,13 @@ def test_even_signed_payloads_must_match_exact_contract(overrides):
 
 def test_tampering_or_unsigned_body_cannot_advance_state():
     original = envelope()
+    original_signature = {
+        "X-Karen-Pairing-Signature": (
+            "sha256=" + hmac.new(KEY.encode(), original, hashlib.sha256).hexdigest()
+        ),
+    }
     with pytest.raises(PairingEvidenceDenied):
-        decode(original + b" ")
+        decode(original + b" ", headers=original_signature)
     with pytest.raises(PairingEvidenceDenied):
         decode(original, headers={})
     with pytest.raises(PairingEvidenceDenied):
