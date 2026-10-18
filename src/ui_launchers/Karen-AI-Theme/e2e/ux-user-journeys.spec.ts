@@ -259,3 +259,93 @@ test('UX-12: transport failure is reported without inventing an assistant answer
     'Chat request failed notice appeared and assistant count did not increase',
   );
 });
+
+test('UX-13: advanced navigation is discoverable without overwhelming the first screen', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires sanitized authenticated Karen deployment.');
+  await signIn(page);
+
+  const toggle = page.getByTestId('advanced-tools-toggle');
+  const advanced = page.getByTestId('advanced-tools-content');
+
+  await expect(page.getByText('Start here')).toBeVisible();
+  await expect(page.getByText('Explore', { exact: true })).toBeVisible();
+  await expect(page.getByText('Automations', { exact: true })).toBeVisible();
+  await expect(page.getByText('Tools & plugins', { exact: true })).toBeVisible();
+
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(advanced).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(advanced).toBeVisible();
+  await expect(advanced.getByText('Tasks', { exact: true })).toBeVisible();
+  await expect(advanced.getByText('Cron Jobs', { exact: true })).toBeVisible();
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-13',
+    'Open authenticated dashboard and expand Advanced tools',
+    'Core destinations visible; detailed routes discoverable but initially collapsed',
+    'Advanced tools expanded and Tasks / Cron Jobs became visible',
+  );
+});
+
+test('UX-14: mobile navigation returns focus to the selected workspace', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires sanitized authenticated Karen deployment.');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+
+  const trigger = page.locator('[data-sidebar="trigger"]');
+  await trigger.click();
+  const drawer = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole('button', { name: 'Messages & channels' }).click();
+  await expect(drawer).toBeHidden({ timeout: 10_000 });
+  await expect(page.getByTestId('workspace-scroll-region')).toBeVisible();
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-14',
+    'Open navigation on a 390px mobile viewport and choose Messages & channels',
+    'The mobile drawer closes and the workspace remains usable',
+    'Mobile navigation drawer closed following a destination selection',
+  );
+});
+
+test('UX-15: mobile sidebar reveals primary and advanced navigation', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasCredentials, 'Requires sanitized authenticated Karen deployment.');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+
+  const sidebarTrigger = page.getByRole('button', { name: 'Toggle Sidebar' });
+  await expect(sidebarTrigger).toBeInViewport();
+  await sidebarTrigger.click();
+
+  const mobileNav = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
+  await expect(mobileNav).toBeVisible();
+  await expect(mobileNav.getByText('Start here')).toBeVisible();
+  await expect(mobileNav.getByText('Messages & channels', { exact: true })).toBeVisible();
+  await expect(mobileNav.getByText('Tools & plugins', { exact: true })).toBeVisible();
+
+  const advanced = mobileNav.getByTestId('advanced-tools-toggle');
+  await expect(advanced).toHaveAttribute('aria-expanded', 'false');
+  await advanced.click();
+  await expect(advanced).toHaveAttribute('aria-expanded', 'true');
+  await expect(mobileNav.getByText('Cron Jobs', { exact: true })).toBeVisible();
+
+  await captureEvidence(
+    page,
+    testInfo,
+    'UX-15',
+    'Open mobile navigation at 390 x 844 and expand advanced destinations',
+    'Readable primary navigation and discoverable advanced sections in mobile sheet',
+    'Mobile sheet and advanced destinations rendered; navigation not submitted',
+  );
+});
