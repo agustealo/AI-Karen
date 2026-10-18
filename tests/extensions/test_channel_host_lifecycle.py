@@ -666,6 +666,7 @@ async def test_personal_pairing_consent_requires_current_policy_and_persisted_co
         credential_handle="vault://ref", revision=1, enabled=False,
     )
     host.repository.get_connection = AsyncMock(return_value=account)
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=True)
     host.repository.acknowledge_personal_pairing_risk = AsyncMock(return_value=True)
     host.repository.revoke_personal_pairing_consent = AsyncMock(return_value=True)
     host.activation._authorize = AsyncMock(side_effect=PermissionError("denied"))
@@ -673,7 +674,7 @@ async def test_personal_pairing_consent_requires_current_policy_and_persisted_co
         execution_id="consent-1", policy_decision_id="decision-1",
         authorized_user_id=user, authorized_tenant_id=tenant,
         allowed_plugins=["telegram-bot"],
-        allowed_capabilities=["channel.provision"],
+        allowed_capabilities=["channel.consent"],
     )
     values = dict(
         tenant_id=tenant, connection_id="personal-1",
@@ -724,6 +725,7 @@ async def test_personal_pairing_consent_cannot_cross_tenants():
     tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     other = "cccccccc-cccc-cccc-cccc-cccccccccccc"
     user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=True)
     host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
         connection_id="personal-1", tenant_id=other,
         installation_id="telegram-bot", provider_account_id="account",
@@ -740,7 +742,7 @@ async def test_personal_pairing_consent_cannot_cross_tenants():
                 execution_id="consent-2", policy_decision_id="decision-2",
                 authorized_user_id=user, authorized_tenant_id=tenant,
                 allowed_plugins=["telegram-bot"],
-                allowed_capabilities=["channel.provision"],
+                allowed_capabilities=["channel.consent"],
             ),
         )
     host.activation._authorize.assert_not_awaited()
