@@ -115,3 +115,13 @@ def test_callback_size_and_short_vault_secret_fail_closed():
         decode(b"x" * 16_385)
     with pytest.raises(PairingEvidenceDenied):
         decode(envelope(), secret="short")
+
+
+def test_conflicting_case_variant_signature_headers_rejected():
+    body = envelope()
+    signature = "sha256=" + hmac.new(KEY.encode(), body, hashlib.sha256).hexdigest()
+    with pytest.raises(PairingEvidenceDenied):
+        decode(body, headers={
+            "X-Karen-Pairing-Signature": signature,
+            "x-karen-pairing-signature": signature,
+        })
