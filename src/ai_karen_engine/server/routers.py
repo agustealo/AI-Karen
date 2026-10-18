@@ -36,6 +36,7 @@ from ai_karen_engine.api_routes.chat.websocket import router as websocket_router
 from ai_karen_engine.api_routes.channels.personal_consent import router as personal_channel_consent_router
 from ai_karen_engine.api_routes.channels.webhooks import (
     is_native_channel_webhook_path,
+    is_personal_pairing_callback_path,
     router as native_channel_webhook_router,
 )
 from ai_karen_engine.api_routes.content.communications import router as communications_center_router
@@ -224,6 +225,7 @@ def configure_authentication_middleware(app: FastAPI) -> None:
         if (
             auth_middleware.is_public_endpoint(path)
             or is_native_channel_webhook_path(path, request.method)
+            or is_personal_pairing_callback_path(path, request.method)
             or path.startswith("/metrics")
             or path.startswith("/health")
             or path.startswith("/api/health")
