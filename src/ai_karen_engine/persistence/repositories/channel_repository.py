@@ -811,7 +811,9 @@ class SqlChannelRepository:
                     WHERE o.tenant_id = CAST(:tenant AS uuid)
                       AND o.delivery_id = CAST(:delivery AS uuid)
                       AND o.status = 'accepted'
+                      AND o.attempt_count = 0
                       AND o.claim_token IS NULL
+                      AND o.claim_expires_at IS NULL
                 """),
                 {"tenant": tenant_id, "delivery": str(uuid.UUID(delivery_id))},
             )).mappings().one_or_none()
