@@ -117,6 +117,21 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_id=str(tenant_b), connection_id=connection_id,
             user_id=str(user),
         )
+        another_user = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.auth_users
+               (user_id,tenant_id,is_active,is_verified)
+               VALUES ($1,$2,true,true)""",
+            another_user, tenant_a,
+        )
+        assert not await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(another_user),
+        )
+        assert not await owner_repo.is_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(another_user),
+        )
         assert await SqlChannelRepository().is_personal_connection_owner(
             tenant_id=str(tenant_a), connection_id=connection_id, user_id=str(user),
         )
