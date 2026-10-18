@@ -427,6 +427,28 @@ class SqlChannelRepository:
         if not connection_id or not provider_id:
             raise ValueError("Consent revocation requires connection and provider")
         async with async_transaction_scope(tenant_id) as session:
+            # Pairing admission takes this SAME parent lock before reading
+            # consent. Revocation must therefore serialize with an in-flight
+            # QR or link-confirmed commit, not race an independent row update.
+            # A revocation returning successfully cannot be followed by a
+            # stale consent read from a previously waiting pairing worker.
+            owner = (await session.execute(
+                text("""
+                    SELECT c.connection_id
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND o.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id},
+            )).scalar_one_or_none()
+            if owner is None:
+                return False
             record = (await session.execute(
                 text("""
                     UPDATE public.channel_personal_pairing_consents
