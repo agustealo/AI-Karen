@@ -29,9 +29,26 @@ Project: https://github.com/evolution-foundation/evolution-api
 
 ## Acceptance
 - [x] Fail-closed eligibility and versioned consent scope evaluator with tests.
-- [ ] Durable consent store, versioned audit and revocation flow.
+- [x] Tenant-scoped consent store, versioned acknowledgement history and revocation repository.
+- [x] Dedicated channel.consent user permission and operator-assigned connection ownership gate.
+- [ ] Audited operator-only ownership assignment lifecycle and consumer endpoint; no self-assignment.
 - [ ] Qualified third-party provider and adapter with authenticated inbound webhook.
 - [ ] Live pairing, QR expiry/replay, reconnect, tenant, unlink and deletion proof.
 - [ ] One truthful Channels UI driven exclusively by backend connection state.
 
 Policy assessment is NOT an external pairing token. The governed activation path must still revalidate before side effects.
+
+## Self-consent permission boundary
+
+Normal users have only channel.consent through the canonical RBAC registry. They
+cannot provision, activate, send, recover, or manage other people's connections.
+The channel host first reads the exact tenant-scoped connection and its
+operator-assigned channel_connection_owners row, then evaluates current
+principal/RuntimePolicy with channel.consent. Consent SQL also joins owner
+assignment before accepting the risk acknowledgement, independently of host
+validation. The owner ledger cannot be created by the consent action.
+
+The owner is still assigned by a separate governed administrative process,
+which must be implemented and audited before a self-service QR UI goes live.
+A persisted acknowledgement is never sufficient to create a QR or claim a
+provider-linked session; no managed Baileys operator has been approved.
