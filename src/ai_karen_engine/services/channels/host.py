@@ -294,6 +294,58 @@ class ChannelHostServices:
             action="channel.consent", plan=authorized_plan,
         )
 
+    async def get_personal_pairing_status(
+        self, *, tenant_id: str, connection_id: str, provider_id: str,
+        user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> dict:
+        """Consumer-facing evidence status. Persisted != live provider status."""
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if connection is None:
+            raise PermissionError("Connection unavailable")
+        configured = (
+            self.settings.personal_pairing_providers.get(
+                connection.installation_id,
+            ) == provider_id
+            and "pairing_webhook_secret" in self.settings.installations.get(
+                connection.installation_id, frozenset(),
+            )
+            and connection.installation_id in self._installed
+        )
+        # An obsolete persisted link receipt cannot establish a live session.
+        if not configured:
+            return {
+                "availability": "unavailable",
+                "last_observed_phase": None,
+                "live_connected": False,
+                "qr_available": False,
+                "provider_unlinked": False,
+            }
+        snapshot = await self.repository.get_personal_pairing_snapshot(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+        )
+        return {
+            "availability": "configured",
+            "last_observed_phase": (
+                snapshot.phase.value if snapshot is not None else None
+            ),
+            "live_connected": False,
+            "qr_available": False,
+            "provider_unlinked": (
+                snapshot is not None
+                and snapshot.phase.value == "disconnected"
+                and bool(snapshot.provider_unlink_receipt_id)
+            ),
+        }
+
     async def get_personal_pairing_risk(
         self, *, tenant_id: str, connection_id: str,
         user_id: str, session_id: str, provider_id: str,
