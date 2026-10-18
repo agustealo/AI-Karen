@@ -361,10 +361,12 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
               )}
 
               {message.content && (
-                <ChatRenderedContent
-                  content={normalizedContent}
-                  emphasize={isSystemMessage}
-                />
+                <div data-testid="chat-message-content">
+                  <ChatRenderedContent
+                    content={normalizedContent}
+                    emphasize={isSystemMessage}
+                  />
+                </div>
               )}
 
               {/*

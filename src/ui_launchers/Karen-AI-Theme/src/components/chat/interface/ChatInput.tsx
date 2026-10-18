@@ -1,6 +1,6 @@
 import { FormEvent, KeyboardEvent, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Mic, MicOff } from 'lucide-react';
 import { ProviderSettingsModal } from '../const/ProviderSettingsModal';
 import { SessionHistory } from '../const/SessionHistory';
@@ -12,14 +12,11 @@ interface ChatInputProps {
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   displayedInputValue: string;
   onInputChange: (value: string) => void;
-  onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
-  onPaste: (e: React.ClipboardEvent<HTMLInputElement>) => void;
 
   // Button states
   isLoading: boolean;
   isAuthLoading: boolean;
   isRecording: boolean;
-  isEditingDuringProcessing: boolean;
   isBackendOffline: boolean;
   speechRecognitionSupported: boolean;
   showStopButton: boolean;
@@ -57,20 +54,15 @@ interface ChatInputProps {
 
 const DEFAULT_INPUT_PLACEHOLDER = 'Ask Karen anything...';
 const AUTH_LOADING_PLACEHOLDER = 'Loading your profile...';
-const EDIT_DURING_PROCESSING_PLACEHOLDER =
-  'Type while Karen is still processing...';
 const OFFLINE_PLACEHOLDER = 'Offline mode - limited functionality';
 
 export function ChatInput({
   onSubmit,
   displayedInputValue,
   onInputChange,
-  onKeyDown,
-  onPaste,
   isLoading,
   isAuthLoading,
   isRecording,
-  isEditingDuringProcessing,
   isBackendOffline,
   speechRecognitionSupported,
   showStopButton,
@@ -102,34 +94,20 @@ export function ChatInput({
   const trimmedInput = displayedInputValue.trim();
 
   const inputPlaceholder = useMemo(() => {
-    /*
-     * Placeholder priority mirrors runtime state:
-     * auth loading > editable streaming state > offline warning > live streaming status > normal prompt.
-     * This keeps transient streaming status visible without hiding hard blockers.
-     */
+    // Placeholder describes the composer, never transient runtime execution.
     if (isAuthLoading) {
       return AUTH_LOADING_PLACEHOLDER;
-    }
-
-    if (isLoading && isEditingDuringProcessing) {
-      return EDIT_DURING_PROCESSING_PLACEHOLDER;
     }
 
     if (isBackendOffline) {
       return OFFLINE_PLACEHOLDER;
     }
 
-    return streamingStatus || DEFAULT_INPUT_PLACEHOLDER;
+    return DEFAULT_INPUT_PLACEHOLDER;
   }, [
     isAuthLoading,
-    isLoading,
-    isEditingDuringProcessing,
     isBackendOffline,
-    streamingStatus,
   ]);
-
-  const canEditInput =
-    !isAuthLoading && (!showStopButton || isEditingDuringProcessing);
 
   const canUseMic =
     !isLoading && !isAuthLoading && !isBackendOffline && speechRecognitionSupported;
@@ -144,17 +122,23 @@ export function ChatInput({
     ? 'Stop current response generation'
     : 'Send message';
 
-  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    /*
-     * While Karen is streaming, the parent may allow edit-during-processing.
-     * If not enabled, we freeze input edits so the user cannot accidentally
-     * mutate the prompt attached to the active request.
-     */
-    if (!canEditInput) {
+  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    onInputChange(event.target.value);
+  };
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.defaultPrevented || event.key !== 'Enter' || event.shiftKey ||
+        event.altKey || event.ctrlKey || event.metaKey ||
+        event.nativeEvent.isComposing || event.keyCode === 229) {
       return;
     }
 
-    onInputChange(event.target.value);
+    // Enter sends; Shift+Enter inserts a newline. During generation we keep
+    // the draft editable when allowed but never start a second request.
+    event.preventDefault();
+    if (!isLoading && canSubmitMessage) {
+      event.currentTarget.form?.requestSubmit();
+    }
   };
 
   const handleSubmitButtonClick = () => {
@@ -234,6 +218,12 @@ export function ChatInput({
           </div>
         </div>
 
+        {isLoading && streamingStatus && (
+          <div role="status" aria-live="polite" className="mb-2 text-xs text-muted-foreground" data-testid="chat-processing-status">
+            {streamingStatus}
+          </div>
+        )}
+
         <form
           onSubmit={onSubmit}
           className="flex w-full items-center gap-2 sm:gap-3"
@@ -258,14 +248,13 @@ export function ChatInput({
             )}
           </Button>
 
-          <Input
-            type="text"
+          <Textarea
+            rows={2}
             value={displayedInputValue}
             onChange={handleInputChange}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
+            onKeyDown={handleComposerKeyDown}
             placeholder={inputPlaceholder}
-            className="h-11 flex-1 border-border/80 bg-card/70 text-sm shadow-inner sm:h-12 sm:text-[15px]"
+            className="min-h-12 max-h-40 flex-1 resize-y overflow-y-auto border-border/80 bg-card/70 text-sm shadow-inner sm:text-[15px]"
             data-testid="chat-input"
             disabled={isAuthLoading}
             aria-label="Chat message input"
@@ -273,8 +262,7 @@ export function ChatInput({
             aria-invalid={isBackendOffline}
             autoComplete="off"
             spellCheck
-            role="textbox"
-            aria-multiline="false"
+            aria-multiline="true"
           />
 
           <Button

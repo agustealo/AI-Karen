@@ -1,69 +1,40 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback } from 'react';
 
 const REQUEST_CANCELLED_MESSAGE = 'Request cancelled by user.';
-const CLEAR_CANCEL_STATUS_DELAY_MS = 2000;
 
+/**
+ * UI cancellation only. The owning chat request's finally block is responsible
+ * for releasing the submit lock, controller reference, and loading state.
+ * Releasing them here would let a previous aborted request race with a new one.
+ */
 export function useRequestHandlers(
   submitInFlightRef: React.MutableRefObject<boolean>,
   activeRequestControllerRef: React.MutableRefObject<AbortController | null>,
-  setIsLoading: React.Dispatch<React.SetStateAction<boolean>>,
   setProcessingStatus: React.Dispatch<React.SetStateAction<string>>,
+  setIsLoading: React.Dispatch<React.SetStateAction<boolean>>,
 ) {
-  const clearStatusTimerRef = useRef<number | null>(null);
-
-  const clearPendingStatusTimer = useCallback(() => {
-    if (clearStatusTimerRef.current === null || typeof window === 'undefined') {
+  const stopActiveRequest = useCallback(() => {
+    if (!submitInFlightRef.current) {
       return;
     }
 
-    window.clearTimeout(clearStatusTimerRef.current);
-    clearStatusTimerRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      clearPendingStatusTimer();
-    };
-  }, [clearPendingStatusTimer]);
-
-  const stopActiveRequest = useCallback(() => {
-    /*
-     * This hook owns frontend cancellation only:
-     * - clear the local submit lock
-     * - abort the active fetch/SSE request
-     * - update transient UI status
-     *
-     * It must not invent provider/degraded metadata. Runtime truth still comes
-     * from the backend response path when a request completes normally.
-     */
-    submitInFlightRef.current = false;
-
-    const activeController = activeRequestControllerRef.current;
-
-    if (activeController && !activeController.signal.aborted) {
-      activeController.abort();
+    const controller = activeRequestControllerRef.current;
+    if (!controller) {
+      // Restored local in-flight snapshots have no fetch to abort and no
+      // request finally block to release the lock. Unlock that orphan only.
+      submitInFlightRef.current = false;
+      setIsLoading(false);
+      setProcessingStatus('');
+      return;
     }
 
-    activeRequestControllerRef.current = null;
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
 
-    setIsLoading(false);
+    // A live request still owns its eventual finally cleanup.
     setProcessingStatus(REQUEST_CANCELLED_MESSAGE);
-
-    clearPendingStatusTimer();
-
-    if (typeof window !== 'undefined') {
-      clearStatusTimerRef.current = window.setTimeout(() => {
-        setProcessingStatus('');
-        clearStatusTimerRef.current = null;
-      }, CLEAR_CANCEL_STATUS_DELAY_MS);
-    }
-  }, [
-    activeRequestControllerRef,
-    clearPendingStatusTimer,
-    setIsLoading,
-    setProcessingStatus,
-    submitInFlightRef,
-  ]);
+  }, [submitInFlightRef, activeRequestControllerRef, setProcessingStatus, setIsLoading]);
 
   return { stopActiveRequest };
 }
