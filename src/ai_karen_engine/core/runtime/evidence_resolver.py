@@ -486,6 +486,18 @@ class RuntimeEvidenceResolver:
                 ctx,
                 limit=max(0, int(requirement.max_items or 0)),
             )
+        except PermissionError as exc:
+            # Ownership and authorization errors must never be treated as
+            # repository outages eligible for request-ingress recovery.
+            cognitive_context.metadata.update(
+                {
+                    "conversation_history_status": "rejected",
+                    "conversation_history_degraded": False,
+                    "conversation_history_error_type": type(exc).__name__,
+                    "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
+                }
+            )
+            return
         except Exception as exc:
             logger.warning(
                 "Runtime durable conversation resolution failed: %s",
