@@ -158,10 +158,8 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
         run: |
           # Dedicated disposable DB: the live proof recreates its own schema.
-          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \\
-            -c 'CREATE DATABASE karen_channel_test'
-          pytest tests/integration/test_channel_claim_concurrency_postgres.py \\
-            -q --timeout=120 --tb=short
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE karen_channel_test'
+          pytest tests/integration/test_channel_claim_concurrency_postgres.py -q --timeout=120 --tb=short
 
       - name: Upload coverage reports
         if: always()
