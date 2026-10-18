@@ -412,10 +412,14 @@ class RuntimeEvidenceResolver:
         # when the separate durable repository is unavailable. They are never
         # represented as persisted or server-verified facts.
         ingress = self._ingress_user_evidence(request, requirement)
-        if ingress:
+
+        def retain_authorized_ingress() -> None:
+            if not ingress:
+                return
             cognitive_context.evidence.extend(ingress)
             self._mark_resolved(cognitive_context, EvidenceSource.CONVERSATION)
-        cognitive_context.metadata["conversation_ingress_evidence_count"] = len(ingress)
+            cognitive_context.metadata["conversation_ingress_evidence_count"] = len(ingress)
+
         try:
             gateway = self._conversation_gateway or get_conversation_runtime_gateway()
             result = await gateway.load_history(
@@ -442,6 +446,7 @@ class RuntimeEvidenceResolver:
                     "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
                 }
             )
+            retain_authorized_ingress()
             return
 
         cognitive_context.metadata.update(result.to_metadata())
@@ -455,6 +460,7 @@ class RuntimeEvidenceResolver:
                 cognitive_context.metadata["conversation_history_error_type"] = (
                     result.error_type
                 )
+            retain_authorized_ingress()
             return
 
         now = datetime.now(timezone.utc)
