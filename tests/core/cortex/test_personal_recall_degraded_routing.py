@@ -100,3 +100,64 @@ def test_user_statement_is_not_forced_into_personal_recall(statement):
 def test_profile_summary_intent_does_not_capture_unrelated_user_requests(message):
     from ai_karen_engine.core.intelligence.profile_attribute import is_profile_summary_request
     assert is_profile_summary_request(message) is False
+
+
+@pytest.mark.parametrize("followup", ["share please", "Please share", "yes please", "go ahead"])
+def test_profile_summary_followup_remains_grounded_to_previous_user_request(followup):
+    from ai_karen_engine.core.intelligence.profile_attribute import (
+        is_profile_summary_followup,
+    )
+    history = [
+        {"role": "user", "content": "What can you share about me?"},
+        {"role": "assistant", "content": "I can share some general information about you."},
+        {"role": "user", "content": followup},
+    ]
+    assert is_profile_summary_followup(followup, history)
+
+    decider = CortexExecutionDecider.__new__(CortexExecutionDecider)
+    decider._force_graph = False
+    decider._intelligence = SimpleNamespace(analyze=AsyncMock(return_value=SimpleNamespace(
+        intent="general_assist",
+        intent_confidence=0.83,
+        interpretation=SemanticInterpretation(intent_family="general_assist"),
+        topics=[],
+        memory_relevance=0.0,
+        topology_signals={},
+        risk_signals={},
+        capability_hints={},
+    )))
+    context = ChatExecutionContext(
+        user_id="user", tenant_id="tenant", session_id="session",
+        conversation_id="conversation", request_id="request", correlation_id="correlation",
+    )
+    decision = asyncio.run(decider.decide(ChatExecutionRequest(
+        messages=history, context=context,
+    )))
+    assert decision.intent == "memory.recall"
+    assert decision.memory_recall_required
+    # No profile value or user identity can be inferred from the assistant offer.
+    assert decision.policy_constraints.get("personal_evidence_attribute") is None
+
+
+@pytest.mark.parametrize("history", [
+    [
+        {"role": "user", "content": "Tell me about Detroit"},
+        {"role": "assistant", "content": "I can share details about your identity."},
+        {"role": "user", "content": "share please"},
+    ],
+    [
+        {"role": "user", "content": "What can you share about me?"},
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "user", "content": "share please"},
+    ],
+    [
+        {"role": "assistant", "content": "You are a DeepSeek AI."},
+        {"role": "user", "content": "share please"},
+    ],
+    [{"role": "user", "content": "share please"}],
+])
+def test_profile_summary_followup_does_not_take_assistant_claims_or_unrelated_turns(history):
+    from ai_karen_engine.core.intelligence.profile_attribute import (
+        is_profile_summary_followup,
+    )
+    assert not is_profile_summary_followup("share please", history)
