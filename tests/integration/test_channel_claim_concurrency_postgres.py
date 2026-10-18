@@ -103,10 +103,19 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             delivery, tenant_a, connection_id, inbox,
         )
 
-        await raw.execute(
-            """INSERT INTO public.channel_connection_owners
-               (tenant_id,connection_id,user_id) VALUES ($1,$2,$3)""",
-            tenant_a, connection_id, user,
+        # Governed repository only assigns the first active verified owner.
+        owner_repo = SqlChannelRepository()
+        assert await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user),
+        )
+        assert not await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user),
+        )
+        assert not await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_b), connection_id=connection_id,
+            user_id=str(user),
         )
         assert await SqlChannelRepository().is_personal_connection_owner(
             tenant_id=str(tenant_a), connection_id=connection_id, user_id=str(user),
