@@ -317,7 +317,7 @@ test('UX-14: mobile navigation returns focus to the selected workspace', async (
   );
 });
 
-test('UX-14: mobile sidebar reveals primary and advanced navigation', async ({
+test('UX-15: mobile sidebar reveals primary and advanced navigation', async ({
   page,
 }, testInfo) => {
   test.skip(!hasCredentials, 'Requires sanitized authenticated Karen deployment.');
@@ -343,7 +343,7 @@ test('UX-14: mobile sidebar reveals primary and advanced navigation', async ({
   await captureEvidence(
     page,
     testInfo,
-    'UX-14',
+    'UX-15',
     'Open mobile navigation at 390 x 844 and expand advanced destinations',
     'Readable primary navigation and discoverable advanced sections in mobile sheet',
     'Mobile sheet and advanced destinations rendered; navigation not submitted',
