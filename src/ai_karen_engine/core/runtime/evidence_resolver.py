@@ -460,7 +460,8 @@ class RuntimeEvidenceResolver:
                 cognitive_context.metadata["conversation_history_error_type"] = (
                     result.error_type
                 )
-            retain_authorized_ingress()
+            if result.status == "failed":
+                retain_authorized_ingress()
             return
 
         now = datetime.now(timezone.utc)
