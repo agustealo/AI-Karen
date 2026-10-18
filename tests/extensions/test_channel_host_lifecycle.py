@@ -82,6 +82,35 @@ async def test_disabled_app_lifecycle_does_not_start_any_channel(monkeypatch):
     assert app.state.channel_host_services is None
 
 
+def test_personal_pairing_registry_is_explicit_and_requires_signing_secret(monkeypatch):
+    monkeypatch.setenv("KAREN_CHANNEL_HOST_ENABLED", "true")
+    monkeypatch.setenv("KAREN_CHANNEL_SERVICE_PRINCIPAL_ID", "channel-host-runtime")
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_HOST_INSTALLATIONS_JSON",
+        '{"telegram-bot":["webhook_secret","bot_token"]}',
+    )
+    monkeypatch.delenv("KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON", raising=False)
+    assert load_channel_host_settings().personal_pairing_providers == {}
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON",
+        '{"telegram-bot":"managed-operator"}',
+    )
+    with pytest.raises(ValueError, match="signing secret"):
+        load_channel_host_settings()
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_HOST_INSTALLATIONS_JSON",
+        '{"telegram-bot":["webhook_secret","bot_token","pairing_webhook_secret"]}',
+    )
+    actual = load_channel_host_settings()
+    assert actual.personal_pairing_providers == {"telegram-bot": "managed-operator"}
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON",
+        '{"not-installed":"managed-operator"}',
+    )
+    with pytest.raises(ValueError, match="signing secret"):
+        load_channel_host_settings()
+
+
 def test_enabled_host_needs_configured_operator_and_transport_registry(monkeypatch):
     monkeypatch.setenv("KAREN_CHANNEL_HOST_ENABLED", "true")
     monkeypatch.setenv("KAREN_CHANNEL_HOST_INSTALLATIONS_JSON", "{}")
