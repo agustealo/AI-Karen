@@ -106,6 +106,26 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def is_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+    ) -> bool:
+        """Only operator-assigned exact tenant connection owner can self-consent."""
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not connection_id:
+            raise ValueError("Connection is required for ownership check")
+        async with async_transaction_scope(tenant_id) as session:
+            found = (await session.execute(
+                text("""
+                    SELECT 1 FROM public.channel_connection_owners
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "user": user_id},
+            )).scalar_one_or_none()
+        return found is not None
+
     async def get_personal_pairing_consent(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         provider_id: str,
@@ -172,6 +192,10 @@ class SqlChannelRepository:
                            :provider, :version
                     FROM public.channel_connections c
                     JOIN public.auth_users u ON u.tenant_id = c.tenant_id
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                     AND o.user_id = u.user_id
                     WHERE c.tenant_id = CAST(:tenant AS uuid)
                       AND c.connection_id = :connection
                       AND u.user_id = CAST(:user AS uuid)
