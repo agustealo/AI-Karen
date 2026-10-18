@@ -98,6 +98,48 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             delivery, tenant_a, connection_id, inbox,
         )
 
+        # Prove FORCE RLS using a genuinely non-owner database role. A
+        # superuser's tenant-filtered SELECT would not exercise PostgreSQL
+        # row-level security and is insufficient evidence of isolation.
+        await raw.execute("CREATE ROLE karen_channel_rls_probe NOLOGIN")
+        await raw.execute(
+            "GRANT USAGE ON SCHEMA public TO karen_channel_rls_probe"
+        )
+        await raw.execute(
+            "GRANT SELECT ON public.channel_inbox, public.channel_outbox "
+            "TO karen_channel_rls_probe"
+        )
+        async with raw.transaction():
+            await raw.execute("SET LOCAL ROLE karen_channel_rls_probe")
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_a),
+            )
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_inbox"
+            ) == 1
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_outbox"
+            ) == 1
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_b),
+            )
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_inbox"
+            ) == 0
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_outbox"
+            ) == 0
+        await raw.execute(
+            "REVOKE SELECT ON public.channel_inbox, public.channel_outbox "
+            "FROM karen_channel_rls_probe"
+        )
+        await raw.execute(
+            "REVOKE USAGE ON SCHEMA public FROM karen_channel_rls_probe"
+        )
+        await raw.execute("DROP ROLE karen_channel_rls_probe")
+
         engine = create_async_engine(
             "postgresql+asyncpg://" + dsn.split("://", 1)[1],
             pool_size=4, max_overflow=0,
