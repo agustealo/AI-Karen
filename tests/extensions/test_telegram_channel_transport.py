@@ -270,3 +270,33 @@ async def test_generic_plugin_hook_cannot_act_as_ai_or_delivery_path():
     with pytest.raises(PermissionError, match="no generic hook"):
         await adapter.execute_hook(None, None)
     client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message_id", [0, -1, True, "432", None])
+async def test_invalid_telegram_message_id_never_proves_sent(message_id):
+    _, adapter, _, client = load_transport(response=httpx.Response(
+        200, json={"ok": True, "result": {
+            "message_id": message_id, "chat": {"id": 901},
+        }},
+    ))
+    await adapter.start(connection=connection())
+    receipt = await adapter.send(connection=connection(), delivery=delivery())
+    assert receipt.state is ChannelDeliveryState.UNKNOWN
+    assert receipt.provider_message_id is None
+    client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    {"ok": False, "result": {"message_id": 432, "chat": {"id": 901}}},
+    {"ok": True, "result": {"message_id": 432, "chat": {"id": "901"}}},
+    {"ok": True, "result": {"message_id": 432, "chat": {"id": True}}},
+])
+async def test_inconsistent_telegram_success_body_is_unknown(body):
+    _, adapter, _, client = load_transport(response=httpx.Response(200, json=body))
+    await adapter.start(connection=connection())
+    receipt = await adapter.send(connection=connection(), delivery=delivery())
+    assert receipt.state is ChannelDeliveryState.UNKNOWN
+    assert receipt.provider_message_id is None
+    client.post.assert_awaited_once()
