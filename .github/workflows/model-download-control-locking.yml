@@ -4,9 +4,35 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/intelligence/**"
+      - "src/ai_karen_engine/api_routes/models/**"
+      - "src/ai_karen_engine/services/model_download/**"
+      - "src/ai_karen_engine/services/model_management/**"
+      - "src/ai_karen_engine/persistence/**"
+      - "scripts/ci/start-postgres-container.sh"
+      - "tests/integration/test_model_download_*.py"
+      - "tests/integration/test_recommended_model_live_source.py"
+      - "tests/core/model_runtime/**"
+      - "requirements/ci/**"
+      - ".github/workflows/model-download-control-locking.yml"
   push:
     branches:
       - main
+    paths:
+      - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/intelligence/**"
+      - "src/ai_karen_engine/api_routes/models/**"
+      - "src/ai_karen_engine/services/model_download/**"
+      - "src/ai_karen_engine/services/model_management/**"
+      - "src/ai_karen_engine/persistence/**"
+      - "scripts/ci/start-postgres-container.sh"
+      - "tests/integration/test_model_download_*.py"
+      - "tests/integration/test_recommended_model_live_source.py"
+      - "tests/core/model_runtime/**"
+      - "requirements/ci/**"
+      - ".github/workflows/model-download-control-locking.yml"
   workflow_dispatch:
     inputs:
       verify_recommended_model_sources:
