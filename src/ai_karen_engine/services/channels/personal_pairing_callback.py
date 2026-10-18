@@ -63,10 +63,13 @@ def verify_personal_pairing_callback(
         or now.tzinfo is None
     ):
         raise PairingEvidenceDenied("Invalid signed callback prerequisites")
-    signature = next(
-        (value for key, value in headers.items()
-         if key.lower() == "x-karen-pairing-signature"), None,
-    )
+    signatures = [
+        value for key, value in headers.items()
+        if key.lower() == "x-karen-pairing-signature"
+    ]
+    if len(signatures) != 1:
+        raise PairingEvidenceDenied("Exactly one callback signature required")
+    signature = signatures[0]
     if not isinstance(signature, str) or len(signature) != 71 or not signature.startswith("sha256="):
         raise PairingEvidenceDenied("Signed callback required")
     sig_hex = signature[7:]
