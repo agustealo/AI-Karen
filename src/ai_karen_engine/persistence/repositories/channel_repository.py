@@ -106,6 +106,38 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def assign_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+    ) -> bool:
+        """Assign once, only if the target is an active verified tenant user.
+
+        The host must authorize a verified channel operator first. A different
+        owner cannot be replaced here, including after risk acknowledgement.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Connection is required for ownership assignment")
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_connection_owners
+                        (tenant_id, connection_id, user_id)
+                    SELECT c.tenant_id, c.connection_id, u.user_id
+                    FROM public.channel_connections c
+                    JOIN public.auth_users u ON u.tenant_id = c.tenant_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND u.user_id = CAST(:user AS uuid)
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ON CONFLICT DO NOTHING
+                    RETURNING user_id
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "user": user_id},
+            )).scalar_one_or_none()
+        return row is not None
+
     async def is_personal_connection_owner(
         self, *, tenant_id: str, connection_id: str, user_id: str,
     ) -> bool:
