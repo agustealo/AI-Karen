@@ -748,3 +748,59 @@ async def test_personal_pairing_consent_cannot_cross_tenants():
     host.activation._authorize.assert_not_awaited()
     host.repository.acknowledge_personal_pairing_risk.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_self_consent_refuses_other_connection_owner_even_with_valid_plan():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="personal-1", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    host.repository.is_personal_connection_owner = AsyncMock(return_value=False)
+    host.repository.acknowledge_personal_pairing_risk = AsyncMock()
+    host.activation._authorize = AsyncMock()
+    plan = AuthorizedExecutionPlan(
+        execution_id="consent-owner-check", policy_decision_id="decision-owner",
+        authorized_user_id=user, authorized_tenant_id=tenant,
+        allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.consent"],
+    )
+    with pytest.raises(PermissionError, match="connection owner"):
+        await host.acknowledge_personal_pairing_risk(
+            tenant_id=tenant, connection_id="personal-1",
+            user_id=user, session_id="session", provider_id="approved-operator",
+            accepted=True, policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+            authorized_plan=plan,
+        )
+    host.activation._authorize.assert_not_awaited()
+    host.repository.acknowledge_personal_pairing_risk.assert_not_awaited()
+    await host.shutdown()
+
+
+def test_normal_user_has_consent_but_no_channel_admin_rights():
+    from ai_karen_engine.auth.rbac_middleware import (
+        Permission, get_rbac_manager,
+    )
+
+    permissions = get_rbac_manager().get_user_permissions({
+        "user_id": "user-1", "tenant_id": "tenant-1",
+        "roles": ["user"], "permissions": [],
+    })
+    assert Permission.CHANNEL_CONSENT in permissions
+    for forbidden in (
+        Permission.CHANNEL_PROVISION, Permission.CHANNEL_ACTIVATE,
+        Permission.CHANNEL_DEACTIVATE, Permission.CHANNEL_RECOVER,
+        Permission.CHANNEL_SEND,
+    ):
+        assert forbidden not in permissions
