@@ -1570,6 +1570,13 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
 
         const streamRequestPayload = {
           message: userMessage.content,
+          // Same-session user assertions remain provisional until the backend
+          // confirms durable history. Never send assistant/system/tool text.
+          recent_user_messages: messages
+            .filter((item) => item.role === 'user' && typeof item.content === 'string')
+            .map((item) => item.content.trim())
+            .filter((content) => content.length > 0 && content.length <= 500)
+            .slice(-12),
           session_id: currentSessionRef.current?.runtimeSessionId || sessionIdRef.current,
           conversation_id: sessionIdRef.current,
           preferred_llm_provider: preferredProvider,

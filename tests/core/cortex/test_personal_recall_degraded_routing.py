@@ -56,3 +56,32 @@ def test_personal_recall_cortex_overrides_unrelated_ml_intent(question, attribut
     assert decision.intent == "memory.recall"
     assert decision.memory_recall_required
     assert decision.policy_constraints.get("personal_evidence_attribute") == attribute
+
+
+@pytest.mark.parametrize("statement", [
+    "Hello",
+    "My name is Zeus",
+    "I grew up in NYC",
+])
+def test_user_statement_is_not_forced_into_personal_recall(statement):
+    """A disclosure is not a question asking the assistant to retrieve it."""
+    decider = CortexExecutionDecider.__new__(CortexExecutionDecider)
+    decider._force_graph = False
+    decider._intelligence = SimpleNamespace(analyze=AsyncMock(return_value=SimpleNamespace(
+        intent="general_assist",
+        intent_confidence=0.83,
+        interpretation=SemanticInterpretation(intent_family="general_assist"),
+        topics=[],
+        memory_relevance=0.0,
+        topology_signals={},
+        risk_signals={},
+        capability_hints={},
+    )))
+    ctx = ChatExecutionContext(
+        user_id="user", tenant_id="tenant", session_id="session",
+        conversation_id="conversation", request_id="request", correlation_id="correlation",
+    )
+    request = ChatExecutionRequest(messages=[{"role": "user", "content": statement}], context=ctx)
+    decision = asyncio.run(decider.decide(request))
+    assert decision.intent != "memory.recall"
+    assert decision.policy_constraints.get("personal_evidence_attribute") is None
