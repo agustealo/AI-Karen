@@ -202,3 +202,24 @@ behind a held parent lock and a subsequent link confirmation is rejected.
 No managed pairing vendor has been vetted or configured by default. The
 callback signing contract is an internal integration prerequisite, not
 confirmation that any commercial operator natively supports it.
+
+## Strict managed-provider callback ingress
+
+POST /api/channels/personal/callbacks/{tenant_uuid}/{connection_uuid}
+is the only personal-pairing provider callback exemption from normal session
+authentication. Its original body is capped at 16 KiB, read once and sent
+unchanged to the already canonical ChannelHost; there is no direct SQL,
+provider selection or state mutation in the API route. ChannelHost resolves
+the installed, explicitly configured personal-pairing provider and Vault key,
+authenticates the HMAC over the unmodified body and delegates admitted
+observations to revision-fenced repository persistence.
+
+The route returns HTTP 202 only after the host method finishes, never on
+missing host, invalid evidence or storage failure. Error responses do not
+include signing keys, native bodies or provider messages. No managed vendor
+is configured by default, and no QR payload/session is generated.
+
+This is an internal callback integration contract. Any later hosted operator
+must be vetted for compatibility with this signed envelope, custody and
+deletion/remote-unlink requirements before enablement. The backend's
+callback mock tests do not constitute vendor integration testing.
