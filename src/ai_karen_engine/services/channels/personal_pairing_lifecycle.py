@@ -76,8 +76,6 @@ def apply_pairing_observation(
         raise PairingEvidenceDenied("Timezone-aware server and event timestamps required")
     if (
         not observation.authenticated
-        or not provider_vetted_and_enabled
-        or not consent_current
         or not snapshot.tenant_id
         or not snapshot.connection_id
         or not snapshot.provider_id
@@ -89,6 +87,9 @@ def apply_pairing_observation(
         or observation.observed_at > now
     ):
         raise PairingEvidenceDenied("Provider evidence or pairing scope not authorized")
+    if observation.event in (PairingEvent.QR_ISSUED, PairingEvent.LINK_CONFIRMED):
+        if not provider_vetted_and_enabled or not consent_current:
+            raise PairingEvidenceDenied("Fresh consent and approved provider required for pairing")
     if observation.event is PairingEvent.QR_ISSUED:
         expiry = observation.qr_expires_at
         if (
