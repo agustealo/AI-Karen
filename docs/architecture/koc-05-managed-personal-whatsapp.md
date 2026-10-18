@@ -117,3 +117,31 @@ Do not publish these states as live provider truth until session persistence,
 signed provider events, actual managed operator health, replay fencing,
 credential revocation and one-use QR retrieval are implemented and tested.
 A pure reducer alone is never a complete connection lifecycle.
+
+## Durable pairing state (migration 34)
+
+The existing SqlChannelRepository now owns an *internal-only* transaction to
+commit verified personal pairing observations. Migration 34 holds the
+tenant/connection/provider/revision-scoped phase and sequence with FORCE RLS;
+it stores no QR bytes or session credentials. This operation locks the parent
+channel_connections row and reads the operator-assigned owner and latest
+consent **inside the same transaction** before applying the pure reducer and
+persisting one revision-fenced sequence transition. Concurrent submissions
+of the same sequence cannot both commit. Stale connection revisions fail
+closed; any connection owner other than the assigned verified user is rejected.
+
+New QR creation and link confirmation still require the current policy
+version and operator eligibility. Confirmed provider unlink and failure can
+be recorded even after consent revocation or provider disablement. The
+service must not infer actual provider authorization from a Boolean field in
+an event: the future trusted host must authenticate the provider's event,
+verify a configured/vetted operator and do provider health/revocation checks
+before calling this repository method. There is intentionally **no public
+route** to write observations. The method is not a runnable Baileys adapter.
+
+The dedicated disposable PostgreSQL test includes a two-session race against
+the actual repository SQL; it asserts one winner, stale/replayed event
+rejection, foreign owner denial, explicit link and unlink receipt recording,
+and safe revocation. Those tests must pass CI on the current commit before
+this slice can be considered verified. Vendor/operator and UI state remain
+blocked until real provider evidence exists.
