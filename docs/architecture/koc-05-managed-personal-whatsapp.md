@@ -181,3 +181,24 @@ connection or authenticated device unlink is implemented. Never display
 "connected" based on a persisted HMAC envelope alone; real operator
 provenance, session state, expiry, credential unlink and deletion verification
 must be proven with end-to-end tests before enabling this configuration.
+
+## Revocation ordering and verified callback admission
+
+The channel host now includes a Vault-secret-HMAC callback verifier scoped to
+the configured installed channel provider. This is a **host-only** integration,
+not a live Baileys endpoint or proof of a real linked personal account.
+Provider callback bytes are authenticated before parsing, and the repository
+still checks owner, connection revision, current consent and sequence.
+
+Risk revocation now locks the *same parent channel_connections row* as pairing
+observation commits before it invalidates consent. The ordering guarantee is
+that once a revocation transaction returns successfully, a pairing commit
+that starts later cannot use its old accepted consent. A pairing commit
+already serialized ahead of revocation can be recorded before revocation,
+which does NOT imply provider unlink; teardown receipt remains separate.
+Dedicated PostgreSQL integration coverage checks that revocation blocks
+behind a held parent lock and a subsequent link confirmation is rejected.
+
+No managed pairing vendor has been vetted or configured by default. The
+callback signing contract is an internal integration prerequisite, not
+confirmation that any commercial operator natively supports it.
