@@ -322,6 +322,84 @@ class ChannelHostServices:
             authorized_plan=plan, lease_seconds=lease_seconds,
         )
 
+    async def recover_outbox(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str, limit: int = 100,
+    ) -> tuple[int, int]:
+        """Explicit governed reconciliation of NEVER-ATTEMPTED messages.
+
+        This method does not activate a persisted connection, resume native
+        transport polling, or retry an ambiguous provider send. RuntimePolicy
+        admission precedes even reading the tenant's outbox identifiers; each
+        delivery independently receives a newly evaluated user-scoped plan.
+        """
+        if (
+            not self._initialized or self._closed or self.activation is None
+            or self.delivery is None
+        ):
+            raise PermissionError("Channel outbox recovery host is unavailable")
+        if not 1 <= limit <= 1000:
+            raise ValueError("Outbound recovery limit must be 1..1000")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel outbound recovery connection is unavailable")
+        plan = await self.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.send",
+        )
+        if not plan.matches_execution_scope(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+        ):
+            raise PermissionError("Outbound recovery plan scope mismatch")
+        delivery_ids = await self.repository.list_unattempted_outbound(
+            tenant_id=tenant_id, connection_id=connection_id, limit=limit,
+        )
+        dispatched = 0
+        for delivery_id in delivery_ids:
+            if self._closed:
+                break
+            preflight = await self.repository.get_delivery_preflight(
+                tenant_id=tenant_id, delivery_id=delivery_id,
+            )
+            if preflight is None:
+                continue
+            if preflight.connection_id != connection_id or preflight.user_id != user_id:
+                # An operator may not use their own plan to send a message
+                # owned by a different tenant principal.
+                logger.warning(
+                    "channel.host.outbox_recovery_principal_skipped",
+                    extra={"tenant_id": tenant_id, "connection_id": connection_id,
+                           "delivery_id": delivery_id},
+                )
+                continue
+            canonical_session = ChannelDeliveryService._session_id(
+                tenant_id=tenant_id, user_id=user_id,
+                connection_id=connection_id,
+                external_conversation_id=preflight.external_conversation_id,
+            )
+            if canonical_session != session_id:
+                continue
+            if await self.dispatch_authorized_outbox(
+                tenant_id=tenant_id, delivery_id=delivery_id,
+                user_id=user_id, session_id=session_id,
+            ):
+                dispatched += 1
+        logger.info(
+            "channel.host.outbox_recovery_completed",
+            extra={"tenant_id": tenant_id, "connection_id": connection_id,
+                   "discovered_count": len(delivery_ids),
+                   "dispatched_count": dispatched,
+                   "policy_decision_id": plan.policy_decision_id},
+        )
+        return len(delivery_ids), dispatched
+
     async def shutdown(self) -> None:
         """Revoke process-local transport capability before database cleanup."""
         if self._closed:
