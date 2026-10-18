@@ -207,11 +207,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             PairingEvent, PairingEvidenceDenied, PairingObservation, PairingPhase,
         )
 
-        def pairing_event(sequence, kind, *, receipt=None, expiry=None):
+        def pairing_event(sequence, kind, *, receipt=None, expiry=None, provider="approved-managed-connector"):
             return PairingObservation(
                 tenant_id=str(tenant_a),
                 connection_id=connection_id,
-                provider_id="approved-managed-connector",
+                provider_id=provider,
                 connection_revision=1,
                 sequence=sequence,
                 event=kind,
@@ -365,6 +365,51 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         await raw.execute("DROP ROLE karen_channel_rls_probe")
 
 
+
+        # Establish a second provider-scoped QR, then serialize a revocation
+        # ahead of a delayed link confirmation while holding the shared
+        # connection row lock. The post-revocation link must fail closed.
+        assert await SqlChannelRepository().acknowledge_personal_pairing_risk(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user), provider_id="race-provider",
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        qr_race = pairing_event(
+            1, PairingEvent.QR_ISSUED, provider="race-provider",
+            expiry=datetime.now(timezone.utc) + timedelta(seconds=90),
+        )
+        assert (await SqlChannelRepository().commit_personal_pairing_observation(
+            observation=qr_race, user_id=str(user),
+            provider_vetted_and_enabled=True,
+        )).phase is PairingPhase.QR_AVAILABLE
+        async with raw.transaction():
+            await raw.fetchrow(
+                """SELECT connection_id FROM public.channel_connections
+                   WHERE tenant_id=$1 AND connection_id=$2 FOR UPDATE""",
+                tenant_a, connection_id,
+            )
+            revocation = asyncio.create_task(
+                SqlChannelRepository().revoke_personal_pairing_consent(
+                    tenant_id=str(tenant_a), connection_id=connection_id,
+                    user_id=str(user), provider_id="race-provider",
+                )
+            )
+            await asyncio.sleep(0.1)
+            assert not revocation.done()
+        assert await revocation
+        with pytest.raises(PairingEvidenceDenied):
+            await SqlChannelRepository().commit_personal_pairing_observation(
+                observation=pairing_event(
+                    2, PairingEvent.LINK_CONFIRMED,
+                    provider="race-provider", receipt="too-late",
+                ),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        assert await raw.fetchval(
+            """SELECT phase FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2 AND provider_id='race-provider'""",
+            tenant_a, connection_id,
+        ) == "qr_available"
 
         first, second = await asyncio.gather(
             SqlChannelRepository().claim_outbound(
