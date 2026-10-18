@@ -223,3 +223,14 @@ This is an internal callback integration contract. Any later hosted operator
 must be vetted for compatibility with this signed envelope, custody and
 deletion/remote-unlink requirements before enablement. The backend's
 callback mock tests do not constitute vendor integration testing.
+
+## Provider-bound user consent
+
+A new acceptance is allowed only when the connection installation maps to
+the exact managed provider ID in canonical ChannelHostSettings and declares
+the Vault-backed pairing_webhook_secret. Runtime policy and the authenticated
+connection owner are also checked by ChannelHost; a web client cannot invent
+or switch operator identity merely by changing provider_id in the URL.
+After provider disablement, reading or revoking previously recorded consent
+remains available, so users are not locked out of their audit and privacy
+controls. Revoke still does **not** attest remote provider unlink.
