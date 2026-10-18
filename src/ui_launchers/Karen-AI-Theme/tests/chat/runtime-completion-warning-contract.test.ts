@@ -11,7 +11,7 @@ describe('Chat completion truth presentation', () => {
   it('uses explicit backend truncation truth rather than inspecting punctuation', () => {
     expect(chatSource).toContain('metadata.output_truncated === true');
     expect(chatSource).toContain('latestAssistantMetadata.outputTruncated &&');
-    expect(chatSource).toContain("This answer stopped at the model's output-token limit");
+    expect(chatSource.replaceAll('&apos;', "'")).toContain("This answer stopped at the model's output-token limit");
   });
 
   it('exposes an accessible incomplete-answer status', () => {

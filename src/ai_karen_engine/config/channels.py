@@ -22,6 +22,7 @@ _SECRET_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,49}$")
 class ChannelHostSettings:
     enabled: bool = False
     installations: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    personal_pairing_providers: Mapping[str, str] = field(default_factory=dict)
     service_principal_id: str = ""
     max_native_body_bytes: int = 65_536
     http_timeout_seconds: float = 10.0
@@ -54,6 +55,14 @@ class ChannelHostSettings:
                 )
             ):
                 raise ValueError("Invalid channel installation credential contract")
+        for installation, provider in self.personal_pairing_providers.items():
+            if (
+                installation not in self.installations
+                or not isinstance(provider, str)
+                or _IDENTIFIER.fullmatch(provider) is None
+                or "pairing_webhook_secret" not in self.installations[installation]
+            ):
+                raise ValueError("Personal pairing requires installed Vault-backed signing secret")
         return self
 
 
@@ -98,6 +107,12 @@ def load_channel_host_settings() -> ChannelHostSettings:
             ):
                 raise ValueError("Channel secret types must be distinct lists")
             declared[name] = frozenset(values)
+        pairings = json.loads(
+            os.getenv("KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON", "{}"),
+            object_pairs_hook=_unique_json_object,
+        )
+        if not isinstance(pairings, dict):
+            raise ValueError("Personal pairing provider registry must be a mapping")
         timeout = float(os.getenv("KAREN_CHANNEL_HTTP_TIMEOUT_SECONDS", "10"))
         body_budget = int(os.getenv("KAREN_CHANNEL_MAX_BODY_BYTES", "65536"))
     except (ValueError, TypeError) as exc:
@@ -106,6 +121,7 @@ def load_channel_host_settings() -> ChannelHostSettings:
     return ChannelHostSettings(
         enabled=True,
         installations=declared,
+        personal_pairing_providers=pairings,
         service_principal_id=os.getenv("KAREN_CHANNEL_SERVICE_PRINCIPAL_ID", ""),
         max_native_body_bytes=body_budget,
         http_timeout_seconds=timeout,
