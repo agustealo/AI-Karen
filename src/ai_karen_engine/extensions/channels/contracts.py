@@ -148,7 +148,7 @@ class PersonalSessionHealth(_ChannelRecord):
     def require_evidenced_state(self) -> "PersonalSessionHealth":
         if self.observed_at.tzinfo is None:
             raise ValueError("Provider health requires timezone-aware evidence")
-        if self.state is PersonalSessionHealthState.CONNECTED and not self.receipt_id:
+        if self.state is PersonalSessionHealthState.CONNECTED and not (self.receipt_id and self.receipt_id.strip()):
             raise ValueError("Connected requires an explicit provider receipt")
         return self
 
@@ -167,6 +167,8 @@ class PersonalSessionUnlinkReceipt(_ChannelRecord):
     def validate_timestamp(self) -> "PersonalSessionUnlinkReceipt":
         if self.unlinked_at.tzinfo is None:
             raise ValueError("Provider unlink evidence must be timezone-aware")
+        if not self.provider_receipt_id.strip():
+            raise ValueError("Provider unlink receipt cannot be blank")
         return self
 
 
