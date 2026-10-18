@@ -72,3 +72,40 @@ def test_explicit_governed_personal_query_is_preserved_exactly():
     assert RuntimeEvidenceResolver._memory_retrieval_query(
         request, requirement
     ) == "Where am I currently?"
+
+
+@pytest.mark.parametrize("followup", ["share please", "please share", "yes please", "go ahead"])
+def test_profile_summary_followup_retrieves_saved_profile_not_literal_followup(followup):
+    ctx = ChatExecutionContext(
+        user_id="user", tenant_id="tenant", session_id="session",
+        conversation_id="conversation", request_id="request", correlation_id="correlation",
+    )
+    original = [
+        {"role": "user", "content": "What can you share about me?"},
+        {"role": "assistant", "content": "I can help."},
+        {"role": "user", "content": followup},
+    ]
+    request = ChatExecutionRequest(messages=original, context=ctx)
+    assert RuntimeEvidenceResolver._memory_retrieval_query(
+        request, SimpleNamespace(metadata={})
+    ) == "who am i"
+    assert request.messages == original
+
+
+@pytest.mark.parametrize("history", [
+    [{"role": "user", "content": "share please"}],
+    [{"role": "assistant", "content": "What can you share about me?"},
+     {"role": "user", "content": "share please"}],
+    [{"role": "user", "content": "What can you share about me?"},
+     {"role": "user", "content": "What's the weather?"},
+     {"role": "user", "content": "share please"}],
+])
+def test_followup_without_matching_user_subject_is_not_promoted_to_profile(history):
+    ctx = ChatExecutionContext(
+        user_id="user", tenant_id="tenant", session_id="session",
+        conversation_id="conversation", request_id="request", correlation_id="correlation",
+    )
+    request = ChatExecutionRequest(messages=history, context=ctx)
+    assert RuntimeEvidenceResolver._memory_retrieval_query(
+        request, SimpleNamespace(metadata={})
+    ) == "share please"
