@@ -15,7 +15,7 @@ from ai_karen_engine.extensions.platform.core.host.base import (
     ExtensionBase, HookContext, HookPoint,
 )
 
-_ORG_URL = re.compile(r"^https://[a-z0-9][a-z0-9-]{0,62}\\.zulipchat\\.com$")
+_ORG_URL = re.compile(r"^https://[a-z0-9][a-z0-9-]{0,62}\.zulipchat\.com$")
 _TOKEN = re.compile(r"^[A-Za-z0-9]{16,256}$")
 _MAX_BODY = 65_536
 _MAX_TEXT = 4096
