@@ -1511,7 +1511,7 @@ class SqlChannelRepository:
                 raise ValueError("Credential deletion owner or revision rejected")
             existing = (await session.execute(
                 text("""
-                    SELECT request_id, session_reference, credential_scope, status
+                    SELECT request_id, user_id, session_reference, credential_scope, status
                     FROM public.channel_personal_credential_deletions
                     WHERE tenant_id = CAST(:tenant AS uuid)
                       AND connection_id = :connection
@@ -1525,8 +1525,8 @@ class SqlChannelRepository:
                  "idempotency": idempotency_key},
             )).mappings().one_or_none()
             if existing is not None:
-                if (existing["session_reference"], existing["credential_scope"]) != (
-                    session_reference, credential_scope
+                if (str(existing["user_id"]), existing["session_reference"], existing["credential_scope"]) != (
+                    user_id, session_reference, credential_scope
                 ):
                     raise ValueError("Idempotency key reused with different deletion scope")
                 return {"request_id": str(existing["request_id"]), "status": existing["status"]}
