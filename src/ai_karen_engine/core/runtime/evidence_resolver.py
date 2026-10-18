@@ -426,6 +426,19 @@ class RuntimeEvidenceResolver:
                 ctx,
                 limit=max(0, int(requirement.max_items or 0)),
             )
+        except PermissionError as exc:
+            # Authorization/ownership errors are not dependency degradation.
+            # Never promote request-local history under a rejected object scope.
+            cognitive_context.metadata.update(
+                {
+                    "conversation_history_status": "rejected",
+                    "conversation_history_count": 0,
+                    "conversation_history_degraded": True,
+                    "conversation_history_error_type": type(exc).__name__,
+                    "conversation_resolver_id": self.CONVERSATION_RESOLVER_ID,
+                }
+            )
+            return
         except Exception as exc:
             logger.warning(
                 "Runtime durable conversation resolution failed: %s",
