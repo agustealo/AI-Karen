@@ -422,6 +422,8 @@ class RuntimeEvidenceResolver:
             or EvidenceSource.CONVERSATION.value in cognitive_context.denied_sources
         ):
             return
+        if int(requirement.max_items or 0) <= 0:
+            return
         prior = [
             (index, message)
             for index, message in enumerate(request.messages[:-1])
@@ -434,7 +436,7 @@ class RuntimeEvidenceResolver:
             return
         now = datetime.now(timezone.utc)
         # No unbounded ingress fallback: even unspecified max_items is capped.
-        limit = min(max(1, int(requirement.max_items or 20)), 20)
+        limit = min(int(requirement.max_items), 20)
         prior = prior[-limit:]
         for index, message in prior:
             evidence_id = f"ingress:{ctx.correlation_id}:{index}"
@@ -513,12 +515,17 @@ class RuntimeEvidenceResolver:
         )
 
         if result.status in {"failed", "rejected"}:
-            cognitive_context.metadata["conversation_history_degraded"] = True
+            cognitive_context.metadata["conversation_history_degraded"] = (
+                result.status == "failed"
+            )
             if result.error_type:
                 cognitive_context.metadata["conversation_history_error_type"] = (
                     result.error_type
                 )
-            self._recover_ingress_conversation(request, cognitive_context, requirement)
+            # A repository ownership rejection is an authorization boundary,
+            # never a transient failure eligible for ingress fallback.
+            if result.status == "failed":
+                self._recover_ingress_conversation(request, cognitive_context, requirement)
             return
 
         now = datetime.now(timezone.utc)
