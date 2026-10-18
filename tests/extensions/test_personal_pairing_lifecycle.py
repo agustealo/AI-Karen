@@ -150,3 +150,36 @@ def test_failure_is_unknown_not_success_and_duplicate_rejected():
             unknown, event(ready, PairingEvent.FAILED),
             now=NOW, consent_current=True, provider_vetted_and_enabled=True,
         )
+
+
+def test_revoked_consent_still_allows_confirmed_session_teardown():
+    ready = initial()
+    qr = advance(
+        ready, PairingEvent.QR_ISSUED,
+        qr_expires_at=NOW + timedelta(minutes=1),
+    )
+    linked = advance(
+        qr, PairingEvent.LINK_CONFIRMED, provider_receipt_id="linked",
+    )
+    pending = apply_pairing_observation(
+        linked, event(linked, PairingEvent.DISCONNECT_REQUESTED),
+        now=NOW, consent_current=False, provider_vetted_and_enabled=False,
+    )
+    assert pending.phase is PairingPhase.DISCONNECT_PENDING
+    confirmed = apply_pairing_observation(
+        pending, event(
+            pending, PairingEvent.UNLINK_CONFIRMED,
+            provider_receipt_id="unlinked",
+        ),
+        now=NOW, consent_current=False, provider_vetted_and_enabled=False,
+    )
+    assert confirmed.phase is PairingPhase.DISCONNECTED
+    assert confirmed.provider_unlink_receipt_id == "unlinked"
+    with pytest.raises(PairingEvidenceDenied):
+        apply_pairing_observation(
+            ready, event(
+                ready, PairingEvent.QR_ISSUED,
+                qr_expires_at=NOW + timedelta(minutes=1),
+            ),
+            now=NOW, consent_current=False, provider_vetted_and_enabled=False,
+        )
