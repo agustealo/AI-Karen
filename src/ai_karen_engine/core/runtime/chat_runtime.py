@@ -548,26 +548,26 @@ class ChatRuntime:
 
         gate = await self._resolve_gate(ctx)
         if gate is not None:
-            gate_mode = getattr(gate, "mode", "gate")
+            gate_mode = str(getattr(gate, "mode", "gate"))
             gate_metadata = {
                 "gate": gate_mode,
-                "error_code": "CHAT_RUNTIME_GATED",
+                "error_code": "CHAT_RUNTIME_GATE_REJECTED",
+                "error_type": "RuntimeGateRejected",
+                "correlation_id": ctx.correlation_id,
                 "requested_provider": request.preferred_provider,
                 "requested_model": request.preferred_model,
                 "actual_provider": None,
                 "actual_model": None,
                 "runtime_engine": None,
-                "response_source": None,
+                "response_source": "runtime_gate",
                 "fallback_level": 0,
-                "fallback_reason": None,
                 "degraded_mode": True,
-                "degradation_reason": "runtime_gate",
-                "correlation_id": ctx.correlation_id,
+                "degradation_reason": "runtime_gate_rejected",
             }
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
                 status="gate",
-                metadata={"gate_mode": gate_mode, **gate_metadata},
+                metadata=gate_metadata,
             )
             yield self._enrich_chunk(
                 ChatStreamChunk(
