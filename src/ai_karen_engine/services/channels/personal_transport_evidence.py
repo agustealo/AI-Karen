@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection,
+    PersonalCredentialErasureReceipt,
     PersonalPairingQR,
     PersonalSessionHealth,
     PersonalSessionHealthState,
@@ -98,7 +99,7 @@ def validate_live_session_health(
         actual_session_reference=health.session_reference,
     )
     _require_time(health.observed_at, now=now, max_age=max_age)
-    if health.state is PersonalSessionHealthState.CONNECTED and not health.receipt_id:
+    if health.state is PersonalSessionHealthState.CONNECTED and not (health.receipt_id and health.receipt_id.strip()):
         raise PersonalTransportEvidenceDenied("Connected state lacks provider acknowledgement")
     return health.state
 
@@ -123,5 +124,41 @@ def validate_unlink_receipt(
         actual_session_reference=receipt.session_reference,
     )
     _require_time(receipt.unlinked_at, now=now, max_age=max_age)
-    if not receipt.provider_receipt_id:
+    if not receipt.provider_receipt_id.strip():
         raise PersonalTransportEvidenceDenied("Missing provider unlink receipt")
+
+
+def validate_credential_erasure_claim(
+    *,
+    receipt: PersonalCredentialErasureReceipt,
+    connection: ChannelConnection,
+    expected_provider_id: str,
+    expected_session_reference: str,
+    expected_deletion_request_id: str,
+    expected_credential_scope: str,
+    now: datetime,
+    max_age: timedelta = timedelta(minutes=5),
+) -> None:
+    """Validate a recent scoped vendor claim, without asserting verified erasure.
+
+    Only call after native vendor authentication. A human/vendor audit must
+    independently establish deletion coverage, retention and backup handling.
+    """
+    _require_scope(
+        connection=connection,
+        expected_provider_id=expected_provider_id,
+        expected_session_reference=expected_session_reference,
+        actual_provider_id=receipt.provider_id,
+        actual_connection_id=receipt.connection_id,
+        actual_connection_revision=receipt.connection_revision,
+        actual_session_reference=receipt.session_reference,
+    )
+    if (
+        not expected_deletion_request_id
+        or not expected_credential_scope
+        or receipt.deletion_request_id != expected_deletion_request_id
+        or receipt.credential_scope != expected_credential_scope
+        or not receipt.provider_receipt_id.strip()
+    ):
+        raise PersonalTransportEvidenceDenied("Credential erasure evidence scope mismatch")
+    _require_time(receipt.erased_at, now=now, max_age=max_age)
