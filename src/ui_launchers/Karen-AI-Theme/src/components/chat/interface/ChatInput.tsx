@@ -1,6 +1,6 @@
 import { FormEvent, KeyboardEvent, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Mic, MicOff } from 'lucide-react';
 import { ProviderSettingsModal } from '../const/ProviderSettingsModal';
 import { SessionHistory } from '../const/SessionHistory';
@@ -12,8 +12,8 @@ interface ChatInputProps {
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   displayedInputValue: string;
   onInputChange: (value: string) => void;
-  onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
-  onPaste: (e: React.ClipboardEvent<HTMLInputElement>) => void;
+  onKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
 
   // Button states
   isLoading: boolean;
@@ -144,7 +144,7 @@ export function ChatInput({
     ? 'Stop current response generation'
     : 'Send message';
 
-  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     /*
      * While Karen is streaming, the parent may allow edit-during-processing.
      * If not enabled, we freeze input edits so the user cannot accidentally
@@ -155,6 +155,22 @@ export function ChatInput({
     }
 
     onInputChange(event.target.value);
+  };
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    onKeyDown(event);
+    if (event.defaultPrevented || event.key !== 'Enter' || event.shiftKey ||
+        event.altKey || event.ctrlKey || event.metaKey ||
+        event.nativeEvent.isComposing || event.keyCode === 229) {
+      return;
+    }
+
+    // Enter sends; Shift+Enter inserts a newline. During generation we keep
+    // the draft editable when allowed but never start a second request.
+    event.preventDefault();
+    if (!isLoading && canSubmitMessage) {
+      event.currentTarget.form?.requestSubmit();
+    }
   };
 
   const handleSubmitButtonClick = () => {
@@ -258,14 +274,14 @@ export function ChatInput({
             )}
           </Button>
 
-          <Input
-            type="text"
+          <Textarea
+            rows={2}
             value={displayedInputValue}
             onChange={handleInputChange}
-            onKeyDown={onKeyDown}
+            onKeyDown={handleComposerKeyDown}
             onPaste={onPaste}
             placeholder={inputPlaceholder}
-            className="h-11 flex-1 border-border/80 bg-card/70 text-sm shadow-inner sm:h-12 sm:text-[15px]"
+            className="min-h-12 max-h-40 flex-1 resize-y overflow-y-auto border-border/80 bg-card/70 text-sm shadow-inner sm:text-[15px]"
             data-testid="chat-input"
             disabled={isAuthLoading}
             aria-label="Chat message input"
@@ -273,8 +289,7 @@ export function ChatInput({
             aria-invalid={isBackendOffline}
             autoComplete="off"
             spellCheck
-            role="textbox"
-            aria-multiline="false"
+            aria-multiline="true"
           />
 
           <Button
