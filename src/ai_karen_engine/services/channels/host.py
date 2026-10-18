@@ -212,6 +212,7 @@ class ChannelHostServices:
 
     async def dispatch_outbox(
         self, *, tenant_id: str, delivery_id: str,
+        user_id: str, session_id: str,
         authorized_plan: AuthorizedExecutionPlan, lease_seconds: int = 90,
     ) -> bool:
         """Dispatch an existing outbox item through the bound canonical adapter.
@@ -221,7 +222,10 @@ class ChannelHostServices:
         ChannelDeliveryService rechecks RuntimePolicy scope, lease, revision,
         principal and native receipt evidence before recording a send.
         """
-        if not self._initialized or self._closed or self.delivery is None:
+        if (
+            not self._initialized or self._closed
+            or self.delivery is None or self.activation is None
+        ):
             raise PermissionError("Channel outbound host is unavailable")
         if not isinstance(authorized_plan, AuthorizedExecutionPlan):
             raise PermissionError("RuntimePolicy outbound plan is required")
@@ -232,6 +236,15 @@ class ChannelHostServices:
         )
         if preflight is None:
             return False
+        if preflight.user_id != user_id:
+            raise PermissionError("Channel delivery principal mismatch")
+        expected_session_id = ChannelDeliveryService._session_id(
+            tenant_id=tenant_id, user_id=user_id,
+            connection_id=preflight.connection_id,
+            external_conversation_id=preflight.external_conversation_id,
+        )
+        if session_id != expected_session_id:
+            raise PermissionError("Channel delivery session mismatch")
         connection = await self.repository.get_enabled_connection(
             tenant_id=tenant_id, connection_id=preflight.connection_id,
         )
@@ -248,6 +261,14 @@ class ChannelHostServices:
             )
         ):
             raise PermissionError("Channel outbound installation is unavailable")
+        # Fresh principal/RBAC/manifest and RuntimePolicy checks are owned by
+        # the existing activation authority. The delivery service independently
+        # rechecks execution scope and lease just before network mutation.
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.send", plan=authorized_plan,
+        )
         # Dispatch owns all final authorization and DB claim fencing. The
         # host has no right to manufacture an execution plan on its behalf.
         return await self.delivery.dispatch(
