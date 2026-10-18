@@ -1,6 +1,6 @@
 # KAREN user-journey UX audit and evidence register
 
-**Status:** audit protocol established; live application journeys not yet executed.  
+**Status:** audit protocol and initial executable browser smoke coverage committed; live application journeys not yet executed.  
 **Owner:** frontend browser verification in `src/ui_launchers/Karen-AI-Theme/e2e/`.  
 **Visual provenance:** [governed screenshot contract](../assets/screenshots/README.md).
 
@@ -87,10 +87,18 @@ cd src/ui_launchers/Karen-AI-Theme
 npm run lint
 npm run typecheck
 npm run test:e2e
+# Real user-journey smoke: no mocked APIs; sign-in requires a sanitized account.
+KAREN_UX_EMAIL='<sanitized-test-email>' \
+KAREN_UX_PASSWORD='<sanitized-test-password>' \
+KAREN_BASE_URL='<live-test-deployment-url>' \
+KAREN_UX_TARGET_REVISION='<deployed-full-sha>' \
+npx playwright test e2e/ux-user-journeys.spec.ts --config=e2e/playwright.config.ts
 # The governed showcase capture needs its documented sanitized-demo
 # variables and a real application deployment:
 npm run showcase:capture
 ```
+
+The initial executable smoke covers UX-01, UX-02 and the composer portion of UX-10. The other journeys, including complete mobile response and persistence, remain outstanding. Execution artifacts contain screenshot plus structured action/expected/observed metadata. Screenshots are evidence, not permission to promote the image to the README. The credentials are never logged or included in attachments.
 
 The default generic Playwright config uses `KAREN_BASE_URL` and saves failure screenshots/videos/traces. The governed showcase uses `KAREN_SHOWCASE_BASE_URL`, a sanitized account, and revision attestation. See [capture instructions](../assets/screenshots/README.md) before invoking it.
 
