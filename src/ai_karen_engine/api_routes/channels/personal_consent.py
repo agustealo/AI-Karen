@@ -86,6 +86,51 @@ def _translate(exc: Exception) -> HTTPException:
     return HTTPException(503, "Personal channel consent unavailable")
 
 
+class ConsentStatus(BaseModel):
+    acknowledged: bool
+    policy_version: str
+    paired: bool = False
+    provider_unlinked: bool = False
+
+
+@router.get("/{connection_id}/{provider_id}/consent", response_model=ConsentStatus)
+async def get_personal_whatsapp_risk_status(
+    connection_id: UUID,
+    provider_id: str,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> ConsentStatus:
+    """Read only the caller's current persisted consent, not pairing status."""
+    if not provider_id or len(provider_id) > 128:
+        raise HTTPException(422, "Invalid managed provider identifier")
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        session_id, plan = await _authorize(
+            host=host, tenant_id=tenant_id, user_id=user_id,
+            connection_id=str(connection_id),
+        )
+        consent = await host.get_personal_pairing_risk(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            user_id=user_id, session_id=session_id,
+            provider_id=provider_id, authorized_plan=plan,
+        )
+    except Exception as exc:
+        raise _translate(exc) from None
+    valid = (
+        consent is not None
+        and consent.tenant_id == tenant_id
+        and consent.user_id == user_id
+        and consent.connection_id == str(connection_id)
+        and consent.provider_id == provider_id
+        and consent.policy_version == PERSONAL_WHATSAPP_CONSENT_VERSION
+        and consent.revoked_at is None
+    )
+    return ConsentStatus(
+        acknowledged=valid,
+        policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+    )
+
+
 @router.post("/{connection_id}/{provider_id}/consent", response_model=ConsentResult)
 async def acknowledge_personal_whatsapp_risk(
     connection_id: UUID,
