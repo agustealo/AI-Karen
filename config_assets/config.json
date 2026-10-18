@@ -140,7 +140,7 @@
     ]
   },
   "security": {
-    "jwt_secret": "${_SHARED_SECRET}",
+    "jwt_secret": "change-me-in-production-secure-key",
     "jwt_algorithm": "HS256",
     "jwt_expiration": 3600,
     "cors_origins": [
@@ -157,7 +157,7 @@
     "rate_limit_window": 60,
     "enable_auth": true,
     "enable_rate_limiting": true,
-    "secret_key": "${_SHARED_SECRET}"
+    "secret_key": "change-me-in-production-secure-key"
   },
   "monitoring": {
     "enable_metrics": true,
@@ -300,5 +300,23 @@
       "cx_id": null,
       "priority": 80
     }
+  },
+  "ml": {
+    "registry_dir": "models/registry",
+    "evaluation_dataset_version": "ml-eval-v1",
+    "default_calibration_version": "calib-v1",
+    "promotion_min_gain": 0.01,
+    "promotion_max_latency_ms": 500.0,
+    "promotion_max_ece": 0.05,
+    "promotion_min_samples": 50,
+    "shadow_sample_limit": 200,
+    "artifact_hash_algorithm": "sha256",
+    "topology_enabled": true,
+    "topology_mode": "shadow",
+    "topology_min_confidence": 0.5,
+    "topology_feature_version": "topology_features_v1",
+    "random_seed": 42,
+    "training_max_samples": 10000,
+    "training_test_size": 0.2
   }
 }

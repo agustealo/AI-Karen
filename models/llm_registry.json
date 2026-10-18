@@ -1,5 +1,5 @@
-[
-  {
+{
+  "builtin_transformers": {
     "name": "builtin_transformers",
     "provider_class": "TransformersRuntime",
     "description": "Execution adapter for Transformers",
@@ -11,7 +11,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "openai": {
     "name": "openai",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for OpenAI",
@@ -23,7 +23,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "anthropic": {
     "name": "anthropic",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Anthropic Claude",
@@ -35,7 +35,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "meta": {
     "name": "meta",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Meta AI",
@@ -47,7 +47,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "gemini": {
     "name": "gemini",
     "provider_class": "GeminiProvider",
     "description": "Execution adapter for Google Gemini",
@@ -59,7 +59,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "mistral": {
     "name": "mistral",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Mistral AI",
@@ -71,7 +71,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "groq": {
     "name": "groq",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Groq",
@@ -83,7 +83,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "xai": {
     "name": "xai",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for xAI",
@@ -95,7 +95,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "azure": {
     "name": "azure",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Microsoft Azure AI",
@@ -107,7 +107,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "amazon-nova": {
     "name": "amazon-nova",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Amazon Nova",
@@ -119,7 +119,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "qwen": {
     "name": "qwen",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Qwen",
@@ -131,7 +131,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "zai": {
     "name": "zai",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Z.ai",
@@ -143,7 +143,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "deepseek": {
     "name": "deepseek",
     "provider_class": "DeepseekProvider",
     "description": "Execution adapter for DeepSeek",
@@ -155,7 +155,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "moonshot": {
     "name": "moonshot",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Moonshot AI (Kimi)",
@@ -167,19 +167,19 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "ollama": {
     "name": "ollama",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Ollama",
     "supports_streaming": true,
-    "supports_embeddings": false,
+    "supports_embeddings": true,
     "requires_api_key": false,
     "default_model": "deepseek-r1:1.5b",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "together": {
     "name": "together",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Together AI",
@@ -191,7 +191,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "fireworks": {
     "name": "fireworks",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Fireworks AI",
@@ -203,7 +203,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "deepinfra": {
     "name": "deepinfra",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for DeepInfra",
@@ -215,7 +215,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "huggingface": {
     "name": "huggingface",
     "provider_class": "HuggingFaceProvider",
     "description": "Execution adapter for HuggingFace",
@@ -227,7 +227,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "siliconflow": {
     "name": "siliconflow",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for SiliconFlow",
@@ -239,7 +239,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "cohere": {
     "name": "cohere",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Cohere",
@@ -251,7 +251,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "novita": {
     "name": "novita",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Novita AI",
@@ -263,7 +263,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "gmi-cloud": {
     "name": "gmi-cloud",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for GMI Cloud",
@@ -275,7 +275,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "custom": {
     "name": "custom",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Custom",
@@ -287,7 +287,7 @@
     "last_health_check": null,
     "error_message": null
   },
-  {
+  "fallback": {
     "name": "fallback",
     "provider_class": "FallbackProvider",
     "description": "Execution adapter for Fallback",
@@ -298,5 +298,211 @@
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
+  },
+  "spacy/en_core_web_sm": {
+    "model_id": "spacy/en_core_web_sm",
+    "owner": "spacy",
+    "repository": "en_core_web_sm",
+    "storage_key": "spacy",
+    "revision": "8fb6f8155286360bf5486fe399e2738d1df7ded2",
+    "install_path": "/app/models/spacy/en_core_web_sm",
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 957
+      },
+      {
+        "path": "accuracy.json",
+        "size": 6320
+      },
+      {
+        "path": "config.cfg",
+        "size": 5527
+      },
+      {
+        "path": "en_core_web_sm-any-py3-none-any.whl",
+        "size": 12803381
+      },
+      {
+        "path": "LICENSE",
+        "size": 1056
+      },
+      {
+        "path": "LICENSES_SOURCES",
+        "size": 2347
+      },
+      {
+        "path": "meta.json",
+        "size": 10085
+      },
+      {
+        "path": "README.md",
+        "size": 3648
+      },
+      {
+        "path": "tokenizer",
+        "size": 77066
+      },
+      {
+        "path": "attribute_ruler/patterns",
+        "size": 14735
+      },
+      {
+        "path": "lemmatizer/lookups/lookups.bin",
+        "size": 972893
+      },
+      {
+        "path": "ner/cfg",
+        "size": 221
+      },
+      {
+        "path": "ner/model",
+        "size": 6154601
+      },
+      {
+        "path": "ner/moves",
+        "size": 1064
+      },
+      {
+        "path": "parser/cfg",
+        "size": 222
+      },
+      {
+        "path": "parser/model",
+        "size": 319909
+      },
+      {
+        "path": "parser/moves",
+        "size": 1571
+      },
+      {
+        "path": "senter/cfg",
+        "size": 23
+      },
+      {
+        "path": "senter/model",
+        "size": 197089
+      },
+      {
+        "path": "tagger/cfg",
+        "size": 615
+      },
+      {
+        "path": "tagger/model",
+        "size": 19829
+      },
+      {
+        "path": "tok2vec/cfg",
+        "size": 4
+      },
+      {
+        "path": "tok2vec/model",
+        "size": 6269370
+      },
+      {
+        "path": "vocab/key2row",
+        "size": 1
+      },
+      {
+        "path": "vocab/lookups.bin",
+        "size": 70040
+      },
+      {
+        "path": "vocab/strings.json",
+        "size": 1103983
+      },
+      {
+        "path": "vocab/vectors",
+        "size": 128
+      },
+      {
+        "path": "vocab/vectors.cfg",
+        "size": 22
+      }
+    ],
+    "total_size": 28036707,
+    "pinned": false,
+    "last_modified": "2026-10-17T21:11:44.171943+00:00",
+    "downloads": 8301,
+    "likes": 66,
+    "tags": [
+      "spacy",
+      "token-classification",
+      "en",
+      "license:mit",
+      "model-index",
+      "region:us"
+    ],
+    "license": "mit",
+    "gated": false,
+    "description": null,
+    "_karen_publication": {
+      "schema_version": 1,
+      "publication_id": "394d6c68-e5c5-4441-baaf-d17dcf357200",
+      "job_id": "mdl-a8a18d94-65f5-40d1-acd9-2cee93bff569"
+    }
+  },
+  "distilbert/distilbert-base-uncased": {
+    "model_id": "distilbert/distilbert-base-uncased",
+    "owner": "distilbert",
+    "repository": "distilbert-base-uncased",
+    "storage_key": "transformers",
+    "revision": "12040accade4e8a0f71eabdb258fecc2e7e948be",
+    "install_path": "/app/models/transformers/distilbert--distilbert-base-uncased/main",
+    "files": [
+      {
+        "path": "config.json",
+        "size": 483
+      },
+      {
+        "path": "model.safetensors",
+        "size": 267954768
+      },
+      {
+        "path": "tokenizer.json",
+        "size": 466062
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 48
+      },
+      {
+        "path": "vocab.txt",
+        "size": 231508
+      }
+    ],
+    "total_size": 268652869,
+    "pinned": false,
+    "last_modified": "2026-10-17T21:14:34.661144+00:00",
+    "downloads": 7301484,
+    "likes": 1489,
+    "tags": [
+      "transformers",
+      "pytorch",
+      "tf",
+      "jax",
+      "rust",
+      "safetensors",
+      "distilbert",
+      "fill-mask",
+      "exbert",
+      "en",
+      "dataset:bookcorpus",
+      "dataset:wikipedia",
+      "arxiv:1910.01108",
+      "license:apache-2.0",
+      "endpoints_compatible",
+      "deploy:sagemaker",
+      "deploy:azure",
+      "region:us"
+    ],
+    "license": "apache-2.0",
+    "gated": false,
+    "description": null,
+    "_karen_publication": {
+      "schema_version": 1,
+      "publication_id": "360deff5-5d1f-47b2-8249-26a6639487a6",
+      "job_id": "mdl-d9c9ea19-8e6b-4f71-ad16-ddeb38dd65a5"
+    }
   }
-]
+}
