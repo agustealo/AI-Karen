@@ -7,7 +7,7 @@ import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -15,7 +15,33 @@ from ai_karen_engine.extensions.channels.contracts import ChannelConnection
 from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
     PairingEvidenceDenied, PairingPhase, PairingSnapshot,
 )
-from tests.extensions.test_channel_host_lifecycle import fake_components
+from ai_karen_engine.config.channels import ChannelHostSettings
+from ai_karen_engine.services.channels.host import ChannelHostServices
+
+
+def fake_components():
+    adapter = SimpleNamespace(
+        bind_host_services=MagicMock(), initialize=AsyncMock(),
+        shutdown=AsyncMock(), start=AsyncMock(), stop=AsyncMock(), send=AsyncMock(),
+    )
+    kernel = SimpleNamespace(
+        initialize=AsyncMock(), cleanup=AsyncMock(),
+        get_channel_activation_manifest=lambda _: object(),
+        loader=SimpleNamespace(load_extension=MagicMock(return_value=adapter)),
+        is_canonical_channel_adapter=lambda _, candidate: candidate is adapter,
+    )
+    vault = SimpleNamespace(initialize=AsyncMock(), stop=AsyncMock())
+    client = SimpleNamespace(aclose=AsyncMock())
+    host = ChannelHostServices(
+        settings=ChannelHostSettings(
+            enabled=True,
+            installations={"telegram-bot": frozenset({"bot_token", "webhook_secret"})},
+            service_principal_id="channel-host-service",
+        ),
+        kernel=kernel, repository=SimpleNamespace(), vault=vault,
+        http_client=client,
+    )
+    return host, kernel, vault, client, adapter
 
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 CONNECTION = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
