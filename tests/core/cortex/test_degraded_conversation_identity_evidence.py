@@ -116,6 +116,19 @@ def test_repository_ownership_rejection_never_recovers_client_history():
     assert context.metadata["conversation_history_status"] == "rejected"
 
 
+
+def test_ownership_exception_never_recovers_request_ingress():
+    resolver, request, context, requirement = _scenario()
+    resolver._conversation_gateway.load_history = AsyncMock(
+        side_effect=PermissionError("conversation_user_mismatch")
+    )
+    asyncio.run(resolver._resolve_conversation(request, context, requirement))
+    assert not context.evidence
+    assert EvidenceSource.CONVERSATION.value in context.unresolved_sources
+    assert context.metadata["conversation_history_status"] == "rejected"
+    assert context.metadata["conversation_history_degraded"] is False
+
+
 def test_repository_reported_failure_can_recover_only_authorized_ingress():
     resolver, request, context, requirement = _scenario()
     resolver._conversation_gateway.load_history = AsyncMock(
