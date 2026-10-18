@@ -2487,6 +2487,8 @@ class ChatRuntime:
             "degradation_type": (result.metadata or {}).get("degradation_type"),
             "provider_attempts": getattr(result, "attempts", []) or [],
             "usage": dict((result.metadata or {}).get("usage") or {}),
+            "finish_reason": (result.metadata or {}).get("finish_reason"),
+            "output_truncated": (result.metadata or {}).get("output_truncated") is True,
             "prompt_telemetry": prompt_telemetry,
             "execution_spans": [
                 {
@@ -3281,6 +3283,8 @@ class ChatRuntime:
             "protocol": provider_meta.get("protocol"),
             "locality": provider_meta.get("locality"),
             "response_source": provider_meta.get("response_source"),
+            "finish_reason": provider_meta.get("finish_reason"),
+            "output_truncated": provider_meta.get("output_truncated") is True,
             "fallback_level": provider_meta.get("fallback_level", 0),
             "fallback_reason": provider_meta.get("fallback_reason"),
             "failure_category": self._map_failure_category(provider_meta),
