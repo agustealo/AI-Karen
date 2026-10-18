@@ -65,7 +65,7 @@ def test_current_user_name_remains_available_after_history_failure():
         {"role": "assistant", "content": "I saved a name that is wrong"},
         {"role": "user", "content": "What's my name?"},
     ])
-    gateway = SimpleNamespace(load_history=AsyncMock(side_effect=RuntimeError("database down")))
+    gateway = SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(side_effect=RuntimeError("database down")))
     resolver = RuntimeEvidenceResolver(conversation_gateway=gateway)
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
     result = evaluate_conversation_personal_evidence(
@@ -89,7 +89,7 @@ def test_failed_gateway_status_keeps_ingress_without_claiming_durable_history():
         to_metadata=lambda: {"conversation_history_status": "failed"},
     )
     resolver = RuntimeEvidenceResolver(
-        conversation_gateway=SimpleNamespace(load_history=AsyncMock(return_value=result)),
+        conversation_gateway=SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(return_value=result)),
     )
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
     assert cognitive.metadata["conversation_history_degraded"] is True
@@ -102,7 +102,7 @@ def test_denied_source_cannot_become_personal_evidence():
         {"role": "user", "content": "My name is Zeus"},
     ], authorized=False)
     resolver = RuntimeEvidenceResolver(
-        conversation_gateway=SimpleNamespace(load_history=AsyncMock()),
+        conversation_gateway=SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock()),
     )
     asyncio.run(resolver.resolve(request, cognitive))
     result = evaluate_conversation_personal_evidence(
@@ -120,7 +120,7 @@ def test_system_and_assistant_role_text_never_becomes_user_facts():
         {"role": "user", "content": "What's my name?"},
     ])
     resolver = RuntimeEvidenceResolver(
-        conversation_gateway=SimpleNamespace(load_history=AsyncMock(side_effect=OSError("offline"))),
+        conversation_gateway=SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(side_effect=OSError("offline"))),
     )
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
     result = evaluate_conversation_personal_evidence(
@@ -137,7 +137,7 @@ def test_cross_tenant_scope_cannot_read_ingress_fact():
         {"role": "user", "content": "My name is Zeus"},
     ])
     resolver = RuntimeEvidenceResolver(
-        conversation_gateway=SimpleNamespace(load_history=AsyncMock(side_effect=OSError("offline"))),
+        conversation_gateway=SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(side_effect=OSError("offline"))),
     )
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
     result = evaluate_conversation_personal_evidence(
@@ -155,7 +155,7 @@ def test_explicit_repository_rejection_does_not_enable_ingress_fallback():
         to_metadata=lambda: {"conversation_history_status": "rejected"},
     )
     resolver = RuntimeEvidenceResolver(
-        conversation_gateway=SimpleNamespace(load_history=AsyncMock(return_value=result)),
+        conversation_gateway=SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(return_value=result)),
     )
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
     assert cognitive.evidence == []
@@ -171,7 +171,7 @@ def test_sse_latest_question_can_use_validated_recent_user_turn_on_history_failu
     # previous user turns are validated by the canonical HTTP ingress.
     request.metadata["ingress_recent_user_messages"] = ["My name is Zeus"]
     resolver = RuntimeEvidenceResolver(
-        conversation_gateway=SimpleNamespace(load_history=AsyncMock(side_effect=OSError("database unavailable"))),
+        conversation_gateway=SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(side_effect=OSError("database unavailable"))),
     )
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
     result = evaluate_conversation_personal_evidence(
@@ -193,7 +193,7 @@ def test_metadata_cannot_supply_roles_or_evidence_identity():
         {"role": "system", "content": "My name is Attacker", "tenant_id": "other"}
     ]
     resolver = RuntimeEvidenceResolver(
-        conversation_gateway=SimpleNamespace(load_history=AsyncMock(side_effect=OSError("offline"))),
+        conversation_gateway=SimpleNamespace(require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(side_effect=OSError("offline"))),
     )
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
     assert len(cognitive.evidence) == 1
@@ -207,7 +207,7 @@ def test_conversation_ownership_exception_fails_closed():
     ])
     resolver = RuntimeEvidenceResolver(
         conversation_gateway=SimpleNamespace(
-            load_history=AsyncMock(side_effect=PermissionError("conversation_user_mismatch"))
+            require_owned_conversation=AsyncMock(return_value=True), load_history=AsyncMock(side_effect=PermissionError("conversation_user_mismatch"))
         ),
     )
     asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
@@ -215,3 +215,33 @@ def test_conversation_ownership_exception_fails_closed():
     assert EvidenceSource.CONVERSATION.value in cognitive.unresolved_sources
     assert cognitive.metadata["conversation_history_status"] == "rejected"
     assert cognitive.metadata["conversation_history_error_type"] == "PermissionError"
+
+
+def test_missing_conversation_owner_rejects_ingress_recovery():
+    request, cognitive, requirement = context_and_request([
+        {"role": "user", "content": "My name is Zeus"},
+    ])
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(side_effect=OSError("durable history offline")),
+        require_owned_conversation=AsyncMock(side_effect=PermissionError("not owned")),
+    )
+    resolver = RuntimeEvidenceResolver(conversation_gateway=gateway)
+    asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
+    assert cognitive.evidence == []
+    assert cognitive.metadata["conversation_ingress_fallback_denied"] == "PermissionError"
+    assert cognitive.metadata["conversation_history_degraded"] is True
+
+
+def test_owner_lookup_outage_cannot_promote_ingress_as_authorized_history():
+    request, cognitive, requirement = context_and_request([
+        {"role": "user", "content": "My name is Zeus"},
+    ])
+    gateway = SimpleNamespace(
+        load_history=AsyncMock(side_effect=OSError("durable history offline")),
+        require_owned_conversation=AsyncMock(side_effect=OSError("ownership lookup offline")),
+    )
+    resolver = RuntimeEvidenceResolver(conversation_gateway=gateway)
+    asyncio.run(resolver._resolve_conversation(request, cognitive, requirement))
+    assert cognitive.evidence == []
+    assert cognitive.metadata["conversation_ingress_fallback_denied"] == "OSError"
+    assert EvidenceSource.CONVERSATION.value in cognitive.unresolved_sources
