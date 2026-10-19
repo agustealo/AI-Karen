@@ -39,6 +39,7 @@ class AGUIEventProjection:
         self._message_started = False
         self._terminal = False
         self._tool_calls: set[str] = set()
+        self._subagent_runs: set[str] = set()
 
     @property
     def terminal(self) -> bool:
@@ -105,10 +106,18 @@ class AGUIEventProjection:
             # Stable activity identity is scoped by the AG-UI run. A new run
             # cannot overwrite another run's activity message.
             activity_id = f"activity-{self.run_id}-{step_id}"
+            source = _text(meta.get("source"), 32)
+            activity_kind = _text(meta.get("activity_kind"), 32)
+            internal = source == "deepagents" and activity_kind in {
+                "plan", "subagent",
+            }
             activity = {
                 "type": "ACTIVITY_SNAPSHOT",
                 "messageId": activity_id,
-                "activityType": "KAREN_AGENT_STEP",
+                "activityType": (
+                    f"KAREN_DEEPAGENTS_{activity_kind.upper()}"
+                    if internal else "KAREN_AGENT_STEP"
+                ),
                 "content": {
                     "stepId": step_id,
                     "agentId": agent_id,
@@ -117,13 +126,41 @@ class AGUIEventProjection:
                     "description": content[:2000],
                 },
             }
-            return [activity, self._custom("karen.agent_step", {
+            events = [activity, self._custom("karen.agent_step", {
                 "step_id": step_id,
                 "event_type": event_type,
                 "status": status,
                 "agent_id": agent_id,
                 "description": content[:2000],
             })]
+            # SUBAGENT events represent *observed* Deep Agents task-tool
+            # invocations, not a guessed Medusa team or agent plan.
+            if internal and activity_kind == "subagent":
+                sub_run_id = _text(meta.get("subagent_run_id"), 128)
+                if sub_run_id and event_type == f"deepagents_subagent_{status}":
+                    if status == "running" and sub_run_id not in self._subagent_runs:
+                        self._subagent_runs.add(sub_run_id)
+                        events.append({
+                            "type": "SUBAGENT_STARTED",
+                            "subagentRunId": sub_run_id,
+                            "name": "task",
+                        })
+                    elif sub_run_id in self._subagent_runs and status in {
+                        "completed", "failed",
+                    }:
+                        self._subagent_runs.remove(sub_run_id)
+                        if status == "completed":
+                            events.append({
+                                "type": "SUBAGENT_FINISHED",
+                                "subagentRunId": sub_run_id,
+                            })
+                        else:
+                            events.append({
+                                "type": "SUBAGENT_ERROR",
+                                "subagentRunId": sub_run_id,
+                                "message": "Delegated task failed.",
+                            })
+            return events
 
         if kind == "tool":
             phase = _text(meta.get("phase") or meta.get("status"), 32).lower()
