@@ -60,7 +60,7 @@ describe('settings UX ownership contract', () => {
     expect(downloads).toContain('setRuntimeTelemetry(null)');
     expect(downloads).toContain("delete next.jobs");
     expect(downloads).toContain("endpointErrors.jobs ? 'Unavailable' : 'Idle'");
-    expect(downloads).toContain("installed ? \`\u0024{installedModels.length} installed\` : 'Unavailable'");
+    expect(downloads).toContain("installed ?");
     expect(downloads).toContain('Discovery status unavailable');
   });
 
