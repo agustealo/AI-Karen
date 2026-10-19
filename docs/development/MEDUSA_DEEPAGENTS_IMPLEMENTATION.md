@@ -60,24 +60,19 @@ messages and `bind_tools` support** to use its planning, filesystem and task
 tools. Passing the text-only bridge as a fake tool-calling model would silently
 cripple Deep Agents and violate provider provenance.
 
-The canonical ProviderRuntime owner must expose a governed,
-tool-call-capable model execution adapter:
+The canonical provider execution authority now exposes a first
+structured tool-call adapter. The remaining **activation proof** requires:
 
-1. Resolve the active provider and model using Karen's central registry and
-   authorized execution plan. Verify actual tool-calling capability and local
-   runtime readiness; reject unsupported models.
-2. Convert LangChain `BaseChatModel` messages and bound tool schemas into
-   canonical structured generation requests without dropping tool-call metadata.
-3. Convert the provider's real tool-call results to LangChain `AIMessage`
-   `tool_calls`. Never fabricate tool calls by parsing prose.
-4. Preserve model/provider provenance, actual runtime engine, budgets,
-   cancellation, telemetry, safe failures and local-first routing.
-5. At runtime startup, register this **trusted** factory through
-   `get_implementation_factory().register_deepagents_model_factory(...)`.
-   The supplied factory is invoked with the already-authorized Medusa
-   registration and `SpecialistExecutionContext`, not raw user parameters.
-6. Verify local Ollama/vLLM tool calling with the selected model using real
-   tool-call smoke tests before enabling the feature flag.
+1. Verify actual tool-calling capability and registered model inventory in
+   Ollama/vLLM/LM Studio. Do not trust model-name heuristics.
+2. Complete focused CI, local model tool-call, nested subagent and cancellation
+   smoke tests against the pinned Deep Agents release.
+3. Prove parent/child token, model-call, duration and tool budgets; audit all
+   external actions and receipts under the current tenant and policy.
+4. Verify model/provider provenance, actual runtime engine, stop/interruption
+   behavior, telemetry, prompt contracts, and no hidden external traffic.
+5. Exercise restart/resume after a Karen-authorized durable checkpointer exists.
+   Until then this worker is explicitly ephemeral.
 
 Until those checks pass, the default native researcher remains active. Turning
 on the flag without a trusted model factory fails closed and is not a valid
@@ -125,13 +120,23 @@ production rollout.
 
 ## Proof and phased rollout
 
-**Phase 1 (this PR):** Canonical research specialist swap, runtime guard,
-versioned prompt, genuine Deep Agents API, scoped StateBackend, ToolBridge,
-model injection seam, optional dependency and tests.
+**Phase 1 (implemented, verification pending):** Canonical research
+specialist swap, runtime guard, versioned prompt, genuine Deep Agents API,
+scoped StateBackend, ToolBridge, model injection seam, optional dependency,
+tests and runtime Deep Agents-first dispatch for authorized multi-agent
+topology without an explicit workflow ID. Direct chat stays direct. Explicit
+named workflows stay with Karen's custom LangGraph orchestrator. No shadow
+graph launcher is installed.
 
-**Phase 2:** Extend canonical provider execution to preserve tool calls and
-inject an authorized `BaseChatModel`. Test three active local models for
-correct native tool calls, budgets, provider provenance and cancellation.
+**Phase 2 (implemented, verification pending):** Canonical provider
+execution now retains structured OpenAI-compatible tool calls, validates
+provider-emitted tool names/arguments, and maps messages through
+`core/model_runtime/structured_tool_chat_model.py`, an explicit
+`BaseChatModel` adapter. WorkflowRuntime registers this trusted factory at
+its execution boundary and passes preferred model/provider hints through the
+Medusa specialist context. The factory only accepts a healthy, capability-
+matched registered provider/model with confirmed inventory. **Real local tool
+calling still requires the live-model smoke gates** before activation.
 
 **Phase 3:** Configure a PostgreSQL-backed LangGraph checkpointer under the
 existing storage authority, tenant-specific thread namespace, scoped
@@ -166,6 +171,43 @@ python -m pip install -r requirements/deepagents.txt
 pytest tests/agent_medusa/test_deepagents_sdk_compatibility.py -q
 ```
 
-**A merged PR is not proof that local tool-calling support exists.**
+**A successful compile or merged PR is not proof that the actual selected
+local model emitted valid tool calls or that every worker path is ready.**
 The default-off flag remains a release safety gate until runtime-model and
 real-worker tests are green, not merely mocked.
+
+
+## Updated execution priority: Deep Agents-first, LangGraph exceptionally
+
+`ChatRuntime` continues selecting the authorized topology with CORTEX and
+RuntimePolicy. For a request whose authorized topology is `multi_agent`,
+which explicitly requires agent delegation and does not identify a named
+workflow, `WorkflowRuntime` now routes directly to the existing
+`MedusaCoordinator` rather than running a separate outer LangGraph workflow.
+Medusa uses its already-trusted specialist registry, run manager, task budget,
+tool gate and response assembler; the `researcher` implementation delegates
+the *internal* task plan to Deep Agents. Deep Agents internally uses LangGraph.
+
+Explicit `workflow_id` plans, or plans outside the authorized multi-agent
+topology, continue through the existing custom LangGraph `WorkflowRuntime`
+or non-graph chat branches. This avoids a second graph of orchestration
+wrapping the agent harness when it adds no benefit.
+
+This path remains behind `KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED=false`
+until real tool-call-compatible model tests are passing. When disabled, the
+previous graph and native researcher paths stay unchanged. Activating the flag
+in an environment with no healthy registered tool-capable model produces a
+controlled failure; it never silently selects an external model or substitutes
+fabricated tool output.
+
+A verified single Deep Agents specialist response is reused by
+`ResponseAssembler` without an additional LLM synthesis call.
+Multiple specialist outputs still use the canonical aggregation step.
+
+Additional tests:
+```bash
+pytest tests/core/runtime/test_deepagents_primary_routing.py -q
+pytest tests/core/model_runtime/test_structured_tool_provider_execution.py -q
+pytest tests/core/model_runtime/test_structured_tool_chat_model.py -q
+pytest tests/agent_medusa/test_deepagents_response_ownership.py -q
+```
