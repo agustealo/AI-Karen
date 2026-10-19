@@ -2,6 +2,12 @@ name: Beta Live Model Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      run_authenticated_browser_replay:
+        description: "Run real, authenticated personal-memory browser acceptance against approved beta URL"
+        required: false
+        type: boolean
+        default: false
   pull_request:
     branches:
       - main
@@ -82,3 +88,86 @@ jobs:
           KAREN_SMOKE_LIVE_MODEL_NAME: ${{ vars.BETA_MODEL_NAME }}
           KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS: "90"
         run: bash scripts/ci/production-first-boot-smoke.sh
+
+  authenticated-chat-acceptance:
+    name: authenticated-chat-acceptance
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_authenticated_browser_replay == true && github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: beta-release
+    permissions:
+      contents: read
+    env:
+      KAREN_BASE_URL: ${{ vars.KAREN_UX_BASE_URL }}
+      KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+      KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+      KAREN_UX_DEPLOYMENT_REVISION: ${{ vars.KAREN_UX_DEPLOYMENT_REVISION }}
+      KAREN_UX_TARGET_REVISION: ${{ github.sha }}
+      KAREN_UX_IDENTITY_REPLAY: "true"
+      KAREN_E2E_CAPTURE_VIDEO: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Fail closed on missing approval, sanitized account, or revision attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [[ -z "$KAREN_UX_EMAIL" || -z "$KAREN_UX_PASSWORD" ]]; then
+            echo "::error::Sanitized beta-release UX test credentials are not configured."
+            exit 1
+          fi
+          if [[ ! "$KAREN_BASE_URL" =~ ^https://[^/]+/?$ ]]; then
+            echo "::error::KAREN_UX_BASE_URL must be an approved HTTPS origin."
+            exit 1
+          fi
+          if [[ ! "$KAREN_UX_DEPLOYMENT_REVISION" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ "$KAREN_UX_DEPLOYMENT_REVISION" != "$GITHUB_SHA" ]]; then
+            echo "::error::Approved beta deployment revision must exactly match the tested commit."
+            exit 1
+          fi
+          echo "Authenticating against an operator-attested sanitized deployment at exact source revision."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - name: Install existing frontend Playwright dependencies
+        working-directory: src/ui_launchers/Karen-AI-Theme
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for existing browser harness
+        working-directory: src/ui_launchers/Karen-AI-Theme
+        run: npx playwright install --with-deps chromium
+
+      - name: Discard any checked-in or cached test evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf src/ui_launchers/Karen-AI-Theme/playwright-report
+          rm -rf src/ui_launchers/Karen-AI-Theme/test-results
+          rm -f src/ui_launchers/Karen-AI-Theme/test-results.json
+          find src/ui_launchers/Karen-AI-Theme/e2e -name '*.zip' -type f -delete
+
+      - name: Execute authenticated model-backed identity replay
+        id: replay
+        working-directory: src/ui_launchers/Karen-AI-Theme
+        run: npx playwright test e2e/ux-personal-memory-replay.spec.ts --config=e2e/playwright.config.ts --retries=0
+
+      - name: Retain private engineering evidence for review
+        if: ${{ always() && steps.replay.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: karen-authenticated-chat-acceptance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            src/ui_launchers/Karen-AI-Theme/playwright-report/
+            src/ui_launchers/Karen-AI-Theme/test-results/
+            !src/ui_launchers/Karen-AI-Theme/test-results/**/*.zip
+            src/ui_launchers/Karen-AI-Theme/test-results.json
+          if-no-files-found: warn
+          retention-days: 7

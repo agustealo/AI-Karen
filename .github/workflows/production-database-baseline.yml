@@ -19,6 +19,7 @@ on:
       - "tests/architecture/test_identity_vault_tenant_contract.py"
       - ".github/workflows/production-database-baseline.yml"
   pull_request:
+    branches: [main]
     paths:
       - "supabase/migrations/**"
       - "supabase/README.md"

@@ -37,7 +37,12 @@ export default defineConfig({
     video: process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'
       ? 'on'
       : 'retain-on-failure',
-    trace: 'retain-on-failure',
+    // This opt-in suite types a real credential during sign-in.
+    // Playwright traces retain fill action parameters, including passwords.
+    // Never record such traces or include them in uploaded artifacts.
+    trace: process.env.KAREN_UX_IDENTITY_REPLAY === 'true'
+      ? 'off'
+      : 'retain-on-failure',
     actionTimeout: 15000,
     navigationTimeout: 30000,
   },
