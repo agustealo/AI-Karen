@@ -77,6 +77,12 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("setSelectedProvider");
   });
 
+  it("never calls React hooks conditionally for malformed activity events", () => {
+    const activity = component.slice(component.indexOf("function KarenActivity("), component.indexOf("function KarenLearningDecision("));
+    expect(activity.indexOf("const disclosureRef = useRef")).toBeLessThan(activity.indexOf("if (!data || typeof data !=="));
+    expect(activity.indexOf("useEffect(() =>")).toBeLessThan(activity.indexOf("if (!data || typeof data !=="));
+  });
+
   it("does not interpret unknown agent statuses as successful execution", () => {
     expect(component).toContain('["failed", "failure", "error", "errored", "cancelled", "canceled"].includes(normalized)');
     expect(component).toContain('["finished", "completed", "complete", "succeeded", "success"].includes(normalized)');
