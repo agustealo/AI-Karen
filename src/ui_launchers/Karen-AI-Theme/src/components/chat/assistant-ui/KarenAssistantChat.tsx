@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AssistantRuntimeProvider,
+  ActionBarPrimitive,
   AuiIf,
   ComposerPrimitive,
   MessagePrimitive,
@@ -18,7 +19,7 @@ import {
 } from "@assistant-ui/react";
 import { HttpAgent } from "@ag-ui/client";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
-import { ArrowDown, ArrowUp, Bot, CheckCircle2, ChevronDown, CircleAlert, Clock3, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/ChatInterface";
@@ -169,25 +170,45 @@ const agentParts = {
   },
 };
 
+function KarenCopyAction() {
+  return (
+    <ActionBarPrimitive.Root hideWhenRunning className="px-1">
+      <ActionBarPrimitive.Copy
+        aria-label="Copy message"
+        title="Copy message"
+        copiedDuration={2000}
+        className="group/copy inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50"
+      >
+        <Copy className="h-4 w-4 group-data-[copied]/copy:hidden" aria-hidden="true" />
+        <Check className="hidden h-4 w-4 group-data-[copied]/copy:block" aria-hidden="true" />
+        <span className="group-data-[copied]/copy:hidden">Copy</span>
+        <span className="hidden group-data-[copied]/copy:inline">Copied</span>
+      </ActionBarPrimitive.Copy>
+    </ActionBarPrimitive.Root>
+  );
+}
+
 function UserMessage() {
   return (
-    <MessagePrimitive.Root className="flex justify-end px-4 py-2">
+    <MessagePrimitive.Root className="flex flex-col items-end gap-1 px-4 py-2">
       <div className="max-w-[92%] whitespace-pre-wrap break-words rounded-2xl bg-primary px-4 py-3 text-base leading-6 text-primary-foreground sm:max-w-[85%]">
         <MessagePrimitive.Parts />
       </div>
+      <KarenCopyAction />
     </MessagePrimitive.Root>
   );
 }
 
 function AssistantMessage() {
   return (
-    <MessagePrimitive.Root className="flex justify-start px-4 py-2">
+    <MessagePrimitive.Root className="flex flex-col items-start gap-1 px-4 py-2">
       <div className="w-full max-w-full space-y-3 rounded-2xl border border-border/50 bg-card px-4 py-4 text-base leading-7 sm:max-w-[95%] sm:px-5">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Bot className="h-4 w-4" aria-hidden="true" /> Karen
         </div>
         <MessagePrimitive.Parts components={agentParts} />
       </div>
+      <KarenCopyAction />
     </MessagePrimitive.Root>
   );
 }
