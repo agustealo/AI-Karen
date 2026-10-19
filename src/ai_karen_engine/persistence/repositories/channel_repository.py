@@ -1554,6 +1554,81 @@ class SqlChannelRepository:
             return {"request_id": str(row["request_id"]), "status": row["status"]}
 
 
+    async def record_personal_credential_deletion_claim(
+        self, *, tenant_id: str, request_id: str, connection_id: str,
+        user_id: str, receipt,
+    ) -> bool:
+        """Persist a host-verified vendor *claim*, never independently verified erasure.
+
+        Host must authenticate the vendor's native response and validate its
+        scoped/fresh PersonalCredentialErasureReceipt before calling this method.
+        This is an internal repository operation, not a webhook/API entry point.
+        """
+        from ai_karen_engine.extensions.channels.contracts import (
+            PersonalCredentialErasureReceipt,
+        )
+
+        if not isinstance(receipt, PersonalCredentialErasureReceipt):
+            raise ValueError("Typed credential erasure receipt required")
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        request_id = str(uuid.UUID(request_id))
+        if not connection_id or receipt.connection_id != connection_id:
+            raise ValueError("Credential erasure connection scope mismatch")
+        async with async_transaction_scope(tenant_id) as session:
+            record = (await session.execute(
+                text("""
+                    SELECT d.provider_id, d.user_id, d.connection_revision,
+                           d.session_reference, d.credential_scope, d.status,
+                           d.provider_receipt_id, c.revision AS live_revision
+                    FROM public.channel_personal_credential_deletions d
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = d.tenant_id
+                     AND c.connection_id = d.connection_id
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = d.tenant_id
+                     AND o.connection_id = d.connection_id
+                     AND o.user_id = d.user_id
+                    WHERE d.tenant_id = CAST(:tenant AS uuid)
+                      AND d.request_id = CAST(:request AS uuid)
+                      AND d.connection_id = :connection
+                      AND d.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c, d
+                """),
+                {"tenant": tenant_id, "request": request_id,
+                 "connection": connection_id, "user": user_id},
+            )).mappings().one_or_none()
+            if record is None or (
+                str(record["user_id"]) != user_id
+                or record["live_revision"] != receipt.connection_revision
+                or record["connection_revision"] != receipt.connection_revision
+                or record["provider_id"] != receipt.provider_id
+                or record["session_reference"] != receipt.session_reference
+                or record["credential_scope"] != receipt.credential_scope
+                or receipt.deletion_request_id != request_id
+            ):
+                raise ValueError("Credential erasure receipt does not match durable request")
+            if record["status"] == "provider_claimed":
+                return record["provider_receipt_id"] == receipt.provider_receipt_id
+            if record["status"] not in ("requested", "provider_pending"):
+                raise ValueError("Credential erasure transition not permitted")
+            written = (await session.execute(
+                text("""
+                    UPDATE public.channel_personal_credential_deletions
+                    SET status = 'provider_claimed',
+                        provider_receipt_id = :receipt,
+                        updated_at = clock_timestamp()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND request_id = CAST(:request AS uuid)
+                      AND status IN ('requested', 'provider_pending')
+                    RETURNING request_id
+                """),
+                {"tenant": tenant_id, "request": request_id,
+                 "receipt": receipt.provider_receipt_id},
+            )).scalar_one_or_none()
+            return written is not None
+
+
 __all__ = [
     "ChannelAdmissionConflict",
     "ChannelAdmissionDenied",
