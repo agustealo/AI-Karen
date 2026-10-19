@@ -11,6 +11,7 @@ on:
       - 'requirements.txt'
       - 'requirements/deepagents.txt'
       - 'scripts/deepagents_live_tool_smoke.py'
+      - 'supabase/migrations/20261019010000_36_medusa_deepagents_checkpoints.sql'
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
@@ -24,6 +25,7 @@ on:
       - 'requirements.txt'
       - 'requirements/deepagents.txt'
       - 'scripts/deepagents_live_tool_smoke.py'
+      - 'supabase/migrations/20261019010000_36_medusa_deepagents_checkpoints.sql'
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
@@ -207,6 +209,7 @@ jobs:
           python -m pytest \
             tests/agent_medusa/test_deepagents_research_harness.py \
             tests/agent_medusa/test_deepagents_factory_ownership.py \
+            tests/agent_medusa/test_deepagents_checkpoint_saver.py \
             tests/core/runtime/test_deepagents_primary_routing.py \
             tests/core/runtime/test_deepagents_live_activity.py \
             tests/core/model_runtime/test_structured_tool_provider_execution.py \
