@@ -505,9 +505,38 @@ class MedusaCoordinator:
                 and canonical_execution_context is not None
                 and getattr(canonical_execution_context, "tenant_id", None) == request.tenant_id
                 and getattr(canonical_execution_context, "user_id", None) == request.user_id
+                and getattr(canonical_execution_context, "request_id", None) == request.request_id
+                and getattr(canonical_execution_context, "correlation_id", None)
+                    == current_requirements.correlation_id
                 and signal.tenant_id == request.tenant_id
                 and signal.user_id == request.user_id
                 and signal.task_type == current_requirements.intent
+            )
+            else None
+        )
+        prompt_candidate = request.context.get("approved_prompt_messages")
+        prompt_status = request.context.get("learning_context_status")
+        # PromptRuntime's canonical context is forwarded only when the
+        # actual RuntimeExecutionContext belongs to this exact request.
+        trusted_prompt = (
+            prompt_candidate
+            if (
+                canonical_execution_context is not None
+                and getattr(canonical_execution_context, "tenant_id", None) == request.tenant_id
+                and getattr(canonical_execution_context, "user_id", None) == request.user_id
+                and getattr(canonical_execution_context, "request_id", None) == request.request_id
+                and getattr(canonical_execution_context, "correlation_id", None)
+                    == current_requirements.correlation_id
+                and isinstance(prompt_candidate, list)
+                and bool(prompt_candidate)
+                and len(prompt_candidate) <= 100
+                and all(
+                    isinstance(message, dict)
+                    and message.get("role") in {"system", "assistant", "user"}
+                    and isinstance(message.get("content"), str)
+                    and len(message["content"]) <= 100_000
+                    for message in prompt_candidate
+                )
             )
             else None
         )
@@ -524,6 +553,17 @@ class MedusaCoordinator:
             preferred_model=request.context.get("preferred_model"),
             learning_task_type=current_requirements.intent,
             learned_model_signals=trusted_signal,
+            approved_prompt_messages=trusted_prompt,
+            learning_context_status=(
+                {
+                    "status": str(prompt_status.get("status") or "unavailable"),
+                    "included_memory_count": int(
+                        prompt_status.get("included_memory_count") or 0
+                    ),
+                }
+                if trusted_prompt is not None and isinstance(prompt_status, dict)
+                else {"status": "not_supplied", "included_memory_count": 0}
+            ),
             budget_meter=meter,
             event_emitter=emitter,
         )
