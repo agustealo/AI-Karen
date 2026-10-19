@@ -86,9 +86,6 @@ def sdk(monkeypatch):
             get_prompt=lambda *args: SimpleNamespace(
                 system_instructions="Evidence-grounded registered research instructions"
             ),
-            get_prompt_for_compat=lambda *args: SimpleNamespace(
-                system_instructions="Evidence-grounded registered research instructions"
-            ),
         ),
     )
 
