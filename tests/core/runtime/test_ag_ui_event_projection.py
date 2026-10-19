@@ -195,3 +195,107 @@ def test_missing_agent_identity_never_creates_activity():
     assert p.project(chunk("agent_step", status="running", step_id="step-1")) == []
     assert p.project(chunk("agent_step", status="complete",
                            step_id="step-1", agent_id="researcher")) == []
+
+
+def test_deepagents_opt_in_plan_emits_real_activity_snapshots_only():
+    p = AGUIEventProjection(thread_id="tenant-thread", run_id="run-7")
+    p.begin()
+    start = p.project(chunk(
+        "agent_step",
+        content="Deep Agents plan running.",
+        step_id="deepagents-todo-123",
+        agent_id="researcher",
+        status="running",
+        event_type="deepagents_plan_running",
+        source="deepagents",
+        activity_kind="plan",
+    ))
+    complete = p.project(chunk(
+        "agent_step",
+        content="Deep Agents plan completed.",
+        step_id="deepagents-todo-123",
+        agent_id="researcher",
+        status="completed",
+        event_type="deepagents_plan_completed",
+        source="deepagents",
+        activity_kind="plan",
+    ))
+    assert start[0]["type"] == "ACTIVITY_SNAPSHOT"
+    assert start[0]["activityType"] == "KAREN_DEEPAGENTS_PLAN"
+    assert start[0]["messageId"] == complete[0]["messageId"]
+    assert start[0]["content"]["status"] == "running"
+    assert complete[0]["content"]["status"] == "completed"
+    assert not any(e["type"].startswith("SUBAGENT") for e in start + complete)
+
+
+def test_deepagents_real_task_callback_emits_native_subagent_lifecycle():
+    p = AGUIEventProjection(thread_id="tenant-thread", run_id="run-7")
+    p.begin()
+
+    def stage(status, callback_id="actual-task-123"):
+        return p.project(chunk(
+            "agent_step",
+            content=f"Deep Agents subagent {status}.",
+            step_id=f"deepagents-{callback_id}",
+            agent_id="researcher",
+            status=status,
+            event_type=f"deepagents_subagent_{status}",
+            source="deepagents",
+            activity_kind="subagent",
+            subagent_run_id=callback_id,
+            internal_args={"private": "never-reveal"},
+        ))
+
+    start = stage("running")
+    assert [e["type"] for e in start] == [
+        "ACTIVITY_SNAPSHOT", "CUSTOM", "SUBAGENT_STARTED",
+    ]
+    assert start[0]["activityType"] == "KAREN_DEEPAGENTS_SUBAGENT"
+    assert start[2]["subagentRunId"] == "actual-task-123"
+    assert start[2]["name"] == "task"
+    assert [e["type"] for e in stage("running")] == [
+        "ACTIVITY_SNAPSHOT", "CUSTOM",
+    ]
+    finish = stage("completed")
+    assert finish[-1]["type"] == "SUBAGENT_FINISHED"
+    assert finish[-1]["subagentRunId"] == start[-1]["subagentRunId"]
+    assert "SUBAGENT_FINISHED" not in [e["type"] for e in stage("completed")]
+    assert "never-reveal" not in str(start + finish)
+
+
+def test_deepagents_subagent_failure_is_explicit_but_never_exposes_error():
+    p = AGUIEventProjection(thread_id="tenant-thread", run_id="run-8")
+    p.begin()
+    p.project(chunk(
+        "agent_step", "Delegation running",
+        step_id="deepagents-task-1", agent_id="researcher",
+        status="running", event_type="deepagents_subagent_running",
+        source="deepagents", activity_kind="subagent",
+        subagent_run_id="actual-task-1",
+    ))
+    failed = p.project(chunk(
+        "agent_step", "Secret provider exception",
+        step_id="deepagents-task-1", agent_id="researcher",
+        status="failed", event_type="deepagents_subagent_failed",
+        source="deepagents", activity_kind="subagent",
+        subagent_run_id="actual-task-1", exception="credentials leaked",
+    ))
+    assert failed[-1] == {
+        "type": "SUBAGENT_ERROR", "subagentRunId": "actual-task-1",
+        "message": "Delegated task failed.",
+    }
+    assert "credentials leaked" not in str(failed)
+
+
+def test_unobserved_subagent_completion_cannot_invent_start_or_finish():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    received = p.project(chunk(
+        "agent_step", "Task completed",
+        step_id="deepagents-not-started",
+        agent_id="researcher",
+        status="completed", event_type="deepagents_subagent_completed",
+        source="deepagents", activity_kind="subagent",
+        subagent_run_id="not-started",
+    ))
+    assert [e["type"] for e in received] == ["ACTIVITY_SNAPSHOT", "CUSTOM"]
