@@ -256,13 +256,15 @@ class BenchmarkRunner:
         projection = GovernedMLLearningEvidence(
             tenant_id=tenant_id, user_id=user_id,
         )
-        stored = 0
-        for record, reference in zip(records, references):
-            await projection.record_verified(
-                record, label_source="heldout_evaluation",
-                label_evidence_ref=reference,
+        receipt_result = await projection.record_verified_batch([
+            (record, "heldout_evaluation", reference)
+            for record, reference in zip(records, references)
+        ])
+        stored = receipt_result["stored_count"]
+        if receipt_result.get("stored") is not True or stored != len(records):
+            raise RuntimeError(
+                "Governed benchmark learning batch was not fully acknowledged"
             )
-            stored += 1
         logger.info(
             "intelligence.evaluation.durable_ml_projection_verified",
             extra={
