@@ -105,8 +105,12 @@ The existing self-hosted Windows live-model job is not replaced. Its queue
 state is independent of the opt-in browser job. Inspect both job conclusions
 instead of reporting an overall green result from just one.
 
-The private GitHub artifact is retained for seven days and may contain chat
-text, screenshots, browser recordings and traces. Authorized reviewers must
+The GitHub artifact is retained for seven days and may contain chat
+text, screenshots and browser recordings. Credential-bearing Playwright traces
+are disabled for this opt-in suite and ZIP traces are excluded from upload.
+Old report directories are cleared before execution; rerun artifacts use their
+unique run attempt. GitHub artifacts remain accessible to repository readers,
+so do not treat them as secret storage. Authorized reviewers must
 inspect and sanitize it before any public publication. The Playwright assertion
 receipt explicitly does not prove NeuroVault long-term memory projection.
 Do not mark release acceptance complete merely because the workflow dispatch
