@@ -620,6 +620,7 @@ export default function ModelDownloads({
     if (jobsResult.status === 'fulfilled') {
       setJobs(Array.isArray(jobsResult.value) ? jobsResult.value : []);
     } else {
+      setJobs([]);
       nextErrors.jobs = getErrorMessage(
         jobsResult.reason,
         'Download jobs endpoint failed.',
@@ -629,6 +630,7 @@ export default function ModelDownloads({
     if (installedResult.status === 'fulfilled') {
       setInstalled(installedResult.value);
     } else {
+      setInstalled(null);
       nextErrors.installed = getErrorMessage(
         installedResult.reason,
         'Installed model inventory endpoint failed.',
@@ -638,6 +640,7 @@ export default function ModelDownloads({
     if (discoveryResult.status === 'fulfilled') {
       setDiscovery(discoveryResult.value);
     } else {
+      setDiscovery(null);
       nextErrors.discovery = getErrorMessage(
         discoveryResult.reason,
         'Model discovery endpoint failed.',
@@ -647,6 +650,7 @@ export default function ModelDownloads({
     if (recommendationsResult.status === 'fulfilled') {
       setRecommendations(recommendationsResult.value);
     } else {
+      setRecommendations(null);
       nextErrors.recommendations = getErrorMessage(
         recommendationsResult.reason,
         'Model source verification request failed.',
@@ -656,10 +660,14 @@ export default function ModelDownloads({
     if (storageResult.status === 'fulfilled') {
       setStorageSettings(storageResult.value);
       setModelsRootDraft(storageResult.value.models_root);
+    } else {
+      setStorageSettings(null);
     }
 
     if (telemetryResult.status === 'fulfilled') {
       setRuntimeTelemetry(telemetryResult.value);
+    } else {
+      setRuntimeTelemetry(null);
     }
 
     setEndpointErrors(nextErrors);
@@ -703,7 +711,13 @@ export default function ModelDownloads({
     try {
       const response = await apiClient.get<DownloadJob[]>(ENDPOINTS.jobs);
       setJobs(Array.isArray(response) ? response : []);
+      setEndpointErrors((current) => {
+        const next = { ...current };
+        delete next.jobs;
+        return next;
+      });
     } catch (error) {
+      setJobs([]);
       setEndpointErrors((current) => ({
         ...current,
         jobs: getErrorMessage(error, 'Download jobs endpoint failed.'),
@@ -791,7 +805,7 @@ export default function ModelDownloads({
     ? recommendations.essential_ready
       ? 'Ready'
       : `${recommendations.essential_installed}/${recommendations.essential_total} ready`
-    : 'Loading';
+    : 'Unavailable';
 
   const resourceSummary = runtimeTelemetry?.resources;
   const storageSummary = runtimeTelemetry?.storage;
@@ -1442,20 +1456,20 @@ export default function ModelDownloads({
                   ? `${workerSummary.max_concurrent_downloads - workerSummary.available_slots}/${workerSummary.max_concurrent_downloads} active`
                   : activeJobs.length
                     ? `${activeJobs.length} active`
-                    : 'Idle'
+                    : endpointErrors.jobs ? 'Unavailable' : 'Idle'
               }
               detail={
                 workerSummary
                   ? `${workerSummary.available_slots} slot${workerSummary.available_slots === 1 ? '' : 's'} available`
                   : failedJobs
                     ? `${failedJobs} recent failure${failedJobs === 1 ? '' : 's'}`
-                    : 'No active failures'
+                    : endpointErrors.jobs ? 'Jobs unavailable' : 'No active failures'
               }
             />
             <MetricTile
               icon={<Database className="h-4 w-4" aria-hidden="true" />}
               label="Model storage"
-              value={modelStorageBytes ? formatBytes(modelStorageBytes) : `${installedModels.length} installed`}
+              value={modelStorageBytes ? formatBytes(modelStorageBytes) : installed ? `${installedModels.length} installed` : 'Unavailable'}
               detail={diskFreeBytes ? `${formatBytes(diskFreeBytes)} free` : storageSettings?.models_root || 'Storage loading'}
             />
             <MetricTile
@@ -1467,8 +1481,8 @@ export default function ModelDownloads({
             <MetricTile
               icon={<Activity className="h-4 w-4" aria-hidden="true" />}
               label="Discovery"
-              value={discoveryStatus.replace(/_/g, ' ')}
-              detail={String(discoveryStats.total_models ?? installedModels.length) + ' models indexed'}
+              value={discovery ? discoveryStatus.replace(/_/g, ' ') : 'Unavailable'}
+              detail={discovery ? String(discoveryStats.total_models ?? 'Unknown') + ' models indexed' : 'Discovery status unavailable'}
             />
           </div>
 
