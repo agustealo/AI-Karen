@@ -67,12 +67,17 @@ never forwarded blindly. No fabricated progress, state snapshots, approval
 outcomes or successes. The adapter intentionally does not claim full AG-UI
 1.0 capability coverage.
 
-**assistant-ui second, conditionally.** Prototype its ExternalStoreRuntime
-using *existing* Karen message/thread stores and streaming callbacks.
-Only adopt the component primitives that improve accessibility and UX
-without transferring backend truth to an npm package. Do not install
-`@assistant-ui/react-ag-ui` before an AG-UI-compatible browser endpoint,
-request/stream parser and full integration tests pass.
+**assistant-ui second, opt-in.** The official `useAgUiRuntime` + `HttpAgent`
+seam now has source-level frontend integration with existing session identity
+and history. Unlike an ExternalStoreRuntime translation, it natively
+reconstructs AG-UI messages, activities, tool calls and custom data parts.
+All backend authority stays unchanged. No interactive capability is enabled
+solely because assistant-ui renders a control.
+
+The frontend dependency lock and real authenticated browser checks remain
+unverified; the replacement UI therefore remains **default-off and draft**.
+Do not use Assistant Cloud as a second store, use another orchestration
+runtime, or delete `ChatInterface` until this opt-in is proven equivalent.
 
 ## Workstreams and acceptance gates
 
@@ -310,3 +315,135 @@ private memory. It cannot issue or approve a model-promotion action.
 The training/evaluation pipeline and new atomic predictor evidence
 writeback on PR #497 do not grant AG-UI any ability to alter ModelManager,
 MLModelRegistry or the separate adaptive-policy promotion process.
+
+
+## KCHAT-07: assistant-ui native chat audit and actual integration slice (October 19)
+
+### Audit of source-of-truth boundaries
+
+| Responsibility | Existing owner | New assistant-ui behavior |
+| --- | --- | --- |
+| User authentication + tenant | Karen Auth + FastAPI | Same-origin authenticated proxy; no client-supplied identity accepted |
+| Session/conversation | ConversationRuntimeGateway + existing SessionProvider | Existing conversation UUID is the AG-UI thread id; backend resolves ownership and canonical session through the same gateway |
+| Message history | PostgreSQL ConversationRepository | React history adapter reads `GET /api/conversations/{id}`; maps stored user/assistant turns into assistant-ui via `fromAgUiMessages` |
+| Streaming & termination | ChatRuntime → AGUIEventProjection → Next proxy | `HttpAgent` + `useAgUiRuntime`; errors reported, no dummy run completion |
+| Model selection/fallback | CORTEX, RuntimePolicy, ModelManager | No model setting sent through AG-UI, no SDK provider keys or second router |
+| Medusa/Deep Agents | Medusa coordinator & Deep Agents specialist | Observed `ACTIVITY_SNAPSHOT`, subagent, tool activity rendered as named data/tool parts |
+| Learning provenance | Intelligence/Runtime | Read-only `karen.learning_decision` with explicit shadow-status wording |
+| Checkpoint & resume | Karen durable saver / resumed-run policy | Read-only acknowledgement only; no Resume until restart/idempotence evidence |
+| Approvals | Karen ApprovalService / action gate | Read-only `karen.approval_required` notice until governed receipt action adapter is tested |
+| Artifacts, citation, advanced UI | Karen runtime artifact/source contracts | Future gated allowlisted data parts only; no arbitrary generative component registry |
+
+### Current verified source edits
+
+- `src/components/chat/assistant-ui/KarenAssistantChat.tsx`: Karen-branded
+  assistant-ui primitives, official AG-UI runtime, same-origin `HttpAgent`,
+  durable transcript adapter, session-switch adapter, cancellation affordance,
+  observed agent-tool-activity and selected runtime-provenance data renderers.
+- `src/app/dashboard/page.tsx`: one existing `SessionProvider` wraps either
+  the prior ChatInterface or the new assistant-ui surface depending on the
+  explicit frontend environment flag; no duplicate mounted chat engines.
+- `api_routes/chat/runtime.py`: existing conversation UUIDs are authenticated
+  through the canonical ConversationRuntimeGateway before use in AG-UI. It
+  reuses the real session ID. Foreign/unknown conversation IDs return 404;
+  opaque legacy AG-UI thread IDs preserve their earlier tenant-isolated
+  fallback behavior.
+- `tests/api_routes/test_chat_ag_ui_transport.py`: scope tests for existing
+  conversation identity, valid real session binding and foreign-thread denial.
+- `tests/chat/assistant-ui-architecture.test.ts`: source-level guardrails
+  for canonical scope, actual AG-UI runtime, feature gating, no fabricated
+  resumed actions, and no independent provider selection.
+
+**These are source commits, not an E2E green claim.**
+
+### Explicit opt-in configuration
+
+```dotenv
+KARI_ENABLE_AG_UI_BRIDGE=false
+NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED=false
+```
+
+To try the new frontend in an isolated development environment, first
+install and lock **the declared, pinned** `@assistant-ui/react`,
+`@assistant-ui/react-ag-ui` and `@ag-ui/client` dependencies. The
+development system must have npm registry access to regenerate the
+checked-in lockfile. This editing environment did not have registry
+access, so `package-lock.json` is **not yet updated**. Do not run or
+report `npm ci`/typecheck as green for this head, and do not enable
+either feature flag while this is unresolved. No guessed integrity
+hashes or incomplete lock entries are acceptable.
+
+From `src/ui_launchers/Karen-AI-Theme` in a network-enabled checkout:
+
+```bash
+npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+npm ci --no-audit --no-fund
+npm run typecheck
+npm run lint
+npx vitest run tests/chat/assistant-ui-architecture.test.ts
+npx vitest run tests/chat/ag-ui-stream-proxy-response.test.ts
+```
+
+No consumer/distribution packaging is required.
+
+### Full advanced and proprietary chat implementation roadmap
+
+**KCHAT-08: Verified first-class chat.** Authenticate, load an existing
+conversation, send a user turn, observe real partial text and a single
+terminal event, reload and reconcile persisted turns. Cover cancellation
+and interrupted network (never stitch a second fallback onto a partial
+assistant answer). Compare visible behavior against existing ChatInterface.
+The imported history currently contains durable text only, not replayable
+tool/agent snapshots. A canonical read API must supply authorized event
+history before those appear after reload.
+
+**KCHAT-09: Agent execution workspace.** Medusa's exact run/activity IDs
+drive plan/todo, subagent lane, delegated tasks, step status and tool
+execution timelines in the assistant-ui parts and a collapsible right
+rail. Persist and replay only centrally authorized event summaries.
+Displayed progress never creates an agent, tool, plan, capability or
+state. Treat `TOOL_CALL_END` as a transport lifecycle signal and use
+actual ToolBridge receipts for outcomes.
+
+**KCHAT-10: Human review, safely.** Present approvals as actionable only
+after a separate scoped GET identifies an unconsumed pending approval
+receipt and a governed POST can approve/reject that exact receipt. UI
+must disallow duplicate receipts, expired runs, cross-tenant responses and
+client-authored tool arguments. Keep the approval notice read-only until
+approved action tests exist. Never wire experimental assistant-ui
+client-executed tools to privileged Karen plugins.
+
+**KCHAT-11: Durable agent recovery.** Render checkpoint provenance and
+available recovery states separately. Provide Resume only after live
+PostgreSQL checkpoint read-back through worker restart, replay offset
+validation, idempotent tool receipts and backend-issued eligibility.
+Cancellation, resume, and new messages may not double-run an acknowledged
+side effect. Until these tests pass there is no Resume action.
+
+**KCHAT-12: Karen-proprietary affordances.** Evidence/source viewer with
+verified citations, memory recall status and source scope, requested vs
+executed provider/model provenance, learning consultation vs shadow
+candidate, AG-UI nested subagent activity, plugin permission/receipt
+explanations, durable artifacts and rich results. Render verified
+structured data with an explicit component allowlist. No arbitrary
+untrusted JSON-to-React action runner or provider/model selection from
+the browser.
+
+**KCHAT-13: UX/accessibility acceptance.** Keyboard-first composer and
+thread switches, focus restoration, screen-reader announcements, truthful
+pending/failed/saved states, copy/share/export backed by durable
+conversations, syntax/markdown rendering, mobile layout, reduced motion,
+long-thread virtualization, agent transparency without overwhelming
+first-time users, and performance benchmarking. Preserve Karen's visual
+identity rather than adopting an unmodified template or a cloud-hosted
+assistant state store.
+
+### Exit criteria
+
+Use the exact-head CI and deterministic live E2E proof, including
+`npm ci`, TypeScript, lint, unit/integration and authenticated browser
+checks. Backends must prove real Ollama/vLLM tool calls, tenant isolation,
+correct model identity, approved tool execution, interrupted SSE and
+durable histories. No fake backend fixture counts as a live runtime.
+Do not merge PR #494 into main until this is green; PR #497 execution
+and checkpoint gates remain separately disabled.
