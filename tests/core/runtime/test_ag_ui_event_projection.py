@@ -335,3 +335,62 @@ def test_checkpoint_without_verifiable_saved_state_is_only_an_ordinary_status():
     ))
     assert not any(e.get("name") == "karen.checkpoint" for e in events)
     assert not any(e.get("value", {}).get("resumable") is True for e in events)
+
+
+def test_deepagents_content_discloses_learning_provenance_without_private_memory():
+    p = AGUIEventProjection(thread_id="tenant-thread", run_id="run-1")
+    p.begin()
+    events = p.project(chunk(
+        "content", "Finished research.",
+        execution_engine="deepagents",
+        model_selection_source="learning_operational_reliability_v1",
+        learning_signal_status="ready",
+        learning_signal_version="model_operational_outcome_v1",
+        learned_context_status="resolved",
+        learned_memory_refs_included=2,
+        raw_memory={"secret": "must-not-appear"},
+        learned_model_scores={"unverified_quality": 100},
+    ))
+    assert [e["type"] for e in events] == [
+        "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "CUSTOM",
+    ]
+    assert events[2]["name"] == "karen.learning_decision"
+    assert events[2]["value"] == {
+        "selection_source": "learning_operational_reliability_v1",
+        "learning_signal_status": "ready",
+        "learning_signal_version": "model_operational_outcome_v1",
+        "learned_context_status": "resolved",
+        "included_memory_refs": 2,
+        "claim": "operational_evidence_only",
+    }
+    assert "must-not-appear" not in str(events)
+    assert "unverified_quality" not in str(events)
+
+
+def test_agui_does_not_fabricate_learning_on_unobserved_activity():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    events = p.project(chunk(
+        "content", "Answer",
+        execution_engine="deepagents",
+        model_selection_source="the_model_is_genius",
+        learning_signal_status="ready",
+        learned_memory_refs_included=-15,
+    ))
+    assert [e["type"] for e in events] == [
+        "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+    ]
+
+
+def test_agui_cannot_repeat_learning_badge_on_incremental_chunks():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    args = {
+        "execution_engine": "deepagents",
+        "model_selection_source": "baseline_insufficient_evidence",
+        "learning_signal_status": "cold_start",
+    }
+    first = p.project(chunk("content", "Part A", **args))
+    second = p.project(chunk("content", "Part B", **args))
+    assert len([event for event in first + second
+                if event.get("name") == "karen.learning_decision"]) == 1
