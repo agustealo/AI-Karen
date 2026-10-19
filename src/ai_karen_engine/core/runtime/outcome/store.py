@@ -86,6 +86,7 @@ class OutcomeStore(ABC):
         *,
         limit: int = 100,
         user_id: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         """List recent tenant-scoped outcome evidence."""
 
@@ -214,11 +215,16 @@ class InMemoryOutcomeStore(OutcomeStore):
         *,
         limit: int = 100,
         user_id: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         indices = self._tenant_index.get(tenant_id or "_unknown", [])
         records = [self._records[i] for i in indices if i < len(self._records)]
         if user_id is not None:
             records = [record for record in records if str(record.get("user_id") or "") == user_id]
+        if source is not None:
+            if source not in {"runtime.execution", "user.feedback", "intelligence.ml"}:
+                raise ValueError("Unsupported governed outcome evidence source")
+            records = [record for record in records if record.get("source") == source]
         return [dict(record) for record in records[-limit:]]
 
 
@@ -646,10 +652,16 @@ class PostgresOutcomeStore(OutcomeStore):
         *,
         limit: int = 100,
         user_id: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         tenant = self._require_tenant(tenant_id)
         bounded_limit = max(1, min(int(limit), 1000))
         user = str(user_id or "").strip()
+        if source is not None and source not in {
+            "runtime.execution", "user.feedback", "intelligence.ml",
+        }:
+            raise ValueError("Unsupported governed outcome evidence source")
+        scoped_source = source or ""
         try:
             with transaction_scope(tenant) as session:
                 rows = session.execute(
@@ -659,11 +671,13 @@ class PostgresOutcomeStore(OutcomeStore):
                         FROM public.outcome_records
                         WHERE tenant_id = CAST(:tenant_id AS uuid)
                           AND (:user_id = '' OR user_id = CAST(:user_id AS uuid))
+                          AND (:source = '' OR source = :source)
                         ORDER BY recorded_at DESC
                         LIMIT :limit
                         """
                     ),
-                    {"tenant_id": tenant, "user_id": user, "limit": bounded_limit},
+                    {"tenant_id": tenant, "user_id": user,
+                     "source": scoped_source, "limit": bounded_limit},
                 ).mappings().all()
             return [self._payload_from_row(row["payload"]) for row in rows]
         except OutcomeStoreError:
