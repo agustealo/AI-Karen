@@ -166,11 +166,20 @@ class DeepAgentsResearchSpecialist:
                 "tool_name": tool_name,
                 "receipt_id": str(result["receipt_id"]),
             })
-            return json.dumps(
+            tool_payload = json.dumps(
                 {"result": result.get("result"), "receipt_id": result["receipt_id"]},
                 ensure_ascii=False,
                 default=str,
-            )[:16000]
+            )
+            if len(tool_payload) > 16000:
+                # Keep the agent-facing response valid JSON and explicitly
+                # identify truncation instead of handing it malformed data.
+                tool_payload = json.dumps({
+                    "receipt_id": result["receipt_id"],
+                    "result_preview": tool_payload[:12000],
+                    "truncated": True,
+                })
+            return tool_payload
 
         class ModelBudgetCallback(AsyncCallbackHandler):
             raise_error = True
