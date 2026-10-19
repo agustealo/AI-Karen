@@ -9,6 +9,9 @@ on:
       - 'tests/core/runtime/**'
       - 'tests/agent_medusa/**'
       - 'requirements.txt'
+      - 'requirements/deepagents.txt'
+      - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
+      - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
   pull_request:
     branches: [main, develop]
@@ -18,6 +21,9 @@ on:
       - 'tests/core/runtime/**'
       - 'tests/agent_medusa/**'
       - 'requirements.txt'
+      - 'requirements/deepagents.txt'
+      - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
+      - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
 
 env:
@@ -168,6 +174,43 @@ jobs:
           name: codecov-medusa
           fail_ci_if_error: false
 
+  deepagents-real-sdk:
+    name: Deep Agents Real SDK Compatibility
+    runs-on: ubuntu-latest
+    needs: [lint, compile]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install canonical runtime and pinned Deep Agents
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements/deepagents.txt
+          python -m pip install pytest pytest-asyncio pytest-timeout
+
+      - name: Prove actual SDK import and constructed graph
+        run: |
+          python -c "from deepagents import create_deep_agent; from deepagents.backends import StateBackend; print('real deepagents SDK available')"
+          python -m pytest tests/agent_medusa/test_deepagents_sdk_compatibility.py -q --timeout=120
+
+      - name: Prove governed runner without external providers
+        run: |
+          python -m pytest \
+            tests/agent_medusa/test_deepagents_research_harness.py \
+            tests/agent_medusa/test_deepagents_factory_ownership.py \
+            tests/core/runtime/test_deepagents_primary_routing.py \
+            tests/core/runtime/test_deepagents_live_activity.py \
+            tests/core/model_runtime/test_structured_tool_provider_execution.py \
+            tests/core/model_runtime/test_structured_tool_chat_model.py \
+            -q --timeout=120
+
   validate-behavioral-contracts:
     name: Validate Behavioral Contracts
     runs-on: ubuntu-latest
@@ -306,7 +349,7 @@ jobs:
   final-validation:
     name: Final MEDUSA-CLOSURE-1 Validation
     runs-on: ubuntu-latest
-    needs: [validate-behavioral-contracts, security-scan]
+    needs: [validate-behavioral-contracts, security-scan, deepagents-real-sdk]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
