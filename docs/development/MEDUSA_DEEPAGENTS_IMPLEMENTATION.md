@@ -294,3 +294,60 @@ pytest tests/core/runtime/test_deepagents_primary_routing.py -q
 Cross-branch AG-UI tests live with the transport owner in PR #494 and must
 pass after integration; mocked callback tests are not evidence a live local
 model actually calls the planner or task tool.
+
+
+## Real local tool-call activation proof (October 19, 2026)
+
+This branch adds `scripts/deepagents_live_tool_smoke.py`, a **genuine
+model-facing, read-only** tool-call and continuation test. It reuses the
+existing `scripts/beta_live_model_smoke.py` operator target and HTTP
+helpers rather than introducing another provider configuration source.
+It requires an explicit `BETA_MODEL_PROVIDER`, `BETA_MODEL_NAME`,
+and beta-local `BETA_MODEL_BASE_URL`. No default or first-available
+model is accepted.
+
+The proof first requests one declared `karen_readonly_probe` function,
+checks that the backend returned an **actual OpenAI-compatible
+`message.tool_calls` record** with a provider-issued call ID, the
+correct function and nonce-preserving JSON arguments. It does not parse
+model prose or execute the tool. It supplies a controlled tool-role reply
+to the model and requires an exact acknowledgement, proving native
+tool-call continuation. Unexpected model switching, invalid payloads,
+external endpoints and malformed replies fail closed. Only a sanitized
+success/failure summary is printed.
+
+The existing self-hosted
+`.github/workflows/beta-live-model-smoke.yml` runs this step when the
+beta operator explicitly sets repository/environment variable
+`BETA_DEEPAGENTS_TOOL_CALL_PROOF_ENABLED=true`. Non-loopback private
+beta hosts additionally require
+`BETA_DEEPAGENTS_TRUST_PRIVATE_HOST=true`, after the operator has
+approved the trusted local host. The default beta smoke is unchanged.
+
+**Skipped is not passed.** A green general chat/model smoke, an offline
+mocked contract test, or a queued self-hosted workflow does not establish
+Deep Agents tool-calling readiness. The default-off Deep Agents feature
+must remain off until this live proof and the runtime-selected
+`KarenGovernedChatModel` integration smoke have both passed for the
+intended local model and provider.
+
+Commands:
+
+```bash
+# Offline contracts, no local model required:
+pytest tests/core/model_runtime/test_deepagents_live_tool_smoke_contract.py -q
+
+# Actual live local model, only on the approved self-hosted beta worker:
+BETA_MODEL_PROVIDER=<registered-local-provider> \
+BETA_MODEL_NAME=<verified-tool-model> \
+BETA_MODEL_BASE_URL=http://127.0.0.1:11434/v1 \
+python scripts/deepagents_live_tool_smoke.py
+```
+
+The existing canonical Medusa run ledger is **not yet** a LangGraph
+checkpoint saver. Cross-process graph resume and AG-UI replay remain
+explicitly disabled/unproven until a governed PostgreSQL checkpointer,
+tenant-scoped run-to-thread identity, resume authorization, and
+persisted event sequence have passed integration tests. UI preparation
+status is not evidence that model execution has begun; only observed
+Medusa/Deep Agents events can establish that transition.
