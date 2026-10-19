@@ -315,3 +315,80 @@ async def test_user_model_selection_rejects_disabled_provider(monkeypatch):
         )
     assert exc.value.status_code == 422
     assert not service.preference_updates
+
+
+@pytest.mark.asyncio
+async def test_model_selection_rejects_unknown_model_from_explicit_provider_catalog(
+    monkeypatch,
+) -> None:
+    service = FakeAuthService(preferences={"notifications": {"enabled": False}})
+
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    from ai_karen_engine.config import llm_provider_config
+
+    monkeypatch.setattr(
+        llm_provider_config,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: SimpleNamespace(
+                enabled=True,
+                models=[SimpleNamespace(id="authorized-model")],
+            ),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await settings_routes.update_user_model_selection(
+            settings_routes.ModelSelectionSettings(
+                provider="cloud-provider", model="invented-model"
+            ),
+            _principal(),
+        )
+
+    assert error.value.status_code == 422
+    assert service.preference_updates == []
+    assert service.account.preferences["notifications"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_model_selection_accepts_registered_model_without_writing_shared_settings(
+    monkeypatch,
+) -> None:
+    service = FakeAuthService(preferences={"behavior": {"memoryDepth": "long"}})
+
+    async def fake_get_auth_service():
+        return service
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    from ai_karen_engine.config import llm_provider_config
+
+    monkeypatch.setattr(
+        llm_provider_config,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: SimpleNamespace(
+                enabled=True, models=[SimpleNamespace(id="authorized-model")]
+            ),
+        ),
+    )
+    response = await settings_routes.update_user_model_selection(
+        settings_routes.ModelSelectionSettings(
+            provider="cloud-provider", model="authorized-model"
+        ),
+        _principal(),
+    )
+
+    assert response["status"] == "success"
+    assert service.preference_updates == [{
+        "user_id": _principal().user_id,
+        "preferences": {
+            "model_selection": {
+                "provider": "cloud-provider", "model": "authorized-model"
+            }
+        },
+        "merge": True,
+    }]
+    assert service.account.preferences["behavior"]["memoryDepth"] == "long"
