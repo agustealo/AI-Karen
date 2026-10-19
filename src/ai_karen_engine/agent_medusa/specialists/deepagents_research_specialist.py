@@ -9,7 +9,6 @@ Karen runtime model factory: no Deep Agents default provider or secret lookup.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import json
 import logging
@@ -105,7 +104,8 @@ class DeepAgentsResearchSpecialist:
         execution = self._verify_scope(self.registration, execution)
         from ai_karen_engine.config.agent_medusa import get_agent_medusa_runtime_settings
 
-        if not get_agent_medusa_runtime_settings().deepagents_research_enabled:
+        medusa_settings = get_agent_medusa_runtime_settings()
+        if not medusa_settings.deepagents_research_enabled:
             raise RuntimeError("Deep Agents research harness is disabled")
         if self._model_factory is None:
             raise RuntimeError("Deep Agents trusted runtime model factory is not configured")
@@ -302,26 +302,31 @@ class DeepAgentsResearchSpecialist:
             "tools": tools,
         }]
 
+        from ai_karen_engine.agent_medusa.execution.deepagents_checkpoints import (
+            ScopedPostgresDeepAgentsSaver, trusted_thread_id,
+        )
+
+        thread_id = trusted_thread_id(execution)
+        checkpointer = (
+            ScopedPostgresDeepAgentsSaver.for_authorized_execution(
+                execution, thread_id=thread_id
+            )
+            if medusa_settings.deepagents_checkpoint_enabled else None
+        )
+        # Graph checkpoints are durable ONLY when the separately validated
+        # PostgreSQL saver is enabled. A saved checkpoint alone does not
+        # create an authorized resume API or make a dead worker alive.
         agent = create_deep_agent(
             model=model,
             tools=tools,
             system_prompt=prompt,
             subagents=subagents,
             backend=StateBackend(),  # No host filesystem/shell/memory writes.
-            # Deep Agents >=0.7 intentionally removed the default todo tool.
-            # Research specialists explicitly opt in to actual SDK planning.
             middleware=[TodoListMiddleware()],
             skills=[],
             memory=[],
-            checkpointer=None,  # No unverified cross-process resume claims.
+            checkpointer=checkpointer,
         )
-        namespace = ":".join((
-            execution.tenant_id,
-            execution.session_id,
-            execution.trajectory_id,
-            execution.step_id,
-        ))
-        thread_id = hashlib.sha256(namespace.encode("utf-8")).hexdigest()
         limit = max(6, min(128, budget.max_reasoning_steps * 4))
         timeout_seconds = max(0.001, budget.max_duration_ms / 1000.0)
 
