@@ -141,6 +141,11 @@ async def test_checkpoint_and_writes_roundtrip_with_scoped_postgres_queries():
     assert inserts[0][1]["user_id"] == USER
     assert inserts[0][1]["policy_decision_id"] == "policy-1"
     assert inserts[0][1]["run_id"] == "run-1"
+    # Idempotent replays may update the SAME checkpoint, but never widen
+    # tenant, user, policy, session or Medusa run ownership.
+    assert "ON CONFLICT" in inserts[0][0]
+    assert "agent_medusa_deepagents_checkpoints.user_id = EXCLUDED.user_id" in inserts[0][0]
+    assert "agent_medusa_deepagents_checkpoints.run_id = EXCLUDED.run_id" in inserts[0][0]
 
 
 @pytest.mark.asyncio
