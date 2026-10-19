@@ -252,3 +252,43 @@ and `KARI_ENABLE_AG_UI_BRIDGE=false` for the transport. A successful
 beta model smoke is not a substitute for the explicit Deep Agents native
 tool-call proof, and no successful checkpoint insert alone proves safe
 external action replay, worker claim fencing, or human-authorized resume.
+
+
+## Operational learning and AG-UI provenance
+
+Deep Agents PR #497 now consumes an authorized CORTEX/NeuroRecall
+PromptRuntime context and a tenant/user/task-scoped Intelligence
+model-selection advisory. The provider registry, RuntimePolicy and
+ModelManager remain the only executability/model authorities; AG-UI
+receives only the observed outcome.
+
+The opt-in AG-UI projector in this PR exposes
+`CUSTOM(karen.learning_decision)` once per run when the canonical
+**content** chunk carries valid Runtime-origin lineage:
+
+```json
+{
+  "type": "CUSTOM",
+  "name": "karen.learning_decision",
+  "value": {
+    "selection_source": "learning_operational_reliability_v1",
+    "learning_signal_status": "ready",
+    "learning_signal_version": "model_operational_outcome_v1",
+    "learned_context_status": "resolved",
+    "included_memory_refs": 2,
+    "claim": "operational_evidence_only"
+  }
+}
+```
+
+This is an **illustrative event shape, not a live benchmark result**.
+It communicates how a model choice was made, not a reward score, training
+promotion, or correctness claim. The custom event refuses unknown
+selection sources and clamps included-reference counts. It does not
+forward private memory, model ranking internals or error contents.
+Client display is secondary to the canonical result; a missing event
+is not an invitation to fabricate a "Karen learned" toast.
+
+The old chat transport remains supported while the AG-UI opt-in bridge
+is acceptance-tested. Full candidate policy promotion, durable event
+replay, and a human-reviewed memory/learning interface remain gated.
