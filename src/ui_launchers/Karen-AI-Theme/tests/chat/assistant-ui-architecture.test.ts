@@ -77,6 +77,13 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("setSelectedProvider");
   });
 
+  it("does not interpret unknown agent statuses as successful execution", () => {
+    expect(component).toContain('["failed", "failure", "error", "errored", "cancelled", "canceled"].includes(normalized)');
+    expect(component).toContain('["finished", "completed", "complete", "succeeded", "success"].includes(normalized)');
+    expect(component).not.toContain('normalized.includes("success")');
+    expect(component).not.toContain('normalized.includes("complete")');
+  });
+
   it("renders runtime-supplied event provenance without fabricating task ordering", () => {
     expect(component).toContain('typeof value.runId === "string"');
     expect(component).toContain('typeof value.eventId === "string"');
