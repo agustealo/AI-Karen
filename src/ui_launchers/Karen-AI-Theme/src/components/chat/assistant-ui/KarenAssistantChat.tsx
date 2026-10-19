@@ -47,8 +47,8 @@ type Activity = {
 };
 
 function KarenActivity({ data, category = "Agent step" }: { data: unknown; category?: "Agent step" | "Plan" | "Subagent" }) {
-  if (typeof data !== "object" || !data) return null;
-  const raw = data as Activity;
+  const disclosureRef = useRef<HTMLDetailsElement>(null);
+  const raw = (typeof data === "object" && data ? data : {}) as Activity;
   const value = raw.content && typeof raw.content === "object"
     ? raw.content : raw;
   const fields = value as Record<string, unknown>;
@@ -71,11 +71,11 @@ function KarenActivity({ data, category = "Agent step" }: { data: unknown; categ
   const failed = ["failed", "failure", "error", "errored", "cancelled", "canceled"].includes(normalized);
   const done = ["finished", "completed", "complete", "succeeded", "success"].includes(normalized);
   const StatusIcon = failed ? CircleAlert : done ? CheckCircle2 : Clock3;
-  const disclosureRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     // Open failures once when observed, but let the user collapse the details.
     if (failed && disclosureRef.current) disclosureRef.current.open = true;
   }, [failed]);
+  if (!data || typeof data !== "object") return null;
   return (
     <details ref={disclosureRef} data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
