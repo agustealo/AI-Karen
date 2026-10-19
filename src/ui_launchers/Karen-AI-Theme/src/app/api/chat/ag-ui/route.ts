@@ -70,7 +70,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         flush(controller) {
           if (!terminalSeen && !request.signal.aborted) {
             controller.enqueue(encoder.encode(
-              'data: {"type":"RUN_ERROR","message":"Backend stream ended before completion.","code":"CHAT_STREAM_UPSTREAM_TERMINATED"}\n\n',
+              '\n\ndata: {"type":"RUN_ERROR","message":"Backend stream ended before completion.","code":"CHAT_STREAM_UPSTREAM_TERMINATED"}\n\n',
             ));
           }
         },
