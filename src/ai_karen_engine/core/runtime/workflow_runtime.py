@@ -380,6 +380,24 @@ class WorkflowRuntime:
         get_implementation_factory().register_deepagents_model_factory(
             build_medusa_deepagents_model
         )
+        # Resolve learning once, at the authenticated runtime boundary.
+        # Medusa/Deep Agents receive only a typed, scoped advisory snapshot.
+        # Memory/provider registries retain their own single authorities.
+        learned_model_signals = None
+        if (
+            not request.preferred_model
+            and not plan.provider_constraints.get("model")
+        ):
+            from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+                get_model_outcome_signal_service,
+            )
+            learned_model_signals = await (
+                get_model_outcome_signal_service().for_execution(
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    task_type=decision.intent,
+                )
+            )
         agent_request = RuntimeRequest(
             query=query,
             user_id=ctx.user_id,
@@ -390,6 +408,8 @@ class WorkflowRuntime:
                 "execution_context": ctx,
                 "preferred_provider": request.preferred_provider,
                 "preferred_model": request.preferred_model,
+                "learning_task_type": decision.intent,
+                "learned_model_signals": learned_model_signals,
             },
             authorized_plan=_serialize_plan(plan),
             execution_requirements=requirements,
