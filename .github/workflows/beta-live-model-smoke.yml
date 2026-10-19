@@ -145,18 +145,29 @@ jobs:
         working-directory: src/ui_launchers/Karen-AI-Theme
         run: npx playwright install --with-deps chromium
 
+      - name: Discard any checked-in or cached test evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf src/ui_launchers/Karen-AI-Theme/playwright-report
+          rm -rf src/ui_launchers/Karen-AI-Theme/test-results
+          rm -f src/ui_launchers/Karen-AI-Theme/test-results.json
+          find src/ui_launchers/Karen-AI-Theme/e2e -name '*.zip' -type f -delete
+
       - name: Execute authenticated model-backed identity replay
+        id: replay
         working-directory: src/ui_launchers/Karen-AI-Theme
         run: npx playwright test e2e/ux-personal-memory-replay.spec.ts --config=e2e/playwright.config.ts --retries=0
 
       - name: Retain private engineering evidence for review
-        if: ${{ always() }}
+        if: ${{ always() && steps.replay.outcome != 'skipped' }}
         uses: actions/upload-artifact@v4
         with:
-          name: karen-authenticated-chat-acceptance-${{ github.sha }}-${{ github.run_id }}
+          name: karen-authenticated-chat-acceptance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             src/ui_launchers/Karen-AI-Theme/playwright-report/
             src/ui_launchers/Karen-AI-Theme/test-results/
+            !src/ui_launchers/Karen-AI-Theme/test-results/**/*.zip
             src/ui_launchers/Karen-AI-Theme/test-results.json
           if-no-files-found: warn
           retention-days: 7
