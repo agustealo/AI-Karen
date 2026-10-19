@@ -94,33 +94,65 @@ class AGUIEventProjection:
             return events
 
         if kind == "agent_step":
-            return [self._custom("karen.agent_step", {
-                "step_id": _text(meta.get("step_id"), 128),
-                "event_type": _text(meta.get("event_type"), 64),
-                "status": _text(meta.get("status"), 32),
-                "agent_id": _text(meta.get("agent_id"), 128),
+            step_id = _text(meta.get("step_id"), 128)
+            agent_id = _text(meta.get("agent_id"), 128)
+            status = _text(meta.get("status"), 32)
+            event_type = _text(meta.get("event_type"), 64)
+            if not step_id or not agent_id or status not in {
+                "running", "completed", "failed", "cancelled", "skipped",
+            }:
+                return []
+            # Stable activity identity is scoped by the AG-UI run. A new run
+            # cannot overwrite another run's activity message.
+            activity_id = f"activity-{self.run_id}-{step_id}"
+            activity = {
+                "type": "ACTIVITY_SNAPSHOT",
+                "messageId": activity_id,
+                "activityType": "KAREN_AGENT_STEP",
+                "content": {
+                    "stepId": step_id,
+                    "agentId": agent_id,
+                    "status": status,
+                    "eventType": event_type,
+                    "description": content[:2000],
+                },
+            }
+            return [activity, self._custom("karen.agent_step", {
+                "step_id": step_id,
+                "event_type": event_type,
+                "status": status,
+                "agent_id": agent_id,
                 "description": content[:2000],
             })]
 
         if kind == "tool":
             phase = _text(meta.get("phase") or meta.get("status"), 32).lower()
-            tool_id = _text(meta.get("tool_call_id") or meta.get("step_id"), 128)
-            tool_name = _text(meta.get("tool_name") or meta.get("action_type"), 128)
+            # An agent step is not a tool-call identity. Never invent one.
+            tool_id = _text(meta.get("tool_call_id"), 128)
+            tool_name = _text(meta.get("tool_name"), 128)
+            if not tool_id or not tool_name or phase not in {
+                "started", "completed", "failed", "cancelled",
+            }:
+                return []
             events = [self._custom("karen.tool_activity", {
                 "tool_call_id": tool_id,
                 "name": tool_name,
                 "phase": phase,
             })]
-            if tool_id and tool_name and phase in {"started", "starting"} and tool_id not in self._tool_calls:
+            if phase == "started" and tool_id not in self._tool_calls:
                 self._tool_calls.add(tool_id)
                 events.append({
                     "type": "TOOL_CALL_START",
                     "toolCallId": tool_id,
                     "toolCallName": tool_name,
                 })
-            elif tool_id in self._tool_calls and phase in {"completed", "failed", "cancelled"}:
+            elif tool_id in self._tool_calls and phase in {
+                "completed", "failed", "cancelled",
+            }:
                 self._tool_calls.remove(tool_id)
                 events.append({"type": "TOOL_CALL_END", "toolCallId": tool_id})
+            # CUSTOM retains the observed failed/cancelled outcome; AG-UI
+            # TOOL_CALL_END means only that the invocation is no longer active.
             return events
 
         if kind == "citation":
