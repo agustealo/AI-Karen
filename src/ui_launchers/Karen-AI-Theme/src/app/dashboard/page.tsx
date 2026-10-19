@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import {
   Bell,
   Binary,
@@ -70,6 +71,13 @@ import { Separator } from "@/components/ui/separator";
 
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
+
+// Keep legacy chat as the default until full assistant-ui/AG-UI proof passes.
+const USE_ASSISTANT_UI_CHAT = process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED === "true";
+const KarenAssistantChat = dynamic(
+  () => import("@/components/chat/assistant-ui/KarenAssistantChat"),
+  { ssr: false },
+);
 
 type ActiveView =
   | "chat"
@@ -307,7 +315,7 @@ export default function DashboardPage() {
     () => ({
       chat: (
         <SessionProvider>
-          <ChatInterface />
+          {USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />}
         </SessionProvider>
       ),
       settings: <SettingsDialogComponent />,
