@@ -214,3 +214,88 @@ def test_existing_runtime_outcome_schema_and_tenant_rls_retained():
     assert "outcome_records_source_check" in sql
     assert "'runtime.execution', 'user.feedback', 'intelligence.ml'" in sql
     assert "CREATE TABLE" not in sql
+
+
+@pytest.mark.asyncio
+async def test_atomic_evaluation_batch_commits_complete_set_and_rejects_duplicates():
+    store = InMemoryOutcomeStore()
+    service = GovernedMLLearningEvidence(tenant_id=TENANT, user_id=USER, store=store)
+    cases = [
+        (observation(outcome_id="case-one"), "heldout_evaluation", "case-1"),
+        (observation(outcome_id="case-two"), "heldout_evaluation", "case-2"),
+    ]
+    acknowledgement = await service.record_verified_batch(cases)
+    assert acknowledgement["stored"] is True
+    assert acknowledgement["stored_count"] == 2
+    assert len(await service.load_verified()) == 2
+    with pytest.raises(OutcomeStoreError):
+        await service.record_verified_batch([
+            (observation(outcome_id="case-three"), "heldout_evaluation", "case-3"),
+            (observation(outcome_id="case-two"), "heldout_evaluation", "case-2"),
+        ])
+    assert len(await service.load_verified()) == 2
+    assert not any(
+        row["outcome_id"] == "case-three"
+        for row in store.list_for_tenant(TENANT, user_id=USER)
+    )
+
+
+@pytest.mark.asyncio
+async def test_atomic_batch_rejects_unsupported_store_instead_of_sequential_fallback():
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
+
+    class SingleOnlyStore(InMemoryOutcomeStore):
+        async def save_unique_outcomes_async(self, payloads):
+            return await OutcomeStore.save_unique_outcomes_async(self, payloads)
+
+    store = SingleOnlyStore()
+    service = GovernedMLLearningEvidence(tenant_id=TENANT, user_id=USER, store=store)
+    with pytest.raises(OutcomeStoreError, match="Atomic"):
+        await service.record_verified_batch([
+            (observation(outcome_id="first"), "heldout_evaluation", "case-1"),
+            (observation(outcome_id="second"), "heldout_evaluation", "case-2"),
+        ])
+    assert await service.load_verified() == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_batch_uses_one_transaction_and_rolls_back_on_second_failure(
+    monkeypatch,
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from ai_karen_engine.core.runtime.outcome import store as store_module
+
+    calls = []
+    rolled_back = []
+    staged = []
+
+    class TransactionSession:
+        async def execute(self, sql, params):
+            calls.append(params["outcome_id"])
+            if len(calls) == 2:
+                return SimpleNamespace(rowcount=0)
+            staged.append(dict(params))
+            return SimpleNamespace(rowcount=1)
+
+    @asynccontextmanager
+    async def atomic_scope(tenant):
+        assert tenant == TENANT
+        try:
+            yield TransactionSession()
+        except Exception:
+            staged.clear()
+            rolled_back.append(True)
+            raise
+
+    monkeypatch.setattr(store_module, "async_transaction_scope", atomic_scope)
+    store = PostgresOutcomeStore()
+    service = GovernedMLLearningEvidence(tenant_id=TENANT, user_id=USER, store=store)
+    with pytest.raises(OutcomeStoreError, match="not appended"):
+        await service.record_verified_batch([
+            (observation(outcome_id="tx-one"), "heldout_evaluation", "case-1"),
+            (observation(outcome_id="tx-two"), "heldout_evaluation", "case-2"),
+        ])
+    assert calls == ["tx-one", "tx-two"]
+    assert rolled_back == [True]
+    assert staged == []
