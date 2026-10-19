@@ -299,3 +299,37 @@ async def test_postgres_batch_uses_one_transaction_and_rolls_back_on_second_fail
     assert calls == ["tx-one", "tx-two"]
     assert rolled_back == [True]
     assert staged == []
+
+
+@pytest.mark.asyncio
+async def test_source_scoped_learning_history_cannot_be_starved_by_other_outcomes():
+    store = InMemoryOutcomeStore()
+    runtime = {
+        "tenant_id": TENANT, "user_id": USER,
+        "source": "runtime.execution", "recorded_at": "2026-10-19T10:00:00Z",
+        "metadata": {"task_type": "research"},
+    }
+    store.save_outcome({**runtime, "outcome_id": "runtime-first"})
+    service = GovernedMLLearningEvidence(tenant_id=TENANT, user_id=USER, store=store)
+    for i in range(25):
+        await service.record_verified(
+            observation(outcome_id=f"predictor-{i}"),
+            label_source="heldout_evaluation",
+            label_evidence_ref=f"benchmark-{i}",
+        )
+    # A generic newest-5 read consists solely of recent benchmark records.
+    assert all(
+        r["source"] == "intelligence.ml"
+        for r in store.list_for_tenant(TENANT, user_id=USER, limit=5)
+    )
+    runtime_rows = store.list_for_tenant(
+        TENANT, user_id=USER, source="runtime.execution", limit=5
+    )
+    assert [r["outcome_id"] for r in runtime_rows] == ["runtime-first"]
+    predicted = store.list_for_tenant(
+        TENANT, user_id=USER, source="intelligence.ml", limit=5
+    )
+    assert len(predicted) == 5
+    assert all(r["source"] == "intelligence.ml" for r in predicted)
+    with pytest.raises(ValueError, match="source"):
+        store.list_for_tenant(TENANT, source="unknown-source")
