@@ -60,6 +60,34 @@ def is_profile_summary_request(text: str) -> bool:
     return bool(_PROFILE_SUMMARY.search(normalize_personal_query(text)))
 
 
+
+def is_profile_summary_followup(
+    text: str, messages: list[dict[str, object]]
+) -> bool:
+    """Resolve a brief affirmative reply only to a preceding user identity query.
+
+    A model's self-description, assistant offer, or unrelated previous question
+    is not evidence about the user. The actual answer must still pass the
+    canonical runtime's authorized fact sufficiency checks.
+    """
+    utterance = normalize_personal_query(text).strip(" ?.!").strip()
+    if utterance not in {
+        "share please", "please share", "yes please", "yes, please",
+        "go ahead", "tell me more", "please do",
+    }:
+        return False
+    # The most recent preceding user request must be about their own profile.
+    # An intervening unrelated user turn breaks discourse continuity.
+    for item in reversed(messages[:-1]):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").casefold()
+        if role == "user":
+            prior = str(item.get("content") or "")
+            return is_profile_summary_request(prior)
+    return False
+
+
 def requested_profile_attribute(text: str) -> str | None:
     """Resolve one unambiguous attribute, independent of expressive wording."""
     if is_profile_summary_request(text):

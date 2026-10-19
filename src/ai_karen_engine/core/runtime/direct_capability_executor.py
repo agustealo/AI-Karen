@@ -681,7 +681,7 @@ class DirectCapabilityExecutor:
     def _extract_time_location(query: str) -> Optional[str]:
         patterns = (
             r"^what\s+time\s+is\s+it(?:\s+right\s+now)?\s+(?:in|for)\s+(.+?)[?!.]*$",
-            r"^what(?:'s|\s+is)\s+the\s+(?:current\s+)?time\s+(?:in|for)\s+(.+?)[?!.]*$",
+            r"^what(?:'s|s|\s+is)\s+the\s+(?:current\s+)?time\s+(?:in|for)\s+(.+?)[?!.]*$",
             r"^(?:current\s+time|time\s+now)\s+(?:in|for)\s+(.+?)[?!.]*$",
             r"^timezone\s+(?:in|for|of)\s+(.+?)[?!.]*$",
             r"^time\s+in\s+(.+?)[?!.]*$",

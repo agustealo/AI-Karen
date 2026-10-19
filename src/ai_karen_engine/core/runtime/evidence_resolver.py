@@ -165,9 +165,12 @@ class RuntimeEvidenceResolver:
         )
 
         from ai_karen_engine.core.intelligence.profile_attribute import (
+            is_profile_summary_followup,
             is_profile_summary_request,
         )
-        if is_profile_summary_request(query):
+        if is_profile_summary_request(query) or is_profile_summary_followup(
+            query, request.messages
+        ):
             return "who am i"
 
         # Query by the requested fact, not by a sanitized user utterance.
