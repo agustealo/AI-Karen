@@ -113,6 +113,14 @@ class DeepAgentsResearchSpecialist:
         query = input_data.get("query") or input_data.get("raw")
         if not isinstance(query, str) or not query.strip():
             raise ValueError("Deep Agents research requires a nonempty task query")
+        # The canonical Runtime can supply already-assembled PromptRuntime
+        # messages with CORTEX-authorized NeuroRecall evidence. The agent
+        # never retrieves or invents a separate memory snapshot.
+        approved_messages = execution.approved_prompt_messages
+        input_messages = (
+            [dict(message) for message in approved_messages]
+            if approved_messages else [{"role": "user", "content": query.strip()}]
+        )
         prompt = self._get_prompt(self.registration)
 
         # Optional dependency is deliberately imported only for selected runs.
@@ -346,7 +354,7 @@ class DeepAgentsResearchSpecialist:
         async with asyncio.timeout(timeout_seconds):
             with tracing_context(enabled=False):
                 result = await agent.ainvoke(
-                    {"messages": [{"role": "user", "content": query.strip()}]},
+                    {"messages": input_messages},
                     config={
                         "configurable": {"thread_id": thread_id},
                         "callbacks": [ModelBudgetCallback()],
@@ -411,6 +419,16 @@ class DeepAgentsResearchSpecialist:
             ),
             "learning_signal_version": getattr(
                 model, "learning_signal_version", ""
+            ),
+            "learned_context_status": (
+                (execution.learning_context_status or {}).get(
+                    "status", "not_supplied"
+                )
+            ),
+            "learned_memory_refs_included": int(
+                (execution.learning_context_status or {}).get(
+                    "included_memory_count", 0
+                )
             ),
             "runtime_engine": model.endpoint.runtime_engine.value,
             "prompt_contract_id": self.registration.prompt_contract_id,
