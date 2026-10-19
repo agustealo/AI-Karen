@@ -26,3 +26,7 @@ class SpecialistExecutionContext:
     budget_meter: Optional[Any] = None
     event_emitter: Optional[Any] = None
     session_id: Optional[str] = None
+    # Trusted transport preferences are validated against the canonical
+    # provider registry before construction of a Deep Agents model.
+    preferred_provider: Optional[str] = None
+    preferred_model: Optional[str] = None
