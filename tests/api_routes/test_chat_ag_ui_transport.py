@@ -352,3 +352,68 @@ async def test_verified_medusa_checkpoint_emits_observed_ag_ui_without_resume(mo
     assert events[1]["value"]["resumable"] is False
     assert "must-not-leak" not in frames
     assert events[-1]["type"] == "RUN_FINISHED"
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_uses_authorized_durable_thread_and_canonical_runtime_session(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as gateway
+    fake = FakeRuntime()
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: fake)
+    owned_id = "7e76d870-5314-40ae-9478-513b843a9fd0"
+    class ScopedGateway:
+        async def get_owned_snapshot(self, context, *, message_limit):
+            assert context.conversation_id == owned_id
+            assert context.tenant_id == TENANT_A
+            assert context.user_id == USER
+            assert message_limit == 0
+            return SimpleNamespace(
+                conversation=SimpleNamespace(
+                    id=owned_id, session_id="canonical_session_1"
+                )
+            )
+    monkeypatch.setattr(
+        gateway, "get_conversation_runtime_gateway",
+        lambda: ScopedGateway(),
+    )
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(threadId=owned_id),
+        http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    events = [json.loads(line[6:])
+              for part in [part async for part in response.body_iterator]
+              for line in part.splitlines() if line.startswith("data: ")]
+    assert events[-1]["type"] == "RUN_FINISHED"
+    assert len(fake.requests) == 1
+    assert fake.requests[0].context.session_id == "canonical_session_1"
+    assert fake.requests[0].context.conversation_id == owned_id
+    assert fake.requests[0].context.tenant_id == TENANT_A
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_rejects_unowned_uuid_thread_instead_of_creating_conversation(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as gateway
+    class DenyGateway:
+        async def get_owned_snapshot(self, *_args, **_kwargs):
+            raise PermissionError("conversation_user_mismatch")
+    monkeypatch.setattr(
+        gateway, "get_conversation_runtime_gateway", lambda: DenyGateway()
+    )
+    class NoExecution:
+        def execute_stream(self, *_args, **_kwargs):
+            raise AssertionError("Unowned thread must not execute")
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: NoExecution())
+    with pytest.raises(HTTPException) as exc:
+        await chat_ingress.stream_ag_ui_chat(
+            request=agui_run(
+                threadId="b789543c-5260-4f9b-86b0-d40d13f5967d"
+            ),
+            http_request=SimpleNamespace(headers={}),
+            user={"user_id": USER, "tenant_id": TENANT_B},
+        )
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Conversation is unavailable"
