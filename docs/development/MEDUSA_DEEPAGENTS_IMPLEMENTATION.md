@@ -425,3 +425,161 @@ pytest tests/core/runtime/test_deepagents_live_activity.py -q
 
 These are **structural and mocked transport tests**, not PostgreSQL
 durability proof. The feature flag remains disabled by default.
+
+
+## Learning is an execution input, not a competing orchestrator (October 19, 2026)
+
+This branch now wires Karen's **two-speed learning** into Deep Agents,
+without moving RuntimePolicy or provider authority into an SDK.
+
+```text
+User request
+  -> RuntimeEvidenceResolver -> authorized NeuroRecall / user-model evidence
+  -> CORTEX intent and capability requirements
+  -> Karen Chat/WorkflowRuntime
+      -> versioned PromptRuntime memory/continuity assembly
+      -> Intelligence ModelOutcomeSignalService (tenant + user + intent)
+      -> RuntimePolicy and ModelManager approved inventory
+  -> Medusa -> Deep Agents SDK (governed prompt, selected real local model)
+  -> canonical provider transport and ToolBridge receipts
+  -> canonical outcome and trajectory stores (append-only PostgreSQL)
+  -> Intelligence derived evidence on the next authorized request
+```
+
+### Fast learning, used during execution
+
+The canonical ChatRuntime already consumes CORTEX-resolved NeuroRecall
+evidence before normal direct model execution. The new Deep Agents path
+passes this **same** typed CognitiveContext to the already existing
+PromptRuntime assembler, after verifying tenant, user, request, policy
+and evidence-level scopes. It does not issue its own retrieval or form
+a second prompt. Expired or contradicted evidence is excluded and
+RuntimePolicy's actual input-token budget is enforced. The SDK sees
+the assembled authorized messages; progress/AG-UI see only counts,
+provenance and explicit degraded status, never private memory content.
+
+The Intelligence-owned `ModelOutcomeSignalService` projects from
+`OutcomeStore.list_for_tenant(tenant_id, user_id=...)`, which is backed by
+the existing tenant-RLS PostgreSQL ledger. Evidence reads are timeout
+bounded. The result is a versioned advisory snapshot
+`model_operational_outcome_v1` scoped to the CORTEX intent, tenant,
+user, provider and model.
+
+The conservative model choice path is:
+
+1. RuntimePolicy constraints and **explicit user model choice** are
+   authoritative. Never silently substitute a requested model.
+2. Provider registry and health/inventory/tool capability are checked.
+   Models outside the policy model allowlist never enter learning ranks.
+3. If model choice is automatic, baseline is the canonical provider's
+   configured default. A verified, sufficient history of **runtime
+   completion/failure** can change that model only when the baseline
+   shows repeated failures and the alternative is materially more
+   reliable. Insufficient samples, staleness, cross-tenant evidence,
+   mixed/fallback provenance, storage failures, and cold starts all
+   retain the authorized baseline.
+4. CORTEX/Intelligence advise; ModelManager alone resolves the
+   executable provider/model. Medusa does not reroute the call.
+5. The observed model and actual shared Medusa model-call count flow
+   back through WorkflowRuntime and ChatRuntime into the canonical
+   outcome recorder. Direct-vs-graph and stream-vs-nonstream provenance
+   now share typed metadata.
+
+**Operational completion is NOT ground-truth task quality.** This
+initial signal can improve operational reliability under repeated
+failure, not claim that a model writes better code, makes fewer factual
+errors, or has higher verified task success. Those decisions require
+task-specific verification and user-feedback evidence, off-policy
+evaluation and the ML promotion gate. The learning policy never
+grants a permission or changes an active ML model artifact.
+
+### Slow learning and durable predictor evidence
+
+The original `core.intelligence.ml.online_learning` observer retains
+its process-local, shadow/test use. The new Intelligence-owned
+`core.intelligence.ml.durable_outcomes.GovernedMLLearningEvidence`
+provides a **separately scoped durable adapter** for evaluated
+predictor evidence using the SAME canonical OutcomeStore.
+
+Migration `20261019020000_37_intelligence_ml_outcome_evidence.sql`
+expands the source check on the existing tenant-RLS
+`public.outcome_records` table to accept `intelligence.ml` while
+keeping `runtime.execution` and `user.feedback` distinct.
+The adapter requires an attributed review/held-out evaluation
+reference, strict unique append acknowledgement, typed predictor
+task/model/feature versions, finite calibrated values, and exact
+tenant and user identity. Only **numeric evaluation summaries**
+are stored: no raw labels, user memory, prompts, training examples or
+arbitrary source metadata.
+
+`load_verified()` rehydrates numeric outcome summaries from scoped
+PostgreSQL reads; `build_adaptive_layer()` recomputes candidate
+evidence from durable records rather than a stale process cache.
+The evidence reference is currently an **attestation from a trusted
+evaluation caller**, not independent cryptographic proof of label
+correctness. ML promotion remains separately governed by
+`MLModelRegistry` and the existing evaluation/promotion service.
+The adapter does not backfill old process-memory observations or
+automatically create labels; connect evaluated training jobs as
+producers only after verifying their label provenance and consent.
+
+### AG-UI integration
+
+The existing PR #494 now supports one allowlisted
+`CUSTOM(karen.learning_decision)` projection when *actual* Deep
+Agents response metadata includes model-selection source, learning
+status/version and number of memory references included. It does not
+expose model scores, personal memories, or a claim of learned answer
+correctness. A UI can distinguish `baseline_no_learning`,
+`learning_operational_reliability_v1`, `explicit_runtime_or_user`,
+and degraded/unavailable learning, but cannot invent a recommendation.
+
+### Central settings
+
+The following centrally validated settings are explicit and may be
+overridden by environment. They do not enable the Deep Agents
+execution flag:
+
+```dotenv
+LEARNING_MODEL_ROUTING_SIGNALS_ENABLED=true
+LEARNING_MODEL_ROUTING_MIN_SAMPLES=12
+LEARNING_MODEL_ROUTING_HISTORY_LIMIT=500
+LEARNING_MODEL_ROUTING_HISTORY_DAYS=90
+LEARNING_MODEL_ROUTING_READ_TIMEOUT_SECONDS=0.75
+LEARNING_MODEL_ROUTING_MAX_FAILURE_RATE=0.4
+LEARNING_MODEL_ROUTING_MIN_RELIABILITY_GAIN=0.2
+```
+
+### Proof and remaining activation gates
+
+```bash
+pytest tests/core/intelligence/ml/test_model_outcome_signals.py -q
+pytest tests/unit/core/intelligence/ml/test_durable_outcomes.py -q
+pytest tests/core/runtime/test_deepagents_learning_context.py -q
+pytest tests/core/model_runtime/test_structured_tool_chat_model.py -q
+pytest tests/core/runtime/test_deepagents_primary_routing.py -q
+pytest tests/agent_medusa/test_deepagents_research_harness.py -q
+```
+
+These contracts test deterministic evidence ranking, cold start,
+negative evidence, exact model override, RuntimePolicy allowlists,
+tenant isolation, replay from a new durable adapter, prompt inclusion,
+expired/contradicted memory exclusion, and stream/nonstream metadata.
+**Mocked tests are not model-quality or live PostgreSQL proof.**
+
+Still required before calling this a proven adaptive improvement:
+
+- Apply/check migration 37 with actual PostgreSQL roles and tenant-RLS
+  isolation, plus idempotent evidence re-read across a worker restart.
+- Confirm the real local-model tool-call, checkpoint recovery, and
+  observed model-call/provenance end-to-end against the chosen provider.
+- Connect label-producing training/evaluation jobs with trusted,
+  reproducible label evidence, consent and deletion propagation.
+- Measure model choices against a fixed no-learning baseline on held-out
+  task strata, including corrections, failure rates, costs, latency,
+  regressions and model/policy pin overrides.
+- Gate promotion of new learning policies using existing
+  shadow/off-policy evaluation and MLRegistry governance.
+- Exercise actual AG-UI chat/browser flow and preserve user-visible
+  memory/privacy preferences. Keep draft PRs until latest-head CI and
+  human acceptance pass.
