@@ -360,7 +360,10 @@ class WorkflowRuntime:
         ):
             raise PermissionError("Deep Agents resolved learning context scope mismatch")
 
-        from ai_karen_engine.core.context.contracts import EvidenceSource
+        from datetime import datetime, timezone
+        from ai_karen_engine.core.context.contracts import (
+            EvidenceContradictionStatus, EvidenceSource,
+        )
         from ai_karen_engine.core.runtime.prompt import (
             PromptAssemblyRequest, get_prompt_runtime_service,
         )
@@ -378,6 +381,20 @@ class WorkflowRuntime:
                 # A mixed-scope evidence payload is a security violation,
                 # never a reason to broaden recall or silently use it.
                 raise PermissionError("Deep Agents evidence crosses authorized scope")
+            # Exclude unresolved contradictions and expired evidence, even
+            # when a previously authorized context included those candidates.
+            # The memory/NeuroRecall owner remains the evidence authority.
+            if item.contradiction.status in {
+                EvidenceContradictionStatus.POSSIBLE,
+                EvidenceContradictionStatus.CONFIRMED,
+            }:
+                continue
+            expires_at = item.temporal.expires_at
+            if expires_at is not None:
+                if expires_at.tzinfo is None or expires_at.astimezone(
+                    timezone.utc
+                ) <= datetime.now(timezone.utc):
+                    continue
             if not isinstance(item.content, str) or not item.content.strip():
                 continue
             if (
@@ -411,12 +428,25 @@ class WorkflowRuntime:
                 memory_items=memory_items,
                 continuity_items=continuity_items,
                 messages=list(request.messages),
+                # Never raise a policy-issued input limit to an invented
+                # 512-token floor. PromptRuntime must obey the actual budget.
                 token_budget=min(
-                    max(512, decision.token_budget),
-                    max(512, plan.budget.max_input_tokens),
+                    max(1, decision.token_budget),
+                    max(1, plan.budget.max_input_tokens),
                 ),
             )
         )
+        permitted_tokens = min(
+            max(1, decision.token_budget),
+            max(1, plan.budget.max_input_tokens),
+        )
+        if (
+            assembled.token_estimate
+            and assembled.token_estimate > permitted_tokens
+        ):
+            raise RuntimeError(
+                "Deep Agents PromptRuntime output exceeds authorized input budget"
+            )
         # Runtime-owned prompt is trusted, but the LangChain message adapter
         # accepts only canonical role/content fields, not embedded metadata.
         messages = [
