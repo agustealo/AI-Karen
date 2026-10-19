@@ -140,10 +140,15 @@ request/stream parser and full integration tests pass.
   projection with fail-closed terminal behavior and metadata allowlisting.
 - Added centrally feature-gated authenticated `POST /api/chat/ag-ui` endpoint to existing
   `api_routes/chat/runtime.py`, still executing only via ChatRuntime.
-- Added unit and ingress tests for ordering, redaction, role constraints,
-  tenant isolation, rejection of client instructions and interrupted streams.
-- **Not yet complete:** browser AG-UI proxy, assistant-ui prototype, full
-  agent workspace migration, migration cleanup, and end-to-end CI verification.
+- Added a configured-backend, same-origin Next.js AG-UI proxy. It verifies
+  explicit terminal frames and returns a safe RUN_ERROR on premature EOF or
+  socket read interruption instead of inventing completion.
+- Added Python unit/ingress and frontend proxy tests for ordering, redaction,
+  role constraints, tenant isolation, client instruction rejection and stream
+  integrity. CI execution has not yet been verified.
+- **Not yet complete:** assistant-ui prototype, full agent workspace
+  migration, broader AG-UI state/tool feature coverage, migration cleanup,
+  complete client compatibility verification and all CI gates.
 
 ### Do not merge before these checks
 
