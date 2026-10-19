@@ -156,11 +156,14 @@ class ModelOutcomeSignalService:
             )
         try:
             store = get_outcome_store()
-            records = await asyncio.to_thread(
-                store.list_for_tenant,
-                tenant_id,
-                limit=settings.model_routing_history_limit,
-                user_id=user_id,
+            records = await asyncio.wait_for(
+                asyncio.to_thread(
+                    store.list_for_tenant,
+                    tenant_id,
+                    limit=settings.model_routing_history_limit,
+                    user_id=user_id,
+                ),
+                timeout=settings.model_routing_read_timeout_seconds,
             )
             return derive_model_signals(
                 records, tenant_id=tenant_id, user_id=user_id,
