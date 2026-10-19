@@ -38,6 +38,16 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("ActionBarPrimitive.Edit");
   });
 
+  it("renders assistant text as safe GitHub-flavored Markdown without an HTML escape hatch", () => {
+    expect(component).toContain('import ReactMarkdown from "react-markdown"');
+    expect(component).toContain('import remarkGfm from "remark-gfm"');
+    expect(component).toContain('Text: KarenMarkdownText');
+    expect(component).toContain('skipHtml');
+    expect(component).toContain('urlTransform={(url) => /^(https?:|mailto:)/i.test(url) ? url : ""}');
+    expect(component).not.toContain('rehypeRaw');
+    expect(component).not.toContain('dangerouslySetInnerHTML');
+  });
+
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
     expect(dashboard).toContain("<SessionProvider>");
     expect(dashboard).toContain("USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />");
