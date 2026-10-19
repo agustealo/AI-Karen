@@ -141,6 +141,14 @@ class ChatRuntimeMetadata:
     requested_target: Optional[str] = None
     actual_provider: Optional[str] = None
     actual_model: Optional[str] = None
+    # Scalar, bounded, Runtime-authorized learning lineage. Does not expose
+    # raw personal memories, task prompts, model scores or checkpoint bytes.
+    model_calls_observed: Optional[int] = None
+    model_selection_source: Optional[str] = None
+    learning_signal_status: Optional[str] = None
+    learning_signal_version: Optional[str] = None
+    learned_context_status: Optional[str] = None
+    learned_memory_refs_included: Optional[int] = None
     actual_target: Optional[str] = None
     runtime_engine: Optional[str] = None
     protocol: Optional[str] = None
@@ -173,6 +181,12 @@ class ChatRuntimeMetadata:
             "requested_target": self.requested_target,
             "actual_provider": self.actual_provider,
             "actual_model": self.actual_model,
+            "model_calls_observed": self.model_calls_observed,
+            "model_selection_source": self.model_selection_source,
+            "learning_signal_status": self.learning_signal_status,
+            "learning_signal_version": self.learning_signal_version,
+            "learned_context_status": self.learned_context_status,
+            "learned_memory_refs_included": self.learned_memory_refs_included,
             "actual_target": self.actual_target,
             "runtime_engine": self.runtime_engine,
             "protocol": self.protocol,
