@@ -219,6 +219,34 @@ compatibility contracts are proven and assistant-ui integration remains
 feature-gated. PR #494 and PR #497 are **separate owners, not duplicate
 AG-UI implementations**; do not copy transport normalization into Medusa.
 
+### Durable timeline contract (not implemented yet)
+
+A transcript-level AG-UI activity card is an observed event, **not** evidence
+of a complete, ordered or replayable task history. Do not group cards into a
+timeline, mark a run complete from an individual step, or offer Resume until
+the canonical run-ledger API proves all of the following:
+
+1. Every event has a server-assigned, immutable event ID and monotonic
+   per-run sequence; timestamp is display-only, never an ordering key.
+2. The run has a canonical ID, tenant ID, conversation ID, execution attempt
+   and verified lifecycle status, with explicit terminal state and source.
+3. The authorized read API validates session and tenant scope on every request;
+   pagination/cursors remain stable across reconnects and concurrent writes.
+4. Replay delivers saved event receipts in ledger sequence, without duplicating
+   side effects, collapsing distinct attempts or synthesizing missing events.
+5. Truncation, gaps, missing history, partial replay, and retention expiry are
+   explicit response states. The UI must label these as incomplete, not as
+   an empty or successful run.
+6. Tool outcomes and approval decisions link to backend-issued IDs and governed
+   receipts; lifecycle finish alone must not imply a successful side effect.
+7. Tests cover interrupted streams, concurrent subagents, reconnect and reload,
+   tenant isolation, deletion, retention, idempotency, and accessibility.
+
+**Boundary:** PR #494 may render and test approved read-only events, but must
+not create a second event ledger. The canonical persisted run-history contract
+belongs with the runtime/Medusa owner; frontend timeline grouping remains
+feature-gated until its API and integration evidence are supplied.
+
 ### Acceptance sequence
 
 1. Focused projection, authenticated ingress and frontend SSE integrity tests
