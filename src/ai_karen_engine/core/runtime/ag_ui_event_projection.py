@@ -111,6 +111,13 @@ class AGUIEventProjection:
             internal = source == "deepagents" and activity_kind in {
                 "plan", "subagent",
             }
+            # Canonical Deep Agents activity is structured runtime truth.
+            # Even a malformed upstream description must not become raw
+            # reasoning, tool arguments or provider-error text in the UI.
+            description = (
+                f"Deep Agents {activity_kind} {status}."
+                if internal else content[:2000]
+            )
             activity = {
                 "type": "ACTIVITY_SNAPSHOT",
                 "messageId": activity_id,
@@ -123,7 +130,7 @@ class AGUIEventProjection:
                     "agentId": agent_id,
                     "status": status,
                     "eventType": event_type,
-                    "description": content[:2000],
+                    "description": description,
                 },
             }
             events = [activity, self._custom("karen.agent_step", {
@@ -131,7 +138,7 @@ class AGUIEventProjection:
                 "event_type": event_type,
                 "status": status,
                 "agent_id": agent_id,
-                "description": content[:2000],
+                "description": description,
             })]
             # SUBAGENT events represent *observed* Deep Agents task-tool
             # invocations, not a guessed Medusa team or agent plan.
