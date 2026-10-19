@@ -90,7 +90,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       controller: ReadableStreamDefaultController<Uint8Array>,
       code: 'CHAT_STREAM_UPSTREAM_TERMINATED' | 'CHAT_STREAM_UPSTREAM_INTERRUPTED',
     ) => {
-      if ((terminalSeen && !protocolViolation) || request.signal.aborted) return;
+      if (terminalSeen || request.signal.aborted) return;
       // Leading blank record separators keep a partial upstream frame from
       // swallowing the transport diagnostic.
       controller.enqueue(encoder.encode(
@@ -121,7 +121,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             controller.enqueue(value);
           }
         } catch (error) {
-          if (request.signal.aborted) {
+          if (request.signal.aborted || protocolViolation) {
             controller.error(error);
           } else {
             fail(controller, 'CHAT_STREAM_UPSTREAM_INTERRUPTED');
