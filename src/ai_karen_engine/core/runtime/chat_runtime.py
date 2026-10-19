@@ -3784,6 +3784,17 @@ class ChatRuntime:
             persistence_success = True
         else:
             persistence_success = None
+        medusa_calls = (provider_meta or {}).get("model_calls_observed")
+        # The Medusa coordinator enforces a different *shared* execution
+        # meter than the chat topology meter. Attribute only the actual
+        # observed integer from that governed runtime, never an inferred call.
+        observed_model_calls = (
+            medusa_calls
+            if isinstance(medusa_calls, int)
+            and not isinstance(medusa_calls, bool)
+            and 0 < medusa_calls <= decision.max_model_calls
+            else meter.model_calls
+        )
         await self._outcome_recorder.record_execution_outcome_async(
             trajectory_id=trajectory_id,
             decision_observation_id=decision_observation_id,
@@ -3824,11 +3835,11 @@ class ChatRuntime:
                         (provider_meta or {}).get("actual_provider")
                         and (provider_meta or {}).get("actual_model")
                         and not (provider_meta or {}).get("fallback_level")
-                        and meter.model_calls > 0
+                        and observed_model_calls > 0
                     )
                     else "unverified"
                 ),
-                "model_calls": meter.model_calls,
+                "model_calls": observed_model_calls,
                 "tool_calls": meter.tool_calls,
                 "reasoning_steps": meter.reasoning_steps,
                 "memory_persistence_status": memory_status,
