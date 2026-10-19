@@ -684,3 +684,32 @@ PostgreSQL; exercise tenant RLS with the app DB role; interrupt a batch
 mid-transaction and verify zero visible rows; recreate the training
 worker and re-read the same evidence; demonstrate deletion and RBAC
 boundaries. Do not enable learning writeback on an untested database.
+
+
+### Mixed-source evidence isolation
+
+Fast operational routing outcomes, human feedback and reviewed ML
+benchmarks live in **one** canonical tenant-RLS outcome ledger, but
+they must not compete for a single last-N read window.
+
+OutcomeStore now supports an explicit allowlisted `source` filter.
+Intelligence's model-routing signal reader requests only
+`runtime.execution`; verified predictor learning requests only
+`intelligence.ml`. Filtering occurs **before** PostgreSQL's bounded
+`LIMIT`, never on an already-truncated mixed collection.
+Migration 37 adds the corresponding
+`(tenant_id, user_id, source, recorded_at DESC)` partial index.
+The in-memory test store follows the same contract.
+
+This matters when a 500-case benchmark writes after a chat session:
+without source-aware reads, the latest 500 rows could contain only
+predictor evaluation and temporarily blind Karen to its operational
+history. Tests now verify that this cannot happen with correctly
+filtered canonical storage reads.
+
+The new atomic batch path shares the existing OutcomeStore transaction
+owner. A strict batch accepts only one tenant and validated
+`intelligence.ml` rows, and any failed row aborts the transaction.
+Unsupported backends fail rather than silently performing individual
+writes. A synthetic rollback test is not a live PostgreSQL transaction
+or row-security proof.
