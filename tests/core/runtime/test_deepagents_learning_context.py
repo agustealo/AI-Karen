@@ -355,3 +355,71 @@ async def test_deepagents_learned_prompt_never_exceeds_policy_input_limit(
             request(), decision_instance, authorised_plan,
         )
     assert observed == [32]
+
+
+def test_nonstreamed_deepagents_response_serializes_learning_lineage():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    rt = object.__new__(ChatRuntime)
+    normalized = rt._normalize_graph_meta(
+        {
+            "execution_engine": "deepagents",
+            "actual_provider": "ollama-local",
+            "actual_model": "model-b",
+            "model_calls_observed": 2,
+            "model_selection_source": "learning_operational_reliability_v1",
+            "learning_signal_status": "ready",
+            "learning_signal_version": "model_operational_outcome_v1",
+            "learned_context_status": "resolved",
+            "learned_memory_refs_included": 3,
+        },
+        request(),
+    )
+    md = rt._build_metadata(
+        request(),
+        decision(),
+        normalized,
+        latency_ms=42.0,
+        memory_meta={},
+    ).to_dict()
+    assert md["actual_provider"] == "ollama-local"
+    assert md["actual_model"] == "model-b"
+    assert md["model_calls_observed"] == 2
+    assert md["model_selection_source"] == "learning_operational_reliability_v1"
+    assert md["learning_signal_status"] == "ready"
+    assert md["learning_signal_version"] == "model_operational_outcome_v1"
+    assert md["learned_context_status"] == "resolved"
+    assert md["learned_memory_refs_included"] == 3
+    assert "memory_items" not in md
+
+
+def test_stream_metadata_accumulates_only_runtime_learning_lineage():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatStreamChunk,
+    )
+    rt = object.__new__(ChatRuntime)
+    metadata = {}
+    rt._accumulate_chunk_metadata(
+        ChatStreamChunk(
+            type="content", content="Evidence-grounded answer",
+            correlation_id="corr-1",
+            metadata={
+                "execution_engine": "deepagents",
+                "actual_provider": "ollama-local",
+                "actual_model": "model-b",
+                "model_calls_observed": 3,
+                "model_selection_source": "learning_operational_reliability_v1",
+                "learning_signal_status": "ready",
+                "learning_signal_version": "model_operational_outcome_v1",
+                "learned_context_status": "resolved",
+                "learned_memory_refs_included": 2,
+                "raw_memory": {"secret": "not-forwarded"},
+            },
+        ),
+        metadata,
+    )
+    assert metadata["actual_model"] == "model-b"
+    assert metadata["model_calls_observed"] == 3
+    assert metadata["learned_memory_refs_included"] == 2
+    assert "raw_memory" not in metadata
