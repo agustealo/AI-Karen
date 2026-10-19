@@ -45,6 +45,12 @@ for Karen's runtime or conversation storage.
 **Do not bulk-merge Open WebUI.** Use it only as a UX reference. Do not adopt
 a Svelte runtime, OWU database, provider router, authentication, or agent engine.
 
+**Deployment switch:** `KARI_ENABLE_AG_UI_BRIDGE=false` by default.
+The route refuses requests with HTTP 404 unless the validated central
+`RuntimeSettings.features.enable_ag_ui_bridge` configuration enables it.
+Do not enable it for a consumer release until end-to-end client and
+security verification is complete.
+
 **AG-UI first as an opt-in compatibility seam.** The native Karen chat stream
 remains unchanged. The initial adapter accepts authenticated AG-UI run
 requests with an explicitly supported subset: text-only final user turn;
@@ -132,7 +138,7 @@ request/stream parser and full integration tests pass.
 
 - Added `core/runtime/ag_ui_event_projection.py`: canonical-to-AG-UI
   projection with fail-closed terminal behavior and metadata allowlisting.
-- Added opt-in authenticated `POST /api/chat/ag-ui` endpoint to existing
+- Added centrally feature-gated authenticated `POST /api/chat/ag-ui` endpoint to existing
   `api_routes/chat/runtime.py`, still executing only via ChatRuntime.
 - Added unit and ingress tests for ordering, redaction, role constraints,
   tenant isolation, rejection of client instructions and interrupted streams.
