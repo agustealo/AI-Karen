@@ -246,3 +246,51 @@ The feature flag remains off until the real SDK check and real local
 tool-calling model smoke (Ollama/vLLM/LM Studio as applicable) pass, together
 with approval, cancellation, multi-agent budget, tenant, durability and human
 UX acceptance. No packaging before human consumer-readiness verification.
+
+
+## AG-UI as a first-class Deep Agents consumer
+
+AG-UI is the transport projection of the **existing** Karen runtime, not an
+alternate executor. PR #494 owns the protocol, HTTP/SSE endpoint, and browser
+integration. This PR owns the upstream authoritative events.
+
+Deep Agents 0.7+ no longer enables todo planning by default. Our researcher
+now explicitly injects `TodoListMiddleware` so a *real* `write_todos` call
+can produce observed planning events. A shared `ModelBudgetCallback` also
+tracks actual SDK `write_todos` and `task` tool invocation boundaries,
+without exposing their inputs, outputs or private error details. These events
+are allowlisted through Medusa's per-run emitter and WorkflowRuntime's
+canonical `agent_step` chunks. The run ID for a delegated task is the SDK
+callback run ID, not a synthetic child identity.
+
+The downstream AG-UI projector maps verified `agent_step` to structured
+`ACTIVITY_SNAPSHOT`. Actual `task` callbacks become native
+`SUBAGENT_STARTED`, `SUBAGENT_FINISHED`, or `SUBAGENT_ERROR`. Real
+ToolBridge invocations remain `TOOL_CALL_START/END` with unchanged tool-call
+identity and a separate acknowledged result receipt. No AG-UI component may
+select a model, grant a tool permission, fabricate a saved checkpoint, or
+turn a partial streamed response into a completed run.
+
+Important deployment distinction: the Deep Agents **execution** switch
+`KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED` and the AG-UI **transport**
+switch `KARI_ENABLE_AG_UI_BRIDGE` are separate centralized, default-off
+features. Enabling the first does not implicitly expose the second.
+Karen's legacy UI can still render canonical `agent_step`/`tool` events.
+
+Durable checkpoints and replay must use Karen's canonical tenant-scoped
+persistence authority. No ephemeral Deep Agents `StateBackend` should be
+presented as a durable saved workflow. Before enabling restart/resume, prove
+checkpoint restoration, RBAC, tenant isolation, version migration and
+correlation-preserving AG-UI replay from recorded events.
+
+### Additional proof
+
+```bash
+pytest tests/agent_medusa/test_deepagents_research_harness.py -q
+pytest tests/core/runtime/test_deepagents_live_activity.py -q
+pytest tests/core/runtime/test_deepagents_primary_routing.py -q
+```
+
+Cross-branch AG-UI tests live with the transport owner in PR #494 and must
+pass after integration; mocked callback tests are not evidence a live local
+model actually calls the planner or task tool.
