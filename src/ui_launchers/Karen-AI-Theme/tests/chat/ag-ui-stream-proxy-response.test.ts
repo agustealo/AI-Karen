@@ -33,6 +33,33 @@ describe('AG-UI stream proxy', () => {
     expect(await response.text()).toBe(payload);
   });
 
+  it('recognizes a terminal event split across SSE data lines and network chunks', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":\n'));
+        controller.enqueue(encoder.encode('data: "RUN_FINISHED"}\n\n'));
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    const output = await (await POST(request())).text();
+    expect(output).not.toContain('CHAT_STREAM_UPSTREAM_TERMINATED');
+    expect(output).toContain('RUN_FINISHED');
+  });
+
+  it('fails closed when an incomplete SSE event exceeds the framing limit', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      'data: ' + 'x'.repeat(1048577),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const output = await (await POST(request())).text();
+    expect(output).toContain('RUN_ERROR');
+    expect(output).toContain('CHAT_STREAM_UPSTREAM_INTERRUPTED');
+  });
+
   it('fails closed when the upstream stream ends without completion', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', {
       headers: { 'content-type': 'text/event-stream' },
