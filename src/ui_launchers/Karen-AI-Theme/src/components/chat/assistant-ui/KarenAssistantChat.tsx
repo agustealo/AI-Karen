@@ -57,9 +57,60 @@ function KarenActivity({ data }: { data: unknown }) {
   );
 }
 
+function KarenLearningDecision({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const decision = data as Record<string, unknown>;
+  const selection = decision.selection_source;
+  const status = decision.learning_signal_status;
+  if (typeof selection !== "string" || typeof status !== "string") return null;
+  const label = selection === "shadow_operational_recommendation"
+    ? "Learned recommendation evaluated in shadow. Registered model used."
+    : selection === "learning_operational_reliability_v1"
+      ? "Learned operational evidence influenced model selection."
+      : selection === "explicit_runtime_or_user"
+        ? "Explicit model selection retained."
+        : "Registered model selection retained.";
+  return (
+    <div role="note" data-testid="karen-learning-provenance"
+      className="my-2 rounded-lg border border-border/60 bg-muted/20 p-3 text-xs">
+      <div className="font-medium">Model decision provenance</div>
+      <p className="mt-1 text-muted-foreground">{label}</p>
+      <p className="mt-1 text-muted-foreground">Evidence: {status}. Operational evidence is not proof of answer correctness.</p>
+    </div>
+  );
+}
+
+function KarenCheckpoint({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const checkpoint = data as Record<string, unknown>;
+  if (checkpoint.checkpoint_verified !== true) return null;
+  return (
+    <div role="status" data-testid="karen-checkpoint-evidence"
+      className="my-2 rounded-lg border border-border/60 p-3 text-xs text-muted-foreground">
+      Checkpoint persisted. Recovery has not been verified. No resume action is available.
+    </div>
+  );
+}
+
+function KarenApprovalNotice({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const approval = data as Record<string, unknown>;
+  if (typeof approval.approval_id !== "string" || !approval.approval_id) return null;
+  return (
+    <div role="status" data-testid="karen-approval-required"
+      className="my-2 rounded-lg border border-amber-600/40 p-3 text-xs">
+      The runtime requires approval. Use the governed approvals workflow to review this action.
+      No action will execute from this informational notice.
+    </div>
+  );
+}
+
 const agentParts = {
   data: {
     by_name: {
+      "karen.learning_decision": KarenLearningDecision,
+      "karen.checkpoint": KarenCheckpoint,
+      "karen.approval_required": KarenApprovalNotice,
       "agui-activity/KAREN_AGENT_STEP": KarenActivity,
       "agui-activity/KAREN_DEEPAGENTS_PLAN": KarenActivity,
       "agui-activity/KAREN_DEEPAGENTS_SUBAGENT": KarenActivity,
