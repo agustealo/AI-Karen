@@ -71,8 +71,13 @@ function KarenActivity({ data, category = "Agent step" }: { data: unknown; categ
   const failed = ["failed", "failure", "error", "errored", "cancelled", "canceled"].includes(normalized);
   const done = ["finished", "completed", "complete", "succeeded", "success"].includes(normalized);
   const StatusIcon = failed ? CircleAlert : done ? CheckCircle2 : Clock3;
+  const disclosureRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    // Open failures once when observed, but let the user collapse the details.
+    if (failed && disclosureRef.current) disclosureRef.current.open = true;
+  }, [failed]);
   return (
-    <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" open={failed || undefined}>
+    <details ref={disclosureRef} data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
         <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate font-medium">{category}: {agent}</span>
