@@ -3812,6 +3812,12 @@ class ChatRuntime:
                 "learning_signal_version": (provider_meta or {}).get(
                     "learning_signal_version"
                 ),
+                "learned_context_status": (provider_meta or {}).get(
+                    "learned_context_status"
+                ),
+                "learned_memory_refs_included": (provider_meta or {}).get(
+                    "learned_memory_refs_included"
+                ),
                 "model_attribution": (
                     "single_provider_model"
                     if (
