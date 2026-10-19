@@ -310,3 +310,45 @@ async def test_deepagents_failed_run_cannot_turn_into_agui_success(monkeypatch):
     assert events[-1]["code"] == "AGENT_EXECUTION_FAILED"
     assert not any(event["type"] == "RUN_FINISHED" for event in events)
     assert "secret" not in frames
+
+
+@pytest.mark.asyncio
+async def test_verified_medusa_checkpoint_emits_observed_ag_ui_without_resume(monkeypatch):
+    class CheckpointedWorker:
+        async def execute_stream(self, request):
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.STATUS,
+                content="Agent checkpoint persisted. Automatic resume is not enabled.",
+                correlation_id=request.context.correlation_id,
+                metadata={
+                    "source": "deepagents",
+                    "step_id": "research-step-1",
+                    "checkpoint_verified": True,
+                    "resumable": False,
+                    "checkpoint_bytes": {"private": "must-not-leak"},
+                },
+            )
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.COMPLETE,
+                content="",
+                correlation_id=request.context.correlation_id,
+            )
+
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: CheckpointedWorker())
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(), http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    frames = "".join([part async for part in response.body_iterator])
+    events = [
+        json.loads(line[6:]) for line in frames.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED", "CUSTOM", "RUN_FINISHED",
+    ]
+    assert events[1]["name"] == "karen.checkpoint"
+    assert events[1]["value"]["checkpoint_verified"] is True
+    assert events[1]["value"]["resumable"] is False
+    assert "must-not-leak" not in frames
+    assert events[-1]["type"] == "RUN_FINISHED"
