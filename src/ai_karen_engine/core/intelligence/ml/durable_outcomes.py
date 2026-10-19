@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import math
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
 from ai_karen_engine.core.intelligence.ml.online_learning import (
