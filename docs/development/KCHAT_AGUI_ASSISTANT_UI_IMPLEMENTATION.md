@@ -489,3 +489,46 @@ Keep a single backend-owned conversation model. The default surface should prior
 ### Exit gate
 
 No feature activation, merge, or user-facing completion claim from source-only assertions, queued CI or simulated model output. Record authenticated browser run links, exact commit SHA, real provider/model, tenant-scoped persistence receipts, accessibility observations, screenshots for responsive typography, and failure-case evidence. Preserve the existing PR ownership: #494 is presentation/AG-UI; #497 is Medusa/Deep Agents; ChatRuntime and governed services stay authoritative.
+
+
+## Application-wide assistant-ui capability adoption contract
+
+Assistant-ui is Karen's **conversation interaction toolkit**, not a replacement for the application's settings, provider registry, RBAC, privacy screens, or backend. The existing Karen-owned chat/session runtime and canonical AG-UI transport remain the sole integration path. Do not install parallel AI SDK, LangGraph, assistant-cloud persistence, or client-side provider execution merely to access a UI feature.
+
+### Audited usage (PR #494)
+
+At the time of this audit the opt-in `KarenAssistantChat` imports `AssistantRuntimeProvider`, `AuiIf`, `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`, `ExportedMessageRepository`, `useAgUiRuntime`, `fromAgUiMessages`, and `HttpAgent`. It does not currently use `ActionBarPrimitive`, `BranchPickerPrimitive`, `ThreadListPrimitive`, or a canonical attachments/markdown renderer. Tool and approval components are currently observations, not authorized actions. The production dashboard remains opt-in and the package lock installation/build proof remains a gate.
+
+### Ownership and adoption matrix
+
+| Feature | Existing source of truth | UI strategy | Activation proof |
+| --- | --- | --- | --- |
+| Thread/message/composer | ChatRuntime, AG-UI, persisted session API | Keep assistant-ui primitives and branded styling; phase out only duplicate presentation surfaces after parity | Stream, stop, reload, error and auth tests |
+| Thread list/history | Existing SessionProvider and scoped conversations API | Adopt assistant-ui ThreadList primitives only when an adapter preserves canonical IDs, pagination and ownership; otherwise retain present Karen-owned picker | Tenant isolation, keyboard navigation, pagination and reload |
+| Markdown, code, copy | Persisted message content and server-validated rich parts | Compose assistant-ui message parts/renderers and accessible action bar; sanitize untrusted content and use existing copy affordances | XSS, long-code, zoom, screen reader and partial-stream tests |
+| Retry, edit, branches | Backend execution and message lineage | Show only when backend supplies replay/edit/branch eligibility; no frontend replay illusion | Idempotency, lineage, authorization and exactly-once side-effect tests |
+| Files and attachments | Authorized upload/storage APIs, scoped artifact IDs | Use assistant-ui composer attachments and message previews only with canonical upload receipts | Size/type limits, tenant ownership, cancel, persistence and malware policy |
+| Tools / generative UI | CORTEX eligibility, governed plugin executor, AG-UI typed events | Reusable typed tool result slots, progressive activity disclosure, evidence panels | Manifest/schema validation, sensitive redaction and zero client execution |
+| Approvals | Backend approval receipt, RBAC and checkpoint | Human confirmation card with server-issued action token and explicit pending/succeeded/denied state | Replay/race/RBAC, refusal and receipt verification |
+| Agent plans and work status | Medusa/Deep Agents events projected through runtime | Timeline and task inspector composed inside chat, never a second agent scheduler | Restart/reconnect, ordered events and tenant-scoped checkpoint tests |
+| Citations / artifacts | Canonical citations and verified persisted artifacts | Rich cards/viewers within messages, open source or artifact only through authorized links | Broken/deleted sources, permission revocation and content safety |
+| Voice | Existing Karen voice subsystem and backend controls | Integrate dictation/audio only through existing voice transport if capabilities warrant it | Permission, upload, transcription, fallback and accessibility tests |
+| Suggested prompts / actions | Runtime capabilities and configured tool registry | Dynamic suggestions only from backend-enabled capabilities, never hardcoded claims | Capability removal and RBAC tests |
+| Settings, provider inventory and privacy | Existing app panel components and backend APIs | Keep current shadcn-based forms; optionally embed conversation/explanation surfaces that invoke authorized actions | Save receipts, auth boundaries and truthful error states |
+
+### Implementation order
+
+1. **Prerequisite:** restore a consistent package lock, clean install, TypeScript/lint/test/build and authenticated AG-UI smoke tests. No production enablement until exact-head evidence is green.
+2. **Transcript parity:** markdown/code, accessible message actions, auto-scroll/copy, stop/error/retry eligibility and mobile/keyboard proof.
+3. **Runtime truth:** typed tool visualization, citations, artifacts, agent activity timeline and reconnect/reload persistence.
+4. **Guarded interactions:** backend-approved tool confirmations, file uploads, message edit/branch support only where the runtime exposes receipts and eligibility.
+5. **Cross-application AI touchpoints:** embed a reusable conversation entry point from settings, memory, downloads and admin workflows, but delegate to canonical ChatRuntime for context, authorization and effects.
+
+**Do not** treat assistant-ui primitives as a reason to replace global settings controls, create another provider router, copy provider state into React, bypass the AG-UI proxy, or use assistant-cloud as a second persistence owner. Each UI action must map to an existing authorized backend contract. Mark unsupported capabilities unavailable rather than rendering ghost controls.
+
+### Source-of-truth references
+
+- Official upstream: https://github.com/assistant-ui/assistant-ui
+- Upstream documentation: https://www.assistant-ui.com/docs
+- Existing Karen frontend: `src/ui_launchers/Karen-AI-Theme/src/components/chat/assistant-ui/KarenAssistantChat.tsx`
+- Existing runtime projection: `/chat/ag-ui`, same-origin `/api/chat/ag-ui` proxy.
