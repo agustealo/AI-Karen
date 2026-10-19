@@ -8,6 +8,7 @@ const expression = readFileSync(resolve(process.cwd(), 'src/components/settings/
 const downloads = readFileSync(resolve(process.cwd(), 'src/components/settings/ModelDownloads.tsx'), 'utf8');
 const facts = readFileSync(resolve(process.cwd(), 'src/components/settings/PersonalFactsSettings.tsx'), 'utf8');
 const privacy = readFileSync(resolve(process.cwd(), 'src/components/settings/PrivacySettings.tsx'), 'utf8');
+const notifications = readFileSync(resolve(process.cwd(), 'src/components/settings/NotificationSettings.tsx'), 'utf8');
 
 describe('settings UX ownership contract', () => {
   it('keeps settings navigation in the shell and persistence in existing panels', () => {
@@ -83,6 +84,15 @@ describe('settings UX ownership contract', () => {
     expect(privacy).toContain('setRequestStatus(null)');
     expect(privacy).toContain('setRequestStatus(response)');
     expect(privacy).toContain('setLastRequest(response)');
+  });
+
+  it('keeps notification local draft status synchronized with backend save outcomes', () => {
+    expect(notifications).toContain('const [hasDraft, setHasDraft] = useState(false)');
+    expect(notifications).toContain('setHasDraft(Boolean(draft))');
+    expect(notifications).toContain('setHasDraft(true)');
+    expect(notifications).toContain('setHasDraft(false)');
+    expect(notifications).toContain("clearDraftSettings()");
+    expect(notifications).toContain("apiClient.put<NotificationSettingsResponse>");
   });
 
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
