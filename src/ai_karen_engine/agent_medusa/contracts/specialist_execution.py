@@ -30,3 +30,7 @@ class SpecialistExecutionContext:
     # provider registry before construction of a Deep Agents model.
     preferred_provider: Optional[str] = None
     preferred_model: Optional[str] = None
+    # Advisory Intelligence snapshot computed at the canonical Runtime
+    # boundary. Not a user-supplied model choice or permission grant.
+    learning_task_type: Optional[str] = None
+    learned_model_signals: Optional[Any] = None
