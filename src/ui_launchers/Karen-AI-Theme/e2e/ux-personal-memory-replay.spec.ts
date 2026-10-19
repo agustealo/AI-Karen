@@ -69,7 +69,35 @@ test('UX-ID-01: current name and summary followup stay grounded in a real conver
 
   // Reload discards React component state. Both the user's last prompt and
   // the exact assistant answer must be restored by the canonical backend.
+  // The UI first paints localStorage messages while the server is loading.
+  // Prove the durable transcript from an actual successful API response,
+  // not from locally cached bubbles or a transient optimistic render.
+  const conversationResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET'
+      && /^\\/api\\/conversations\\/[^/]+$/.test(url.pathname);
+  }, { timeout: 45_000 });
   await page.reload();
+  const serverResponse = await conversationResponse;
+  expect(serverResponse.ok()).toBe(true);
+  const transcript: unknown = await serverResponse.json();
+  expect(transcript).toBeTruthy();
+  if (typeof transcript !== 'object' || transcript === null ||
+      !('messages' in transcript) || !Array.isArray(transcript.messages)) {
+    throw new Error('Canonical conversation response did not contain a transcript');
+  }
+  const persistedTurns = transcript.messages.filter(
+    (message: unknown): message is { role: string; content: string } =>
+      typeof message === 'object' && message !== null &&
+      'role' in message && 'content' in message &&
+      typeof message.role === 'string' && typeof message.content === 'string',
+  );
+  expect(persistedTurns.some((message) =>
+    message.role.toLowerCase() === 'user' &&
+    message.content.trim() === 'share please')).toBe(true);
+  expect(persistedTurns.some((message) =>
+    message.role.toLowerCase() === 'assistant' &&
+    message.content.trim() === followup)).toBe(true);
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
   const restored = page.getByRole('log', { name: 'Chat messages' });
   await expect(restored.getByText('share please', { exact: true }).last())
