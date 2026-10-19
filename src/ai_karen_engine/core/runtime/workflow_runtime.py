@@ -188,13 +188,28 @@ class WorkflowRuntime:
         if not query.strip():
             raise ValueError("Deep Agents requires a user task")
 
+        from ai_karen_engine.agent_medusa.registry_factory import (
+            get_implementation_factory,
+        )
+        from ai_karen_engine.core.model_runtime.structured_tool_chat_model import (
+            build_medusa_deepagents_model,
+        )
+        # The canonical runtime registers the only trusted model constructor.
+        # The factory resolves provider/model through ModelManager on each run.
+        get_implementation_factory().register_deepagents_model_factory(
+            build_medusa_deepagents_model
+        )
         agent_request = RuntimeRequest(
             query=query,
             user_id=ctx.user_id,
             tenant_id=ctx.tenant_id,
             session_id=ctx.session_id,
             request_id=req_config["request_id"],
-            context={"execution_context": ctx},
+            context={
+                "execution_context": ctx,
+                "preferred_provider": request.preferred_provider,
+                "preferred_model": request.preferred_model,
+            },
             authorized_plan=_serialize_plan(plan),
             execution_requirements=requirements,
         )
