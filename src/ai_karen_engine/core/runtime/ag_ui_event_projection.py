@@ -174,6 +174,7 @@ class AGUIEventProjection:
                     if internal else "KAREN_AGENT_STEP"
                 ),
                 "content": {
+                    "runId": self.run_id,
                     "stepId": step_id,
                     "agentId": agent_id,
                     "status": status,
