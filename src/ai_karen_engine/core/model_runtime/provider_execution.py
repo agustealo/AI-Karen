@@ -101,6 +101,164 @@ def _resolve_api_key(endpoint: ProviderEndpoint) -> str | None:
     return None
 
 
+def _post_chat_completions(
+    endpoint: ProviderEndpoint,
+    base_url: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Single OpenAI-compatible HTTP transport for text and tool-call models."""
+    headers = {"Content-Type": "application/json"}
+    api_key = _resolve_api_key(endpoint)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=endpoint.timeout_seconds) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        # Do not echo a potentially sensitive provider response into telemetry.
+        raise ProviderExecutionError(
+            f"provider_http_error:{endpoint.provider_id}:{exc.code}"
+        ) from exc
+    except URLError as exc:
+        raise ProviderExecutionError(
+            f"provider_connection_error:{endpoint.provider_id}"
+        ) from exc
+    if not isinstance(body, dict):
+        raise ProviderExecutionError("provider_invalid_response_object")
+    return body
+
+
+@dataclass(frozen=True)
+class StructuredChatResult:
+    """Canonical structured output, retaining provider-emitted tool calls."""
+
+    message: dict[str, Any]
+    provider_id: str
+    model: str
+    runtime_engine: str
+    finish_reason: str | None
+    usage: dict[str, int]
+
+
+def _sync_structured_chat_request(
+    endpoint: ProviderEndpoint,
+    *,
+    messages: Sequence[Mapping[str, Any]],
+    model: str,
+    tools: Sequence[Mapping[str, Any]],
+    max_tokens: int,
+    temperature: float,
+) -> StructuredChatResult:
+    """Emit only explicitly registered tools, never model-side fake calls."""
+    if endpoint.protocol is not EndpointProtocol.OPENAI_COMPATIBLE:
+        raise ProviderExecutionError("tool_call_protocol_unsupported")
+    if not endpoint.enabled or "tools" not in set(endpoint.capabilities):
+        raise ProviderExecutionError("tool_call_provider_not_eligible")
+    if not model or model == "auto":
+        raise ProviderExecutionError("tool_call_model_identity_required")
+    base_url = _resolve_base_url(endpoint)
+    if not base_url:
+        raise ProviderExecutionError("tool_call_endpoint_unavailable")
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [dict(message) for message in messages],
+        "tools": [dict(tool) for tool in tools],
+        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    body = _post_chat_completions(endpoint, base_url, payload)
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ProviderExecutionError("tool_call_response_has_no_choices")
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise ProviderExecutionError("tool_call_response_invalid_choice")
+    message = choice.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        raise ProviderExecutionError("tool_call_response_invalid_assistant")
+    tool_calls = message.get("tool_calls") or []
+    if not isinstance(tool_calls, list):
+        raise ProviderExecutionError("tool_call_response_invalid_calls")
+    verified_calls: list[dict[str, Any]] = []
+    allowed = {
+        tool.get("function", {}).get("name")
+        for tool in tools if isinstance(tool.get("function"), dict)
+    }
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            raise ProviderExecutionError("tool_call_response_invalid_call")
+        function = call.get("function")
+        if (
+            not isinstance(function, dict)
+            or not isinstance(call.get("id"), str)
+            or not call["id"]
+            or function.get("name") not in allowed
+            or not isinstance(function.get("arguments"), str)
+        ):
+            raise ProviderExecutionError("tool_call_response_unknown_tool")
+        try:
+            arguments = json.loads(function["arguments"])
+        except (ValueError, TypeError) as exc:
+            raise ProviderExecutionError("tool_call_response_invalid_arguments") from exc
+        if not isinstance(arguments, dict):
+            raise ProviderExecutionError("tool_call_response_arguments_not_object")
+        verified_calls.append({
+            "id": call["id"],
+            "name": function["name"],
+            "args": arguments,
+        })
+    content = message.get("content") or ""
+    if not isinstance(content, str):
+        raise ProviderExecutionError("tool_call_response_invalid_content")
+    if not content.strip() and not verified_calls:
+        raise ProviderExecutionError("tool_call_response_empty")
+    usage: dict[str, int] = {}
+    if isinstance(body.get("usage"), dict):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = body["usage"].get(key)
+            if isinstance(value, int) and value >= 0:
+                usage[key] = value
+    actual_model = str(body.get("model") or model)
+    if actual_model != model:
+        raise ProviderExecutionError("tool_call_model_changed_unexpectedly")
+    return StructuredChatResult(
+        message={"content": content, "tool_calls": verified_calls},
+        provider_id=endpoint.provider_id,
+        model=actual_model,
+        runtime_engine=endpoint.runtime_engine.value,
+        finish_reason=str(choice.get("finish_reason") or "") or None,
+        usage=usage,
+    )
+
+
+async def execute_structured_provider_endpoint(
+    endpoint: ProviderEndpoint,
+    *,
+    messages: Sequence[Mapping[str, Any]],
+    model: str,
+    tools: Sequence[Mapping[str, Any]],
+    max_tokens: int,
+    temperature: float,
+) -> StructuredChatResult:
+    """Canonical provider transport used by governed LangChain adapters."""
+    return await asyncio.to_thread(
+        _sync_structured_chat_request,
+        endpoint,
+        messages=messages,
+        model=model,
+        tools=tools,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+
+
 def _sync_openai_compatible_request(
     endpoint: ProviderEndpoint,
     *,
@@ -128,30 +286,7 @@ def _sync_openai_compatible_request(
     if request_model:
         payload["model"] = request_model
 
-    headers = {"Content-Type": "application/json"}
-    api_key = _resolve_api_key(endpoint)
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    request = Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-
-    try:
-        with urlopen(request, timeout=endpoint.timeout_seconds) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise ProviderExecutionError(
-            f"provider_http_error:{endpoint.provider_id}:{exc.code}:{detail[:500]}"
-        ) from exc
-    except URLError as exc:
-        raise ProviderExecutionError(
-            f"provider_connection_error:{endpoint.provider_id}:{exc.reason}"
-        ) from exc
+    body = _post_chat_completions(endpoint, base_url, payload)
 
     choices = body.get("choices") or []
     if not choices:
