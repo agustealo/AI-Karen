@@ -158,3 +158,70 @@ request/stream parser and full integration tests pass.
 4. AG-UI endpoint is kept opt-in and off the consumer route until browser
    integration/compatibility is verified.
 5. Existing tests and operational profiles remain green.
+
+
+## Deep Agents / Medusa event contract (October 19, 2026)
+
+AG-UI is the **projection** of canonical Karen execution, never a second
+agent runtime, state store, approval service or planner. The Deep Agents-first
+work on PR #497 preserves this shape:
+
+```text
+Deep Agents SDK callbacks / governed ToolBridge
+    -> Medusa per-run EventEmitter
+    -> WorkflowRuntime canonical ChatStreamChunk
+    -> ChatRuntime sequence, persistence and terminal policy
+    -> AGUIEventProjection (this PR, opt-in)
+    -> Same-origin browser transport and Karen UI
+```
+
+### Versioned event responsibilities
+
+| Origin | Canonical event | AG-UI projection | Proof |
+|---|---|---|---|
+| Actual Medusa specialist start/finish/failure | `agent_step` | `ACTIVITY_SNAPSHOT`, `CUSTOM(karen.agent_step)` | Stable run + step IDs, allowlisted status |
+| Deep Agents `write_todos` callback | `agent_step` with `source=deepagents`, `activity_kind=plan` | `ACTIVITY_SNAPSHOT(KAREN_DEEPAGENTS_PLAN)` | Genuine opt-in planning middleware and SDK start/end callbacks |
+| Deep Agents `task` callback | `agent_step` with real `subagent_run_id` | `ACTIVITY_SNAPSHOT(KAREN_DEEPAGENTS_SUBAGENT)`, real `SUBAGENT_STARTED/FINISHED/ERROR` | One SDK-issued callback run ID, no unobserved finish |
+| Governed external ToolBridge | `tool` with real `tool_call_id` and `phase` | `TOOL_CALL_START/END`, `CUSTOM(karen.tool_activity)` | Real ToolBridge invocation/receipt |
+| ChatRuntime approved assistant text | `content` | `TEXT_MESSAGE_START/CONTENT/END` | Canonical output only |
+| ChatRuntime success/error | `complete` / `error` | `RUN_FINISHED` / `RUN_ERROR` | Exactly one terminal outcome |
+
+The planner is **opt-in** in Deep Agents 0.7+: PR #497 installs
+`TodoListMiddleware` for its governed research harness. It does not fake
+planning status when the model never calls `write_todos`.
+
+Agentic activity payloads never forward raw model reasoning, filesystem
+contents, tool arguments, secret-bearing internal metadata or provider error
+details. A completed tool never implies successful external side effects:
+ToolBridge's durable result/receipt remains authoritative. AG-UI tool-end
+is only a lifecycle boundary. Human approvals are rendered only when Karen
+issues a canonical approval event; an AG-UI client cannot mint authorization.
+
+### Durability and replay: still gated
+
+A live AG-UI stream is **not** a durable agent execution record. The canonical
+PostgreSQL run ledger and authorized checkpoint system must own lifecycle and
+restart/replay decisions. No `STATE_SNAPSHOT`, `STATE_DELTA`, or resumed
+subagent events may be invented by the UI or from Redis-local transient
+projections. After a reconnect, the runtime must verify tenant/session/run
+scope and replay only retained, explicitly recorded events in their original
+sequence. Any unsupported resume must fail honestly rather than showing
+a fabricated ongoing/completed run.
+
+The default chat UI and `/api/chat/stream` remain in place while these
+compatibility contracts are proven and assistant-ui integration remains
+feature-gated. PR #494 and PR #497 are **separate owners, not duplicate
+AG-UI implementations**; do not copy transport normalization into Medusa.
+
+### Acceptance sequence
+
+1. Focused projection, authenticated ingress and frontend SSE integrity tests
+   in PR #494.
+2. Pinned real Deep Agents SDK planning/task callbacks, Medusa event stream and
+   ToolBridge receipt tests in PR #497.
+3. Joint runtime-to-AG-UI smoke after both branches are integrated; verify
+   recorded planning, delegation, and tool lifecycle, including fail-closed
+   interruption, exact IDs, redaction and cancellation.
+4. Real local tool-call model smoke under ProviderRuntime selection.
+5. Tenant-scoped checkpoints, reconnection and durable event replay proof
+   before advertising resumability. Human acceptance before release.
