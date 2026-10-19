@@ -58,9 +58,9 @@ async def test_evaluated_benchmark_projects_only_numeric_redacted_evidence(monke
             assert tenant_id == "tenant-1"
             assert user_id == "user-1"
 
-        async def record_verified(self, record, *, label_source, label_evidence_ref):
-            saved.append((record, label_source, label_evidence_ref))
-            return {"stored": True}
+        async def record_verified_batch(self, observations):
+            saved.extend(observations)
+            return {"stored": True, "stored_count": len(observations)}
 
     monkeypatch.setattr(
         durable_outcomes, "GovernedMLLearningEvidence", CapturingProjection,
@@ -91,8 +91,9 @@ async def test_fallback_and_missing_predictor_are_excluded_from_learning(monkeyp
         def __init__(self, *, tenant_id, user_id):
             pass
 
-        async def record_verified(self, *args, **kwargs):
+        async def record_verified_batch(self, *args, **kwargs):
             called.append(True)
+            return {"stored": True, "stored_count": 0}
 
     monkeypatch.setattr(
         durable_outcomes, "GovernedMLLearningEvidence", EmptyProjection,
@@ -130,7 +131,7 @@ async def test_persistence_failure_is_never_a_false_learning_success(monkeypatch
         def __init__(self, *, tenant_id, user_id):
             pass
 
-        async def record_verified(self, *args, **kwargs):
+        async def record_verified_batch(self, *args, **kwargs):
             raise RuntimeError("PostgreSQL rejected the durable evidence")
 
     monkeypatch.setattr(
