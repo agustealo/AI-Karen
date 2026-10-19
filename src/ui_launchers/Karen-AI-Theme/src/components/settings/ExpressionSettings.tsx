@@ -455,8 +455,7 @@ export default function ExpressionSettings() {
                   size="sm"
                   className="h-8 text-[10px] font-bold uppercase tracking-widest shadow-md"
                   onClick={() => handleSave(undefined, fallbackOrder)}
-                  disabled={!canManageRuntime || isSaving}
-                  disabled={Boolean(isSaving || (
+                  disabled={Boolean(!canManageRuntime || isSaving || (
                     exprSettings && 
                     JSON.stringify(exprSettings.fallback_order) === JSON.stringify(fallbackOrder) &&
                     exprSettings.active_engine === activeEngine
