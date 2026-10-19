@@ -105,29 +105,28 @@ def test_self_contained_runtime_uses_canonical_first_run_and_public_automation_a
     assert "random_token" in runner
 
 
-def test_owner_only_pr_comment_is_bound_to_current_same_repo_pr_head() -> None:
+def test_capture_requires_explicit_dispatch_with_validated_target_and_destination() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     prepare, _ = workflow.split("  capture:", maxsplit=1)
 
-    assert "issue_comment:" in workflow
-    assert "types: [created]" in workflow
-    assert "github.actor == github.repository_owner" in prepare
-    assert "github.event.comment.author_association == 'OWNER'" in prepare
-    assert "startsWith(github.event.comment.body, '/capture-presentation ')" in prepare
-    assert r"/capture-presentation\s+([0-9a-fA-F]{40})" in prepare
-    assert 'destination = ""' in prepare
-    assert 'destination = "docs/premium-brand-showcase"' not in prepare
-    assert 'PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"' in prepare
-    assert 'if [[ "$CURRENT_PR_HEAD" != "$TARGET_REVISION" ]]' in prepare
-    assert 'if [[ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]' in prepare
-    assert "owner-comment capture write-back is restricted to same-repository pull requests" in prepare
-    assert 'if [[ -z "$DESTINATION_BRANCH" || "$DESTINATION_BRANCH" == "$DEFAULT_BRANCH" ]]' in prepare
-    assert "printf 'destination_branch=%s\\n' \"$DESTINATION_BRANCH\" >> \"$GITHUB_OUTPUT\"" in prepare
-    assert (
-        "destination_branch: ${{ steps.bind.outputs.destination_branch || "
-        "steps.request.outputs.destination_branch }}" in prepare
-    )
-    assert 'commit_assets = "true"' in prepare
+    assert "workflow_dispatch:" in workflow
+    assert "issue_comment:" not in workflow
+    assert "types: [created]" not in workflow
+    assert "github.event.comment" not in workflow
+    assert "/capture-presentation" not in workflow
+    assert "Bind owner comment" not in workflow
+
+    assert "DISPATCH_TARGET_REVISION: ${{ inputs.target_revision }}" in prepare
+    assert "DISPATCH_DESTINATION_BRANCH: ${{ inputs.destination_branch }}" in prepare
+    assert "DISPATCH_COMMIT_ASSETS: ${{ inputs.commit_assets }}" in prepare
+    assert 're.fullmatch(r"[0-9a-fA-F]{40}", target)' in prepare
+    assert 'if not destination:' in prepare
+    assert 'if commit_assets not in {"true", "false"}:' in prepare
+    assert 'destination_branch: ${{ steps.request.outputs.destination_branch }}' in prepare
+    assert 'commit_assets: ${{ steps.request.outputs.commit_assets }}' in prepare
+    assert 'if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]' in prepare
+    assert "persist-credentials: false" in prepare
+    assert 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' in prepare
 
 
 def test_write_scoped_job_executes_only_trusted_artifact_code() -> None:
@@ -185,7 +184,7 @@ if __name__ == "__main__":
     test_capture_is_default_branch_owned_and_has_no_long_lived_demo_secrets()
     test_exact_candidate_is_built_separately_from_trusted_harness()
     test_self_contained_runtime_uses_canonical_first_run_and_public_automation_apis()
-    test_owner_only_pr_comment_is_bound_to_current_same_repo_pr_head()
+    test_capture_requires_explicit_dispatch_with_validated_target_and_destination()
     test_write_scoped_job_executes_only_trusted_artifact_code()
     test_trusted_capture_harness_is_repository_owned_and_real_runtime_only()
     test_trust_boundary_fetches_history_for_git_provenance_checks()

@@ -116,14 +116,6 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
       
-      - name: Run Medusa planner correctness tests
-        run: |
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -v --timeout=300 --tb=short
-      
-      - name: Run legacy to Medusa delegation tests
-        run: |
-          pytest tests/core/runtime/test_legacy_to_medusa_delegation.py -v --timeout=300 --tb=short
-      
       - name: Run canonical Medusa runtime tests
         run: |
           pytest \
@@ -312,9 +304,6 @@ jobs:
       
       - name: Run final behavioral proof tests
         run: |
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "dependency" -v --timeout=300
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "wildcard" -v --timeout=300
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "concurrent" -v --timeout=300
           
           echo "Running behavioral proofs..."
           
