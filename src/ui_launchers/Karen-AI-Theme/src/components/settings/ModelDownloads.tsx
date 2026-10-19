@@ -826,7 +826,7 @@ export default function ModelDownloads({
   );
 
   const savePolicy = useCallback(async () => {
-    if (!policy) {
+    if (!adminMode || !policy) {
       return;
     }
 
@@ -855,7 +855,7 @@ export default function ModelDownloads({
     } finally {
       setSavingPolicy(false);
     }
-  }, [policy, toast]);
+  }, [adminMode, policy, toast]);
 
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
@@ -1363,7 +1363,8 @@ export default function ModelDownloads({
 
         <Switch
           checked={Boolean(value)}
-          disabled={disabled}
+          disabled={!adminMode || disabled}
+          aria-label={label}
           onCheckedChange={(checked) =>
             updatePolicyField(key, checked as never)
           }
@@ -1958,6 +1959,7 @@ export default function ModelDownloads({
           </CardHeader>
 
           <CardContent className="space-y-4">
+            {!adminMode && <p role="status" className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm text-muted-foreground">Download safety policy is managed by an administrator. Its current values are shown for transparency; you cannot change the system-wide policy here.</p>}
             {loading || !policy ? (
               <div
                 className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -2022,6 +2024,7 @@ export default function ModelDownloads({
                   <Switch
                     checked={policy.trust_remote_code}
                     disabled={!adminMode}
+                    aria-label="Trust remote model code"
                     onCheckedChange={(checked) =>
                       updatePolicyField('trust_remote_code', checked)
                     }
@@ -2061,6 +2064,7 @@ export default function ModelDownloads({
                     min={1}
                     max={8}
                     value={policy.max_concurrent_downloads}
+                    disabled={!adminMode}
                     onChange={(event) =>
                       updatePolicyField(
                         'max_concurrent_downloads',
@@ -2074,7 +2078,7 @@ export default function ModelDownloads({
                   <Button
                     type="button"
                     onClick={() => void savePolicy()}
-                    disabled={savingPolicy}
+                    disabled={!adminMode || savingPolicy}
                   >
                     {savingPolicy ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
