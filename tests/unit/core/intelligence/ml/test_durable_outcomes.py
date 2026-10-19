@@ -186,6 +186,12 @@ def test_postgres_outcome_store_only_accepts_governed_ml_schema():
             "model_version": "v1",
             "feature_version": "v1",
             "correct": True,
+            "raw_probability": 0.9,
+            "calibrated_probability": 0.9,
+            "confidence": 0.9,
+            "calibration_error": 0.01,
+            "latency_ms": 10.0,
+            "fallback_used": False,
         },
     }
     assert PostgresOutcomeStore._validated_identity(payload) == (
