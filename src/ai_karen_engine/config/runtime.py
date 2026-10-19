@@ -166,6 +166,8 @@ class FeatureFlags:
 
     enable_agent_mode: bool = True
     enable_streaming: bool = True
+    # AG-UI compatibility is experimental and disabled for consumer builds.
+    enable_ag_ui_bridge: bool = False
     enable_memory_integration: bool = True
     enable_proactive_suggestions: bool = True
     enable_performance_optimization: bool = True
@@ -410,6 +412,10 @@ class RuntimeSettings:
         env_enable_agent = env("KARI_ENABLE_AGENT_MODE")
         if env_enable_agent is not None:
             self.features.enable_agent_mode = as_bool(env_enable_agent)
+
+        env_ag_ui_bridge = env("KARI_ENABLE_AG_UI_BRIDGE")
+        if env_ag_ui_bridge is not None:
+            self.features.enable_ag_ui_bridge = as_bool(env_ag_ui_bridge)
 
         env_enable_streaming = env("KARI_ENABLE_STREAMING")
         if env_enable_streaming is not None:
