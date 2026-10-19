@@ -537,6 +537,10 @@ class WorkflowRuntime:
             "model_selection_source": result.metadata.get("model_selection_source"),
             "learning_signal_status": result.metadata.get("learning_signal_status"),
             "learning_signal_version": result.metadata.get("learning_signal_version"),
+            "learned_context_status": result.metadata.get("learned_context_status"),
+            "learned_memory_refs_included": result.metadata.get(
+                "learned_memory_refs_included", 0
+            ),
             "runtime_engine": result.metadata.get("runtime_engine"),
             "execution_topology": "multi_agent",
             "agent_status": result.status.value,
