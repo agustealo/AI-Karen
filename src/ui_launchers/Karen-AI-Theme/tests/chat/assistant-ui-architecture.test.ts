@@ -48,6 +48,16 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain('dangerouslySetInnerHTML');
   });
 
+  it("renders fenced code in a scrollable region with accessible copy and truthful clipboard state", () => {
+    expect(component).toContain("function KarenCodeBlock");
+    expect(component).toContain("components={{ pre: KarenCodeBlock }}");
+    expect(component).toContain('aria-label={copied ? "Code copied" : "Copy code block"}');
+    expect(component).toContain("await navigator.clipboard.writeText(source)");
+    expect(component).toContain("setCopied(false)");
+    expect(component).toContain("overflow-x-auto");
+    expect(component).not.toContain("dangerouslySetInnerHTML");
+  });
+
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
     expect(dashboard).toContain("<SessionProvider>");
     expect(dashboard).toContain("USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />");
