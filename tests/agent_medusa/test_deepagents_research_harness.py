@@ -85,7 +85,10 @@ def sdk(monkeypatch):
         lambda: SimpleNamespace(
             get_prompt=lambda *args: SimpleNamespace(
                 system_instructions="Evidence-grounded registered research instructions"
-            )
+            ),
+            get_prompt_for_compat=lambda *args: SimpleNamespace(
+                system_instructions="Evidence-grounded registered research instructions"
+            ),
         ),
     )
 
@@ -108,6 +111,8 @@ def sdk(monkeypatch):
 
     callbacks = types.ModuleType("langchain_core.callbacks")
     callbacks.AsyncCallbackHandler = type("AsyncCallbackHandler", (), {})
+    planning = types.ModuleType("langchain.agents.middleware")
+    planning.TodoListMiddleware = type("TodoListMiddleware", (), {})
 
     class FakeStructuredTool:
         @staticmethod
@@ -124,6 +129,7 @@ def sdk(monkeypatch):
         "deepagents": core,
         "deepagents.backends": backend,
         "langchain_core.callbacks": callbacks,
+        "langchain.agents.middleware": planning,
         "langchain_core.tools": tools,
         "langsmith": langsmith,
     }.items():
@@ -155,6 +161,8 @@ async def test_real_harness_creation_uses_canonical_scope_and_ephemeral_workspac
     assert sdk["args"]["checkpointer"] is None
     assert sdk["args"]["memory"] == []
     assert sdk["args"]["skills"] == []
+    assert len(sdk["args"]["middleware"]) == 1
+    assert sdk["args"]["middleware"][0].__class__.__name__ == "TodoListMiddleware"
     assert sdk["args"]["backend"].__class__.__name__ == "StateBackend"
     assert sdk["args"]["subagents"][0]["name"] == "general-purpose"
     assert sdk["args"]["subagents"][0]["model"] is model
@@ -268,3 +276,96 @@ async def test_no_unacknowledged_tool_result_is_recorded_as_success(sdk, monkeyp
     await specialist.run({"query": "Research"}, execution=execution())
     with pytest.raises(RuntimeError, match="acknowledged"):
         await sdk["approved_tool"]["coroutine"]("web_search", {"query": "Research"})
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_planning_and_task_callbacks_are_safe_and_observed(sdk):
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+
+    class CapturingEmitter:
+        def __init__(self):
+            self.events = []
+
+        async def emit(self, event):
+            self.events.append(event)
+
+    ctx = execution()
+    ctx.event_emitter = CapturingEmitter()
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
+    )
+    await specialist.run({"query": "Research safely"}, execution=ctx)
+    cb = sdk["config"]["callbacks"][0]
+    await cb.on_tool_start(
+        {"name": "write_todos"},
+        '{"todos":[{"content":"private-plan"}]}',
+        run_id="todo-run-1",
+    )
+    await cb.on_tool_end({"private": "result"}, run_id="todo-run-1")
+    await cb.on_tool_start(
+        {"name": "task"},
+        '{"subagent_type":"general-purpose","description":"private-subtask"}',
+        run_id="subagent-run-1",
+    )
+    await cb.on_tool_error(
+        RuntimeError("never expose this internal exception"),
+        run_id="subagent-run-1",
+    )
+    assert [e.type for e in ctx.event_emitter.events] == [
+        AgentEventType.PLAN_UPDATED,
+        AgentEventType.PLAN_UPDATED,
+        AgentEventType.REASONING_STEP,
+        AgentEventType.REASONING_STEP,
+    ]
+    assert [e.metadata["status"] for e in ctx.event_emitter.events] == [
+        "running", "completed", "running", "failed",
+    ]
+    assert ctx.event_emitter.events[2].metadata["subagent_run_id"] == "subagent-run-1"
+    assert all(e.correlation_id == "corr-1" for e in ctx.event_emitter.events)
+    assert all(e.metadata["source"] == "deepagents" for e in ctx.event_emitter.events)
+    assert "private-plan" not in str(ctx.event_emitter.events)
+    assert "private-subtask" not in str(ctx.event_emitter.events)
+    assert "never expose" not in str(ctx.event_emitter.events)
+    await cb.on_tool_end("not from an observed start", run_id="unknown-run")
+    await cb.on_tool_start(
+        {"name": "karen_approved_tool"},
+        '{"secret":"not an internal plan"}',
+        run_id="external-action",
+    )
+    assert len(ctx.event_emitter.events) == 4
+
+
+@pytest.mark.asyncio
+async def test_deepagents_callbacks_do_not_claim_a_subagent_that_never_started(sdk):
+    class CapturingEmitter:
+        def __init__(self):
+            self.events = []
+
+        async def emit(self, event):
+            self.events.append(event)
+
+    ctx = execution()
+    ctx.event_emitter = CapturingEmitter()
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
+    )
+    await specialist.run({"query": "Research"}, execution=ctx)
+    cb = sdk["config"]["callbacks"][0]
+    await cb.on_tool_error(RuntimeError("internal"), run_id="never-started")
+    assert ctx.event_emitter.events == []
