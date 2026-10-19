@@ -75,3 +75,39 @@ The showcase suite is separate from the generic browser contracts because it cap
 - canonical gallery verification before repository write.
 
 Do not weaken that boundary to make screenshots easier to produce.
+
+## Governed authenticated identity replay
+
+The canonical `Beta Live Model Smoke` workflow has an opt-in
+`run_authenticated_browser_replay` dispatch input. It reuses
+`e2e/ux-personal-memory-replay.spec.ts`; no separate CI pipeline,
+browser harness, synthetic model response, or packaging job is needed.
+
+Only dispatch the workflow **from `main`** after deploying that exact commit to
+an approved HTTPS beta installation with a healthy real model. Set these values
+on the protected `beta-release` GitHub environment:
+
+- Variable `KAREN_UX_BASE_URL`: approved HTTPS origin (no path).
+- Variable `KAREN_UX_DEPLOYMENT_REVISION`: the exact deployed 40-character
+  commit SHA; it must equal the dispatch workflow's checkout SHA. This is an
+  **operator attestation**, not independent binary-deployment verification.
+- Secrets `KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD`: dedicated sanitized
+  account that is allowed to log in and use chat.
+
+From GitHub Actions, choose **Beta Live Model Smoke**, select **Run workflow**
+on `main`, and turn on **Run real, authenticated personal-memory browser
+acceptance**. The additional Ubuntu job validates prerequisites, installs the
+existing frontend's locked dependencies and Chromium, then runs the identity
+replay with full-session video enabled. It fails closed if the environment or
+credentials are missing, the URL is not HTTPS, or the attested revision differs.
+
+The existing self-hosted Windows live-model job is not replaced. Its queue
+state is independent of the opt-in browser job. Inspect both job conclusions
+instead of reporting an overall green result from just one.
+
+The private GitHub artifact is retained for seven days and may contain chat
+text, screenshots, browser recordings and traces. Authorized reviewers must
+inspect and sanitize it before any public publication. The Playwright assertion
+receipt explicitly does not prove NeuroVault long-term memory projection.
+Do not mark release acceptance complete merely because the workflow dispatch
+was accepted, skipped, or queued.
