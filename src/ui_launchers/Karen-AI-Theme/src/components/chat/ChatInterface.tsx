@@ -784,13 +784,6 @@ interface SpeechRecognitionErrorEvent {
   message: string;
 }
 
-declare global {
-  interface Window {
-    SpeechRecognition: SpeechRecognitionConstructor | undefined;
-    webkitSpeechRecognition: SpeechRecognitionConstructor | undefined;
-  }
-}
-
 const createSessionId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -2286,7 +2279,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
-    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const speechWindow = window as Window & {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+    const SpeechRecognitionAPI = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) {
       setSpeechRecognitionSupported(false);
       return;
