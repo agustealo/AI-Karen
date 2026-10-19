@@ -351,3 +351,77 @@ tenant-scoped run-to-thread identity, resume authorization, and
 persisted event sequence have passed integration tests. UI preparation
 status is not evidence that model execution has begun; only observed
 Medusa/Deep Agents events can establish that transition.
+
+
+## Canonical PostgreSQL checkpoint storage: phase-one implementation
+
+A separate central configuration flag is now registered:
+
+```dotenv
+KAREN_MEDUSA_DEEPAGENTS_CHECKPOINT_ENABLED=false
+```
+
+The flag can be enabled only with
+`KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED=true` and the **required**
+Medusa durable run ledger enabled in fail-closed mode. This is intentional:
+a stored graph snapshot is not a separate execution authority.
+
+The forward-only
+`supabase/migrations/20261019010000_36_medusa_deepagents_checkpoints.sql`
+adds checkpoint and pending-write tables, ties each snapshot to
+`agent_medusa_runs (run_id, tenant_id)`, and enforces tenant row-level
+security on both tables. It does not create a second database engine.
+
+`agent_medusa/execution/deepagents_checkpoints.py` implements
+LangGraph's asynchronous `BaseCheckpointSaver` interface using Karen's
+canonical `PostgresEngine` session and tenant transaction scope:
+`aget_tuple`, `aput`, `aput_writes`, `alist` and
+`adelete_thread`. Its scope is bound to an authorized Medusa
+run/user/session/policy and a deterministic opaque thread identity,
+never to client-provided tenant or graph configuration. It rejects
+pickle serialization formats, unsafe checkpoint identities and
+cross-thread reads/deletions.
+
+When checkpointing is enabled, Deep Agents receives this saver rather
+than a process-local `MemorySaver` or an automatically creating
+PostgreSQL connection. A successful `ainvoke` must also read back a
+persisted checkpoint before the specialist can claim durable storage.
+Only after that acknowledgement does Medusa emit
+`CHECKPOINT_PERSISTED`, and WorkflowRuntime produces a sanitized
+status event. The corresponding AG-UI projection in PR #494 maps
+that to `CUSTOM(karen.checkpoint)` with
+`checkpoint_verified=true` and `resumable=false`.
+
+**This implements durable checkpoint storage wiring, NOT end-to-end
+interruption recovery.** We still require a dedicated, authenticated
+resume operation that resolves the original tenant/user/session,
+policy decision, run, and thread; verifies the run ledger state;
+reconciles tool receipts to prevent duplicate side effects; acquires
+a safe worker lease; and replays persisted events for AG-UI. A
+checkpoint row alone cannot establish that a run is executing or
+that it has successfully resumed. Until these proofs exist, AG-UI
+must never expose an enabled Resume action.
+
+Remaining release gates for this phase:
+
+- Apply and rollback-test the new migration in a disposable PostgreSQL
+  instance with actual row-level security and correct database roles.
+- Verify a real pinned Deep Agents graph can save/read checkpoints
+  after a process restart, and that corrupt/foreign checkpoints fail.
+- Audit encryption-at-rest, secret-bearing graph state, retention,
+  deletion, and tenant/user isolation with NeuroVault governance.
+- Check idempotent external tool outcomes and interrupted task handling
+  before issuing new model/tool actions from restored state.
+- Verify cancellation, SSE disconnects, correlation-preserving AG-UI
+  activity replay, and no double execution.
+- Human UX verification before enabling the flag or packaging a release.
+
+Tests added without requiring a live database:
+```bash
+pytest tests/agent_medusa/test_deepagents_checkpoint_saver.py -q
+pytest tests/agent_medusa/test_deepagents_research_harness.py -q
+pytest tests/core/runtime/test_deepagents_live_activity.py -q
+```
+
+These are **structural and mocked transport tests**, not PostgreSQL
+durability proof. The feature flag remains disabled by default.
