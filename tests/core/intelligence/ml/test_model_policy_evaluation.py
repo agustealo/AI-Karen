@@ -5,7 +5,6 @@ Test observations here are deliberate fixtures, NOT live model results.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
