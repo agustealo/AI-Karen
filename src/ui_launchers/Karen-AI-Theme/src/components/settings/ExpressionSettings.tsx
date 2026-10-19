@@ -230,7 +230,7 @@ export default function ExpressionSettings() {
               <CardTitle className="text-xl font-bold flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-primary" /> Expression Engine Management
               </CardTitle>
-              <CardDescription>Direct Kari&apos;s cognition through your configured model providers.</CardDescription>
+              <CardDescription>Direct Karen&apos;s cognition through your configured model providers.</CardDescription>
             </div>
             <TooltipProvider>
               <Tooltip>
@@ -364,7 +364,7 @@ export default function ExpressionSettings() {
                                <SelectItem value="transformers">Transformers (Broad Compatibility)</SelectItem>
                              </SelectContent>
                            </Select>
-                           <p className="text-[10px] text-muted-foreground">Force a specific internal backend or let Kari choose based on model requirements.</p>
+                           <p className="text-[10px] text-muted-foreground">Force a specific internal backend or let Karen choose based on model requirements.</p>
                          </div>
                        )}
 
@@ -430,7 +430,7 @@ export default function ExpressionSettings() {
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Automatic Fallback Sequence</Label>
-                <p className="text-xs text-muted-foreground">The order in which Kari attempts engines when the active one fails. (Max 5 steps)</p>
+                <p className="text-xs text-muted-foreground">The order in which Karen attempts engines when the active one fails. (Up to 4 steps)</p>
               </div>
               <div className="flex gap-2">
                 <Button 
