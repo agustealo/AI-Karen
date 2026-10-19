@@ -532,6 +532,7 @@ class WorkflowRuntime:
         return result.content, {
             "execution_engine": "deepagents",
             "response_source": result.metadata.get("response_source", "agent"),
+            "model_calls_observed": result.metadata.get("model_calls_observed"),
             "actual_provider": result.metadata.get("actual_provider"),
             "actual_model": result.metadata.get("actual_model"),
             "model_selection_source": result.metadata.get("model_selection_source"),
