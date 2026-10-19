@@ -51,16 +51,21 @@ function KarenActivity({ data, category = "Agent step" }: { data: unknown; categ
   const raw = data as Activity;
   const value = raw.content && typeof raw.content === "object"
     ? raw.content : raw;
-  const agent = (typeof value.agentId === "string" && value.agentId) || "Agent";
+  const fields = value as Record<string, unknown>;
+  const agent = (typeof fields.agent_id === "string" && fields.agent_id) || (typeof value.agentId === "string" && value.agentId) || "Agent";
   const status = (typeof value.status === "string" && value.status) || "observed";
   const description =
     typeof value.description === "string" ? value.description : "";
   // Display only identifiers and timestamps supplied by an observed runtime event.
   // Do not synthesize event ordering or a completed workflow from missing fields.
-  const runId = typeof value.runId === "string" ? value.runId : "";
-  const eventId = typeof value.eventId === "string" ? value.eventId : "";
-  const reportedAt = typeof value.timestamp === "string" && !Number.isNaN(Date.parse(value.timestamp))
-    ? new Date(value.timestamp).toLocaleString() : "";
+  const runId = typeof fields.run_id === "string" ? fields.run_id
+    : typeof value.runId === "string" ? value.runId : "";
+  const eventId = typeof fields.event_id === "string" ? fields.event_id
+    : typeof value.eventId === "string" ? value.eventId : "";
+  const rawTimestamp = typeof fields.timestamp === "string" ? fields.timestamp
+    : typeof fields.occurred_at === "string" ? fields.occurred_at : "";
+  const reportedAt = rawTimestamp && !Number.isNaN(Date.parse(rawTimestamp))
+    ? new Date(rawTimestamp).toLocaleString() : "";
   const normalized = status.toLowerCase();
   const failed = normalized.includes("fail") || normalized.includes("error");
   const done = normalized.includes("finish") || normalized.includes("complete") || normalized.includes("success");
@@ -76,7 +81,7 @@ function KarenActivity({ data, category = "Agent step" }: { data: unknown; categ
       </summary>
       <div className="border-t border-border/50 px-3 py-3 text-muted-foreground">
         {description ? <p className="whitespace-pre-wrap">{description}</p> : <p>No further activity details were reported.</p>}
-        {value.stepId ? <p className="mt-2 break-all text-xs">Step: {value.stepId}</p> : null}
+        {(typeof fields.step_id === "string" && fields.step_id || value.stepId) ? <p className="mt-2 break-all text-xs">Step: {typeof fields.step_id === "string" ? fields.step_id : value.stepId}</p> : null}
         {runId ? <p className="mt-1 break-all text-xs">Run: {runId}</p> : null}
         {eventId ? <p className="mt-1 break-all text-xs">Event: {eventId}</p> : null}
         {reportedAt ? <p className="mt-1 text-xs">Reported: {reportedAt}</p> : null}
