@@ -28,6 +28,16 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(packageJson.dependencies["@ag-ui/client"]).toBeDefined();
   });
 
+  it("reuses official assistant-ui copy controls without unauthorized retry or edit", () => {
+    expect(component).toContain("ActionBarPrimitive.Root");
+    expect(component).toContain("ActionBarPrimitive.Copy");
+    expect(component).toContain('aria-label="Copy message"');
+    expect(component).toContain("group-data-[copied]/copy:inline");
+    expect(component).toContain("<KarenCopyAction />");
+    expect(component).not.toContain("ActionBarPrimitive.Reload");
+    expect(component).not.toContain("ActionBarPrimitive.Edit");
+  });
+
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
     expect(dashboard).toContain("<SessionProvider>");
     expect(dashboard).toContain("USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />");
