@@ -217,3 +217,36 @@ def test_forward_migration_has_tenant_rls_and_canonical_ledger_relation():
     assert "current_setting('app.current_tenant_id', true)" in text
     assert "ON DELETE CASCADE" in text
     assert "CREATE TABLE agent_medusa_deepagents_checkpoint_writes" in text
+
+
+def test_checkpoint_feature_requires_governed_ledger_and_real_deepagents():
+    from ai_karen_engine.config.agent_medusa import (
+        AgentMedusaConfigError,
+        AgentMedusaRuntimeSettings,
+    )
+
+    for overrides in [
+        {
+            "deepagents_research_enabled": False,
+            "durable_run_ledger_enabled": True,
+            "durable_run_ledger_required": True,
+        },
+        {
+            "deepagents_research_enabled": True,
+            "durable_run_ledger_enabled": False,
+            "durable_run_ledger_required": False,
+        },
+    ]:
+        with pytest.raises(AgentMedusaConfigError, match="checkpoint"):
+            AgentMedusaRuntimeSettings(
+                deepagents_checkpoint_enabled=True,
+                **overrides,
+            )
+    settings = AgentMedusaRuntimeSettings(
+        deepagents_research_enabled=True,
+        deepagents_checkpoint_enabled=True,
+        durable_run_ledger_enabled=True,
+        durable_run_ledger_required=True,
+    )
+    assert settings.deepagents_checkpoint_enabled is True
+    assert AgentMedusaRuntimeSettings().deepagents_checkpoint_enabled is False
