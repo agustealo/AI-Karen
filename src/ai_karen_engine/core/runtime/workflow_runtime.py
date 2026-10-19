@@ -94,7 +94,19 @@ class WorkflowRuntime:
                     correlation_id=ctx.correlation_id,
                     metadata={"execution_engine": "deepagents", "status": "running"},
                 )
-                while not (run_task.done() and events.empty()):
+                while True:
+                    if run_task.done():
+                        # Do not race a permanently completed task against a
+                        # newly scheduled queue-get. Drain observed events
+                        # before reporting the terminal response.
+                        while not events.empty():
+                            chunk = self._project_medusa_event(
+                                events.get_nowait(),
+                                correlation_id=ctx.correlation_id,
+                            )
+                            if chunk is not None:
+                                yield chunk
+                        break
                     next_event = asyncio.create_task(events.get())
                     try:
                         ready, _ = await asyncio.wait(
