@@ -3018,6 +3018,21 @@ class ChatRuntime:
             "fallback_reason": observed("fallback_reason"),
             "llm": raw.get("llm"),
         }
+        # Keep versioned, scalar learning lineage for nonstreamed graph
+        # responses too. The same allowlist is used for live stream chunks;
+        # otherwise identical Deep Agents runs report different provenance.
+        for key in (
+            "execution_engine",
+            "model_calls_observed",
+            "model_selection_source",
+            "learning_signal_status",
+            "learning_signal_version",
+            "learned_context_status",
+            "learned_memory_refs_included",
+        ):
+            value = observed(key)
+            if value is not None:
+                normalized[key] = value
         for key in _RICH_RESULT_KEYS:
             value = raw.get(key)
             if value is not None:
