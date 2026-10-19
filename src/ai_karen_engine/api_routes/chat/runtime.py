@@ -579,13 +579,13 @@ async def _ag_ui_sse(
 ):
     """Translate the same authorized runtime stream into AG-UI event framing."""
     projection = AGUIEventProjection(thread_id=thread_id, run_id=run_id)
-    yield ": stream_connected\\n\\n"
-    yield f"data: {json.dumps(projection.begin())}\\n\\n"
+    yield ": stream_connected\n\n"
+    yield f"data: {json.dumps(projection.begin())}\n\n"
 
     try:
         async for chunk in get_chat_runtime().execute_stream(runtime_request):
             for event in projection.project(chunk):
-                yield f"data: {json.dumps(event)}\\n\\n"
+                yield f"data: {json.dumps(event)}\n\n"
             if projection.terminal:
                 break
     except Exception as exc:
@@ -603,10 +603,10 @@ async def _ag_ui_sse(
             metadata={"error_code": "CHAT_STREAM_RUNTIME_EXCEPTION"},
         )
         for event in projection.project(error_chunk):
-            yield f"data: {json.dumps(event)}\\n\\n"
+            yield f"data: {json.dumps(event)}\n\n"
 
     for event in projection.fail_incomplete():
-        yield f"data: {json.dumps(event)}\\n\\n"
+        yield f"data: {json.dumps(event)}\n\n"
 
 
 @router.post("/chat/ag-ui")
