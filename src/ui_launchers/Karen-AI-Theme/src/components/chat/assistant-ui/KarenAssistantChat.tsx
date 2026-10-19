@@ -50,7 +50,7 @@ function KarenActivity({ data }: { data: unknown }) {
   const done = normalized.includes("finish") || normalized.includes("complete") || normalized.includes("success");
   const StatusIcon = failed ? CircleAlert : done ? CheckCircle2 : Clock3;
   return (
-    <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" open={failed}>
+    <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" defaultOpen={failed}>
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
         <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate font-medium">{agent}</span>
@@ -80,12 +80,19 @@ function KarenLearningDecision({ data }: { data: unknown }) {
         ? "Explicit model selection retained."
         : "Registered model selection retained.";
   return (
-    <div role="note" data-testid="karen-learning-provenance"
-      className="my-2 rounded-lg border border-border/60 bg-muted/20 p-3 text-xs">
-      <div className="font-medium">Model decision provenance</div>
-      <p className="mt-1 text-muted-foreground">{label}</p>
-      <p className="mt-1 text-muted-foreground">Evidence: {status}. Operational evidence is not proof of answer correctness.</p>
-    </div>
+    <details data-testid="karen-learning-provenance"
+      className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+        <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1 font-medium">Model decision</span>
+        <span className="text-xs text-muted-foreground">Details</span>
+        <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+      </summary>
+      <div className="space-y-2 border-t border-border/50 px-3 py-3">
+        <p>{label}</p>
+        <p className="text-muted-foreground">Evidence: {status}. Operational evidence is not proof of answer correctness.</p>
+      </div>
+    </details>
   );
 }
 
@@ -94,10 +101,17 @@ function KarenCheckpoint({ data }: { data: unknown }) {
   const checkpoint = data as Record<string, unknown>;
   if (checkpoint.checkpoint_verified !== true) return null;
   return (
-    <div role="status" data-testid="karen-checkpoint-evidence"
-      className="my-2 rounded-lg border border-border/60 p-3 text-xs text-muted-foreground">
-      Checkpoint persisted. Recovery has not been verified. No resume action is available.
-    </div>
+    <details data-testid="karen-checkpoint-evidence"
+      className="my-2 rounded-xl border border-border/60 text-sm">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+        <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1 font-medium">Checkpoint persisted</span>
+        <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+      </summary>
+      <p className="border-t border-border/50 px-3 py-3 text-muted-foreground">
+        The runtime verified storage, but restart recovery is not verified. No resume action is available.
+      </p>
+    </details>
   );
 }
 
