@@ -321,8 +321,7 @@ export default function ExpressionSettings() {
                           size="sm"
                           className="h-9 text-[10px] font-bold uppercase tracking-widest shadow-sm min-w-[120px]"
                           onClick={() => handleSave()}
-                          disabled={!canManageRuntime || isSaving}
-                          disabled={isSaving || exprSettings?.active_engine === activeEngine || !currentEngineConfig.enabled}
+                          disabled={!canManageRuntime || isSaving || exprSettings?.active_engine === activeEngine || !currentEngineConfig.enabled}
                         >
                           {exprSettings?.active_engine === activeEngine ? <ShieldCheck className="h-4 w-4 mr-2" /> : <Zap className="h-4 w-4 mr-2" />}
                           {exprSettings?.active_engine === activeEngine ? "Primary Active" : "Set as Primary"}
@@ -334,8 +333,7 @@ export default function ExpressionSettings() {
                             size="sm" 
                             className={cn("h-7 px-3 text-[9px] font-bold uppercase tracking-widest rounded-lg", currentEngineConfig.enabled ? "text-amber-600 hover:bg-amber-50" : "text-emerald-600 hover:bg-emerald-50")}
                             onClick={() => handleSave({ [activeEngine]: { enabled: !currentEngineConfig.enabled } })}
-                            disabled={!canManageRuntime || isSaving}
-                            disabled={isSaving || activeEngine === 'builtin'}
+                            disabled={!canManageRuntime || isSaving || activeEngine === 'builtin'}
                           >
                             {currentEngineConfig.enabled ? "Disable" : "Enable"}
                           </Button>
@@ -345,7 +343,6 @@ export default function ExpressionSettings() {
                             className={cn("h-7 px-3 text-[9px] font-bold uppercase tracking-widest rounded-lg", currentEngineConfig.fallback_eligible ? "text-primary hover:bg-primary/5 shadow-sm bg-background/50" : "text-muted-foreground")}
                             onClick={() => handleSave({ [activeEngine]: { fallback_eligible: !currentEngineConfig.fallback_eligible } })}
                             disabled={!canManageRuntime || isSaving}
-                            disabled={isSaving}
                           >
                             {currentEngineConfig.fallback_eligible ? "Fallback ON" : "No Fallback"}
                           </Button>
