@@ -61,6 +61,9 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("loadSession(session.id)");
     expect(component).toContain('aria-expanded={historyOpen}');
     expect(component).toContain('<details data-testid="karen-agent-activity"');
+    expect(component).toContain("defaultOpen={failed}");
+    expect(component).toContain('<details data-testid="karen-learning-provenance"');
+    expect(component).toContain('<details data-testid="karen-checkpoint-evidence"');
     expect(component).toContain("value.stepId");
     expect(component).not.toContain("localStorage.setItem");
     expect(component).not.toContain("clientExecuteTool");
