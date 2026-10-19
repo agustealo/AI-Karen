@@ -23,6 +23,7 @@ import { Button } from '../ui/button';
 import { Separator } from '../ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/useAuth';
 import { apiClient } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { normalizeModelSettingsResponse, type RuntimeSettingsResponse } from '@/lib/model-runtime-inventory';
@@ -63,6 +64,8 @@ export default function ExpressionSettings() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canManageRuntime = Boolean(user?.roles?.some((role) => role === 'admin' || role === 'super_admin'));
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -90,6 +93,7 @@ export default function ExpressionSettings() {
   useEffect(() => { void loadData(); }, [loadData]);
 
   const handleSave = async (engineConfigs?: Record<string, Record<string, unknown>>, newFallbackOrder?: string[]) => {
+    if (!canManageRuntime) return;
     setIsSaving(true);
     try {
       const payload: Record<string, unknown> = {
@@ -223,6 +227,7 @@ export default function ExpressionSettings() {
 
   return (
     <div className="space-y-6">
+      {!canManageRuntime && <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">Expression routing is shared runtime configuration. You can review it here, but only an administrator can change the primary engine or fallback order.</p>}
       <Card className="border-border/40 shadow-sm transition-all hover:shadow-md">
         <CardHeader className="border-b bg-muted/20 pb-4">
           <div className="flex items-center justify-between">
@@ -316,6 +321,7 @@ export default function ExpressionSettings() {
                           size="sm"
                           className="h-9 text-[10px] font-bold uppercase tracking-widest shadow-sm min-w-[120px]"
                           onClick={() => handleSave()}
+                          disabled={!canManageRuntime || isSaving}
                           disabled={isSaving || exprSettings?.active_engine === activeEngine || !currentEngineConfig.enabled}
                         >
                           {exprSettings?.active_engine === activeEngine ? <ShieldCheck className="h-4 w-4 mr-2" /> : <Zap className="h-4 w-4 mr-2" />}
@@ -328,6 +334,7 @@ export default function ExpressionSettings() {
                             size="sm" 
                             className={cn("h-7 px-3 text-[9px] font-bold uppercase tracking-widest rounded-lg", currentEngineConfig.enabled ? "text-amber-600 hover:bg-amber-50" : "text-emerald-600 hover:bg-emerald-50")}
                             onClick={() => handleSave({ [activeEngine]: { enabled: !currentEngineConfig.enabled } })}
+                            disabled={!canManageRuntime || isSaving}
                             disabled={isSaving || activeEngine === 'builtin'}
                           >
                             {currentEngineConfig.enabled ? "Disable" : "Enable"}
@@ -337,6 +344,7 @@ export default function ExpressionSettings() {
                             size="sm" 
                             className={cn("h-7 px-3 text-[9px] font-bold uppercase tracking-widest rounded-lg", currentEngineConfig.fallback_eligible ? "text-primary hover:bg-primary/5 shadow-sm bg-background/50" : "text-muted-foreground")}
                             onClick={() => handleSave({ [activeEngine]: { fallback_eligible: !currentEngineConfig.fallback_eligible } })}
+                            disabled={!canManageRuntime || isSaving}
                             disabled={isSaving}
                           >
                             {currentEngineConfig.fallback_eligible ? "Fallback ON" : "No Fallback"}
@@ -438,7 +446,7 @@ export default function ExpressionSettings() {
                   size="sm"
                   className="h-8 text-[10px] font-bold uppercase tracking-widest border-primary/20 hover:bg-primary/5"
                   onClick={addSequenceStep}
-                  disabled={isSaving || fallbackOrder.length >= 4}
+                  disabled={!canManageRuntime || isSaving || fallbackOrder.length >= 4}
                 >
                   Add Step
                 </Button>
@@ -447,6 +455,7 @@ export default function ExpressionSettings() {
                   size="sm"
                   className="h-8 text-[10px] font-bold uppercase tracking-widest shadow-md"
                   onClick={() => handleSave(undefined, fallbackOrder)}
+                  disabled={!canManageRuntime || isSaving}
                   disabled={Boolean(isSaving || (
                     exprSettings && 
                     JSON.stringify(exprSettings.fallback_order) === JSON.stringify(fallbackOrder) &&
