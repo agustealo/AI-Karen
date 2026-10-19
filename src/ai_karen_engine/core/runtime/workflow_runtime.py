@@ -201,6 +201,28 @@ class WorkflowRuntime:
             return None
         if not isinstance(agent_id, str) or not 1 <= len(agent_id) <= 128:
             return None
+        if kind == "checkpoint_persisted":
+            # Persistence is a *read-back acknowledgement*, not a claim that
+            # the interrupted worker can automatically resume.
+            if (
+                metadata.get("source") != "deepagents"
+                or metadata.get("checkpoint_verified") is not True
+                or metadata.get("resumable") is not False
+            ):
+                return None
+            return _SharedChatStreamChunk(
+                type="status",
+                content="Agent state checkpoint persisted. Automatic resume is not enabled.",
+                correlation_id=correlation_id,
+                metadata={
+                    "execution_engine": "deepagents",
+                    "source": "deepagents",
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                    "checkpoint_verified": True,
+                    "resumable": False,
+                },
+            )
         if kind in {"plan_updated", "reasoning_step"}:
             # These SDK lifecycle events exist only when Deep Agents really
             # executed its opt-in planner or a delegated task. No graph
