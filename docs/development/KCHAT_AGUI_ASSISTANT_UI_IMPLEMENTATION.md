@@ -292,3 +292,21 @@ is not an invitation to fabricate a "Karen learned" toast.
 The old chat transport remains supported while the AG-UI opt-in bridge
 is acceptance-tested. Full candidate policy promotion, durable event
 replay, and a human-reviewed memory/learning interface remain gated.
+
+
+### Shadow model-selection status is not an executed model
+
+Intelligence now consults scoped operational model outcomes by default,
+but learned routing changes are **shadow-only by default**. The actual
+model remains the healthy, RuntimePolicy-approved, registered baseline.
+
+If a real Medusa/Deep Agents response carries
+`model_selection_source=shadow_operational_recommendation`, the existing
+AG-UI `CUSTOM(karen.learning_decision)` event may report it as an
+unpromoted advisory signal. The projection never includes the
+unexecuted candidate model name, a claimed measured quality gain or
+private memory. It cannot issue or approve a model-promotion action.
+
+The training/evaluation pipeline and new atomic predictor evidence
+writeback on PR #497 do not grant AG-UI any ability to alter ModelManager,
+MLModelRegistry or the separate adaptive-policy promotion process.
