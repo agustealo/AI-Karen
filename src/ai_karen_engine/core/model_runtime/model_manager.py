@@ -150,6 +150,23 @@ class ModelManager:
             raise ProviderNotAvailable(
                 "Learned recommendation outside registered model inventory"
             )
+        if selected != baseline_model and not settings.model_routing_adaptive_enabled:
+            # A completion-rate observation is not a verified measure of
+            # task correctness. Keep learning active as shadow evidence until
+            # the policy has passed real held-out/shadow promotion gates.
+            logger.info(
+                "learning.model_routing.shadow_candidate",
+                extra={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "task_type": task_type,
+                    "provider_id": provider_id,
+                    "baseline_model": baseline_model,
+                    "recommended_model": selected,
+                    "signal_version": getattr(signals, "version", ""),
+                },
+            )
+            return baseline_model, "shadow_operational_recommendation"
         return selected, source
 
     def resolve_runtime(self, selection: RuntimeSelection) -> Any:
