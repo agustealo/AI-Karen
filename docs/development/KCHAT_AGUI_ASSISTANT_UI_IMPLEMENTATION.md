@@ -20,8 +20,9 @@ The execution chain remains:
 6. A frontend view layer displays only events the backend actually emitted.
 
 AG-UI is **not** an agent framework or alternate source of truth.
-assistant-ui is a candidate React UI component library, **not** a replacement
-for Karen's runtime or conversation storage.
+assistant-ui is an **opt-in React UI layer**, **not** a replacement
+for Karen's runtime or conversation storage. It remains disabled until
+the npm lock, event compatibility and live chat regression gates are green.
 
 ## Repository evidence
 
