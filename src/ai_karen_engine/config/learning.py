@@ -27,6 +27,7 @@ class LearningSettings:
     model_routing_min_samples: int = 12
     model_routing_history_limit: int = 500
     model_routing_history_days: int = 90
+    model_routing_read_timeout_seconds: float = 0.75
     model_routing_max_failure_rate: float = 0.4
     model_routing_min_reliability_gain: float = 0.2
 
@@ -37,6 +38,8 @@ class LearningSettings:
             raise ValueError("Learning outcome history limit must be 10-1000")
         if not 1 <= self.model_routing_history_days <= 365:
             raise ValueError("Learning outcome retention horizon must be 1-365 days")
+        if not 0.1 <= self.model_routing_read_timeout_seconds <= 10.0:
+            raise ValueError("Learning read timeout must be 0.1-10 seconds")
         for value in (
             self.model_routing_max_failure_rate, self.model_routing_min_reliability_gain
         ):
@@ -85,6 +88,7 @@ class LearningSettings:
             ("LEARNING_MODEL_ROUTING_MIN_SAMPLES", "model_routing_min_samples", int),
             ("LEARNING_MODEL_ROUTING_HISTORY_LIMIT", "model_routing_history_limit", int),
             ("LEARNING_MODEL_ROUTING_HISTORY_DAYS", "model_routing_history_days", int),
+            ("LEARNING_MODEL_ROUTING_READ_TIMEOUT_SECONDS", "model_routing_read_timeout_seconds", float),
             ("LEARNING_MODEL_ROUTING_MAX_FAILURE_RATE", "model_routing_max_failure_rate", float),
             ("LEARNING_MODEL_ROUTING_MIN_RELIABILITY_GAIN", "model_routing_min_reliability_gain", float),
         )
