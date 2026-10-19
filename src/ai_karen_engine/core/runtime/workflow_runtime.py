@@ -45,6 +45,10 @@ class WorkflowRuntime:
         conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
 
+        if self._use_deepagents(request, decision, plan):
+            result = await self._run_deepagents(request, decision, plan, config)
+            return result
+
         orchestrator = await self._get_orchestrator()
         final_state = await orchestrator.process(
             messages=self._to_langchain(request.messages),
@@ -63,6 +67,38 @@ class WorkflowRuntime:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
+
+        if self._use_deepagents(request, decision, plan):
+            yield _SharedChatStreamChunk(
+                type="status",
+                content="Authorized agent run started.",
+                correlation_id=ctx.correlation_id,
+                metadata={"execution_engine": "deepagents", "status": "running"},
+            )
+            try:
+                content, metadata = await self._run_deepagents(
+                    request, decision, plan, config
+                )
+            except Exception:
+                logger.exception(
+                    "deepagents_primary_execution_failed",
+                    extra={"correlation_id": ctx.correlation_id,
+                           "tenant_id": ctx.tenant_id},
+                )
+                yield _SharedChatStreamChunk(
+                    type="error",
+                    content="The authorized agent run could not be completed.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"error_code": "AGENT_EXECUTION_FAILED"},
+                )
+                return
+            yield _SharedChatStreamChunk(
+                type="content",
+                content=content,
+                correlation_id=ctx.correlation_id,
+                metadata=metadata,
+            )
+            return
 
         orchestrator = await self._get_orchestrator()
         async for chunk in orchestrator.stream_process(
@@ -89,6 +125,93 @@ class WorkflowRuntime:
                     correlation_id=ctx.correlation_id,
                     metadata=meta,
                 )
+
+    @staticmethod
+    def _use_deepagents(
+        request: ChatExecutionRequest,
+        decision: Optional[ExecutionDecision],
+        plan: Optional[AuthorizedExecutionPlan],
+    ) -> bool:
+        """Agent-first execution: custom LangGraph only for explicit workflows.
+
+        The runtime, never the frontend, chooses the execution engine.
+        While the tool-call-capable provider integration is being validated,
+        the Deep Agents path is opt-in and fails closed when not ready.
+        """
+        from ai_karen_engine.config.agent_medusa import (
+            get_agent_medusa_runtime_settings,
+        )
+        if not get_agent_medusa_runtime_settings().deepagents_research_enabled:
+            return False
+        if decision is None or plan is None:
+            return False
+        if getattr(plan.topology, "value", plan.topology) != "multi_agent":
+            return False
+        if not decision.requires_agent_delegation:
+            return False
+        if decision.workflow_id or plan.workflow_id:
+            return False  # Explicit custom graph stays in LangGraph.
+        return bool(request.messages and request.context.user_id and
+                    request.context.tenant_id and request.context.session_id)
+
+    async def _run_deepagents(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        config: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Use Medusa's existing run manager directly, not a second graph owner."""
+        from ai_karen_engine.agent_medusa.contracts.runtime_request import RuntimeRequest
+        from ai_karen_engine.agent_medusa.contracts.runtime_response import ResponseStatus
+        from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import (
+            MedusaCoordinator,
+        )
+
+        ctx = request.context
+        if not plan.matches_execution_scope(
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            policy_decision_id=plan.policy_decision_id,
+        ):
+            raise PermissionError("Deep Agents execution scope mismatch")
+        req_config = config["request_config"]
+        requirements = config.get("execution_requirements")
+        if not isinstance(requirements, dict) or not requirements.get("requires_agent_delegation"):
+            raise PermissionError("Deep Agents requires CORTEX delegation")
+        query = next(
+            (str(item.get("content") or "") for item in reversed(request.messages)
+             if item.get("role") == "user"),
+            "",
+        )
+        if not query.strip():
+            raise ValueError("Deep Agents requires a user task")
+
+        agent_request = RuntimeRequest(
+            query=query,
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            request_id=req_config["request_id"],
+            context={"execution_context": ctx},
+            authorized_plan=_serialize_plan(plan),
+            execution_requirements=requirements,
+        )
+        result = await MedusaCoordinator().handle_request(agent_request)
+        if result.status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
+                                 ResponseStatus.DEGRADED}:
+            raise RuntimeError("Authorized Medusa agent execution failed")
+        if not isinstance(result.content, str) or not result.content.strip():
+            raise RuntimeError("Authorized Medusa agent returned no content")
+        return result.content, {
+            "execution_engine": "deepagents",
+            "response_source": "agent",
+            "execution_topology": "multi_agent",
+            "agent_status": result.status.value,
+            "degraded_mode": result.status == ResponseStatus.DEGRADED,
+            "correlation_id": ctx.correlation_id,
+        }
 
     async def _get_orchestrator(self):
         from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator
