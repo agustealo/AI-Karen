@@ -46,6 +46,9 @@ test('UX-ID-01: current name and summary followup stay grounded in a real conver
     !enabled || !email || !password,
     'Opt-in only: sanitized account, healthy real backend, and KAREN_UX_IDENTITY_REPLAY=true',
   );
+  // Five real model turns plus a server-backed reload can exceed the
+  // generic 60-second UI-contract timeout on small local hardware.
+  test.setTimeout(8 * 60_000);
   await signIn(page);
   const hello = await sendAndRead(page, 'Hello');
   expect(hello).not.toMatch(/not sure what specific need|clarify your intention/i);
@@ -64,6 +67,17 @@ test('UX-ID-01: current name and summary followup stay grounded in a real conver
   expect(followup).not.toMatch(/you are an AI created by|you are a language model/i);
   expect(followup).toMatch(/Zeus/i);
 
+  // Reload discards React component state. Both the user's last prompt and
+  // the exact assistant answer must be restored by the canonical backend.
+  await page.reload();
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
+  const restored = page.getByRole('log', { name: 'Chat messages' });
+  await expect(restored.getByText('share please', { exact: true }).last())
+    .toBeVisible({ timeout: 30_000 });
+  const restoredAnswer = restored.getByTestId('chat-message-assistant')
+    .last().getByTestId('chat-message-content');
+  await expect(restoredAnswer).toHaveText(followup, { timeout: 30_000 });
+
   await testInfo.attach('UX-ID-01-live-conversation', {
     body: await page.screenshot({ fullPage: true, animations: 'disabled' }),
     contentType: 'image/png',
@@ -71,9 +85,11 @@ test('UX-ID-01: current name and summary followup stay grounded in a real conver
   await testInfo.attach('UX-ID-01-assertion-receipt', {
     body: Buffer.from(JSON.stringify({
       test: 'UX-ID-01',
-      checked: ['greeting', 'name_acknowledgement', 'name_recall', 'summary', 'followup'],
+      checked: ['greeting', 'name_acknowledgement', 'name_recall', 'summary', 'followup', 'reload_restoration'],
       target_revision: process.env.KAREN_UX_TARGET_REVISION || null,
       timestamp: new Date().toISOString(),
+      // UI restoration is evidence of server-backed transcript retrieval,
+      // not proof of NeuroVault long-term memory projection.
       runtime_persistence_verified: false,
       video_capture_opt_in: process.env.KAREN_E2E_CAPTURE_VIDEO === 'true',
     }, null, 2)),
