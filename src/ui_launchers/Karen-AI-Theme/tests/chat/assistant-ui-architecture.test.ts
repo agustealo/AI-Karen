@@ -69,6 +69,9 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain('<details data-testid="karen-checkpoint-evidence"');
     expect(component).toContain("value.stepId");
     expect(component).not.toContain("localStorage.setItem");
+    expect(component).toContain('data-testid="karen-observed-tool"');
+    expect(component).toContain("Only Karen's governed execution receipt");
+    expect(component).toContain("It does not confirm that an external action succeeded.");
     expect(component).not.toContain("clientExecuteTool");
   });
 
