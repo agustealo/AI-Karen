@@ -64,6 +64,9 @@ class KarenGovernedChatModel(BaseChatModel):
 
     endpoint: ProviderEndpoint = Field(exclude=True)
     selected_model: str
+    selection_source: str = "canonical_registry"
+    learning_signal_status: str = "not_consulted"
+    learning_signal_version: str = ""
     tool_schemas: list[dict[str, Any]] = Field(default_factory=list)
     selected_temperature: float = 0.0
     selected_max_tokens: int = 1024
@@ -157,17 +160,17 @@ def build_medusa_deepagents_model(registration: Any, execution: Any) -> KarenGov
     requested_provider = (
         execution.preferred_provider or plan.provider_constraints.get("provider")
     )
-    requested_model = (
+    explicit_model = (
         execution.preferred_model or plan.provider_constraints.get("model")
     )
-    if not isinstance(requested_model, str) or not requested_model.strip():
-        raise RuntimeError("Deep Agents requires a verified explicit model identity")
+    if explicit_model is not None and (
+        not isinstance(explicit_model, str) or not explicit_model.strip()
+    ):
+        raise RuntimeError("Deep Agents requested model identity is invalid")
     manager = get_model_manager()
     selection = manager.select_provider(
         "function_calling",
-        context={
-            "preferred_provider": requested_provider,
-        },
+        context={"preferred_provider": requested_provider},
     )
     if selection is None:
         raise RuntimeError("No provider available with real tool-calling support")
@@ -185,15 +188,50 @@ def build_medusa_deepagents_model(registration: Any, execution: Any) -> KarenGov
     known_models = manager.registry.get_registered_models(
         selection.provider_id, healthy_only=True
     )
-    if known_models and requested_model not in known_models:
+    if not known_models:
+        raise RuntimeError("Deep Agents model inventory is not verified")
+
+    signal = getattr(execution, "learned_model_signals", None)
+    signal_status = getattr(signal, "status", "not_consulted")
+    signal_version = getattr(signal, "version", "")
+    selection_source = "explicit_runtime_or_user" if explicit_model else "canonical_registry"
+    requested_model = explicit_model
+    if requested_model is None:
+        # A registered provider default is the deterministic cold-start
+        # baseline. We do not guess a model from the first inventory entry.
+        baseline_model = selection.model or endpoint.default_model
+        if not isinstance(baseline_model, str) or not baseline_model:
+            raise RuntimeError("Deep Agents has no registered default tool model")
+        if baseline_model not in known_models:
+            raise RuntimeError("Default tool model is not in canonical model inventory")
+        task_type = getattr(execution, "learning_task_type", "") or ""
+        if (
+            isinstance(task_type, str) and task_type
+            and callable(getattr(manager, "choose_tool_model_from_learning", None))
+        ):
+            requested_model, selection_source = manager.choose_tool_model_from_learning(
+                provider_id=selection.provider_id,
+                baseline_model=baseline_model,
+                eligible_models=list(known_models),
+                tenant_id=execution.tenant_id,
+                user_id=execution.user_id,
+                task_type=task_type,
+                signals=signal,
+            )
+        else:
+            requested_model = baseline_model
+            selection_source = "baseline_no_learning"
+    if requested_model not in known_models:
         raise RuntimeError("Requested tool model is not in canonical model inventory")
     if not manager.registry.is_model_available(
         selection.provider_id, requested_model, healthy_only=True
     ):
-        # An empty inventory is not affirmative capability evidence.
         raise RuntimeError("Deep Agents model availability is not verified")
     return KarenGovernedChatModel(
         endpoint=endpoint,
         selected_model=requested_model,
+        selection_source=selection_source,
+        learning_signal_status=signal_status,
+        learning_signal_version=signal_version,
         selected_max_tokens=min(4096, plan.budget.max_output_tokens),
     )
