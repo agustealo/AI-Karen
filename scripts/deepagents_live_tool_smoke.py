@@ -53,8 +53,13 @@ def _require_local_target(base_url: str, *, allow_private_hostname: bool) -> Non
     the self-hosted beta runner may explicitly allow its trusted private host.
     """
     parsed = urlparse(base_url)
-    if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password:
-        raise RuntimeError("Tool-call proof requires an authenticated local HTTP endpoint")
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        raise RuntimeError("Tool-call proof requires a credential-free local HTTP(S) target")
     host = parsed.hostname.casefold()
     local_hosts = {"127.0.0.1", "localhost", "::1", "host.docker.internal"}
     if host not in local_hosts and not allow_private_hostname:
