@@ -55,6 +55,17 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("autoApprove");
   });
 
+  it("exposes only persisted conversation history and observed expandable activity", () => {
+    expect(component).toContain('id="karen-history-search"');
+    expect(component).toContain("matchingSessions.map((session)");
+    expect(component).toContain("loadSession(session.id)");
+    expect(component).toContain('aria-expanded={historyOpen}');
+    expect(component).toContain('<details data-testid="karen-agent-activity"');
+    expect(component).toContain("value.stepId");
+    expect(component).not.toContain("localStorage.setItem");
+    expect(component).not.toContain("clientExecuteTool");
+  });
+
   it("keeps the adapter opt-in until backend and npm dependency proof pass", () => {
     expect(dashboard).toContain(
       'process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED === "true"',
