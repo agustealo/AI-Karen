@@ -166,3 +166,147 @@ async def test_ag_ui_bridge_is_disabled_by_default(monkeypatch):
             user={"user_id": USER, "tenant_id": TENANT_A},
         )
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_deepagents_observations_project_to_real_agui_activity_and_tool_events(
+    monkeypatch,
+):
+    """Contract test for the exact canonical chunk types emitted by Medusa.
+
+    This uses canonical chunk objects, not a fake AG-UI backend. The route
+    must preserve the runtime's chronological observations and outcome.
+    """
+
+    class MedusaStream:
+        async def execute_stream(self, runtime_request):
+            cid = runtime_request.context.correlation_id
+            for kind, content, metadata in (
+                (
+                    ChatStreamEventType.AGENT_STEP,
+                    "Agent step running.",
+                    {
+                        "step_id": "step-1",
+                        "agent_id": "researcher",
+                        "status": "running",
+                        "event_type": "agent_step_started",
+                        "execution_engine": "deepagents",
+                        "secret": "internal-plan",
+                    },
+                ),
+                (
+                    ChatStreamEventType.TOOL,
+                    "",
+                    {
+                        "step_id": "step-1",
+                        "tool_name": "web_search",
+                        "tool_call_id": "real-tool-call-1",
+                        "phase": "started",
+                        "arguments": {"password": "never-send"},
+                    },
+                ),
+                (
+                    ChatStreamEventType.TOOL,
+                    "",
+                    {
+                        "step_id": "step-1",
+                        "tool_name": "web_search",
+                        "tool_call_id": "real-tool-call-1",
+                        "phase": "completed",
+                        "result": {"private": "never-send"},
+                    },
+                ),
+                (
+                    ChatStreamEventType.AGENT_STEP,
+                    "Agent step completed.",
+                    {
+                        "step_id": "step-1",
+                        "agent_id": "researcher",
+                        "status": "completed",
+                        "event_type": "agent_step_completed",
+                    },
+                ),
+                (
+                    ChatStreamEventType.CONTENT,
+                    "Evidence-based answer.",
+                    {"actual_provider": "ollama-local"},
+                ),
+                (ChatStreamEventType.COMPLETE, "", {}),
+            ):
+                yield ChatStreamChunk(
+                    type=kind, content=content,
+                    correlation_id=cid, metadata=metadata,
+                )
+
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: MedusaStream())
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(),
+        http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    frames = "".join([part async for part in response.body_iterator])
+    events = [
+        json.loads(line[6:]) for line in frames.splitlines()
+        if line.startswith("data: ")
+    ]
+    event_types = [event["type"] for event in events]
+    assert event_types == [
+        "RUN_STARTED",
+        "ACTIVITY_SNAPSHOT", "CUSTOM",
+        "CUSTOM", "TOOL_CALL_START",
+        "CUSTOM", "TOOL_CALL_END",
+        "ACTIVITY_SNAPSHOT", "CUSTOM",
+        "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END", "RUN_FINISHED",
+    ]
+    snapshots = [event for event in events if event["type"] == "ACTIVITY_SNAPSHOT"]
+    assert len(snapshots) == 2
+    assert snapshots[0]["messageId"] == snapshots[1]["messageId"]
+    assert snapshots[0]["content"]["status"] == "running"
+    assert snapshots[1]["content"]["status"] == "completed"
+    tool_start = next(event for event in events if event["type"] == "TOOL_CALL_START")
+    tool_end = next(event for event in events if event["type"] == "TOOL_CALL_END")
+    assert tool_start["toolCallId"] == tool_end["toolCallId"] == "real-tool-call-1"
+    assert events[-3]["type"] == "TEXT_MESSAGE_CONTENT"
+    assert events[-3]["delta"] == "Evidence-based answer."
+    assert events[-1]["type"] == "RUN_FINISHED"
+    assert events[-1]["runId"] == "run-1"
+    assert "never-send" not in frames
+    assert "internal-plan" not in frames
+    assert "TOOL_CALL_RESULT" not in event_types
+
+
+@pytest.mark.asyncio
+async def test_deepagents_failed_run_cannot_turn_into_agui_success(monkeypatch):
+    class FailingMedusa:
+        async def execute_stream(self, request):
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.AGENT_STEP,
+                content="Agent step failed.",
+                correlation_id=request.context.correlation_id,
+                metadata={
+                    "step_id": "step-1", "agent_id": "researcher",
+                    "status": "failed", "event_type": "agent_step_failed",
+                },
+            )
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.ERROR,
+                content="The authorized agent run could not be completed.",
+                correlation_id=request.context.correlation_id,
+                metadata={"error_code": "AGENT_EXECUTION_FAILED", "internal": "secret"},
+            )
+
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: FailingMedusa())
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(), http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    frames = "".join([part async for part in response.body_iterator])
+    events = [
+        json.loads(line[6:]) for line in frames.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert events[-1]["type"] == "RUN_ERROR"
+    assert events[-1]["code"] == "AGENT_EXECUTION_FAILED"
+    assert not any(event["type"] == "RUN_FINISHED" for event in events)
+    assert "secret" not in frames
