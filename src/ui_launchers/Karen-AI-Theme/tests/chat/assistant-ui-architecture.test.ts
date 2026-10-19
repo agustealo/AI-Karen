@@ -60,6 +60,9 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("matchingSessions.map((session)");
     expect(component).toContain("loadSession(session.id)");
     expect(component).toContain('aria-expanded={historyOpen}');
+    expect(component).toContain("historySearchRef.current?.focus()");
+    expect(component).toContain('event.key === "Escape"');
+    expect(component).toContain("historyTriggerRef.current?.focus()");
     expect(component).toContain('<details data-testid="karen-agent-activity"');
     expect(component).toContain("defaultOpen={failed}");
     expect(component).toContain('<details data-testid="karen-learning-provenance"');
