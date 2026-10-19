@@ -13,6 +13,7 @@ import pytest
 async def test_pinned_deepagents_constructs_and_runs_in_memory_graph():
     deepagents = pytest.importorskip("deepagents")
     from deepagents.backends import StateBackend
+    from langchain.agents.middleware import TodoListMiddleware
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
     class ToolCapableTestModel(FakeListChatModel):
@@ -32,6 +33,7 @@ async def test_pinned_deepagents_constructs_and_runs_in_memory_graph():
             "tools": [],
         }],
         backend=StateBackend(),
+        middleware=[TodoListMiddleware()],
         skills=[],
         memory=[],
         checkpointer=None,
