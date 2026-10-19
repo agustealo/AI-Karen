@@ -106,6 +106,413 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def get_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str,
+    ) -> str | None:
+        """Host-only lookup of exact operator-assigned owner under tenant RLS."""
+        tenant_id = _tenant_uuid(tenant_id)
+        if not connection_id:
+            raise ValueError("Connection required")
+        async with async_transaction_scope(tenant_id) as session:
+            owner = (await session.execute(
+                text("""
+                    SELECT user_id FROM public.channel_connection_owners
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                """),
+                {"tenant": tenant_id, "connection": connection_id},
+            )).scalar_one_or_none()
+        return str(owner) if owner is not None else None
+
+    async def get_personal_pairing_snapshot(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, provider_id: str,
+    ):
+        """Read persisted provider evidence for the assigned user, not live health."""
+        from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+            PairingPhase, PairingSnapshot,
+        )
+
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not provider_id or len(provider_id) > 128 or not connection_id:
+            raise ValueError("Invalid personal pairing read scope")
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    SELECT s.connection_revision, s.sequence, s.phase,
+                           s.qr_expires_at, s.provider_link_receipt_id,
+                           s.provider_unlink_receipt_id
+                    FROM public.channel_personal_pairing_state s
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = s.tenant_id
+                     AND c.connection_id = s.connection_id
+                     AND c.revision = s.connection_revision
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = s.tenant_id
+                     AND o.connection_id = s.connection_id
+                    WHERE s.tenant_id = CAST(:tenant AS uuid)
+                      AND s.connection_id = :connection
+                      AND s.provider_id = :provider
+                      AND o.user_id = CAST(:user AS uuid)
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "provider": provider_id, "user": user_id},
+            )).mappings().one_or_none()
+        if row is None:
+            return None
+        return PairingSnapshot(
+            tenant_id=tenant_id, connection_id=connection_id,
+            provider_id=provider_id,
+            connection_revision=row["connection_revision"],
+            sequence=row["sequence"], phase=PairingPhase(row["phase"]),
+            qr_expires_at=row["qr_expires_at"],
+            provider_link_receipt_id=row["provider_link_receipt_id"],
+            provider_unlink_receipt_id=row["provider_unlink_receipt_id"],
+        )
+
+    async def commit_personal_pairing_observation(
+        self, *, observation, user_id: str,
+        provider_vetted_and_enabled: bool,
+    ):
+        """Atomically persist scoped, authenticated pairing evidence.
+
+        Internal ChannelHost-only entry point. A caller-provided authenticated
+        flag or vetted flag is never proof: the future host adapter MUST verify
+        the provider's signature and operator eligibility before invocation.
+        No HTTP route exposes this method or makes a QR/session.
+        """
+        from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+            PairingEvidenceDenied, PairingPhase, PairingSnapshot,
+            apply_pairing_observation,
+        )
+        from ai_karen_engine.services.channels.personal_pairing_policy import (
+            PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+
+        tenant_id = _tenant_uuid(observation.tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if (
+            not isinstance(observation.connection_id, str)
+            or not observation.connection_id.strip()
+            or not isinstance(observation.provider_id, str)
+            or not 1 <= len(observation.provider_id.strip()) <= 128
+            or type(provider_vetted_and_enabled) is not bool
+            or observation.connection_revision < 1
+            or observation.sequence < 1
+        ):
+            raise PairingEvidenceDenied("Invalid pairing observation scope")
+        async with async_transaction_scope(tenant_id) as session:
+            # Serialize independently of provider_id, so revisions and owner
+            # removal cannot race a local state change.
+            connection = (await session.execute(
+                text("""
+                    SELECT c.revision, o.user_id
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND o.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c
+                """),
+                {"tenant": tenant_id, "connection": observation.connection_id,
+                 "user": user_id},
+            )).mappings().one_or_none()
+            if (
+                connection is None
+                or connection["revision"] != observation.connection_revision
+            ):
+                raise PairingEvidenceDenied("Connection owner or revision has changed")
+            consent = (await session.execute(
+                text("""
+                    SELECT accepted_at
+                    FROM public.channel_personal_pairing_consents
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                      AND provider_id = :provider
+                      AND policy_version = :version
+                      AND revoked_at IS NULL
+                    LIMIT 1
+                """),
+                {"tenant": tenant_id, "connection": observation.connection_id,
+                 "user": user_id, "provider": observation.provider_id,
+                 "version": PERSONAL_WHATSAPP_CONSENT_VERSION},
+            )).scalar_one_or_none()
+            record = (await session.execute(
+                text("""
+                    SELECT connection_revision, sequence, phase, qr_expires_at,
+                           provider_link_receipt_id, provider_unlink_receipt_id
+                    FROM public.channel_personal_pairing_state
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND provider_id = :provider
+                    FOR UPDATE
+                """),
+                {"tenant": tenant_id, "connection": observation.connection_id,
+                 "provider": observation.provider_id},
+            )).mappings().one_or_none()
+            if record is None:
+                prior = PairingSnapshot(
+                    tenant_id=tenant_id,
+                    connection_id=observation.connection_id,
+                    provider_id=observation.provider_id,
+                    connection_revision=observation.connection_revision,
+                )
+            else:
+                if record["connection_revision"] != observation.connection_revision:
+                    raise PairingEvidenceDenied("Stored pairing revision is stale")
+                prior = PairingSnapshot(
+                    tenant_id=tenant_id,
+                    connection_id=observation.connection_id,
+                    provider_id=observation.provider_id,
+                    connection_revision=record["connection_revision"],
+                    sequence=record["sequence"],
+                    phase=PairingPhase(record["phase"]),
+                    qr_expires_at=record["qr_expires_at"],
+                    provider_link_receipt_id=record["provider_link_receipt_id"],
+                    provider_unlink_receipt_id=record["provider_unlink_receipt_id"],
+                )
+            now = (await session.execute(
+                text("SELECT clock_timestamp()")
+            )).scalar_one()
+            updated = apply_pairing_observation(
+                prior, observation, now=now,
+                consent_current=consent is not None and consent <= now,
+                provider_vetted_and_enabled=provider_vetted_and_enabled,
+            )
+            args = {
+                "tenant": tenant_id, "connection": observation.connection_id,
+                "provider": observation.provider_id,
+                "revision": observation.connection_revision,
+                "previous_sequence": prior.sequence,
+                "sequence": updated.sequence, "phase": updated.phase.value,
+                "qr_expiry": updated.qr_expires_at,
+                "link_receipt": updated.provider_link_receipt_id,
+                "unlink_receipt": updated.provider_unlink_receipt_id,
+            }
+            if record is None:
+                written = (await session.execute(
+                    text("""
+                        INSERT INTO public.channel_personal_pairing_state
+                            (tenant_id, connection_id, provider_id,
+                             connection_revision, sequence, phase,
+                             qr_expires_at, provider_link_receipt_id,
+                             provider_unlink_receipt_id)
+                        VALUES (CAST(:tenant AS uuid), :connection, :provider,
+                                :revision, :sequence, :phase, :qr_expiry,
+                                :link_receipt, :unlink_receipt)
+                        ON CONFLICT DO NOTHING
+                        RETURNING sequence
+                    """), args,
+                )).scalar_one_or_none()
+            else:
+                written = (await session.execute(
+                    text("""
+                        UPDATE public.channel_personal_pairing_state
+                        SET sequence = :sequence, phase = :phase,
+                            qr_expires_at = :qr_expiry,
+                            provider_link_receipt_id = :link_receipt,
+                            provider_unlink_receipt_id = :unlink_receipt,
+                            updated_at = clock_timestamp()
+                        WHERE tenant_id = CAST(:tenant AS uuid)
+                          AND connection_id = :connection
+                          AND provider_id = :provider
+                          AND connection_revision = :revision
+                          AND sequence = :previous_sequence
+                        RETURNING sequence
+                    """), args,
+                )).scalar_one_or_none()
+            if written != updated.sequence:
+                raise PairingEvidenceDenied("Concurrent pairing event lost revision CAS")
+            return updated
+
+    async def assign_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+    ) -> bool:
+        """Assign once, only if the target is an active verified tenant user.
+
+        The host must authorize a verified channel operator first. A different
+        owner cannot be replaced here, including after risk acknowledgement.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Connection is required for ownership assignment")
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_connection_owners
+                        (tenant_id, connection_id, user_id)
+                    SELECT c.tenant_id, c.connection_id, u.user_id
+                    FROM public.channel_connections c
+                    JOIN public.auth_users u ON u.tenant_id = c.tenant_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND u.user_id = CAST(:user AS uuid)
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ON CONFLICT DO NOTHING
+                    RETURNING user_id
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "user": user_id},
+            )).scalar_one_or_none()
+        return row is not None
+
+    async def is_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+    ) -> bool:
+        """Only operator-assigned exact tenant connection owner can self-consent."""
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not connection_id:
+            raise ValueError("Connection is required for ownership check")
+        async with async_transaction_scope(tenant_id) as session:
+            found = (await session.execute(
+                text("""
+                    SELECT 1 FROM public.channel_connection_owners
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "user": user_id},
+            )).scalar_one_or_none()
+        return found is not None
+
+    async def get_personal_pairing_consent(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str,
+    ):
+        """Read only the latest ACTIVE policy acknowledgement from tenant RLS."""
+        from ai_karen_engine.services.channels.personal_pairing_policy import (
+            PersonalPairingConsent,
+        )
+
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not connection_id or not provider_id:
+            raise ValueError("Consent lookup requires connection and provider")
+        async with async_transaction_scope(tenant_id) as session:
+            record = (await session.execute(
+                text("""
+                    SELECT tenant_id, connection_id, user_id, provider_id,
+                           policy_version, accepted_at, revoked_at
+                    FROM public.channel_personal_pairing_consents
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                      AND provider_id = :provider
+                      AND revoked_at IS NULL
+                    ORDER BY accepted_at DESC
+                    LIMIT 1
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id, "provider": provider_id},
+            )).mappings().one_or_none()
+        return (
+            PersonalPairingConsent(
+                tenant_id=str(record["tenant_id"]),
+                connection_id=record["connection_id"],
+                user_id=str(record["user_id"]),
+                provider_id=record["provider_id"],
+                policy_version=record["policy_version"],
+                accepted_at=record["accepted_at"],
+                revoked_at=record["revoked_at"],
+            ) if record else None
+        )
+
+    async def acknowledge_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str, policy_version: str,
+    ) -> bool:
+        """Persist explicit user acceptance only for own existing connection.
+
+        No native provider content, browser flags or arbitrary tenant principal
+        are trusted. Host must authorize the actor BEFORE calling this method.
+        Revoked consent history is never overwritten or destroyed.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not all(isinstance(v, str) and v.strip() and len(v) <= 128
+                   for v in (connection_id, provider_id, policy_version)):
+            raise ValueError("Invalid pairing risk consent scope")
+        async with async_transaction_scope(tenant_id) as session:
+            record = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_personal_pairing_consents
+                        (tenant_id, connection_id, user_id, provider_id, policy_version)
+                    SELECT c.tenant_id, c.connection_id, u.user_id,
+                           :provider, :version
+                    FROM public.channel_connections c
+                    JOIN public.auth_users u ON u.tenant_id = c.tenant_id
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                     AND o.user_id = u.user_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND u.user_id = CAST(:user AS uuid)
+                      AND u.is_active = true AND u.is_verified = true
+                    ON CONFLICT DO NOTHING
+                    RETURNING consent_id
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id, "provider": provider_id,
+                 "version": policy_version},
+            )).scalar_one_or_none()
+        return record is not None
+
+    async def revoke_personal_pairing_consent(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str,
+    ) -> bool:
+        """Revoke active consent atomically, preserving its historical record."""
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not connection_id or not provider_id:
+            raise ValueError("Consent revocation requires connection and provider")
+        async with async_transaction_scope(tenant_id) as session:
+            # Pairing admission takes this SAME parent lock before reading
+            # consent. Revocation must therefore serialize with an in-flight
+            # QR or link-confirmed commit, not race an independent row update.
+            # A revocation returning successfully cannot be followed by a
+            # stale consent read from a previously waiting pairing worker.
+            owner = (await session.execute(
+                text("""
+                    SELECT c.connection_id
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND o.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id},
+            )).scalar_one_or_none()
+            if owner is None:
+                return False
+            record = (await session.execute(
+                text("""
+                    UPDATE public.channel_personal_pairing_consents
+                    SET revoked_at = clock_timestamp(),
+                        updated_at = clock_timestamp()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND user_id = CAST(:user AS uuid)
+                      AND provider_id = :provider
+                      AND revoked_at IS NULL
+                    RETURNING consent_id
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id, "provider": provider_id},
+            )).scalar_one_or_none()
+        return record is not None
+
     async def create_connection(
         self, *, tenant_id: str, installation_id: str,
         provider_account_id: str, credential_handle: str,
@@ -1063,6 +1470,163 @@ class SqlChannelRepository:
                  "claim_token": str(uuid.UUID(claim_token)), "error_code": error_code},
             )).scalar_one_or_none()
         return value is not None
+
+
+    async def request_personal_credential_deletion(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        provider_id: str, connection_revision: int, session_reference: str,
+        credential_scope: str, idempotency_key: str,
+    ) -> dict[str, str]:
+        """Record one owner-scoped request, without invoking a vendor.
+
+        The connection row is locked so owner/revision checks and issuance
+        serialize with any concurrent channel state mutation.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        fields = (connection_id, provider_id, session_reference, credential_scope, idempotency_key)
+        limits = (256, 128, 256, 128, 128)
+        if (
+            type(connection_revision) is not int or connection_revision < 1
+            or any(not isinstance(x, str) or not 1 <= len(x.strip()) <= n
+                   for x, n in zip(fields, limits))
+        ):
+            raise ValueError("Invalid credential deletion request scope")
+        async with async_transaction_scope(tenant_id) as session:
+            owner = (await session.execute(
+                text("""
+                    SELECT c.revision
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND o.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c
+                """),
+                {"tenant": tenant_id, "connection": connection_id, "user": user_id},
+            )).scalar_one_or_none()
+            if owner != connection_revision:
+                raise ValueError("Credential deletion owner or revision rejected")
+            existing = (await session.execute(
+                text("""
+                    SELECT request_id, user_id, session_reference, credential_scope, status
+                    FROM public.channel_personal_credential_deletions
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND provider_id = :provider
+                      AND connection_revision = :revision
+                      AND idempotency_key = :idempotency
+                    FOR UPDATE
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "provider": provider_id, "revision": connection_revision,
+                 "idempotency": idempotency_key},
+            )).mappings().one_or_none()
+            if existing is not None:
+                if (str(existing["user_id"]), existing["session_reference"], existing["credential_scope"]) != (
+                    user_id, session_reference, credential_scope
+                ):
+                    raise ValueError("Idempotency key reused with different deletion scope")
+                return {"request_id": str(existing["request_id"]), "status": existing["status"]}
+            request_id = str(uuid.uuid4())
+            row = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_personal_credential_deletions
+                        (tenant_id, request_id, connection_id, provider_id, user_id,
+                         connection_revision, session_reference, credential_scope, idempotency_key)
+                    VALUES
+                        (CAST(:tenant AS uuid), CAST(:request_id AS uuid), :connection,
+                         :provider, CAST(:user AS uuid), :revision, :session,
+                         :credential_scope, :idempotency)
+                    ON CONFLICT (tenant_id, connection_id, provider_id,
+                                 connection_revision, idempotency_key) DO NOTHING
+                    RETURNING request_id, status
+                """),
+                {"tenant": tenant_id, "request_id": request_id, "connection": connection_id,
+                 "provider": provider_id, "user": user_id, "revision": connection_revision,
+                 "session": session_reference, "credential_scope": credential_scope,
+                 "idempotency": idempotency_key},
+            )).mappings().one_or_none()
+            if row is None:
+                raise ValueError("Concurrent deletion request must be retried")
+            return {"request_id": str(row["request_id"]), "status": row["status"]}
+
+
+    async def record_personal_credential_deletion_claim(
+        self, *, tenant_id: str, request_id: str, connection_id: str,
+        user_id: str, receipt,
+    ) -> bool:
+        """Persist a host-verified vendor *claim*, never independently verified erasure.
+
+        Host must authenticate the vendor's native response and validate its
+        scoped/fresh PersonalCredentialErasureReceipt before calling this method.
+        This is an internal repository operation, not a webhook/API entry point.
+        """
+        from ai_karen_engine.extensions.channels.contracts import (
+            PersonalCredentialErasureReceipt,
+        )
+
+        if not isinstance(receipt, PersonalCredentialErasureReceipt):
+            raise ValueError("Typed credential erasure receipt required")
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        request_id = str(uuid.UUID(request_id))
+        if not connection_id or receipt.connection_id != connection_id:
+            raise ValueError("Credential erasure connection scope mismatch")
+        async with async_transaction_scope(tenant_id) as session:
+            record = (await session.execute(
+                text("""
+                    SELECT d.provider_id, d.user_id, d.connection_revision,
+                           d.session_reference, d.credential_scope, d.status,
+                           d.provider_receipt_id, c.revision AS live_revision
+                    FROM public.channel_personal_credential_deletions d
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = d.tenant_id
+                     AND c.connection_id = d.connection_id
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = d.tenant_id
+                     AND o.connection_id = d.connection_id
+                     AND o.user_id = d.user_id
+                    WHERE d.tenant_id = CAST(:tenant AS uuid)
+                      AND d.request_id = CAST(:request AS uuid)
+                      AND d.connection_id = :connection
+                      AND d.user_id = CAST(:user AS uuid)
+                    FOR UPDATE OF c, d
+                """),
+                {"tenant": tenant_id, "request": request_id,
+                 "connection": connection_id, "user": user_id},
+            )).mappings().one_or_none()
+            if record is None or (
+                str(record["user_id"]) != user_id
+                or record["live_revision"] != receipt.connection_revision
+                or record["connection_revision"] != receipt.connection_revision
+                or record["provider_id"] != receipt.provider_id
+                or record["session_reference"] != receipt.session_reference
+                or record["credential_scope"] != receipt.credential_scope
+                or receipt.deletion_request_id != request_id
+            ):
+                raise ValueError("Credential erasure receipt does not match durable request")
+            if record["status"] == "provider_claimed":
+                return record["provider_receipt_id"] == receipt.provider_receipt_id
+            if record["status"] not in ("requested", "provider_pending"):
+                raise ValueError("Credential erasure transition not permitted")
+            written = (await session.execute(
+                text("""
+                    UPDATE public.channel_personal_credential_deletions
+                    SET status = 'provider_claimed',
+                        provider_receipt_id = :receipt,
+                        updated_at = clock_timestamp()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND request_id = CAST(:request AS uuid)
+                      AND status IN ('requested', 'provider_pending')
+                    RETURNING request_id
+                """),
+                {"tenant": tenant_id, "request": request_id,
+                 "receipt": receipt.provider_receipt_id},
+            )).scalar_one_or_none()
+            return written is not None
 
 
 __all__ = [

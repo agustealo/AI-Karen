@@ -151,6 +151,270 @@ class ChannelHostServices:
             credential_handle=credential_handle,
         )
 
+    async def admit_signed_personal_pairing_event(
+        self, *, tenant_id: str, connection_id: str,
+        headers: dict[str, str], body: bytes,
+    ):
+        """Admit an installed, explicitly vetted provider's signed event.
+
+        Not an HTTP endpoint. Provider transport must pass the original bytes
+        unchanged; user/browser requests cannot select an installed adapter.
+        No personal pairing provider is enabled in default configuration.
+        """
+        from datetime import datetime, timezone
+
+        from ai_karen_engine.services.channels.personal_pairing_callback import (
+            verify_personal_pairing_callback,
+        )
+        from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+            PairingEvidenceDenied,
+        )
+
+        if not self._initialized or self._closed or not self.settings.enabled:
+            raise PairingEvidenceDenied("Pairing gateway unavailable")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if connection is None or connection.tenant_id != tenant_id:
+            raise PairingEvidenceDenied("Unrecognized pairing connection")
+        installation_id = connection.installation_id
+        provider_id = self.settings.personal_pairing_providers.get(installation_id)
+        resolver = self._resolvers.get(installation_id)
+        if (
+            not provider_id or resolver is None
+            or installation_id not in self._installed
+            or self.kernel.get_channel_activation_manifest(installation_id) is None
+            or "pairing_webhook_secret" not in self.settings.installations[installation_id]
+            or not self.kernel.is_canonical_channel_adapter(
+                installation_id, self._installed[installation_id],
+            )
+        ):
+            raise PairingEvidenceDenied("No vetted pairing transport is enabled")
+        owner = await self.repository.get_personal_connection_owner(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if not owner:
+            raise PairingEvidenceDenied("No authorized connection owner")
+        secrets = await resolver(
+            tenant_id=tenant_id, credential_handle=connection.credential_handle,
+        )
+        secret = secrets.get("pairing_webhook_secret")
+        if not secret:
+            raise PairingEvidenceDenied("Missing managed-provider signing secret")
+        observation = verify_personal_pairing_callback(
+            body=body, headers=headers, signing_secret=secret,
+            tenant_id=tenant_id, connection_id=connection_id,
+            provider_id=provider_id, now=datetime.now(timezone.utc),
+        )
+        result = await self.repository.commit_personal_pairing_observation(
+            observation=observation, user_id=owner,
+            provider_vetted_and_enabled=True,
+        )
+        logger.info(
+            "channel.personal_pairing.observation_committed",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "provider_id": provider_id,
+                "connection_revision": result.connection_revision,
+                "sequence": result.sequence,
+                "phase": result.phase.value,
+            },
+        )
+        return result
+
+    async def assign_personal_connection_owner(
+        self, *, tenant_id: str, connection_id: str,
+        owner_user_id: str, operator_user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Explicit operator action; never inferred from QR, user consent or UI.
+
+        Ownership is immutable in this first slice. Reassignment requires
+        a separately audited lifecycle with consent revocation and session
+        unlink proof, not a generic upsert.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel ownership authority unavailable")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel connection not available for ownership")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=operator_user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.provision", plan=authorized_plan,
+        )
+        assigned = await self.repository.assign_personal_connection_owner(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=owner_user_id,
+        )
+        logger.info(
+            "channel.connection.owner_assignment",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "user_id": operator_user_id,
+                "owner_user_id": owner_user_id,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+                "status": "assigned" if assigned else "unchanged_or_denied",
+            },
+        )
+        return assigned
+
+    async def _authorize_personal_pairing_consent(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> None:
+        """Canonical live principal and policy gate before consent SQL."""
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel consent authority unavailable")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel connection not available for consent")
+        if not await self.repository.is_personal_connection_owner(
+            tenant_id=tenant_id, connection_id=connection_id, user_id=user_id,
+        ):
+            raise PermissionError("User is not the verified connection owner")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.consent", plan=authorized_plan,
+        )
+
+    async def get_personal_pairing_status(
+        self, *, tenant_id: str, connection_id: str, provider_id: str,
+        user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> dict:
+        """Consumer-facing evidence status. Persisted != live provider status."""
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if connection is None:
+            raise PermissionError("Connection unavailable")
+        configured = (
+            self.settings.personal_pairing_providers.get(
+                connection.installation_id,
+            ) == provider_id
+            and "pairing_webhook_secret" in self.settings.installations.get(
+                connection.installation_id, frozenset(),
+            )
+            and connection.installation_id in self._installed
+        )
+        # An obsolete persisted link receipt cannot establish a live session.
+        if not configured:
+            return {
+                "availability": "unavailable",
+                "last_observed_phase": None,
+                "live_connected": False,
+                "qr_available": False,
+                "provider_unlinked": False,
+            }
+        snapshot = await self.repository.get_personal_pairing_snapshot(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+        )
+        return {
+            "availability": "configured",
+            "last_observed_phase": (
+                snapshot.phase.value if snapshot is not None else None
+            ),
+            "live_connected": False,
+            "qr_available": False,
+            "provider_unlinked": (
+                snapshot is not None
+                and snapshot.phase.value == "disconnected"
+                and bool(snapshot.provider_unlink_receipt_id)
+            ),
+        }
+
+    async def get_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str, provider_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ):
+        """Read current scoped consent; never expose provider or session secrets."""
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        return await self.repository.get_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+        )
+
+    async def acknowledge_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str, provider_id: str,
+        accepted: bool, policy_version: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Record explicit risk agreement, never generate a QR or pair a device."""
+        from ai_karen_engine.services.channels.personal_pairing_policy import (
+            PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+
+        if accepted is not True or policy_version != PERSONAL_WHATSAPP_CONSENT_VERSION:
+            raise PermissionError("Current personal pairing risk acknowledgement required")
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None
+            or self.settings.personal_pairing_providers.get(
+                connection.installation_id,
+            ) != provider_id
+            or "pairing_webhook_secret" not in self.settings.installations.get(
+                connection.installation_id, frozenset(),
+            )
+        ):
+            raise PermissionError("Managed personal pairing provider not configured")
+        return await self.repository.acknowledge_personal_pairing_risk(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+            policy_version=policy_version,
+        )
+
+    async def revoke_personal_pairing_risk(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str, provider_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Revoke consent; does NOT falsely assert provider session unlink."""
+        await self._authorize_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan,
+        )
+        return await self.repository.revoke_personal_pairing_consent(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, provider_id=provider_id,
+        )
+
     async def recover_inbox(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,

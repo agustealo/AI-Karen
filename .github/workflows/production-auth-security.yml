@@ -2,6 +2,7 @@ name: Production Auth Security
 
 on:
   push:
+    branches: [main]
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/api_routes/admin/users.py"
@@ -42,6 +43,7 @@ on:
       - "requirements/ci/runtime-contract.txt"
       - ".github/workflows/production-auth-security.yml"
   pull_request:
+    branches: [main]
     paths:
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ai_karen_engine/api_routes/admin/users.py"

@@ -1,0 +1,54 @@
+{
+  "name": "zulip-cloud",
+  "version": "1.0.0",
+  "display_name": "Zulip Cloud Channel",
+  "description": "Optional Zulip-hosted open-source direct-message bot via verified outgoing webhook and bot REST API. Host owns policy, memory and execution.",
+  "author": "AI Karen",
+  "license": "MIT",
+  "category": "communication",
+  "entrypoint": "handler:MainExtension",
+  "tags": [
+    "zulip",
+    "communication",
+    "channel",
+    "managed",
+    "open-source"
+  ],
+  "api_version": "1.0",
+  "capabilities": {
+    "provides_ui": false,
+    "provides_api": false,
+    "provides_background_tasks": false,
+    "provides_webhooks": true,
+    "prompt_first": true,
+    "communication_channel": {
+      "version": "1.0.0",
+      "transport": "zulip-cloud",
+      "ingress": [
+        "webhook"
+      ],
+      "inbound": [
+        "text"
+      ],
+      "outbound": [
+        "text"
+      ],
+      "authentication": "token",
+      "supports_edits": false,
+      "supports_streaming": false,
+      "supports_media": false,
+      "supports_delivery_receipts": false
+    }
+  },
+  "permissions": {
+    "network_access": [
+      "zulipchat.com"
+    ]
+  },
+  "rbac": {
+    "allowed_roles": [
+      "admin"
+    ],
+    "default_enabled": false
+  }
+}

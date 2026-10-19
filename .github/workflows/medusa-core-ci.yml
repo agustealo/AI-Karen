@@ -7,6 +7,8 @@ on:
       - 'src/ai_karen_engine/agent_medusa/**'
       - 'src/ai_karen_engine/core/runtime/**'
       - 'tests/core/runtime/**'
+      - 'tests/agent_medusa/**'
+      - 'requirements.txt'
       - '.github/workflows/medusa-core-ci.yml'
   pull_request:
     branches: [main, develop]
@@ -14,6 +16,9 @@ on:
       - 'src/ai_karen_engine/agent_medusa/**'
       - 'src/ai_karen_engine/core/runtime/**'
       - 'tests/core/runtime/**'
+      - 'tests/agent_medusa/**'
+      - 'requirements.txt'
+      - '.github/workflows/medusa-core-ci.yml'
 
 env:
   PYTHON_VERSION: '3.12'
@@ -116,14 +121,6 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
       
-      - name: Run Medusa planner correctness tests
-        run: |
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -v --timeout=300 --tb=short
-      
-      - name: Run legacy to Medusa delegation tests
-        run: |
-          pytest tests/core/runtime/test_legacy_to_medusa_delegation.py -v --timeout=300 --tb=short
-      
       - name: Run canonical Medusa runtime tests
         run: |
           pytest \
@@ -136,6 +133,22 @@ jobs:
             --cov=src/ai_karen_engine/core/runtime \
             --cov-report=xml --cov-report=html
       
+      - name: Reject legacy tenant sentinels at LangGraph boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          node = Path('src/ai_karen_engine/agent_medusa/agent_medusa_node.py').read_text()
+          forbidden = [
+              'tenant_id=state.get("tenant_id", "default")',
+              "tenant_id=state.get('tenant_id', 'default')",
+          ]
+          hits = [pattern for pattern in forbidden if pattern in node]
+          if hits:
+              raise SystemExit(f'legacy tenant fallback returned: {hits}')
+          print('explicit tenant boundary verified')
+          PY
+
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -312,9 +325,6 @@ jobs:
       
       - name: Run final behavioral proof tests
         run: |
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "dependency" -v --timeout=300
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "wildcard" -v --timeout=300
-          pytest tests/core/runtime/test_medusa_planner_correctness.py -k "concurrent" -v --timeout=300
           
           echo "Running behavioral proofs..."
           

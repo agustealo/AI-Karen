@@ -120,6 +120,7 @@ class CortexExecutionDecider:
         )
         from ai_karen_engine.core.intelligence.profile_attribute import (
             referenced_profile_attribute,
+            is_profile_summary_followup,
             requested_profile_query,
         )
         profile_query = requested_profile_query(user_content)
@@ -130,6 +131,7 @@ class CortexExecutionDecider:
         personal_recall_query = (
             is_personal_memory_recall_query(user_content)
             or resolved_discourse_attribute is not None
+            or is_profile_summary_followup(user_content, request.messages)
         )
         memory_recall_required = bool(
             analysis.get("memory_recall_required", False)
