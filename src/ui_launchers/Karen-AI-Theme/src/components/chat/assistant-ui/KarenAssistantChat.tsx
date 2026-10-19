@@ -7,7 +7,8 @@
  * execution policy, or synthetic agent activity. The canonical Karen backend
  * owns all run execution and durable conversations.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   AssistantRuntimeProvider,
   ActionBarPrimitive,
@@ -172,12 +173,50 @@ const agentParts = {
   },
 };
 
+function KarenCodeBlock({ children }: { children?: ReactNode }) {
+  const codeElement = isValidElement<{ children?: ReactNode; className?: string }>(children)
+    ? children : null;
+  const source = typeof codeElement?.props.children === "string"
+    ? codeElement.props.children.replace(/\\n$/, "") : null;
+  const language = codeElement?.props.className?.match(/language-([a-zA-Z0-9_+-]+)/)?.[1];
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => setCopied(false), [source]);
+
+  const copyCode = async () => {
+    if (source === null || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(source);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="my-3 min-w-0 overflow-hidden rounded-lg border border-border/60 bg-muted/40">
+      <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border/50 px-3">
+        <span className="truncate font-mono text-xs text-muted-foreground">{language || "Code"}</span>
+        <button type="button" onClick={() => void copyCode()}
+          disabled={source === null}
+          aria-label={copied ? "Code copied" : "Copy code block"}
+          className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50">
+          {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+          {copied ? "Copied" : "Copy code"}
+        </button>
+      </div>
+      <pre className="max-w-full overflow-x-auto p-3 text-sm leading-6">{children}</pre>
+    </div>
+  );
+}
+
 function KarenMarkdownText({ text }: { text: string }) {
   return (
     <div className="min-w-0 break-words text-sm leading-7 text-foreground [&_a]:break-all [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_code]:break-words [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_pre]:my-3 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-muted [&_pre]:p-3 [&_pre_code]:break-normal [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
+        components={{ pre: KarenCodeBlock }}
         urlTransform={(url) => /^(https?:|mailto:)/i.test(url) ? url : ""}
       >
         {text}
