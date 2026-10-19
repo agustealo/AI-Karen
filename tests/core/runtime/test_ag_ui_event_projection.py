@@ -74,6 +74,8 @@ def test_agent_activity_does_not_fabricate_langgraph_progress():
     assert events[0]["messageId"] == "activity-run-s1"
     assert events[0]["activityType"] == "KAREN_AGENT_STEP"
     assert events[0]["content"]["status"] == "completed"
+    assert events[0]["content"]["runId"] == "run"
+    assert "eventId" not in events[0]["content"]  # No fabricated persisted-event identity.
     assert events[1]["name"] == "karen.agent_step"
     assert events[1]["value"]["status"] == "completed"
     assert "secret" not in str(events)
