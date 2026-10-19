@@ -201,6 +201,40 @@ class WorkflowRuntime:
             return None
         if not isinstance(agent_id, str) or not 1 <= len(agent_id) <= 128:
             return None
+        if kind in {"plan_updated", "reasoning_step"}:
+            # These SDK lifecycle events exist only when Deep Agents really
+            # executed its opt-in planner or a delegated task. No graph
+            # inference or model-prose inspection is used.
+            if metadata.get("source") != "deepagents":
+                return None
+            activity_kind = metadata.get("activity_kind")
+            stage_status = metadata.get("status")
+            if activity_kind not in {"plan", "subagent"} or stage_status not in {
+                "running", "completed", "failed",
+            }:
+                return None
+            subagent_run_id = metadata.get("subagent_run_id")
+            if activity_kind == "subagent" and (
+                not isinstance(subagent_run_id, str)
+                or not 1 <= len(subagent_run_id) <= 128
+            ):
+                return None
+            return _SharedChatStreamChunk(
+                type="agent_step",
+                content=f"Deep Agents {activity_kind} {stage_status}.",
+                correlation_id=correlation_id,
+                metadata={
+                    "event_type": f"deepagents_{activity_kind}_{stage_status}",
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                    "status": stage_status,
+                    "source": "deepagents",
+                    "activity_kind": activity_kind,
+                    "subagent_run_id": subagent_run_id
+                    if activity_kind == "subagent" else "",
+                    "execution_engine": "deepagents",
+                },
+            )
         status_by_type = {
             "agent_started": ("agent_step_started", "running"),
             "agent_completed": ("agent_step_completed", "completed"),
