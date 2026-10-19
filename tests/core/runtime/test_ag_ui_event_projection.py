@@ -394,3 +394,26 @@ def test_agui_cannot_repeat_learning_badge_on_incremental_chunks():
     second = p.project(chunk("content", "Part B", **args))
     assert len([event for event in first + second
                 if event.get("name") == "karen.learning_decision"]) == 1
+
+
+def test_agui_reports_shadow_learning_without_claiming_an_active_model_switch():
+    p = AGUIEventProjection(thread_id="tenant-thread", run_id="run-shadow")
+    p.begin()
+    events = p.project(chunk(
+        "content", "Research result",
+        execution_engine="deepagents",
+        model_selection_source="shadow_operational_recommendation",
+        learning_signal_status="ready",
+        learning_signal_version="model_operational_outcome_v1",
+        learned_context_status="resolved",
+        learned_memory_refs_included=2,
+        recommended_model="unpromoted-model-b",
+        raw_memory={"secret": "private"},
+    ))
+    provenance = next(
+        e for e in events if e.get("name") == "karen.learning_decision"
+    )["value"]
+    assert provenance["selection_source"] == "shadow_operational_recommendation"
+    assert provenance["claim"] == "operational_evidence_only"
+    assert "unpromoted-model-b" not in str(events)
+    assert "private" not in str(events)
