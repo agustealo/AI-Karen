@@ -312,10 +312,34 @@ class PostgresOutcomeStore(OutcomeStore):
                 or not all(metadata.get(k) for k in (
                     "task", "model_id", "model_version", "feature_version",
                 ))
-                or any(key in metadata for key in (
-                    "predicted_label", "expected_label", "raw_prompt",
-                    "private_memory", "raw_training_data",
-                ))
+                or set(metadata) != {
+                    "schema_version", "label_source", "label_evidence_ref",
+                    "task", "model_id", "model_version", "feature_version",
+                    "correct", "raw_probability", "calibrated_probability",
+                    "confidence", "calibration_error", "latency_ms",
+                    "fallback_used",
+                }
+                or any(
+                    isinstance(metadata.get(k), bool)
+                    or not isinstance(metadata.get(k), (int, float))
+                    or not __import__("math").isfinite(metadata[k])
+                    or not 0 <= metadata[k] <= 1
+                    for k in (
+                        "raw_probability", "calibrated_probability",
+                        "confidence", "calibration_error",
+                    )
+                )
+                or isinstance(metadata.get("latency_ms"), bool)
+                or not isinstance(metadata.get("latency_ms"), (int, float))
+                or not __import__("math").isfinite(metadata["latency_ms"])
+                or not 0 <= metadata["latency_ms"] <= 600000
+                or not isinstance(metadata.get("fallback_used"), bool)
+                or len(metadata["label_evidence_ref"]) > 256
+                or not metadata["label_evidence_ref"].isascii()
+                or not all(
+                    ch.isalnum() or ch in "-._:/"
+                    for ch in metadata["label_evidence_ref"]
+                )
             ):
                 raise OutcomeStoreError(
                     "ML evidence requires trusted scoped evaluation provenance without raw labels"
