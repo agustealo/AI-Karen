@@ -3796,6 +3796,23 @@ class ChatRuntime:
             persistence_success=persistence_success,
             metadata={
                 "topology": decision.topology.value,
+                # Operational learning derives from this append-only outcome
+                # evidence, not transient process-local counters. Attribution
+                # is withheld for fallback/mixed/unknown model executions.
+                "task_type": decision.intent,
+                "actual_provider": (provider_meta or {}).get("actual_provider"),
+                "actual_model": (provider_meta or {}).get("actual_model"),
+                "runtime_engine": (provider_meta or {}).get("runtime_engine"),
+                "model_attribution": (
+                    "single_provider_model"
+                    if (
+                        (provider_meta or {}).get("actual_provider")
+                        and (provider_meta or {}).get("actual_model")
+                        and not (provider_meta or {}).get("fallback_level")
+                        and meter.model_calls > 0
+                    )
+                    else "unverified"
+                ),
                 "model_calls": meter.model_calls,
                 "tool_calls": meter.tool_calls,
                 "reasoning_steps": meter.reasoning_steps,
