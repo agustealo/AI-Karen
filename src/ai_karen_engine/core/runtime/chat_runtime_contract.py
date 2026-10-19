@@ -181,12 +181,6 @@ class ChatRuntimeMetadata:
             "requested_target": self.requested_target,
             "actual_provider": self.actual_provider,
             "actual_model": self.actual_model,
-            "model_calls_observed": self.model_calls_observed,
-            "model_selection_source": self.model_selection_source,
-            "learning_signal_status": self.learning_signal_status,
-            "learning_signal_version": self.learning_signal_version,
-            "learned_context_status": self.learned_context_status,
-            "learned_memory_refs_included": self.learned_memory_refs_included,
             "actual_target": self.actual_target,
             "runtime_engine": self.runtime_engine,
             "protocol": self.protocol,
@@ -204,6 +198,17 @@ class ChatRuntimeMetadata:
             "assistant_message_id": self.assistant_message_id,
         }
         base.update(self.extra)
+        # Backwards compatible: ordinary direct chat responses do not sprout
+        # six additional null properties merely because Deep Agents learning
+        # metadata exists as a typed extension.
+        for key in (
+            "model_calls_observed", "model_selection_source",
+            "learning_signal_status", "learning_signal_version",
+            "learned_context_status", "learned_memory_refs_included",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                base[key] = value
         return base
 
 
