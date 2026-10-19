@@ -15,6 +15,18 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 
 
+@pytest.fixture(autouse=True)
+def enable_experimental_ag_ui_for_transport_tests(monkeypatch):
+    """Route stays disabled in production unless central configuration enables it."""
+    monkeypatch.setattr(
+        chat_ingress,
+        "get_runtime_settings",
+        lambda: SimpleNamespace(
+            features=SimpleNamespace(enable_ag_ui_bridge=True)
+        ),
+    )
+
+
 USER = "11111111-1111-1111-1111-111111111111"
 TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -136,3 +148,21 @@ async def test_ag_ui_missing_authenticated_tenant_fails_closed():
             user={"user_id": USER},
         )
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_bridge_is_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(
+        chat_ingress,
+        "get_runtime_settings",
+        lambda: SimpleNamespace(
+            features=SimpleNamespace(enable_ag_ui_bridge=False)
+        ),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await chat_ingress.stream_ag_ui_chat(
+            request=agui_run(),
+            http_request=SimpleNamespace(headers={}),
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert exc.value.status_code == 404
