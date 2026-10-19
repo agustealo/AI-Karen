@@ -23,6 +23,16 @@ describe('settings UX ownership contract', () => {
     expect(models).toContain('Your saved provider and model selection have not been changed');
   });
 
+  it('distinguishes saved provider selection from runtime health and draft changes', () => {
+    expect(models).toContain('const hasUnsavedSelection');
+    expect(models).toContain("Saved model:");
+    expect(models).toContain("not proof of a currently executing model");
+    expect(models).toContain("Provider or model selection changed locally");
+    expect(models).toContain("Registered provider details");
+    expect(models).not.toContain("Active Node Status");
+    expect(models).not.toContain("Active Model</span>");
+  });
+
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
     expect(models).toContain("apiClient.get<ModelSettingsResponse>('/api/settings/model')");
     expect(models).toContain("normalizeModelSettingsResponse");
