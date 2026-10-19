@@ -48,7 +48,7 @@ test('UX-ID-01: current name and summary followup stay grounded in a real conver
   );
   // Five real model turns plus a server-backed reload can exceed the
   // generic 60-second UI-contract timeout on small local hardware.
-  test.setTimeout(8 * 60_000);
+  test.setTimeout(12 * 60_000);
   await signIn(page);
   const hello = await sendAndRead(page, 'Hello');
   expect(hello).not.toMatch(/not sure what specific need|clarify your intention/i);
