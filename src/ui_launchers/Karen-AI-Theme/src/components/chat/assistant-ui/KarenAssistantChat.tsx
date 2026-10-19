@@ -161,7 +161,7 @@ const agentParts = {
           </summary>
           <p className="border-t border-border/50 px-3 py-3 text-sm text-muted-foreground">
             This is observed tool lifecycle activity. It does not confirm that an external action succeeded.
-            Only Karen's governed execution receipt can confirm an external side effect.
+            Only Karen&apos;s governed execution receipt can confirm an external side effect.
           </p>
         </details>
       );
