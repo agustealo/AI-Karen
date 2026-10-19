@@ -13,6 +13,13 @@ ALTER TABLE public.outcome_records
         'runtime.execution', 'user.feedback', 'intelligence.ml'
     ));
 
+-- Mixed runtime/tool/feedback/ML workloads share one ledger but must not
+-- starve the learning evidence window for any individual source.
+CREATE INDEX IF NOT EXISTS idx_outcome_records_tenant_user_source_recorded
+    ON public.outcome_records (
+        tenant_id, user_id, source, recorded_at DESC
+    ) WHERE user_id IS NOT NULL;
+
 COMMENT ON COLUMN public.outcome_records.source IS
     'Runtime execution, user feedback, or governed ML predictor evaluation. Each remains distinguishable; no source grants authority.';
 
