@@ -2,6 +2,7 @@ name: Memory Consumer Contract
 
 on:
   pull_request:
+    branches: [main]
     paths:
       - 'src/ai_karen_engine/core/memory/**'
       - 'src/ai_karen_engine/core/runtime/lazy_loading.py'

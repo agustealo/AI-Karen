@@ -12,6 +12,7 @@ on:
       - "tests/architecture/test_production_data_recovery_contract.py"
       - ".github/workflows/production-data-recovery.yml"
   pull_request:
+    branches: [main]
     paths:
       - "supabase/migrations/**"
       - "supabase/README.md"
