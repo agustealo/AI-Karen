@@ -76,6 +76,10 @@ class ResponseAssembler:
                     "model_selection_source": output.get("model_selection_source"),
                     "learning_signal_status": output.get("learning_signal_status"),
                     "learning_signal_version": output.get("learning_signal_version"),
+                    "learned_context_status": output.get("learned_context_status"),
+                    "learned_memory_refs_included": output.get(
+                        "learned_memory_refs_included", 0
+                    ),
                     "runtime_engine": output.get("runtime_engine"),
                     "synthesis": {"source": "agent_harness", "additional_model_calls": 0},
                 },
