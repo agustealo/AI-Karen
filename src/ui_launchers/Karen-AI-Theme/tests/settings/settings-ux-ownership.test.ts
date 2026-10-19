@@ -64,6 +64,17 @@ describe('settings UX ownership contract', () => {
     expect(downloads).toContain('Discovery status unavailable');
   });
 
+  it('blocks download actions when queue or policy truth is unavailable', () => {
+    expect(downloads).toContain('Download job status is unavailable.');
+    expect(downloads).toContain('Existing jobs may still be running.');
+    expect(downloads).toContain('endpointErrors.jobs ? "Jobs unavailable"');
+    expect(downloads).toContain('!endpointErrors.jobs &&');
+    expect(downloads).toContain('!endpointErrors.policy &&');
+    expect(downloads).toContain('!endpointErrors.channels;');
+    expect(downloads).toContain('disabled={Boolean(endpointErrors.jobs) || !canPauseJob');
+    expect(downloads).toContain('disabled={Boolean(endpointErrors.jobs) || retryingJobs');
+  });
+
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
     expect(models).toContain("apiClient.get<ModelSettingsResponse>('/api/settings/model')");
     expect(models).toContain("normalizeModelSettingsResponse");
