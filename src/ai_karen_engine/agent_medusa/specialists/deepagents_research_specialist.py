@@ -403,9 +403,15 @@ class DeepAgentsResearchSpecialist:
             "resumable": False,  # No authorized restart/resume flow exists yet.
             "actual_provider": model.endpoint.provider_id,
             "actual_model": model.selected_model,
-            "model_selection_source": model.selection_source,
-            "learning_signal_status": model.learning_signal_status,
-            "learning_signal_version": model.learning_signal_version,
+            "model_selection_source": getattr(
+                model, "selection_source", "canonical_registry"
+            ),
+            "learning_signal_status": getattr(
+                model, "learning_signal_status", "not_consulted"
+            ),
+            "learning_signal_version": getattr(
+                model, "learning_signal_version", ""
+            ),
             "runtime_engine": model.endpoint.runtime_engine.value,
             "prompt_contract_id": self.registration.prompt_contract_id,
             "prompt_version": self.registration.prompt_version,
