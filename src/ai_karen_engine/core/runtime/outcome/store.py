@@ -288,8 +288,38 @@ class PostgresOutcomeStore(OutcomeStore):
     def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
         tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
-        if source not in {"runtime.execution", "user.feedback"}:
+        if source not in {
+            "runtime.execution", "user.feedback", "intelligence.ml",
+        }:
             raise OutcomeStoreError(f"Unsupported outcome source: {source or 'missing'}")
+        if source == "intelligence.ml":
+            metadata = payload.get("metadata")
+            if (
+                not payload.get("user_id")
+                or not payload.get("outcome_id")
+                or not isinstance(metadata, dict)
+                or metadata.get("schema_version") != "ml_predictor_evidence_v1"
+                or metadata.get("label_source") not in {
+                    "human_review", "heldout_evaluation",
+                }
+                or not isinstance(metadata.get("label_evidence_ref"), str)
+                or not metadata["label_evidence_ref"]
+                or not isinstance(metadata.get("correct"), bool)
+                or not isinstance(metadata.get("task"), str)
+                or not isinstance(metadata.get("model_id"), str)
+                or not isinstance(metadata.get("model_version"), str)
+                or not isinstance(metadata.get("feature_version"), str)
+                or not all(metadata.get(k) for k in (
+                    "task", "model_id", "model_version", "feature_version",
+                ))
+                or any(key in metadata for key in (
+                    "predicted_label", "expected_label", "raw_prompt",
+                    "private_memory", "raw_training_data",
+                ))
+            ):
+                raise OutcomeStoreError(
+                    "ML evidence requires trusted scoped evaluation provenance without raw labels"
+                )
         return tenant_id, source
 
     def save_outcome(self, payload: dict[str, Any]) -> None:
