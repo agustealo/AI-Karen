@@ -34,3 +34,7 @@ class SpecialistExecutionContext:
     # boundary. Not a user-supplied model choice or permission grant.
     learning_task_type: Optional[str] = None
     learned_model_signals: Optional[Any] = None
+    # PromptRuntime assembled this from already-authorized NeuroRecall
+    # evidence. Never source it directly from an agent/user-supplied task.
+    approved_prompt_messages: Optional[list[dict[str, str]]] = None
+    learning_context_status: Optional[dict[str, Any]] = None
