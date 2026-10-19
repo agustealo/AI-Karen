@@ -431,9 +431,16 @@ async def test_opt_in_checkpoint_saver_uses_exact_governed_medusa_execution_scop
     )
     calls = []
 
+    class VerifiedCheckpoint:
+        checkpoint_owner = "canonical-postgres"
+
+        async def aget_tuple(self, config):
+            assert len(config["configurable"]["thread_id"]) == 64
+            return SimpleNamespace(checkpoint={"id": "persisted-id"})
+
     def checkpointer_factory(ctx, *, thread_id):
         calls.append((ctx, thread_id))
-        return SimpleNamespace(checkpoint_owner="canonical-postgres")
+        return VerifiedCheckpoint()
 
     monkeypatch.setattr(
         ScopedPostgresDeepAgentsSaver, "for_authorized_execution",
@@ -451,9 +458,51 @@ async def test_opt_in_checkpoint_saver_uses_exact_governed_medusa_execution_scop
         ),
     )
     ctx = execution()
-    await specialist.run({"query": "Research authorized evidence"}, execution=ctx)
+    result = await specialist.run(
+        {"query": "Research authorized evidence"}, execution=ctx
+    )
+    assert result["checkpoint_verified"] is True
+    assert result["resumable"] is False
     assert len(calls) == 1
     assert calls[0][0] is ctx
     assert len(calls[0][1]) == 64
     assert sdk["args"]["checkpointer"].checkpoint_owner == "canonical-postgres"
     assert sdk["config"]["configurable"]["thread_id"] == calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_enabled_but_no_durable_readback_fails_honestly(sdk, monkeypatch):
+    from ai_karen_engine.config import agent_medusa as config
+    from ai_karen_engine.agent_medusa.execution.deepagents_checkpoints import (
+        ScopedPostgresDeepAgentsSaver,
+    )
+
+    monkeypatch.setattr(
+        config, "get_agent_medusa_runtime_settings",
+        lambda: SimpleNamespace(
+            deepagents_research_enabled=True,
+            deepagents_checkpoint_enabled=True,
+        ),
+    )
+
+    class MissingCheckpoint:
+        async def aget_tuple(self, config):
+            return None
+
+    monkeypatch.setattr(
+        ScopedPostgresDeepAgentsSaver, "for_authorized_execution",
+        lambda execution, *, thread_id: MissingCheckpoint(),
+    )
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="not durably acknowledged"):
+        await specialist.run({"query": "Research"}, execution=execution())
