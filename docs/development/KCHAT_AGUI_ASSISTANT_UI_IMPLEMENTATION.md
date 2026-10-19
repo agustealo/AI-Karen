@@ -448,3 +448,44 @@ correct model identity, approved tool execution, interrupted SSE and
 durable histories. No fake backend fixture counts as a live runtime.
 Do not merge PR #494 into main until this is green; PR #497 execution
 and checkpoint gates remain separately disabled.
+
+
+## KCHAT-14: User-centered UX audit and proof matrix (October 19, 2026)
+
+This assessment inspects source on PR #494 at `2af608d1`, not a validated running browser. All visual or behavioral conclusions below are provisional until authenticated desktop/mobile and assistive-technology sessions. It does not imply that PR #497 is merged or deployed.
+
+### Observable deficiencies and owners
+
+| Severity | User experience failure or risk | Evidence in source | Canonical owner and required acceptance |
+| --- | --- | --- | --- |
+| P0 | The new chat is not consumer-ready | Frontend and AG-UI flags default off; package dependencies are declared without updated lockfile | Frontend integration; regenerate lock from registry, npm clean install, exact-head typecheck/lint/unit/browser tests |
+| P0 | Persistence can be mistaken for success | History `append: async () => {}` is a no-op because backend owns persistence; existing source test only checks for adapter text | ChatRuntime/ConversationRuntimeGateway; after each run, reload and prove both turns persisted or present a truthful unsaved/error state. Never report saved from the no-op callback |
+| P0 | Stop/retry/reconnect might duplicate or splice responses | Composer Cancel and proxy terminal-integrity handling exist, but no authenticated interrupted-stream browser proof | Runtime plus AG-UI proxy; cancel during tokens, force network EOF, reconnect and verify single run, one terminal state, no fallback text appended |
+| P0 | Approval notices cannot accomplish the action | `KarenApprovalNotice` explicitly read-only | ApprovalService/ActionExecutionGate; eligible receipt-backed approve/reject UI only after pending-receipt scope, expiry, idempotency, denial and replay tests |
+| P0 | Task execution lacks durable intelligible continuity | Observed activity rendered from live data parts; replay unsupported | Runtime durable run ledger + AG-UI authorized replay; show exact per-run steps after refresh without inventing succeeded actions |
+| P1 | Conversation navigation does not scale | Header `select` enumerates sessions with title only | Existing SessionProvider; searchable, keyboard-reachable recent history with grouping, rename and provenance after backend ownership tests |
+| P1 | Agent actions are not legible to nontechnical users | Tool fallback exposes tool name and raw status type; plan and subagent activity use the same flat card | AG-UI renderers; human-readable task timeline, clearly distinguished queued/running/failed/finished and receipt-backed outcomes |
+| P1 | Helpful responses lack rich inspection | Current assistant message uses `MessagePrimitive.Parts` with custom activity parts, no verified artifact/evidence inspector | Runtime verified citations and artifact APIs; frontend safe allowlisted renderers, inspect provenance and download only backed artifacts |
+| P1 | Typography and hierarchy are not proven at real sizes | Message text `text-sm leading-7`, badges `text-xs`, sidebar labels as small as `text-[9px]` | Frontend design system; test 320/375/768/1280px and 200% zoom; readable body and accessible controls, no clipping |
+| P1 | User has little explanation of accessible AI capabilities | Empty state only says ask/plan/delegate, while plugins and agents live in separate navigation | Product information architecture; capability cards reflect backend eligibility only, disabled states explain prerequisites |
+| P1 | Accessibility is not yet demonstrated | Basic `aria-label` and `role=log` exist; no source evidence of focus recovery, screen-reader or keyboard E2E | Frontend; axe and manual keyboard/screen-reader audit, focus after send, failure, session switch and approval, reduced-motion check |
+| P2 | Settings labels express engineering implementation more than user outcomes | Dashboard calls out local-first runtime, separately lists Agents, Tasks, Jobs, Cron Jobs | Product navigation; progressive disclosure: Chat, Activity, Library, Integrations, Settings for regular users; technical controls in Advanced |
+
+### Behavioral acceptance journeys
+
+1. **First run and actual capability discovery:** An authenticated new user sees only callable, authorized capabilities, knows where models/memory/tools come from, and can start a conversation without reading settings. Verify keyboard, narrow mobile and offline/degraded cases.
+2. **Conversation persistence:** Start existing conversation, send prompt, receive verified runtime completion, reload the browser and inspect canonical conversation history. Require explicit error state for a persistence failure and no synthetic saved indicator.
+3. **Long answer interruption:** Send a streaming request; cancel after partial output and separately force upstream EOF. Assert truthful terminal error/cancel, preserved user-visible partial text as appropriate, no duplicated turn, no stitched fallback, and correlation/provenance availability.
+4. **Observed delegation:** Run an authorized multi-step task against real Deep Agents on an allowed local model. Compare rendered plan/tool/subagent IDs and status with server ledger and ToolBridge receipts. Never mistake tool completion for side-effect success.
+5. **Consent and denial:** Issue a real pending approval. Test approve, reject, expired, repeated click, stolen/cross-tenant receipt, and page refresh. No client-defined tool execution or silent success.
+6. **Recovery and replay:** Restart worker between checkpoint persistence and resolution; ensure no Resume affordance appears until tenant-scoped checkpoint, worker claim fencing, side-effect idempotency and replay proof are positive.
+7. **Evidence and artifacts:** Render only canonical cited sources and verified persisted artifacts. Check malicious/untrusted data, empty sources, deleted artifacts and tenant isolation.
+8. **Design and accessibility:** Manual desktop and mobile walkthrough, 200% zoom, keyboard-only navigation, screen-reader order/status, reduced motion, high contrast, syntax/markdown/code overflow and very long conversations.
+
+### Experience architecture to validate
+
+Keep a single backend-owned conversation model. The default surface should prioritize a readable transcript, an accessible composer and an optional collapsible task/activity inspector. Present verified context about models, learning, memory, tools and privacy through progressive disclosure; never force dense diagnostic cards into every message. Reserve actions such as approval, retry and resume for explicit runtime-issued eligibility. Keep agent activity and artifacts inside the selected conversation, with a stable way to revisit them. The legacy chat remains the consumer default until the new surface passes equivalent user journeys.
+
+### Exit gate
+
+No feature activation, merge, or user-facing completion claim from source-only assertions, queued CI or simulated model output. Record authenticated browser run links, exact commit SHA, real provider/model, tenant-scoped persistence receipts, accessibility observations, screenshots for responsive typography, and failure-case evidence. Preserve the existing PR ownership: #494 is presentation/AG-UI; #497 is Medusa/Deep Agents; ChatRuntime and governed services stay authoritative.
