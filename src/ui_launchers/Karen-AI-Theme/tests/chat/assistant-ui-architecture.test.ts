@@ -80,7 +80,10 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
   it("renders runtime-supplied event provenance without fabricating task ordering", () => {
     expect(component).toContain('typeof value.runId === "string"');
     expect(component).toContain('typeof value.eventId === "string"');
-    expect(component).toContain('Number.isNaN(Date.parse(value.timestamp))');
+    expect(component).toContain('Number.isNaN(Date.parse(rawTimestamp))');
+    expect(component).toContain('typeof fields.run_id === "string"');
+    expect(component).toContain('typeof fields.event_id === "string"');
+    expect(component).toContain('typeof fields.step_id === "string"');
     expect(component).toContain('Run: {runId}');
     expect(component).toContain('Event: {eventId}');
     expect(component).toContain('Reported: {reportedAt}');
