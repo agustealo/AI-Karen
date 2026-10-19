@@ -10,6 +10,7 @@ on:
       - 'tests/agent_medusa/**'
       - 'requirements.txt'
       - 'requirements/deepagents.txt'
+      - 'scripts/deepagents_live_tool_smoke.py'
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
@@ -22,6 +23,7 @@ on:
       - 'tests/agent_medusa/**'
       - 'requirements.txt'
       - 'requirements/deepagents.txt'
+      - 'scripts/deepagents_live_tool_smoke.py'
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
@@ -209,6 +211,7 @@ jobs:
             tests/core/runtime/test_deepagents_live_activity.py \
             tests/core/model_runtime/test_structured_tool_provider_execution.py \
             tests/core/model_runtime/test_structured_tool_chat_model.py \
+            tests/core/model_runtime/test_deepagents_live_tool_smoke_contract.py \
             -q --timeout=120
 
   validate-behavioral-contracts:
