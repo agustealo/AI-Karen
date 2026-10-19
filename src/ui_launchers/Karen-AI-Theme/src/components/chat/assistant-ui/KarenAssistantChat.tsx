@@ -18,7 +18,7 @@ import {
 } from "@assistant-ui/react";
 import { HttpAgent } from "@ag-ui/client";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
-import { ArrowDown, ArrowUp, Bot, Loader2, Plus, Square, ShieldCheck } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, CheckCircle2, ChevronDown, CircleAlert, Clock3, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/ChatInterface";
@@ -45,15 +45,24 @@ function KarenActivity({ data }: { data: unknown }) {
   const status = (typeof value.status === "string" && value.status) || "observed";
   const description =
     typeof value.description === "string" ? value.description : "";
+  const normalized = status.toLowerCase();
+  const failed = normalized.includes("fail") || normalized.includes("error");
+  const done = normalized.includes("finish") || normalized.includes("complete") || normalized.includes("success");
+  const StatusIcon = failed ? CircleAlert : done ? CheckCircle2 : Clock3;
   return (
-    <div data-testid="karen-agent-activity" className="my-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm">
-      <div className="flex items-center gap-2 font-medium">
-        <Bot className="h-4 w-4" aria-hidden="true" />
-        <span>{agent}</span>
-        <span className="ml-auto text-xs text-muted-foreground">{status}</span>
+    <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" open={failed}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+        <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate font-medium">{agent}</span>
+        <StatusIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="text-xs text-muted-foreground">{status}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      </summary>
+      <div className="border-t border-border/50 px-3 py-3 text-muted-foreground">
+        {description ? <p className="whitespace-pre-wrap">{description}</p> : <p>No further activity details were reported.</p>}
+        {value.stepId ? <p className="mt-2 break-all text-xs">Step: {value.stepId}</p> : null}
       </div>
-      {description ? <p className="mt-1 text-muted-foreground">{description}</p> : null}
-    </div>
+    </details>
   );
 }
 
@@ -119,7 +128,7 @@ const agentParts = {
   tools: {
     // Render-only. No client execution, fake tool result, or permission path.
     Fallback: ({ toolName, status }: { toolName?: string; status?: { type?: string } }) => (
-      <div className="my-2 rounded-lg border border-border/70 px-3 py-2 text-xs"
+      <div className="my-2 rounded-xl border border-border/70 bg-muted/20 px-3 py-3 text-sm"
         data-testid="karen-observed-tool">
         <span className="font-medium">{toolName || "Observed tool call"}</span>
         <span className="ml-2 text-muted-foreground">
@@ -133,7 +142,7 @@ const agentParts = {
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-end px-4 py-2">
-      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground">
+      <div className="max-w-[92%] whitespace-pre-wrap break-words rounded-2xl bg-primary px-4 py-3 text-base leading-6 text-primary-foreground sm:max-w-[85%]">
         <MessagePrimitive.Parts />
       </div>
     </MessagePrimitive.Root>
@@ -143,7 +152,7 @@ function UserMessage() {
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-start px-4 py-2">
-      <div className="w-full max-w-[92%] space-y-2 rounded-2xl border border-border/50 bg-card px-4 py-3 text-sm leading-7">
+      <div className="w-full max-w-full space-y-3 rounded-2xl border border-border/50 bg-card px-4 py-4 text-base leading-7 sm:max-w-[95%] sm:px-5">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Bot className="h-4 w-4" aria-hidden="true" /> Karen
         </div>
@@ -190,17 +199,17 @@ function KarenThread() {
                 rows={1}
                 aria-label="Message Karen"
                 placeholder="Message Karen..."
-                className="max-h-40 min-h-10 flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none"
+                className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2 text-base outline-none"
               />
               <AuiIf condition={(s) => s.composer.canCancel}>
                 <ComposerPrimitive.Cancel
                   title="Stop response" aria-label="Stop response"
-                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-input"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-input"
                 ><Square className="h-4 w-4" aria-hidden="true" /></ComposerPrimitive.Cancel>
               </AuiIf>
               <ComposerPrimitive.Send
                 title="Send message" aria-label="Send message"
-                className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground disabled:opacity-40"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground disabled:opacity-40"
               ><ArrowUp className="h-4 w-4" aria-hidden="true" /></ComposerPrimitive.Send>
             </ComposerPrimitive.Root>
             <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
@@ -295,6 +304,11 @@ export default function KarenAssistantChat() {
     currentSession, sessions, createNewSession, loadSession,
     isLoadingSessions, error,
   } = useSession();
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const matchingSessions = useMemo(() => sessions.filter((session) =>
+    (session.title || "Untitled conversation").toLowerCase().includes(historyQuery.trim().toLowerCase()),
+  ), [sessions, historyQuery]);
   if (isLoadingSessions) {
     return <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
       <Loader2 className="h-4 w-4 animate-spin" /> Loading conversations…
@@ -320,24 +334,47 @@ export default function KarenAssistantChat() {
           <p className="truncate text-sm font-semibold">{currentSession.title || "Conversation"}</p>
           <p className="text-xs text-muted-foreground">Agent activity is based on observed runtime events</p>
         </div>
-        <div className="flex items-center gap-2">
-          <select
-            aria-label="Choose conversation"
-            value={currentSession.id}
-            onChange={(event) => void loadSession(event.target.value)}
-            className="max-w-40 rounded-lg border border-input bg-background px-2 py-2 text-xs"
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button" aria-expanded={historyOpen} aria-controls="karen-conversation-history"
+            onClick={() => setHistoryOpen((open) => !open)}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-input px-3 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
           >
-            {sessions.map((session) => (
-              <option key={session.id} value={session.id}>{session.title}</option>
-            ))}
-          </select>
+            <Search className="h-4 w-4" aria-hidden="true" />
+            <span className="hidden sm:inline">Conversations</span>
+          </button>
           <button
             title="New conversation" aria-label="New conversation"
-            type="button" onClick={() => void createNewSession()}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-input"
+            type="button" onClick={() => { setHistoryOpen(false); void createNewSession(); }}
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted"
           ><Plus className="h-4 w-4" /></button>
         </div>
       </header>
+      {historyOpen && (
+        <section id="karen-conversation-history" aria-label="Conversation history"
+          className="border-b border-border/60 bg-background px-4 py-3">
+          <label htmlFor="karen-history-search" className="mb-2 block text-sm font-medium">Find a conversation</label>
+          <div className="relative max-w-lg">
+            <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            <input id="karen-history-search" type="search" value={historyQuery}
+              onChange={(event) => setHistoryQuery(event.target.value)}
+              placeholder="Search conversation titles"
+              className="h-11 w-full rounded-xl border border-input bg-background pl-10 pr-3 text-base outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring" />
+          </div>
+          <div className="mt-2 max-h-48 overflow-y-auto" role="group" aria-label="Matching conversations">
+            {matchingSessions.length === 0 ? (
+              <p className="py-3 text-sm text-muted-foreground">No matching conversations.</p>
+            ) : matchingSessions.map((session) => (
+              <button key={session.id} type="button"
+                aria-current={session.id === currentSession.id ? "page" : undefined}
+                onClick={() => { setHistoryOpen(false); void loadSession(session.id); }}
+                className="block min-h-11 w-full truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-[current=page]:bg-muted aria-[current=page]:font-semibold">
+                {session.title || "Untitled conversation"}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       <KarenAgUiRuntime key={currentSession.id} threadId={currentSession.id} />
     </div>
   );
