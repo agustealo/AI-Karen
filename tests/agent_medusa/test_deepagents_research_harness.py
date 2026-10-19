@@ -134,7 +134,14 @@ def sdk(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_real_harness_creation_uses_canonical_scope_and_ephemeral_workspace(sdk):
-    model = SimpleNamespace(bind_tools=lambda tools: tools)
+    model = SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        )
     specialist = DeepAgentsResearchSpecialist(
         registration(), model_factory=lambda *_args: model
     )
@@ -168,7 +175,14 @@ async def test_deepagents_tool_invokes_only_canonical_audited_bridge(sdk, monkey
     )
     specialist = DeepAgentsResearchSpecialist(
         registration(),
-        model_factory=lambda *_args: SimpleNamespace(bind_tools=lambda tools: tools),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
     )
     await specialist.run({"query": "Research"}, execution=execution())
     tool = sdk["approved_tool"]["coroutine"]
@@ -184,7 +198,14 @@ async def test_deepagents_tool_invokes_only_canonical_audited_bridge(sdk, monkey
 async def test_model_callback_enforces_shared_budget_for_nested_agent_calls(sdk):
     specialist = DeepAgentsResearchSpecialist(
         registration(),
-        model_factory=lambda *_args: SimpleNamespace(bind_tools=lambda tools: tools),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
     )
     ctx = execution()
     await specialist.run({"query": "Research"}, execution=ctx)
@@ -235,7 +256,14 @@ async def test_no_unacknowledged_tool_result_is_recorded_as_success(sdk, monkeyp
     )
     specialist = DeepAgentsResearchSpecialist(
         registration(),
-        model_factory=lambda *_args: SimpleNamespace(bind_tools=lambda tools: tools),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
     )
     await specialist.run({"query": "Research"}, execution=execution())
     with pytest.raises(RuntimeError, match="acknowledged"):
