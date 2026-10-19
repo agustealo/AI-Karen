@@ -78,7 +78,10 @@ def sdk(monkeypatch):
 
     monkeypatch.setattr(
         config, "get_agent_medusa_runtime_settings",
-        lambda: SimpleNamespace(deepagents_research_enabled=True),
+        lambda: SimpleNamespace(
+            deepagents_research_enabled=True,
+            deepagents_checkpoint_enabled=False,
+        ),
     )
     monkeypatch.setattr(
         registry, "get_prompt_registry",
@@ -408,3 +411,49 @@ async def test_handled_langchain_tool_error_is_not_a_successful_subagent(sdk):
         "running", "failed",
     ]
     assert "sensitive tool exception" not in str(ctx.event_emitter.events)
+
+
+@pytest.mark.asyncio
+async def test_opt_in_checkpoint_saver_uses_exact_governed_medusa_execution_scope(
+    sdk, monkeypatch,
+):
+    from ai_karen_engine.config import agent_medusa as config
+    from ai_karen_engine.agent_medusa.execution.deepagents_checkpoints import (
+        ScopedPostgresDeepAgentsSaver,
+    )
+
+    monkeypatch.setattr(
+        config, "get_agent_medusa_runtime_settings",
+        lambda: SimpleNamespace(
+            deepagents_research_enabled=True,
+            deepagents_checkpoint_enabled=True,
+        ),
+    )
+    calls = []
+
+    def checkpointer_factory(ctx, *, thread_id):
+        calls.append((ctx, thread_id))
+        return SimpleNamespace(checkpoint_owner="canonical-postgres")
+
+    monkeypatch.setattr(
+        ScopedPostgresDeepAgentsSaver, "for_authorized_execution",
+        checkpointer_factory,
+    )
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
+    )
+    ctx = execution()
+    await specialist.run({"query": "Research authorized evidence"}, execution=ctx)
+    assert len(calls) == 1
+    assert calls[0][0] is ctx
+    assert len(calls[0][1]) == 64
+    assert sdk["args"]["checkpointer"].checkpoint_owner == "canonical-postgres"
+    assert sdk["config"]["configurable"]["thread_id"] == calls[0][1]
