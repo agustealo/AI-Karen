@@ -128,13 +128,13 @@ export default function SettingsDialog({
         icon: Sparkles,
         render: () => <ExpressionSettings />,
       },
-      {
-        id: 'model-downloads',
+      ...(adminMode ? [{
+        id: 'model-downloads' as const,
         label: 'Model Downloads',
-        description: 'Discover and manage local model downloads, installed inventory, and download jobs.',
+        description: 'Administer local model downloads, installed inventory, and download jobs.',
         icon: HardDrive,
         render: () => <ModelDownloads adminMode={adminMode} />,
-      },
+      }] : []),
     ];
 
     if (adminMode) {
