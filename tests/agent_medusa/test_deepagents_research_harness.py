@@ -1,0 +1,242 @@
+"""Deep Agents must be a governed implementation of an existing Medusa specialist.
+
+SDK modules are mocked here so ordinary Karen CI can prove the authorization,
+ownership, failure and tool-gate contracts without installing optional Deep
+Agents or reaching an external provider.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import sys
+import types
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from ai_karen_engine.agent_medusa.contracts.registration import AgentRegistration
+from ai_karen_engine.agent_medusa.contracts.specialist_execution import (
+    SpecialistExecutionContext,
+)
+from ai_karen_engine.agent_medusa.specialists.deepagents_research_specialist import (
+    DeepAgentsResearchSpecialist,
+)
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    ExecutionBudget,
+    ExecutionBudgetMeter,
+    ExecutionTopology,
+)
+
+
+def registration() -> AgentRegistration:
+    return AgentRegistration(
+        agent_id="researcher",
+        name="Researcher",
+        description="Governed researcher",
+        implementation_id="karen.agent.researcher.deepagents",
+        prompt_contract_id="karen.agent.researcher.deepagents",
+        prompt_version="v1.0.0",
+        allowed_tools=["web_search"],
+    )
+
+
+def execution(*, allowed_tools=None, tenant_id="tenant-a", user_id="user-a"):
+    budget = ExecutionBudget(max_duration_ms=30000, max_model_calls=2)
+    plan = AuthorizedExecutionPlan(
+        execution_id="run-1",
+        policy_decision_id="policy-1",
+        authorized_user_id="user-a",
+        authorized_tenant_id="tenant-a",
+        authorized_session_id="session-1",
+        topology=ExecutionTopology.MULTI_AGENT,
+        allowed_agents=["researcher"],
+        allowed_tools=["web_search"] if allowed_tools is None else allowed_tools,
+        budget=budget,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    meter.start()
+    return SpecialistExecutionContext(
+        authorized_plan=plan,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id="session-1",
+        policy_decision_id="policy-1",
+        trajectory_id="run-1",
+        correlation_id="corr-1",
+        step_id="step-1",
+        budget_meter=meter,
+    )
+
+
+@pytest.fixture
+def sdk(monkeypatch):
+    """Substitute SDK-level imports only; never fake the Medusa authorization."""
+    import ai_karen_engine.config.agent_medusa as config
+    import ai_karen_engine.core.runtime.prompt.prompt_registry as registry
+
+    monkeypatch.setattr(
+        config, "get_agent_medusa_runtime_settings",
+        lambda: SimpleNamespace(deepagents_research_enabled=True),
+    )
+    monkeypatch.setattr(
+        registry, "get_prompt_registry",
+        lambda: SimpleNamespace(
+            get_prompt=lambda *args: SimpleNamespace(
+                system_instructions="Evidence-grounded registered research instructions"
+            )
+        ),
+    )
+
+    calls: dict = {}
+    backend = types.ModuleType("deepagents.backends")
+    backend.StateBackend = type("StateBackend", (), {})
+
+    class TestAgent:
+        async def ainvoke(self, payload, config):
+            calls["payload"] = payload
+            calls["config"] = config
+            calls["args"]["callbacks"] = config["callbacks"]
+            return {"messages": [SimpleNamespace(content="Grounded research response.")]}
+
+    core = types.ModuleType("deepagents")
+    def create_deep_agent(**kwargs):
+        calls["args"] = kwargs
+        return TestAgent()
+    core.create_deep_agent = create_deep_agent
+
+    callbacks = types.ModuleType("langchain_core.callbacks")
+    callbacks.AsyncCallbackHandler = type("AsyncCallbackHandler", (), {})
+
+    class FakeStructuredTool:
+        @staticmethod
+        def from_function(**kwargs):
+            calls["approved_tool"] = kwargs
+            return SimpleNamespace(**kwargs)
+
+    tools = types.ModuleType("langchain_core.tools")
+    tools.StructuredTool = FakeStructuredTool
+    langsmith = types.ModuleType("langsmith")
+    langsmith.tracing_context = lambda **kwargs: contextlib.nullcontext()
+
+    for name, module in {
+        "deepagents": core,
+        "deepagents.backends": backend,
+        "langchain_core.callbacks": callbacks,
+        "langchain_core.tools": tools,
+        "langsmith": langsmith,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_real_harness_creation_uses_canonical_scope_and_ephemeral_workspace(sdk):
+    model = SimpleNamespace(bind_tools=lambda tools: tools)
+    specialist = DeepAgentsResearchSpecialist(
+        registration(), model_factory=lambda *_args: model
+    )
+    ctx = execution()
+    result = await specialist.run({"query": "Find source evidence"}, execution=ctx)
+
+    assert result["context_found"] == "Grounded research response."
+    assert result["harness"] == "deepagents"
+    assert result["tool_receipts"] == []
+    assert sdk["args"]["model"] is model
+    assert sdk["args"]["checkpointer"] is None
+    assert sdk["args"]["memory"] == []
+    assert sdk["args"]["skills"] == []
+    assert sdk["args"]["backend"].__class__.__name__ == "StateBackend"
+    assert sdk["args"]["subagents"][0]["name"] == "general-purpose"
+    assert sdk["args"]["subagents"][0]["model"] is model
+    assert "thread_id" in sdk["config"]["configurable"]
+    assert "tenant-a" not in sdk["config"]["configurable"]["thread_id"]
+    assert ctx.budget_meter.model_calls == 0  # Mock didn't perform model calls.
+
+
+@pytest.mark.asyncio
+async def test_deepagents_tool_invokes_only_canonical_audited_bridge(sdk, monkeypatch):
+    executed = AsyncMock(return_value={
+        "success": True, "receipt_id": "receipt-1",
+        "result": [{"url": "https://example.test/source"}],
+    })
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.specialists.deepagents_research_specialist.ToolBridge.execute",
+        executed,
+    )
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(bind_tools=lambda tools: tools),
+    )
+    await specialist.run({"query": "Research"}, execution=execution())
+    tool = sdk["approved_tool"]["coroutine"]
+    with pytest.raises(PermissionError, match="authorization"):
+        await tool("delete_everything", {})
+    outcome = await tool("web_search", {"query": "Research"})
+    assert "receipt-1" in outcome
+    assert executed.await_args.kwargs["authorized_plan"].allowed_tools == ["web_search"]
+    assert executed.await_args.kwargs["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_model_callback_enforces_shared_budget_for_nested_agent_calls(sdk):
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(bind_tools=lambda tools: tools),
+    )
+    ctx = execution()
+    await specialist.run({"query": "Research"}, execution=ctx)
+    callback = sdk["config"]["callbacks"][0]
+    await callback.on_chat_model_start({}, [])
+    await callback.on_chat_model_start({}, [])
+    with pytest.raises(RuntimeError, match="budget"):
+        await callback.on_chat_model_start({}, [])
+    assert ctx.budget_meter.model_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_before_calling_the_sdk_on_cross_tenant_request(sdk):
+    model_factory = AsyncMock()
+    specialist = DeepAgentsResearchSpecialist(registration(), model_factory=model_factory)
+    with pytest.raises(PermissionError, match="RuntimePolicy"):
+        await specialist.run(
+            {"query": "Research"},
+            execution=execution(tenant_id="tenant-b"),
+        )
+    model_factory.assert_not_awaited()
+    assert "args" not in sdk
+
+
+@pytest.mark.asyncio
+async def test_never_choose_default_deepagents_model_when_factory_missing(sdk):
+    specialist = DeepAgentsResearchSpecialist(registration(), model_factory=None)
+    with pytest.raises(RuntimeError, match="model factory"):
+        await specialist.run({"query": "Research"}, execution=execution())
+    assert "args" not in sdk
+
+
+@pytest.mark.asyncio
+async def test_deepagents_invalid_model_and_invalid_output_do_not_fake_success(sdk):
+    specialist = DeepAgentsResearchSpecialist(
+        registration(), model_factory=lambda *_args: "openai:default",
+    )
+    with pytest.raises(TypeError, match="tool-capable"):
+        await specialist.run({"query": "Research"}, execution=execution())
+    assert "args" not in sdk
+
+
+@pytest.mark.asyncio
+async def test_no_unacknowledged_tool_result_is_recorded_as_success(sdk, monkeypatch):
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.specialists.deepagents_research_specialist.ToolBridge.execute",
+        AsyncMock(return_value={"success": False}),
+    )
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(bind_tools=lambda tools: tools),
+    )
+    await specialist.run({"query": "Research"}, execution=execution())
+    with pytest.raises(RuntimeError, match="acknowledged"):
+        await sdk["approved_tool"]["coroutine"]("web_search", {"query": "Research"})
