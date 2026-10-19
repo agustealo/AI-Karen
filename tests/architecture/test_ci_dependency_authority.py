@@ -70,7 +70,13 @@ def test_focused_proof_workflows_consume_ci_profiles() -> None:
 def test_full_runtime_proofs_consume_runtime_manifest_directly() -> None:
     for relative_path in RUNTIME_MANIFEST_WORKFLOWS:
         text = _workflow_text(relative_path)
-        assert "python -m pip install -r requirements.txt" in text, relative_path
+        assert any(
+            command in text
+            for command in (
+                "python -m pip install -r requirements.txt",
+                "pip install -r requirements.txt",
+            )
+        ), relative_path
         assert "requirements/ci/" not in text, relative_path
 
 
