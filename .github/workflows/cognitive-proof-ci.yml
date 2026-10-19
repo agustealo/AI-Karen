@@ -138,10 +138,3 @@ jobs:
         if: ${{ always() }}
         run: |
           pytest tests/benchmarks/cognitive/test_proof_gates.py -q --timeout=300 --tb=short
-
-      - name: Run policy dominance proof explicitly
-        if: ${{ always() }}
-        run: |
-          pytest tests/benchmarks/cognitive/test_proof_gates.py \
-            -q --timeout=300 --tb=short \
-            -k 'policy_dominance'
