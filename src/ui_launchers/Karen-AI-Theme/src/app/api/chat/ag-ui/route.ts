@@ -53,24 +53,33 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     };
 
+    // SSE data fields may span multiple lines and transport chunks.
+    // Never infer terminal success from an incomplete or oversized record.
+    const MAX_PENDING_EVENT_BYTES = 1048576;
     const inspect = (bytes: Uint8Array) => {
       pending += decoder.decode(bytes, { stream: true });
+      if (pending.length > MAX_PENDING_EVENT_BYTES && !/\r?\n\r?\n/.test(pending)) {
+        throw new Error('AG-UI event exceeded the maximum framing size');
+      }
       const records = pending.split(/\r?\n\r?\n/);
       pending = records.pop() || '';
       for (const record of records) {
-        for (const line of record.split(/\r?\n/)) {
-          if (!line.startsWith('data:')) continue;
-          try {
-            const event = JSON.parse(line.slice(5).trimStart()) as { type?: string };
-            if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
-              terminalSeen = true;
-            }
-          } catch {
-            // Malformed SSE does not satisfy the terminal contract.
+        if (record.length > MAX_PENDING_EVENT_BYTES) {
+          throw new Error('AG-UI event exceeded the maximum framing size');
+        }
+        const dataLines = record.split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart());
+        if (!dataLines.length) continue;
+        try {
+          const event = JSON.parse(dataLines.join('\n')) as { type?: string };
+          if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
+            terminalSeen = true;
           }
+        } catch {
+          // Malformed SSE does not satisfy the terminal contract.
         }
       }
-      if (pending.length > 1048576) pending = pending.slice(-8192);
     };
 
     const fail = (
