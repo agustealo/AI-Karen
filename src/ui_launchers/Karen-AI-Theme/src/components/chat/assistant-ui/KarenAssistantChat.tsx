@@ -141,15 +141,31 @@ const agentParts = {
   },
   tools: {
     // Render-only. No client execution, fake tool result, or permission path.
-    Fallback: ({ toolName, status }: { toolName?: string; status?: { type?: string } }) => (
-      <div className="my-2 rounded-xl border border-border/70 bg-muted/20 px-3 py-3 text-sm"
-        data-testid="karen-observed-tool">
-        <span className="font-medium">{toolName || "Observed tool call"}</span>
-        <span className="ml-2 text-muted-foreground">
-          {status?.type || "pending"}
-        </span>
-      </div>
-    ),
+    Fallback: ({ toolName, status }: { toolName?: string; status?: { type?: string } }) => {
+      const observedState = status?.type || "unknown";
+      const stateLabel = observedState === "complete"
+        ? "Tool call completed"
+        : observedState === "running"
+          ? "Tool call in progress"
+          : observedState === "incomplete"
+            ? "Tool call incomplete"
+            : "Tool activity observed";
+      return (
+        <details className="my-2 rounded-xl border border-border/70 bg-muted/20 text-sm"
+          data-testid="karen-observed-tool">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+            <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate font-medium">{toolName || "Observed tool call"}</span>
+            <span className="text-xs text-muted-foreground">{stateLabel}</span>
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          </summary>
+          <p className="border-t border-border/50 px-3 py-3 text-sm text-muted-foreground">
+            This is observed tool lifecycle activity. It does not confirm that an external action succeeded.
+            Only Karen's governed execution receipt can confirm an external side effect.
+          </p>
+        </details>
+      );
+    },
   },
 };
 
