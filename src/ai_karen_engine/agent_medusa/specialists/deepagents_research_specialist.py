@@ -278,6 +278,9 @@ class DeepAgentsResearchSpecialist:
             "search_results": [],  # Receipts, not invented search-result records.
             "tool_receipts": accepted_receipts,
             "harness": "deepagents",
+            "actual_provider": model.endpoint.provider_id,
+            "actual_model": model.selected_model,
+            "runtime_engine": model.endpoint.runtime_engine.value,
             "prompt_contract_id": self.registration.prompt_contract_id,
             "prompt_version": self.registration.prompt_version,
         }
