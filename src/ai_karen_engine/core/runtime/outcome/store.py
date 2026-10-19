@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
@@ -322,7 +323,7 @@ class PostgresOutcomeStore(OutcomeStore):
                 or any(
                     isinstance(metadata.get(k), bool)
                     or not isinstance(metadata.get(k), (int, float))
-                    or not __import__("math").isfinite(metadata[k])
+                    or not math.isfinite(metadata[k])
                     or not 0 <= metadata[k] <= 1
                     for k in (
                         "raw_probability", "calibrated_probability",
@@ -331,7 +332,7 @@ class PostgresOutcomeStore(OutcomeStore):
                 )
                 or isinstance(metadata.get("latency_ms"), bool)
                 or not isinstance(metadata.get("latency_ms"), (int, float))
-                or not __import__("math").isfinite(metadata["latency_ms"])
+                or not math.isfinite(metadata["latency_ms"])
                 or not 0 <= metadata["latency_ms"] <= 600000
                 or not isinstance(metadata.get("fallback_used"), bool)
                 or len(metadata["label_evidence_ref"]) > 256
