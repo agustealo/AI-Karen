@@ -14,6 +14,10 @@ on:
       - 'supabase/migrations/20261019010000_36_medusa_deepagents_checkpoints.sql'
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/model_outcome_signals.py'
+      - 'src/ai_karen_engine/config/learning.py'
+      - 'tests/core/intelligence/ml/test_model_outcome_signals.py'
+      - 'tests/core/model_runtime/test_structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
   pull_request:
     branches: [main, develop]
@@ -28,6 +32,10 @@ on:
       - 'supabase/migrations/20261019010000_36_medusa_deepagents_checkpoints.sql'
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/model_outcome_signals.py'
+      - 'src/ai_karen_engine/config/learning.py'
+      - 'tests/core/intelligence/ml/test_model_outcome_signals.py'
+      - 'tests/core/model_runtime/test_structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
 
 env:
@@ -211,6 +219,8 @@ jobs:
             tests/agent_medusa/test_deepagents_factory_ownership.py \
             tests/agent_medusa/test_deepagents_checkpoint_saver.py \
             tests/core/runtime/test_deepagents_primary_routing.py \
+            tests/core/runtime/test_deepagents_learning_context.py \
+            tests/core/intelligence/ml/test_model_outcome_signals.py \
             tests/core/runtime/test_deepagents_live_activity.py \
             tests/core/model_runtime/test_structured_tool_provider_execution.py \
             tests/core/model_runtime/test_structured_tool_chat_model.py \
