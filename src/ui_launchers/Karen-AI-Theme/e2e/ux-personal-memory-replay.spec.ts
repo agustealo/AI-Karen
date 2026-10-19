@@ -75,7 +75,9 @@ test('UX-ID-01: current name and summary followup stay grounded in a real conver
   const conversationResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return response.request().method() === 'GET'
-      && /^\\/api\\/conversations\\/[^/]+$/.test(url.pathname);
+      && url.pathname.startsWith('/api/conversations/')
+      && url.pathname.slice('/api/conversations/'.length).length > 0
+      && !url.pathname.slice('/api/conversations/'.length).includes('/');
   }, { timeout: 45_000 });
   await page.reload();
   const serverResponse = await conversationResponse;
