@@ -253,6 +253,10 @@ class BenchmarkRunner:
             references.append(
                 f"benchmark:{receipt}:{case_hash[:24]}"
             )
+        if not records:
+            # Do not claim learned quality or create empty database writes
+            # when every benchmark case abstained, errored or fell back.
+            return 0
         projection = GovernedMLLearningEvidence(
             tenant_id=tenant_id, user_id=user_id,
         )
