@@ -162,6 +162,7 @@ class ModelOutcomeSignalService:
                     tenant_id,
                     limit=settings.model_routing_history_limit,
                     user_id=user_id,
+                    source="runtime.execution",
                 ),
                 timeout=settings.model_routing_read_timeout_seconds,
             )
