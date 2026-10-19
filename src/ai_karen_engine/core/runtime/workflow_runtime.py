@@ -90,7 +90,7 @@ class WorkflowRuntime:
             try:
                 yield _SharedChatStreamChunk(
                     type="status",
-                    content="Authorized agent run started.",
+                    content="Preparing authorized agent execution.",
                     correlation_id=ctx.correlation_id,
                     metadata={"execution_engine": "deepagents", "status": "running"},
                 )
