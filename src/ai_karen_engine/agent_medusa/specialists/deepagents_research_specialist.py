@@ -126,8 +126,14 @@ class DeepAgentsResearchSpecialist:
         model = self._model_factory(self.registration, execution)
         if inspect.isawaitable(model):
             model = await model
-        if isinstance(model, str) or model is None or not callable(getattr(model, "bind_tools", None)):
-            raise TypeError("Trusted Deep Agents factory must supply a tool-capable chat model")
+        if (
+            isinstance(model, str)
+            or model is None
+            or not callable(getattr(model, "bind_tools", None))
+            or not getattr(getattr(model, "endpoint", None), "provider_id", None)
+            or not getattr(model, "selected_model", None)
+        ):
+            raise TypeError("Trusted Deep Agents factory must supply a governed tool-capable chat model")
 
         budget = execution.authorized_plan.budget
         meter = execution.budget_meter
