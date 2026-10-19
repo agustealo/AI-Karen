@@ -81,11 +81,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Leading blank record separators keep a partial upstream frame from
       // swallowing the transport diagnostic.
       controller.enqueue(encoder.encode(
-        \`\n\ndata: \${JSON.stringify({
+        `\n\ndata: ${JSON.stringify({
           type: 'RUN_ERROR',
           message: 'The backend stream ended before runtime completion.',
           code,
-        })}\n\n\`,
+        })}\n\n`,
       ));
       terminalSeen = true;
     };
