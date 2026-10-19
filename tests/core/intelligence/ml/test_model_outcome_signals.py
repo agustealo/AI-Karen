@@ -145,9 +145,10 @@ async def test_service_reloads_durable_outcomes_on_each_execution(monkeypatch):
     reads = []
 
     class ExistingOutcomeStore:
-        def list_for_tenant(self, tenant, *, limit, user_id):
-            reads.append((tenant, limit, user_id))
-            return list(stored)
+        def list_for_tenant(self, tenant, *, limit, user_id, source=None):
+            reads.append((tenant, limit, user_id, source))
+            assert source == "runtime.execution"
+            return [row for row in stored if row["source"] == source]
 
     monkeypatch.setattr(signals_module, "get_outcome_store", ExistingOutcomeStore)
     monkeypatch.setattr(
@@ -176,7 +177,10 @@ async def test_service_reloads_durable_outcomes_on_each_execution(monkeypatch):
     )
     assert first.profile("ollama-local", "model-b") is None
     assert second.profile("ollama-local", "model-b").samples == 12
-    assert reads == [(TENANT, 500, USER), (TENANT, 500, USER)]
+    assert reads == [
+        (TENANT, 500, USER, "runtime.execution"),
+        (TENANT, 500, USER, "runtime.execution"),
+    ]
 
 
 @pytest.mark.asyncio
