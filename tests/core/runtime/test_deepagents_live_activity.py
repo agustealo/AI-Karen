@@ -236,3 +236,60 @@ async def test_deepagents_stream_reports_failure_without_fabricated_content(monk
     assert chunks[-1].type == ChatStreamEventType.ERROR
     assert not any(c.type == ChatStreamEventType.CONTENT for c in chunks)
     assert "secret backend detail" not in str(chunks)
+
+
+def test_deepagents_real_planning_and_delegation_events_project_to_agent_activity():
+    rt = WorkflowRuntime()
+    for kind, activity_kind in (
+        (AgentEventType.PLAN_UPDATED, "plan"),
+        (AgentEventType.REASONING_STEP, "subagent"),
+    ):
+        started = rt._project_medusa_event(
+            _event(
+                kind, step_id="deepagents-real-123", source="deepagents",
+                activity_kind=activity_kind, status="running",
+                subagent_run_id="real-123" if activity_kind == "subagent" else "",
+                private_tool_input={"token": "never-forward"},
+            ),
+            correlation_id="corr-1",
+        )
+        completed = rt._project_medusa_event(
+            _event(
+                kind, step_id="deepagents-real-123", source="deepagents",
+                activity_kind=activity_kind, status="completed",
+                subagent_run_id="real-123" if activity_kind == "subagent" else "",
+            ),
+            correlation_id="corr-1",
+        )
+        assert started.type == ChatStreamEventType.AGENT_STEP
+        assert started.metadata["status"] == "running"
+        assert started.metadata["source"] == "deepagents"
+        assert started.metadata["activity_kind"] == activity_kind
+        assert started.metadata["step_id"] == completed.metadata["step_id"]
+        assert completed.metadata["status"] == "completed"
+        assert "never-forward" not in str(started) + str(completed)
+
+
+def test_deepagents_progress_requires_actual_sdk_source_and_subagent_identity():
+    rt = WorkflowRuntime()
+    assert rt._project_medusa_event(
+        _event(
+            AgentEventType.REASONING_STEP,
+            step_id="deepagents-unproven", status="running",
+            activity_kind="subagent", subagent_run_id="real-123",
+        ), correlation_id="corr-1",
+    ) is None
+    assert rt._project_medusa_event(
+        _event(
+            AgentEventType.PLAN_UPDATED,
+            step_id="deepagents-unproven", status="running",
+            activity_kind="plan", source="different-engine",
+        ), correlation_id="corr-1",
+    ) is None
+    assert rt._project_medusa_event(
+        _event(
+            AgentEventType.REASONING_STEP,
+            step_id="deepagents-unproven", status="running",
+            activity_kind="subagent", source="deepagents",
+        ), correlation_id="corr-1",
+    ) is None
