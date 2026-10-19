@@ -333,6 +333,107 @@ class WorkflowRuntime:
         return bool(request.messages and request.context.user_id and
                     request.context.tenant_id and request.context.session_id)
 
+    async def _assemble_deepagents_learned_context(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+    ) -> tuple[list[dict[str, str]] | None, dict[str, Any]]:
+        """Reuse PromptRuntime + CORTEX-resolved NeuroRecall, never re-retrieve.
+
+        Retrieval, RBAC, contradiction handling and profile decisions belong
+        upstream. This boundary checks the exact authorized evidence identity
+        before passing a bounded, already-assembled prompt to Deep Agents.
+        """
+        if not decision.memory_recall_required:
+            return None, {"status": "not_requested", "included_memory_count": 0}
+        cognitive = decision.cognitive_context
+        if cognitive is None:
+            return None, {"status": "unavailable", "included_memory_count": 0}
+        ctx = request.context
+        if (
+            cognitive.tenant_id != ctx.tenant_id
+            or cognitive.user_id != ctx.user_id
+            or cognitive.correlation_id != ctx.correlation_id
+            or cognitive.request_id != ctx.request_id
+            or cognitive.policy_decision_id not in (None, plan.policy_decision_id)
+        ):
+            raise PermissionError("Deep Agents resolved learning context scope mismatch")
+
+        from ai_karen_engine.core.context.contracts import EvidenceSource
+        from ai_karen_engine.core.runtime.prompt import (
+            PromptAssemblyRequest, get_prompt_runtime_service,
+        )
+
+        authorized = set(cognitive.authorized_sources)
+        memory_items: list[dict[str, Any]] = []
+        continuity_items: list[dict[str, Any]] = []
+        for item in cognitive.evidence:
+            scope = item.scope
+            if scope is not None and (
+                scope.tenant_id != ctx.tenant_id
+                or scope.user_id not in (None, ctx.user_id)
+                or scope.session_id not in (None, ctx.session_id)
+            ):
+                # A mixed-scope evidence payload is a security violation,
+                # never a reason to broaden recall or silently use it.
+                raise PermissionError("Deep Agents evidence crosses authorized scope")
+            if not isinstance(item.content, str) or not item.content.strip():
+                continue
+            if (
+                item.source is EvidenceSource.MEMORY
+                and EvidenceSource.MEMORY.value in authorized
+                and len(memory_items) < max(0, decision.memory_top_k)
+            ):
+                memory_items.append({
+                    "id": item.evidence_id,
+                    "content": item.content,
+                    "relevance": item.relevance,
+                    "confidence": item.confidence,
+                    "source_ref": item.source_ref,
+                })
+            elif (
+                item.source is EvidenceSource.USER_MODEL
+                and EvidenceSource.USER_MODEL.value in authorized
+                and len(continuity_items) < 5
+            ):
+                continuity_items.append({
+                    "id": item.evidence_id,
+                    "subject": item.content,
+                    "confidence": item.confidence,
+                    "source_type": "authorized_user_model",
+                    "execution_authorized": False,
+                })
+        assembled = await get_prompt_runtime_service().assemble_prompt(
+            PromptAssemblyRequest(
+                prompt_id="karen.chat.default",
+                prompt_version="v1.0.0",
+                memory_items=memory_items,
+                continuity_items=continuity_items,
+                messages=list(request.messages),
+                token_budget=min(
+                    max(512, decision.token_budget),
+                    max(512, plan.budget.max_input_tokens),
+                ),
+            )
+        )
+        # Runtime-owned prompt is trusted, but the LangChain message adapter
+        # accepts only canonical role/content fields, not embedded metadata.
+        messages = [
+            {"role": message["role"], "content": message["content"]}
+            for message in assembled.messages
+            if message.get("role") in {"system", "user", "assistant"}
+            and isinstance(message.get("content"), str)
+        ]
+        if not any(message["role"] == "user" for message in messages):
+            raise RuntimeError("Deep Agents PromptRuntime omitted user task")
+        return messages, {
+            "status": "resolved",
+            "included_memory_count": len(assembled.included_memory_refs),
+            "prompt_id": assembled.prompt_id,
+            "prompt_version": assembled.prompt_version,
+        }
+
     async def _run_deepagents(
         self,
         request: ChatExecutionRequest,
@@ -383,6 +484,9 @@ class WorkflowRuntime:
         # Resolve learning once, at the authenticated runtime boundary.
         # Medusa/Deep Agents receive only a typed, scoped advisory snapshot.
         # Memory/provider registries retain their own single authorities.
+        approved_prompt_messages, learning_context_status = (
+            await self._assemble_deepagents_learned_context(request, decision, plan)
+        )
         learned_model_signals = None
         if (
             not request.preferred_model
@@ -410,6 +514,8 @@ class WorkflowRuntime:
                 "preferred_model": request.preferred_model,
                 "learning_task_type": decision.intent,
                 "learned_model_signals": learned_model_signals,
+                "approved_prompt_messages": approved_prompt_messages,
+                "learning_context_status": learning_context_status,
             },
             authorized_plan=_serialize_plan(plan),
             execution_requirements=requirements,
