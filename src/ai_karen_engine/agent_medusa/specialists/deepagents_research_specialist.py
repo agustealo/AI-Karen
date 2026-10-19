@@ -254,11 +254,18 @@ class DeepAgentsResearchSpecialist:
             async def on_tool_end(
                 self, output: Any, *, run_id: Any, **kwargs: Any
             ) -> None:
-                del output, kwargs
+                del kwargs
                 key = str(run_id)
                 name = self._internal_tools.pop(key, None)
                 if name is not None:
-                    await self._emit_activity(name, key, "completed")
+                    # LangChain may wrap a handled tool failure in a
+                    # ToolMessage(status="error") and still call on_tool_end.
+                    # That is NOT a successful delegated task.
+                    result_status = getattr(output, "status", None)
+                    await self._emit_activity(
+                        name, key,
+                        "failed" if result_status == "error" else "completed",
+                    )
 
             async def on_tool_error(
                 self, error: BaseException, *, run_id: Any, **kwargs: Any
