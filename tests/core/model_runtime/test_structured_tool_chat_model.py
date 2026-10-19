@@ -256,3 +256,45 @@ def test_learned_signal_wrong_tenant_cannot_select_foreign_model(monkeypatch):
     )
     assert result.selected_model == "model-a"
     assert result.selection_source == "baseline_scope_mismatch"
+
+
+def test_policy_model_pin_cannot_be_overridden_by_user_or_learning(monkeypatch):
+    _mock_canonical_model_manager(monkeypatch)
+    request = _model_selection_execution(explicit_model="model-b")
+    request.authorized_plan.provider_constraints["model"] = "model-a"
+    with pytest.raises(PermissionError, match="model constraint"):
+        build_medusa_deepagents_model(
+            SimpleNamespace(agent_id="researcher"), request
+        )
+
+
+def test_policy_provider_pin_cannot_be_overridden_by_user(monkeypatch):
+    _mock_canonical_model_manager(monkeypatch)
+    request = _model_selection_execution(explicit_model="model-a")
+    request.authorized_plan.provider_constraints["provider"] = "approved-provider"
+    with pytest.raises(PermissionError, match="provider constraint"):
+        build_medusa_deepagents_model(
+            SimpleNamespace(agent_id="researcher"), request
+        )
+
+
+def test_policy_model_allowlist_excludes_learned_favorite(monkeypatch):
+    from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+        MODEL_SIGNAL_VERSION, ModelOperationalProfile, ScopedModelSignals,
+    )
+    _mock_canonical_model_manager(monkeypatch)
+    request = _model_selection_execution(
+        signals=ScopedModelSignals(
+            "t-1", "u-1", "research", MODEL_SIGNAL_VERSION, "ready",
+            (
+                ModelOperationalProfile("ollama-local", "model-a", 20, 2, 800),
+                ModelOperationalProfile("ollama-local", "model-b", 20, 19, 300),
+            ),
+        )
+    )
+    request.authorized_plan.provider_constraints["allowed_models"] = ["model-a"]
+    model = build_medusa_deepagents_model(
+        SimpleNamespace(agent_id="researcher"), request
+    )
+    assert model.selected_model == "model-a"
+    assert model.selection_source != "learning_operational_reliability_v1"
