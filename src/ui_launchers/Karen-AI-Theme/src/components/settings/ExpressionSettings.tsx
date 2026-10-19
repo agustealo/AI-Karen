@@ -308,7 +308,7 @@ export default function ExpressionSettings() {
                               <Badge className="h-5 text-[8px] bg-primary text-primary-foreground border-none uppercase tracking-widest px-2">Current Primary</Badge>
                             )}
                             <Badge variant={currentEngineConfig.enabled ? "outline" : "secondary"} className={cn("h-5 text-[8px] uppercase px-1.5 font-bold", currentEngineConfig.enabled ? "text-emerald-500 border-emerald-500/30" : "")}>
-                              {currentEngineConfig.enabled ? "Ready" : "Disabled"}
+                              {currentEngineConfig.enabled ? "Enabled" : "Disabled"}
                             </Badge>
                           </div>
                           <p className="text-xs text-muted-foreground">Select specific models and runtimes for this logic layer.</p>
