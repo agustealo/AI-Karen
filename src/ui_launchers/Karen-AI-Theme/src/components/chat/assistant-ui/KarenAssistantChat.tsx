@@ -18,6 +18,8 @@ import {
   ExportedMessageRepository,
 } from "@assistant-ui/react";
 import { HttpAgent } from "@ag-ui/client";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { apiClient } from "@/lib/api";
@@ -170,6 +172,20 @@ const agentParts = {
   },
 };
 
+function KarenMarkdownText({ text }: { text: string }) {
+  return (
+    <div className="min-w-0 break-words text-sm leading-7 text-foreground [&_a]:break-all [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_code]:break-words [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_pre]:my-3 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-muted [&_pre]:p-3 [&_pre_code]:break-normal [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        urlTransform={(url) => /^(https?:|mailto:)/i.test(url) ? url : ""}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 function KarenCopyAction() {
   return (
     <ActionBarPrimitive.Root hideWhenRunning className="px-1">
@@ -206,7 +222,7 @@ function AssistantMessage() {
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Bot className="h-4 w-4" aria-hidden="true" /> Karen
         </div>
-        <MessagePrimitive.Parts components={agentParts} />
+        <MessagePrimitive.Parts components={{ ...agentParts, Text: KarenMarkdownText }} />
       </div>
       <KarenCopyAction />
     </MessagePrimitive.Root>
