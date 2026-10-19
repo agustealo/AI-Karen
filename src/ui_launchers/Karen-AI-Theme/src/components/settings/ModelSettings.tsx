@@ -311,6 +311,7 @@ export default function ModelSettings() {
     setBaseUrl(usesRuntimeOptions ? providerBaseUrl : normalizeDisplayBaseUrl(providerBaseUrl));
     setApiKey('');
     setIsEditingApiKey(false);
+    validationRequestId.current += 1;
     setApiKeyValidationState('idle');
     setApiKeyValidationMessage('');
     setApiKeyHeader(selectedProviderDetails.api_key_header || 'Authorization');
@@ -328,7 +329,7 @@ export default function ModelSettings() {
 
   useEffect(() => {
     if (!selectedProviderDetails?.requires_api_key || !isEditingApiKey) {
-      setApiKeyValidationState(selectedProviderDetails?.api_key_configured ? 'valid' : 'idle');
+      setApiKeyValidationState('idle');
       setApiKeyValidationMessage(
         selectedProviderDetails?.api_key_configured
           ? `${selectedProviderLabel || selectedProviderDetails?.display_name} key is stored.`
@@ -338,7 +339,7 @@ export default function ModelSettings() {
     }
     const candidateKey = apiKey.trim();
     if (!candidateKey) {
-      setApiKeyValidationState(selectedProviderDetails.api_key_configured ? 'valid' : 'idle');
+      setApiKeyValidationState('idle');
       setApiKeyValidationMessage('');
       return;
     }
@@ -372,7 +373,10 @@ export default function ModelSettings() {
         );
       }
     }, 450);
-    return () => { window.clearTimeout(timeoutId); };
+    return () => {
+      window.clearTimeout(timeoutId);
+      validationRequestId.current += 1;
+    };
   }, [apiKey, baseUrl, isEditingApiKey, selectedModel, selectedProviderDetails, selectedProviderLabel]);
 
   const validateProviderCredentialsBeforeSave = async (): Promise<boolean> => {
@@ -471,9 +475,6 @@ export default function ModelSettings() {
         selectedProviderLabel || selectedProviderDetails.display_name,
         formatErrorMessage(error, 'Karen could not save configuration.'),
       );
-      setApiKeyValidationState('invalid');
-      setApiKeyValidationMessage(message);
-      setIsEditingApiKey(true);
       toast({ title: `Save failed for ${selectedProviderLabel || selectedProviderDetails.display_name}`, description: message, variant: 'destructive' });
     } finally { setIsSaving(false); }
   };
