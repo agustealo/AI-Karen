@@ -40,6 +40,19 @@ class OutcomeStore(ABC):
         """Strict append required for governed action receipts."""
         raise OutcomeStoreError("Strict append-only outcome persistence unavailable")
 
+    async def save_unique_outcomes_async(
+        self, payloads: list[dict[str, Any]]
+    ) -> None:
+        """Atomic, tenant-scoped strict batch for verified evaluation evidence.
+
+        Reject adapters without native atomicity. Never implement as a loop
+        of separately committed single-outcome writes.
+        """
+        if payloads:
+            raise OutcomeStoreError(
+                "Atomic governed outcome batch persistence unavailable"
+            )
+
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
@@ -102,6 +115,33 @@ class InMemoryOutcomeStore(OutcomeStore):
         ):
             raise OutcomeStoreError("Duplicate or missing governed outcome identifier")
         self.save_outcome(payload)
+
+    async def save_unique_outcomes_async(
+        self, payloads: list[dict[str, Any]]
+    ) -> None:
+        if not payloads:
+            return
+        identities = [str(p.get("outcome_id") or "").strip() for p in payloads]
+        tenants = {p.get("tenant_id") for p in payloads}
+        if (
+            any(not key for key in identities)
+            or len(set(identities)) != len(identities)
+            or len(tenants) != 1
+            or not next(iter(tenants))
+            or any(item.get("outcome_id") in identities for item in self._records)
+        ):
+            raise OutcomeStoreError(
+                "Atomic in-memory evaluation batch contains duplicate or cross-tenant identity"
+            )
+        # Validate the entire set before allowing any mutation.
+        for payload in payloads:
+            if payload.get("source") != "intelligence.ml":
+                raise OutcomeStoreError(
+                    "Atomic evaluation batches must contain governed ML evidence"
+                )
+            PostgresOutcomeStore._validated_identity(payload)
+        for payload in payloads:
+            self.save_outcome(payload)
 
     def get_for_trajectory(
         self,
@@ -387,6 +427,42 @@ class PostgresOutcomeStore(OutcomeStore):
                 },
             )
             raise OutcomeStoreError("Governed outcome was not durably appended") from exc
+
+    async def save_unique_outcomes_async(
+        self, payloads: list[dict[str, Any]]
+    ) -> None:
+        """One transaction or no evidence: batch is never partially learned."""
+        if not payloads:
+            return
+        if len(payloads) > 5000:
+            raise OutcomeStoreError("Governed evaluation batch exceeds safety limit")
+        identities = [str(p.get("outcome_id") or "").strip() for p in payloads]
+        if any(not v for v in identities) or len(set(identities)) != len(identities):
+            raise OutcomeStoreError("Evaluation batch IDs must be unique")
+        tenants = set()
+        for payload in payloads:
+            tenant, source = self._validated_identity(payload)
+            if source != "intelligence.ml":
+                raise OutcomeStoreError("Only evaluated ML evidence may be batch appended")
+            tenants.add(tenant)
+        if len(tenants) != 1:
+            raise OutcomeStoreError("Cross-tenant evidence batch is forbidden")
+        tenant = next(iter(tenants))
+        try:
+            async with async_transaction_scope(tenant) as session:
+                for payload in payloads:
+                    await self.append_in_transaction(session, payload)
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.atomic_evaluation_batch_failed",
+                extra={"tenant_id": tenant, "evidence_count": len(payloads),
+                       "error_type": type(exc).__name__},
+            )
+            raise OutcomeStoreError(
+                "Governed evaluation batch did not commit atomically"
+            ) from exc
 
     @staticmethod
     async def append_in_transaction(session: Any, payload: dict[str, Any]) -> None:
