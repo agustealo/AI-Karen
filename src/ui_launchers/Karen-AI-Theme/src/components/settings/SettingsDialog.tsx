@@ -348,11 +348,19 @@ export default function SettingsDialog({
         {activeCategory && (
           <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 shadow-sm backdrop-blur-sm">
-              <div className="flex items-center gap-2 px-1">
-                <div className="h-1 w-1 rounded-full bg-primary" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80">
-                  {activeCategory.label} Configuration
-                </span>
+              <div className="px-1">
+                <h3 className="text-base font-semibold text-foreground">
+                  {activeCategory.id === 'runtime' ? 'Models and execution' : activeCategory.label} settings
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {activeCategory.id === 'runtime'
+                    ? 'Choose a provider, customize expression, or manage model downloads. Availability and saved changes come from Karen.'
+                    : activeCategory.id === 'personal'
+                      ? 'Review personal information, notifications, and privacy controls.'
+                      : activeCategory.id === 'assistant'
+                        ? 'Customize how Karen behaves, speaks, and presents itself.'
+                        : 'Manage authorized administration controls.'}
+                </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
