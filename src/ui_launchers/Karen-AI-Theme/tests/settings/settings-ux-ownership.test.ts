@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 const settings = readFileSync(resolve(process.cwd(), 'src/components/settings/SettingsDialog.tsx'), 'utf8');
 const models = readFileSync(resolve(process.cwd(), 'src/components/settings/ModelSettings.tsx'), 'utf8');
+const expression = readFileSync(resolve(process.cwd(), 'src/components/settings/ExpressionSettings.tsx'), 'utf8');
 
 describe('settings UX ownership contract', () => {
   it('keeps settings navigation in the shell and persistence in existing panels', () => {
@@ -39,6 +40,17 @@ describe('settings UX ownership contract', () => {
     expect(models).toContain('saved model availability has not been verified');
     expect(models).toContain('Unable to copy setup command');
     expect(models).toContain('aria-label="Refresh model discovery"');
+  });
+
+  it('does not fabricate an enabled expression engine after an unavailable inventory', () => {
+    expect(expression).toContain("setLoadError('Karen could not load expression settings");
+    expect(expression).toContain("if (loadError || !exprSettings || !modelSettings)");
+    expect(expression).toContain('Expression settings unavailable');
+    expect(expression).toContain('Retry loading expression settings');
+    expect(expression).toContain('const currentEngineConfig = exprSettings.engines?.[activeEngine]');
+    expect(expression).not.toContain('fallback_eligible: true,\\n    metadata: {}');
+    expect(expression).toContain('Saved primary');
+    expect(expression).toContain('"Enabled" : "Disabled"');
   });
 
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
