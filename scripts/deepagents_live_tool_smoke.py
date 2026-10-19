@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 from typing import Any
 
-from beta_live_model_smoke import SmokeConfig, _request_json
+if __package__:
+    from scripts.beta_live_model_smoke import SmokeConfig, _request_json
+else:
+    from beta_live_model_smoke import SmokeConfig, _request_json
 
 
 @dataclass(frozen=True)
@@ -194,10 +197,12 @@ def main() -> int:
     try:
         result = run().public_summary()
     except Exception as exc:
+        # The provider or transport exception might embed an upstream
+        # response body containing secrets. Record its type, never its text.
         print(
             json.dumps({"status": "failed", "proof": "real_structured_tool_calls",
                         "error_type": type(exc).__name__,
-                        "code": str(exc)[:250]}, sort_keys=True),
+                        "code": "DEEPAGENTS_LOCAL_MODEL_TOOL_PROOF_FAILED"}, sort_keys=True),
             file=sys.stderr,
         )
         return 1
