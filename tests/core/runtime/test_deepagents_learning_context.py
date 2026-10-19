@@ -174,3 +174,73 @@ async def test_cold_start_does_not_fabricate_recalled_user_facts():
     )
     assert messages is None
     assert status == {"status": "unavailable", "included_memory_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_canonical_outcome_records_actual_medusa_model_calls_not_parent_meter():
+    import time
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    received = []
+    class Recorder:
+        async def record_execution_outcome_async(self, **kwargs):
+            received.append(kwargs)
+
+    runtime = object.__new__(ChatRuntime)
+    runtime._outcome_recorder = Recorder()
+    decision_instance = ExecutionDecision(
+        topology=ExecutionTopology.MULTI_AGENT,
+        intent="research", max_model_calls=10,
+    )
+    # ChatRuntime's parent meter may not perform the model calls itself:
+    # the governed Medusa worker reports its real consumption separately.
+    parent_meter = SimpleNamespace(
+        model_calls=0, tool_calls=0, reasoning_steps=0,
+    )
+    await runtime._record_execution_outcome(
+        "traj-1", decision_instance, None, "",
+        time.time(), parent_meter, {}, success=False,
+        provider_meta={
+            "actual_provider": "ollama-local",
+            "actual_model": "registered-research-model",
+            "runtime_engine": "ollama",
+            "model_calls_observed": 3,
+            "model_selection_source": "learning_operational_reliability_v1",
+            "learning_signal_status": "ready",
+            "learning_signal_version": "model_operational_outcome_v1",
+            "fallback_level": 0,
+        },
+    )
+    saved = received[0]
+    assert saved["metadata"]["model_calls"] == 3
+    assert saved["metadata"]["model_attribution"] == "single_provider_model"
+    assert saved["metadata"]["task_type"] == "research"
+    assert saved["metadata"]["actual_model"] == "registered-research-model"
+    assert saved["metadata"]["learning_signal_version"] == "model_operational_outcome_v1"
+    assert saved["status"].value == "failure"
+    assert saved["response_completed"] is False
+
+
+@pytest.mark.asyncio
+async def test_no_unsupported_or_unverified_model_provenance_can_be_learned():
+    import time
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    received = []
+    class Recorder:
+        async def record_execution_outcome_async(self, **kwargs):
+            received.append(kwargs)
+
+    runtime = object.__new__(ChatRuntime)
+    runtime._outcome_recorder = Recorder()
+    await runtime._record_execution_outcome(
+        "traj-1", ExecutionDecision(
+            topology=ExecutionTopology.MULTI_AGENT,
+            intent="research",
+        ), None, "Unverified answer", time.time(),
+        SimpleNamespace(model_calls=0, tool_calls=0, reasoning_steps=0),
+        {}, success=True,
+        provider_meta={"model_calls_observed": 0, "fallback_level": 1},
+    )
+    assert received[0]["metadata"]["model_attribution"] == "unverified"
+    assert received[0]["metadata"]["model_calls"] == 0
