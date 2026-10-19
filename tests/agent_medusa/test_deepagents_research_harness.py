@@ -366,3 +366,45 @@ async def test_deepagents_callbacks_do_not_claim_a_subagent_that_never_started(s
     cb = sdk["config"]["callbacks"][0]
     await cb.on_tool_error(RuntimeError("internal"), run_id="never-started")
     assert ctx.event_emitter.events == []
+
+
+@pytest.mark.asyncio
+async def test_handled_langchain_tool_error_is_not_a_successful_subagent(sdk):
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+
+    class CapturingEmitter:
+        def __init__(self):
+            self.events = []
+
+        async def emit(self, event):
+            self.events.append(event)
+
+    ctx = execution()
+    ctx.event_emitter = CapturingEmitter()
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
+    )
+    await specialist.run({"query": "Research"}, execution=ctx)
+    callback = sdk["config"]["callbacks"][0]
+    await callback.on_tool_start(
+        {"name": "task"}, '{"description":"secret"}', run_id="task-error-1",
+    )
+    await callback.on_tool_end(
+        SimpleNamespace(status="error", content="sensitive tool exception"),
+        run_id="task-error-1",
+    )
+    assert [event.type for event in ctx.event_emitter.events] == [
+        AgentEventType.REASONING_STEP, AgentEventType.REASONING_STEP,
+    ]
+    assert [event.metadata["status"] for event in ctx.event_emitter.events] == [
+        "running", "failed",
+    ]
+    assert "sensitive tool exception" not in str(ctx.event_emitter.events)
