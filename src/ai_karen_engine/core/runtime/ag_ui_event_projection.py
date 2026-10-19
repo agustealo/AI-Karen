@@ -40,6 +40,7 @@ class AGUIEventProjection:
         self._terminal = False
         self._tool_calls: set[str] = set()
         self._subagent_runs: set[str] = set()
+        self._learning_reported = False
 
     @property
     def terminal(self) -> bool:
@@ -92,6 +93,52 @@ class AGUIEventProjection:
                 "messageId": self.message_id,
                 "delta": content,
             })
+            # The UI may disclose *why* Karen picked a model, not raw
+            # remembered facts or invented quality/performance scores.
+            # Only Runtime-origin evidence is serialized here.
+            if (
+                not self._learning_reported
+                and meta.get("execution_engine") == "deepagents"
+                and meta.get("learning_signal_status") in {
+                    "ready", "cold_start", "unavailable", "disabled",
+                    "not_consulted",
+                }
+            ):
+                selection = _text(meta.get("model_selection_source"), 64)
+                source_status = _text(meta.get("learning_signal_status"), 32)
+                context_status = _text(meta.get("learned_context_status"), 32)
+                if selection in {
+                    "learning_operational_reliability_v1",
+                    "canonical_registry",
+                    "explicit_runtime_or_user",
+                    "baseline_no_learning",
+                    "baseline_learning_disabled",
+                    "baseline_scope_mismatch",
+                    "baseline_insufficient_evidence",
+                    "baseline_reliable",
+                    "baseline_no_verified_alternative",
+                }:
+                    self._learning_reported = True
+                    count = meta.get("learned_memory_refs_included")
+                    events.append(self._custom("karen.learning_decision", {
+                        "selection_source": selection,
+                        "learning_signal_status": source_status,
+                        "learning_signal_version": _text(
+                            meta.get("learning_signal_version"), 64
+                        ),
+                        "learned_context_status": (
+                            context_status if context_status in {
+                                "resolved", "not_requested", "not_supplied",
+                                "unavailable",
+                            } else "unavailable"
+                        ),
+                        "included_memory_refs": (
+                            min(100, count)
+                            if isinstance(count, int) and not isinstance(count, bool)
+                            and count >= 0 else 0
+                        ),
+                        "claim": "operational_evidence_only",
+                    }))
             return events
 
         if kind == "agent_step":
