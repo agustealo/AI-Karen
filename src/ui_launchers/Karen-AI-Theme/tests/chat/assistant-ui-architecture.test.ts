@@ -63,6 +63,11 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("historySearchRef.current?.focus()");
     expect(component).toContain('event.key === "Escape"');
     expect(component).toContain("historyTriggerRef.current?.focus()");
+    expect(component).toContain("await loadSession(id)");
+    expect(component).toContain("await createNewSession()");
+    expect(component).toContain("Unable to open that conversation.");
+    expect(component).toContain("Unable to create a conversation.");
+    expect(component).toContain('{navigationError && <p role="alert"');
     expect(component).toContain('<details data-testid="karen-agent-activity"');
     expect(component).toContain("defaultOpen={failed}");
     expect(component).toContain('<details data-testid="karen-learning-provenance"');
