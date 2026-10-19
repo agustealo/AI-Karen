@@ -179,7 +179,7 @@ def test_auto_model_uses_scoped_intelligence_signals_and_canonical_manager(monke
         MODEL_SIGNAL_VERSION, ModelOperationalProfile, ScopedModelSignals,
     )
 
-    manager = _mock_canonical_model_manager(monkeypatch)
+    _mock_canonical_model_manager(monkeypatch)
     signals = ScopedModelSignals(
         tenant_id="t-1", user_id="u-1", task_type="research",
         version=MODEL_SIGNAL_VERSION, status="ready",
