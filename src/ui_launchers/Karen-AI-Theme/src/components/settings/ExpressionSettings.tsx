@@ -230,7 +230,7 @@ export default function ExpressionSettings() {
     return (
       <div role="alert" className="rounded-xl border border-destructive/40 p-4 text-sm">
         <p className="font-semibold">Unknown expression engine</p>
-        <p className="mt-2">The selected engine is missing from Karen's registered engine inventory.</p>
+        <p className="mt-2">The selected engine is missing from Karen&apos;s registered engine inventory.</p>
         <Button type="button" variant="outline" className="mt-4" onClick={() => void loadData()}>Refresh registered engines</Button>
       </div>
     );
