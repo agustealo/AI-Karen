@@ -120,6 +120,10 @@ class DeepAgentsResearchSpecialist:
         from deepagents import create_deep_agent
         from deepagents.backends import StateBackend
         from langchain_core.callbacks import AsyncCallbackHandler
+        from langchain.agents.middleware import TodoListMiddleware
+        from ai_karen_engine.agent_medusa.contracts.events import (
+            AgentEvent, AgentEventType,
+        )
         from langchain_core.tools import StructuredTool
         from pydantic import BaseModel, Field
 
@@ -188,12 +192,84 @@ class DeepAgentsResearchSpecialist:
             return tool_payload
 
         class ModelBudgetCallback(AsyncCallbackHandler):
+            """One callback for the model budget and real Deep Agents activity.
+
+            Do not forward tool arguments, prompts, model outputs or file
+            contents. Only SDK-confirmed planning/delegation lifecycle is
+            observable. ToolBridge emits external action events separately.
+            """
             raise_error = True
 
-            async def on_chat_model_start(self, serialized: dict, messages: list, **kwargs: Any) -> None:
+            def __init__(self) -> None:
+                super().__init__()
+                self._internal_tools: dict[str, str] = {}
+
+            async def on_chat_model_start(
+                self, serialized: dict, messages: list, **kwargs: Any
+            ) -> None:
                 del serialized, messages, kwargs
                 if not await meter.check_duration() or not await meter.consume_model_call():
                     raise RuntimeError("Deep Agents model execution exceeded RuntimePolicy budget")
+
+            async def _emit_activity(
+                self, tool_name: str, run_id: str, status: str
+            ) -> None:
+                if execution.event_emitter is None:
+                    return
+                kind = "plan" if tool_name == "write_todos" else "subagent"
+                await execution.event_emitter.emit(AgentEvent(
+                    type=(
+                        AgentEventType.PLAN_UPDATED if kind == "plan"
+                        else AgentEventType.REASONING_STEP
+                    ),
+                    agent_id=self_agent_id,
+                    message=f"Deep Agents {kind} {status}",
+                    correlation_id=execution.correlation_id,
+                    metadata={
+                        "step_id": f"deepagents-{run_id}",
+                        "source": "deepagents",
+                        "activity_kind": kind,
+                        "subagent_run_id": run_id if kind == "subagent" else "",
+                        "status": status,
+                    },
+                ))
+
+            async def on_tool_start(
+                self, serialized: dict, input_str: str, *,
+                run_id: Any, **kwargs: Any
+            ) -> None:
+                del input_str, kwargs
+                name = serialized.get("name") if isinstance(serialized, dict) else None
+                # write_todos tracks the real opt-in planner; task is a real
+                # Deep Agents delegation. Internal file reads and external
+                # Karen ToolBridge tools remain private/separately observed.
+                if name not in {"write_todos", "task"}:
+                    return
+                key = str(run_id)
+                if not key or len(key) > 128:
+                    return
+                self._internal_tools[key] = name
+                await self._emit_activity(name, key, "running")
+
+            async def on_tool_end(
+                self, output: Any, *, run_id: Any, **kwargs: Any
+            ) -> None:
+                del output, kwargs
+                key = str(run_id)
+                name = self._internal_tools.pop(key, None)
+                if name is not None:
+                    await self._emit_activity(name, key, "completed")
+
+            async def on_tool_error(
+                self, error: BaseException, *, run_id: Any, **kwargs: Any
+            ) -> None:
+                del error, kwargs
+                key = str(run_id)
+                name = self._internal_tools.pop(key, None)
+                if name is not None:
+                    await self._emit_activity(name, key, "failed")
+
+        self_agent_id = self.registration.agent_id
 
         tools: list[Any] = []
         if permitted_tools:
@@ -225,6 +301,9 @@ class DeepAgentsResearchSpecialist:
             system_prompt=prompt,
             subagents=subagents,
             backend=StateBackend(),  # No host filesystem/shell/memory writes.
+            # Deep Agents >=0.7 intentionally removed the default todo tool.
+            # Research specialists explicitly opt in to actual SDK planning.
+            middleware=[TodoListMiddleware()],
             skills=[],
             memory=[],
             checkpointer=None,  # No unverified cross-process resume claims.
