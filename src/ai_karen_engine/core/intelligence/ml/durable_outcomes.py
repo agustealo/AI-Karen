@@ -99,16 +99,12 @@ class GovernedMLLearningEvidence:
             "fallback_used": bool(result.fallback_used),
         }
 
-    async def record_verified(
+    def _build_verified_payload(
         self, result: MLOutcomeRecord, *,
         label_source: str, label_evidence_ref: str,
         trajectory_id: str | None = None,
     ) -> dict[str, Any]:
-        """Append and await a unique durable receipt before reporting success.
-
-        Never store raw labels, training examples, prompts, model output or
-        arbitrary metadata from MLOutcomeRecord.
-        """
+        """One canonical schema for single and atomic batch persistence."""
         if label_source not in _ALLOWED_LABEL_SOURCES:
             raise ValueError("Only governed human review or held-out evaluation is eligible")
         if (
@@ -119,16 +115,17 @@ class GovernedMLLearningEvidence:
                 ch.isalnum() or ch in "-._:/" for ch in label_evidence_ref
             )
         ):
-            raise ValueError("Verified ML outcome requires an evaluation evidence reference")
+            raise ValueError(
+                "Verified ML outcome requires an evaluation evidence reference"
+            )
         data = self._validated_metrics(result)
-        recorded_at = datetime.now(timezone.utc)
-        payload = {
+        return {
             "outcome_id": result.outcome_id,
             "tenant_id": self.tenant_id,
             "user_id": self.user_id,
             "trajectory_id": trajectory_id,
             "source": _ML_SOURCE,
-            "recorded_at": recorded_at.isoformat(),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {
                 "schema_version": _ML_SCHEMA,
                 "label_source": label_source,
@@ -136,13 +133,54 @@ class GovernedMLLearningEvidence:
                 **data,
             },
         }
+
+    async def record_verified(
+        self, result: MLOutcomeRecord, *,
+        label_source: str, label_evidence_ref: str,
+        trajectory_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append exactly one verified record with an awaited durable receipt."""
+        payload = self._build_verified_payload(
+            result, label_source=label_source,
+            label_evidence_ref=label_evidence_ref,
+            trajectory_id=trajectory_id,
+        )
         await self.store.save_unique_outcome_async(payload)
-        # An explicit successful strict insert is the only acknowledgement.
         return {
             "outcome_id": result.outcome_id,
             "source": _ML_SOURCE,
             "stored": True,
             "evidence_version": _ML_SCHEMA,
+        }
+
+    async def record_verified_batch(
+        self, observations: list[tuple[MLOutcomeRecord, str, str]],
+        *, trajectory_id: str | None = None,
+    ) -> dict[str, Any]:
+        """All verified cases commit as ONE canonical tenant transaction.
+
+        Never claim a complete evaluated corpus from individually committed
+        writes. Reject stores that cannot prove an atomic strict batch.
+        """
+        if len(observations) > 5000:
+            raise ValueError("Verified evaluation batch exceeds 5000 cases")
+        if not observations:
+            return {
+                "source": _ML_SOURCE, "stored": True,
+                "stored_count": 0, "evidence_version": _ML_SCHEMA,
+            }
+        payloads = [
+            self._build_verified_payload(
+                record, label_source=source,
+                label_evidence_ref=reference,
+                trajectory_id=trajectory_id,
+            )
+            for record, source, reference in observations
+        ]
+        await self.store.save_unique_outcomes_async(payloads)
+        return {
+            "source": _ML_SOURCE, "stored": True,
+            "stored_count": len(payloads), "evidence_version": _ML_SCHEMA,
         }
 
     async def load_verified(
