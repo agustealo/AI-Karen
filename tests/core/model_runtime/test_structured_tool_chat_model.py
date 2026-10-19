@@ -119,3 +119,138 @@ def test_model_resolver_rejects_unregistered_user_model(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="inventory"):
         build_medusa_deepagents_model(SimpleNamespace(agent_id="researcher"), execution)
+
+
+def _model_selection_execution(*, explicit_model=None, signals=None):
+    from ai_karen_engine.core.runtime.contracts import (
+        AuthorizedExecutionPlan, ExecutionTopology,
+    )
+
+    plan = AuthorizedExecutionPlan(
+        execution_id="req-1",
+        policy_decision_id="policy-1",
+        authorized_user_id="u-1",
+        authorized_tenant_id="t-1",
+        authorized_session_id="s-1",
+        topology=ExecutionTopology.MULTI_AGENT,
+    )
+    return SimpleNamespace(
+        authorized_plan=plan,
+        user_id="u-1", tenant_id="t-1", session_id="s-1",
+        policy_decision_id="policy-1",
+        preferred_provider="ollama-local",
+        preferred_model=explicit_model,
+        learning_task_type="research",
+        learned_model_signals=signals,
+    )
+
+
+def _mock_canonical_model_manager(monkeypatch):
+    from ai_karen_engine.core.model_runtime import model_manager
+    registry = SimpleNamespace(
+        get_provider_endpoint=lambda _: endpoint().model_copy(
+            update={"default_model": "model-a"}
+        ),
+        get_registered_models=lambda *_args, **_kwargs: ["model-a", "model-b"],
+        is_model_available=lambda _provider, name, healthy_only: (
+            name in {"model-a", "model-b"} and healthy_only is True
+        ),
+    )
+    manager = SimpleNamespace(
+        select_provider=lambda *args, **kwargs: SimpleNamespace(
+            provider_id="ollama-local", model="model-a",
+        ),
+        registry=registry,
+        _provider_is_healthy=lambda *_args: True,
+    )
+    manager.choose_tool_model_from_learning = lambda **kwargs: (
+        model_manager.ModelManager.choose_tool_model_from_learning(
+            manager, **kwargs
+        )
+    )
+    monkeypatch.setattr(model_manager, "get_model_manager", lambda: manager)
+    return manager
+
+
+def test_auto_model_uses_scoped_intelligence_signals_and_canonical_manager(monkeypatch):
+    from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+        MODEL_SIGNAL_VERSION, ModelOperationalProfile, ScopedModelSignals,
+    )
+
+    manager = _mock_canonical_model_manager(monkeypatch)
+    signals = ScopedModelSignals(
+        tenant_id="t-1", user_id="u-1", task_type="research",
+        version=MODEL_SIGNAL_VERSION, status="ready",
+        profiles=(
+            ModelOperationalProfile("ollama-local", "model-a", 20, 2, 800),
+            ModelOperationalProfile("ollama-local", "model-b", 20, 19, 300),
+        ),
+    )
+    result = build_medusa_deepagents_model(
+        SimpleNamespace(agent_id="researcher"),
+        _model_selection_execution(signals=signals),
+    )
+    assert result.selected_model == "model-b"
+    assert result.selection_source == "learning_operational_reliability_v1"
+    assert result.learning_signal_version == MODEL_SIGNAL_VERSION
+    assert result.endpoint.provider_id == "ollama-local"
+
+
+def test_user_override_wins_even_if_learning_prefers_other_model(monkeypatch):
+    from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+        MODEL_SIGNAL_VERSION, ModelOperationalProfile, ScopedModelSignals,
+    )
+
+    manager = _mock_canonical_model_manager(monkeypatch)
+    manager.choose_tool_model_from_learning = lambda **kwargs: (
+        (_ for _ in ()).throw(AssertionError("explicit model must skip learning"))
+    )
+    signals = ScopedModelSignals(
+        "t-1", "u-1", "research", MODEL_SIGNAL_VERSION, "ready",
+        (
+            ModelOperationalProfile("ollama-local", "model-a", 20, 2, 800),
+            ModelOperationalProfile("ollama-local", "model-b", 20, 19, 300),
+        ),
+    )
+    result = build_medusa_deepagents_model(
+        SimpleNamespace(agent_id="researcher"),
+        _model_selection_execution(explicit_model="model-a", signals=signals),
+    )
+    assert result.selected_model == "model-a"
+    assert result.selection_source == "explicit_runtime_or_user"
+
+
+def test_no_evidence_retains_registered_default_and_cannot_invent_model(monkeypatch):
+    manager = _mock_canonical_model_manager(monkeypatch)
+    result = build_medusa_deepagents_model(
+        SimpleNamespace(agent_id="researcher"),
+        _model_selection_execution(signals=None),
+    )
+    assert result.selected_model == "model-a"
+    assert result.selection_source == "baseline_no_learning"
+    manager.registry.get_registered_models = lambda *args, **kwargs: ["model-b"]
+    with pytest.raises(RuntimeError, match="Default tool model"):
+        build_medusa_deepagents_model(
+            SimpleNamespace(agent_id="researcher"),
+            _model_selection_execution(signals=None),
+        )
+
+
+def test_learned_signal_wrong_tenant_cannot_select_foreign_model(monkeypatch):
+    from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+        MODEL_SIGNAL_VERSION, ModelOperationalProfile, ScopedModelSignals,
+    )
+    _mock_canonical_model_manager(monkeypatch)
+    signals = ScopedModelSignals(
+        "other-tenant", "u-1", "research", MODEL_SIGNAL_VERSION, "ready",
+        (
+            ModelOperationalProfile("ollama-local", "model-a", 20, 2, 800),
+            ModelOperationalProfile("ollama-local", "model-b", 20, 19, 300),
+        ),
+    )
+    result = build_medusa_deepagents_model(
+        SimpleNamespace(agent_id="researcher"),
+        _model_selection_execution(signals=signals),
+    )
+    assert result.selected_model == "model-a"
+    assert result.selection_source == "baseline_scope_mismatch"
