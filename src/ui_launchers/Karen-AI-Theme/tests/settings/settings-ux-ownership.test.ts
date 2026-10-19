@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 const settings = readFileSync(resolve(process.cwd(), 'src/components/settings/SettingsDialog.tsx'), 'utf8');
 const models = readFileSync(resolve(process.cwd(), 'src/components/settings/ModelSettings.tsx'), 'utf8');
 const expression = readFileSync(resolve(process.cwd(), 'src/components/settings/ExpressionSettings.tsx'), 'utf8');
+const downloads = readFileSync(resolve(process.cwd(), 'src/components/settings/ModelDownloads.tsx'), 'utf8');
 
 describe('settings UX ownership contract', () => {
   it('keeps settings navigation in the shell and persistence in existing panels', () => {
@@ -51,6 +52,16 @@ describe('settings UX ownership contract', () => {
     expect(expression).not.toContain('fallback_eligible: true,\\n    metadata: {}');
     expect(expression).toContain('Saved primary');
     expect(expression).toContain('"Enabled" : "Disabled"');
+  });
+
+  it('never presents stale download reads as healthy empty inventory', () => {
+    expect(downloads).toContain('setInstalled(null)');
+    expect(downloads).toContain('setDiscovery(null)');
+    expect(downloads).toContain('setRuntimeTelemetry(null)');
+    expect(downloads).toContain("delete next.jobs");
+    expect(downloads).toContain("endpointErrors.jobs ? 'Unavailable' : 'Idle'");
+    expect(downloads).toContain("installed ? \`\u0024{installedModels.length} installed\` : 'Unavailable'");
+    expect(downloads).toContain('Discovery status unavailable');
   });
 
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
