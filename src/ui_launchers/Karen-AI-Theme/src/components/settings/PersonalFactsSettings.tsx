@@ -214,7 +214,7 @@ const normalizeFact = (value: unknown): Fact | null => {
       ? Math.max(0, Number(value.usage_count))
       : 0,
     created_at:
-      cleanString(value.created_at || value.createdAt) || new Date().toISOString(),
+      cleanString(value.created_at || value.createdAt),
     last_used: cleanString(value.last_used || value.lastUsed) || null,
   };
 };
