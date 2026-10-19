@@ -71,6 +71,9 @@ class ResponseAssembler:
                 metadata={
                     **(metadata or {}),
                     "response_source": "deepagents_verified_output",
+                    "actual_provider": output.get("actual_provider"),
+                    "actual_model": output.get("actual_model"),
+                    "runtime_engine": output.get("runtime_engine"),
                     "synthesis": {"source": "agent_harness", "additional_model_calls": 0},
                 },
             )
