@@ -33,6 +33,14 @@ describe('settings UX ownership contract', () => {
     expect(models).not.toContain("Active Model</span>");
   });
 
+  it('distinguishes detected runtimes from verified model inventory and handles clipboard denial', () => {
+    expect(models).toContain('Detected');
+    expect(models).toContain('No models were reported by this provider.');
+    expect(models).toContain('saved model availability has not been verified');
+    expect(models).toContain('Unable to copy setup command');
+    expect(models).toContain('aria-label="Refresh model discovery"');
+  });
+
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
     expect(models).toContain("apiClient.get<ModelSettingsResponse>('/api/settings/model')");
     expect(models).toContain("normalizeModelSettingsResponse");
