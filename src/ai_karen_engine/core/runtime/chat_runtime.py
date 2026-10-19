@@ -1076,7 +1076,13 @@ class ChatRuntime:
         }
 
         latency_ms = (time.time() - stream_start) * 1000.0
-        success = bool(streamed_text) and generation_error is None
+        # A provider may emit text and subsequently emit a stream error.
+        # A partial answer is not a successful outcome for adaptive learning.
+        success = (
+            bool(streamed_text)
+            and generation_error is None
+            and not stream_error_emitted
+        )
         await self._record_trajectory_completion(
             trajectory,
             decision,
