@@ -40,7 +40,7 @@ type Activity = {
   };
 };
 
-function KarenActivity({ data }: { data: unknown }) {
+function KarenActivity({ data, category = "Agent step" }: { data: unknown; category?: "Agent step" | "Plan" | "Subagent" }) {
   if (typeof data !== "object" || !data) return null;
   const raw = data as Activity;
   const value = raw.content && typeof raw.content === "object"
@@ -57,9 +57,9 @@ function KarenActivity({ data }: { data: unknown }) {
     <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" open={failed || undefined}>
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
         <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate font-medium">{agent}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{category}: {agent}</span>
         <StatusIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <span className="text-xs text-muted-foreground">{status}</span>
+        <span className="text-xs text-muted-foreground" aria-label={`Reported status: ${status}`}>{status}</span>
         <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       </summary>
       <div className="border-t border-border/50 px-3 py-3 text-muted-foreground">
@@ -132,15 +132,27 @@ function KarenApprovalNotice({ data }: { data: unknown }) {
   );
 }
 
+function KarenAgentStep({ data }: { data: unknown }) {
+  return <KarenActivity data={data} category="Agent step" />;
+}
+
+function KarenAgentPlan({ data }: { data: unknown }) {
+  return <KarenActivity data={data} category="Plan" />;
+}
+
+function KarenSubagent({ data }: { data: unknown }) {
+  return <KarenActivity data={data} category="Subagent" />;
+}
+
 const agentParts = {
   data: {
     by_name: {
       "karen.learning_decision": KarenLearningDecision,
       "karen.checkpoint": KarenCheckpoint,
       "karen.approval_required": KarenApprovalNotice,
-      "agui-activity/KAREN_AGENT_STEP": KarenActivity,
-      "agui-activity/KAREN_DEEPAGENTS_PLAN": KarenActivity,
-      "agui-activity/KAREN_DEEPAGENTS_SUBAGENT": KarenActivity,
+      "agui-activity/KAREN_AGENT_STEP": KarenAgentStep,
+      "agui-activity/KAREN_DEEPAGENTS_PLAN": KarenAgentPlan,
+      "agui-activity/KAREN_DEEPAGENTS_SUBAGENT": KarenSubagent,
     },
   },
   tools: {
