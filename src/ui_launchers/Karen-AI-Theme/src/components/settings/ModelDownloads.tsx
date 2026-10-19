@@ -830,7 +830,10 @@ export default function ModelDownloads({
     (validation.requested_revision || '') === revision.trim() &&
     !startingDownload &&
     !channelBlocked &&
-    !downloadsBlocked;
+    !downloadsBlocked &&
+    !endpointErrors.jobs &&
+    !endpointErrors.policy &&
+    !endpointErrors.channels;
 
   const updatePolicyField = useCallback(
     <K extends keyof DownloadPolicy>(key: K, value: DownloadPolicy[K]) => {
@@ -1455,7 +1458,7 @@ export default function ModelDownloads({
                 workerSummary
                   ? `${workerSummary.max_concurrent_downloads - workerSummary.available_slots}/${workerSummary.max_concurrent_downloads} active`
                   : activeJobs.length
-                    ? `${activeJobs.length} active`
+                    ? `${endpointErrors.jobs ? "Jobs unavailable" : `${activeJobs.length} active`}`
                     : endpointErrors.jobs ? 'Unavailable' : 'Idle'
               }
               detail={
@@ -2417,7 +2420,9 @@ export default function ModelDownloads({
           </div>
         </CardHeader>
         <CardContent>
-          {jobs.length === 0 ? (
+          {endpointErrors.jobs ? (
+            <p role="alert" className="rounded-xl border border-amber-500/40 p-4 text-sm">Download job status is unavailable. Existing jobs may still be running. Refresh runtime state to verify before starting or retrying downloads.</p>
+          ) : jobs.length === 0 ? (
             <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 bg-muted/5 text-sm text-muted-foreground">
               <Download className="h-8 w-8 opacity-20" aria-hidden="true" />
               No active or recent download jobs.
@@ -2451,7 +2456,7 @@ export default function ModelDownloads({
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        disabled={!canPauseJob(job.status) || busyJobs[job.job_id]}
+                        disabled={Boolean(endpointErrors.jobs) || !canPauseJob(job.status) || busyJobs[job.job_id]}
                         onClick={() => void actOnJob(job.job_id, 'pause')}
                       >
                         <Pause className="h-4 w-4" aria-hidden="true" />
@@ -2462,7 +2467,7 @@ export default function ModelDownloads({
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        disabled={!canResumeJob(job.status) || busyJobs[job.job_id]}
+                        disabled={Boolean(endpointErrors.jobs) || !canResumeJob(job.status) || busyJobs[job.job_id]}
                         onClick={() => void actOnJob(job.job_id, 'resume')}
                       >
                         <Play className="h-4 w-4" aria-hidden="true" />
@@ -2473,7 +2478,7 @@ export default function ModelDownloads({
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        disabled={!canCancelJob(job.status) || busyJobs[job.job_id]}
+                        disabled={Boolean(endpointErrors.jobs) || !canCancelJob(job.status) || busyJobs[job.job_id]}
                         onClick={() => void actOnJob(job.job_id, 'cancel')}
                       >
                         <Square className="h-4 w-4" aria-hidden="true" />
@@ -2485,7 +2490,7 @@ export default function ModelDownloads({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
-                          disabled={retryingJobs[job.job_id]}
+                          disabled={Boolean(endpointErrors.jobs) || retryingJobs[job.job_id]}
                           onClick={() => void retryJob(job)}
                         >
                           {retryingJobs[job.job_id] ? (
