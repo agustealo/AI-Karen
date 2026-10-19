@@ -136,6 +136,14 @@ export function useModelSettings() {
       }
 
       const selectedModel = findModel(provider, requestedModelId);
+      if (!selectedModel) {
+        toast({
+          title: 'Model unavailable',
+          description: 'This model is not in the current authorized provider inventory. Refresh available models and choose again.',
+          variant: 'destructive',
+        });
+        return;
+      }
 
       setIsUpdatingModelSelection(true);
 
