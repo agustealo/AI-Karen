@@ -68,9 +68,14 @@ def test_agent_activity_does_not_fabricate_langgraph_progress():
         event_type="agent_step_completed", status="completed",
         agent_id="researcher", secret="internal"
     ))
-    assert events[0]["type"] == "CUSTOM"
-    assert events[0]["name"] == "karen.agent_step"
-    assert events[0]["value"]["status"] == "completed"
+    assert [event["type"] for event in events] == [
+        "ACTIVITY_SNAPSHOT", "CUSTOM",
+    ]
+    assert events[0]["messageId"] == "activity-run-s1"
+    assert events[0]["activityType"] == "KAREN_AGENT_STEP"
+    assert events[0]["content"]["status"] == "completed"
+    assert events[1]["name"] == "karen.agent_step"
+    assert events[1]["value"]["status"] == "completed"
     assert "secret" not in str(events)
     assert p.project(chunk("status", "Waiting"))[0]["name"] == "karen.status"
 
@@ -78,17 +83,21 @@ def test_agent_activity_does_not_fabricate_langgraph_progress():
 def test_tool_projection_never_exposes_args_or_invents_unseen_start():
     p = AGUIEventProjection(thread_id="thread", run_id="run")
     p.begin()
-    out_of_order = p.project(chunk(
+    assert p.project(chunk(
         "tool", step_id="tool-1", tool_name="search", phase="completed",
+        arguments={"token": "secret"}
+    )) == []  # A step ID is not a tool-call ID.
+    out_of_order = p.project(chunk(
+        "tool", tool_call_id="tool-1", tool_name="search", phase="completed",
         arguments={"token": "secret"}
     ))
     assert [event["type"] for event in out_of_order] == ["CUSTOM"]
     started = p.project(chunk(
-        "tool", step_id="tool-2", tool_name="search", phase="started",
+        "tool", tool_call_id="tool-2", tool_name="search", phase="started",
         arguments={"token": "secret"}
     ))
     finished = p.project(chunk(
-        "tool", step_id="tool-2", tool_name="search", phase="completed",
+        "tool", tool_call_id="tool-2", tool_name="search", phase="completed",
         result={"token": "secret"}
     ))
     assert [event["type"] for event in started] == ["CUSTOM", "TOOL_CALL_START"]
@@ -122,3 +131,67 @@ def test_projection_rejects_invalid_state_transitions():
         p.begin()
     with pytest.raises(ValueError):
         AGUIEventProjection(thread_id="", run_id="run")
+
+
+def test_deepagents_step_updates_reuse_one_activity_message():
+    p = AGUIEventProjection(thread_id="tenant-scoped-thread", run_id="agent-run")
+    p.begin()
+    started = p.project(chunk(
+        "agent_step", "Agent step running.",
+        event_type="agent_step_started", step_id="step-7", agent_id="researcher",
+        status="running", execution_engine="deepagents",
+    ))
+    completed = p.project(chunk(
+        "agent_step", "Agent step completed.",
+        event_type="agent_step_completed", step_id="step-7", agent_id="researcher",
+        status="completed", execution_engine="deepagents",
+    ))
+    assert started[0]["type"] == "ACTIVITY_SNAPSHOT"
+    assert started[0]["messageId"] == completed[0]["messageId"]
+    assert started[0]["content"]["status"] == "running"
+    assert completed[0]["content"]["status"] == "completed"
+    assert not any(e["type"] == "TEXT_MESSAGE_CONTENT" for e in started + completed)
+
+
+def test_deepagents_tool_failure_does_not_fabricate_result_or_tool_args():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    started = p.project(chunk(
+        "tool", tool_name="web_search", tool_call_id="real-call-1",
+        step_id="step-7", phase="started", arguments={"secret": "hidden"},
+    ))
+    failed = p.project(chunk(
+        "tool", tool_name="web_search", tool_call_id="real-call-1",
+        step_id="step-7", phase="failed", result={"secret": "hidden"},
+    ))
+    assert [e["type"] for e in started] == ["CUSTOM", "TOOL_CALL_START"]
+    assert [e["type"] for e in failed] == ["CUSTOM", "TOOL_CALL_END"]
+    assert started[1]["toolCallId"] == failed[1]["toolCallId"]
+    assert failed[0]["value"]["phase"] == "failed"
+    assert "TOOL_CALL_RESULT" not in str(started + failed)
+    assert "secret" not in str(started + failed)
+    assert p.project(chunk(
+        "tool", tool_name="web_search", tool_call_id="real-call-1",
+        phase="completed",
+    )) == [p._custom("karen.tool_activity", {
+        "tool_call_id": "real-call-1", "name": "web_search", "phase": "completed",
+    })]
+
+
+def test_deepagents_events_do_not_cross_run_or_reuse_message_identity():
+    def project(run_id):
+        p = AGUIEventProjection(thread_id="thread", run_id=run_id)
+        p.begin()
+        return p.project(chunk(
+            "agent_step", status="running",
+            step_id="step-1", agent_id="researcher",
+        ))[0]["messageId"]
+    assert project("run-1") != project("run-2")
+
+
+def test_missing_agent_identity_never_creates_activity():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    assert p.project(chunk("agent_step", status="running", step_id="step-1")) == []
+    assert p.project(chunk("agent_step", status="complete",
+                           step_id="step-1", agent_id="researcher")) == []
