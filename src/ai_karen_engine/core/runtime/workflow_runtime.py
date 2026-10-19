@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import asdict, is_dataclass
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -69,16 +70,60 @@ class WorkflowRuntime:
         config = self._build_config(request, ctx, conversation_id, decision, plan)
 
         if self._use_deepagents(request, decision, plan):
-            yield _SharedChatStreamChunk(
-                type="status",
-                content="Authorized agent run started.",
-                correlation_id=ctx.correlation_id,
-                metadata={"execution_engine": "deepagents", "status": "running"},
+            # Subscribe to the existing per-request Medusa event emitter. This
+            # is a transport projection, not another execution scheduler.
+            events: asyncio.Queue[Any] = asyncio.Queue(maxsize=256)
+            dropped_event = False
+
+            def receive_event(event: Any) -> None:
+                nonlocal dropped_event
+                try:
+                    events.put_nowait(event)
+                except asyncio.QueueFull:
+                    dropped_event = True
+
+            run_task = asyncio.create_task(
+                self._run_deepagents(
+                    request, decision, plan, config, event_sink=receive_event
+                )
             )
             try:
-                content, metadata = await self._run_deepagents(
-                    request, decision, plan, config
+                yield _SharedChatStreamChunk(
+                    type="status",
+                    content="Authorized agent run started.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"execution_engine": "deepagents", "status": "running"},
                 )
+                while not (run_task.done() and events.empty()):
+                    next_event = asyncio.create_task(events.get())
+                    try:
+                        ready, _ = await asyncio.wait(
+                            {next_event, run_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if next_event in ready:
+                            chunk = self._project_medusa_event(
+                                next_event.result(),
+                                correlation_id=ctx.correlation_id,
+                            )
+                            if chunk is not None:
+                                yield chunk
+                    finally:
+                        if not next_event.done():
+                            next_event.cancel()
+                            await asyncio.gather(next_event, return_exceptions=True)
+
+                if dropped_event:
+                    raise RuntimeError("Medusa agent progress event stream overflow")
+                content, metadata = await run_task
+                yield _SharedChatStreamChunk(
+                    type="content",
+                    content=content,
+                    correlation_id=ctx.correlation_id,
+                    metadata=metadata,
+                )
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception(
                     "deepagents_primary_execution_failed",
@@ -91,13 +136,10 @@ class WorkflowRuntime:
                     correlation_id=ctx.correlation_id,
                     metadata={"error_code": "AGENT_EXECUTION_FAILED"},
                 )
-                return
-            yield _SharedChatStreamChunk(
-                type="content",
-                content=content,
-                correlation_id=ctx.correlation_id,
-                metadata=metadata,
-            )
+            finally:
+                if not run_task.done():
+                    run_task.cancel()
+                    await asyncio.gather(run_task, return_exceptions=True)
             return
 
         orchestrator = await self._get_orchestrator()
@@ -125,6 +167,75 @@ class WorkflowRuntime:
                     correlation_id=ctx.correlation_id,
                     metadata=meta,
                 )
+
+    @staticmethod
+    def _project_medusa_event(
+        event: Any, *, correlation_id: str
+    ) -> Optional[_SharedChatStreamChunk]:
+        """Allowlist actual Medusa events for the existing Karen UI contract.
+
+        The emitter may carry internal data, including tool inputs, which must
+        not cross this transport boundary. Identity mismatches are dropped.
+        """
+        if getattr(event, "correlation_id", None) != correlation_id:
+            return None
+        event_type = getattr(event, "type", "")
+        kind = str(getattr(event_type, "value", event_type))
+        raw = getattr(event, "metadata", None)
+        metadata = raw if isinstance(raw, dict) else {}
+        step_id = metadata.get("step_id")
+        agent_id = getattr(event, "agent_id", None)
+        if not isinstance(step_id, str) or not 1 <= len(step_id) <= 128:
+            return None
+        if not isinstance(agent_id, str) or not 1 <= len(agent_id) <= 128:
+            return None
+        status_by_type = {
+            "agent_started": ("agent_step_started", "running"),
+            "agent_completed": ("agent_step_completed", "completed"),
+            "agent_failed": ("agent_step_failed", "failed"),
+        }
+        if kind in status_by_type:
+            event_name, status = status_by_type[kind]
+            return _SharedChatStreamChunk(
+                type="agent_step",
+                content=f"Agent step {status}.",
+                correlation_id=correlation_id,
+                metadata={
+                    "event_type": event_name,
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                    "status": status,
+                    "execution_topology": "multi_agent",
+                    "execution_engine": "deepagents",
+                },
+            )
+        tool_phase = {
+            "tool_call_started": "started",
+            "tool_call_completed": "completed",
+            "tool_call_failed": "failed",
+        }.get(kind)
+        if tool_phase is None:
+            return None
+        tool_name = metadata.get("tool")
+        tool_id = metadata.get("tool_call_id")
+        if not isinstance(tool_name, str) or not 1 <= len(tool_name) <= 128:
+            return None
+        if not isinstance(tool_id, str) or not 1 <= len(tool_id) <= 128:
+            return None
+        return _SharedChatStreamChunk(
+            type="tool",
+            content="",
+            correlation_id=correlation_id,
+            metadata={
+                "tool_name": tool_name,
+                "tool_call_id": tool_id,
+                "phase": tool_phase,
+                "step_id": step_id,
+                "agent_id": agent_id,
+                "execution_topology": "multi_agent",
+                "execution_engine": "deepagents",
+            },
+        )
 
     @staticmethod
     def _use_deepagents(
@@ -160,6 +271,8 @@ class WorkflowRuntime:
         decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan,
         config: Dict[str, Any],
+        *,
+        event_sink: Optional[Callable[[Any], None]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Use Medusa's existing run manager directly, not a second graph owner."""
         from ai_karen_engine.agent_medusa.contracts.runtime_request import RuntimeRequest
@@ -213,7 +326,10 @@ class WorkflowRuntime:
             authorized_plan=_serialize_plan(plan),
             execution_requirements=requirements,
         )
-        result = await MedusaCoordinator().handle_request(agent_request)
+        coordinator = MedusaCoordinator()
+        if event_sink is not None:
+            coordinator.attach_sink(event_sink)
+        result = await coordinator.handle_request(agent_request)
         if result.status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
                                  ResponseStatus.DEGRADED}:
             raise RuntimeError("Authorized Medusa agent execution failed")
