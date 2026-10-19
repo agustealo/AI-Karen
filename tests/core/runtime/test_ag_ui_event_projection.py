@@ -285,6 +285,8 @@ def test_deepagents_subagent_failure_is_explicit_but_never_exposes_error():
         "message": "Delegated task failed.",
     }
     assert "credentials leaked" not in str(failed)
+    assert "Secret provider exception" not in str(failed)
+    assert failed[0]["content"]["description"] == "Deep Agents subagent failed."
 
 
 def test_unobserved_subagent_completion_cannot_invent_start_or_finish():
