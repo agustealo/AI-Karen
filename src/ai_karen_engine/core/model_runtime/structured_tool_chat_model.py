@@ -157,12 +157,14 @@ def build_medusa_deepagents_model(registration: Any, execution: Any) -> KarenGov
         policy_decision_id=execution.policy_decision_id,
     ):
         raise PermissionError("Governed tool model principal scope mismatch")
-    requested_provider = (
-        execution.preferred_provider or plan.provider_constraints.get("provider")
-    )
-    explicit_model = (
-        execution.preferred_model or plan.provider_constraints.get("model")
-    )
+    policy_provider = plan.provider_constraints.get("provider")
+    policy_model = plan.provider_constraints.get("model")
+    requested_provider = execution.preferred_provider or policy_provider
+    explicit_model = execution.preferred_model or policy_model
+    if policy_provider and requested_provider != policy_provider:
+        raise PermissionError("RuntimePolicy provider constraint cannot be overridden")
+    if policy_model and explicit_model != policy_model:
+        raise PermissionError("RuntimePolicy model constraint cannot be overridden")
     if explicit_model is not None and (
         not isinstance(explicit_model, str) or not explicit_model.strip()
     ):
@@ -190,6 +192,17 @@ def build_medusa_deepagents_model(registration: Any, execution: Any) -> KarenGov
     )
     if not known_models:
         raise RuntimeError("Deep Agents model inventory is not verified")
+    # A learned ranker may only compare models remaining after RuntimePolicy's
+    # explicit allowlist and the healthy provider registry have intersected.
+    allowed_models = plan.provider_constraints.get("allowed_models")
+    if allowed_models is not None:
+        if not isinstance(allowed_models, (list, tuple, set)):
+            raise PermissionError("RuntimePolicy model allowlist is invalid")
+        if not all(isinstance(model, str) and model for model in allowed_models):
+            raise PermissionError("RuntimePolicy model allowlist contains invalid identities")
+        known_models = [model for model in known_models if model in allowed_models]
+        if not known_models:
+            raise PermissionError("No verified tool model remains authorized")
 
     signal = getattr(execution, "learned_model_signals", None)
     signal_status = getattr(signal, "status", "not_consulted")
