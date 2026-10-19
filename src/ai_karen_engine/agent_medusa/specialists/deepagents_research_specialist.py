@@ -409,6 +409,7 @@ class DeepAgentsResearchSpecialist:
             "harness": "deepagents",
             "checkpoint_verified": checkpoint_verified,
             "resumable": False,  # No authorized restart/resume flow exists yet.
+            "model_calls_observed": meter.model_calls,
             "actual_provider": model.endpoint.provider_id,
             "actual_model": model.selected_model,
             "model_selection_source": getattr(
