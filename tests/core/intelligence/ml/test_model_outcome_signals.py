@@ -156,6 +156,7 @@ async def test_service_reloads_durable_outcomes_on_each_execution(monkeypatch):
             model_routing_signals_enabled=True,
             model_routing_history_limit=500,
             model_routing_history_days=90,
+            model_routing_read_timeout_seconds=1.0,
         ),
     )
     # Real clock is used by the service: use freshly dated records.
@@ -193,6 +194,7 @@ async def test_service_failure_preserves_cold_start_and_exact_scope(monkeypatch)
             model_routing_signals_enabled=True,
             model_routing_history_limit=500,
             model_routing_history_days=90,
+            model_routing_read_timeout_seconds=1.0,
         ),
     )
     signals = await ModelOutcomeSignalService().for_execution(
