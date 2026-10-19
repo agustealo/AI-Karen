@@ -54,7 +54,7 @@ function KarenActivity({ data }: { data: unknown }) {
   const done = normalized.includes("finish") || normalized.includes("complete") || normalized.includes("success");
   const StatusIcon = failed ? CircleAlert : done ? CheckCircle2 : Clock3;
   return (
-    <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" defaultOpen={failed}>
+    <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" open={failed || undefined}>
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
         <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate font-medium">{agent}</span>
@@ -387,8 +387,11 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
           await createNewSession();
         },
         onSwitchToThread: async (id: string) => {
+          // The canonical SessionProvider switches conversations and remounts
+          // KarenAgUiRuntime by durable thread ID. History loads there through
+          // the repository adapter, not a second untyped message conversion.
           await loadSession(id);
-          return { messages: await readOwnedHistory(id) };
+          return { messages: [] };
         },
       },
     },
