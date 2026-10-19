@@ -301,3 +301,37 @@ def test_unobserved_subagent_completion_cannot_invent_start_or_finish():
         subagent_run_id="not-started",
     ))
     assert [e["type"] for e in received] == ["ACTIVITY_SNAPSHOT", "CUSTOM"]
+
+
+def test_checkpoint_status_requires_acknowledged_persistence_and_never_implies_resume():
+    p = AGUIEventProjection(thread_id="tenant-thread", run_id="run-1")
+    p.begin()
+    events = p.project(chunk(
+        "status",
+        "Agent state checkpoint persisted. Automatic resume is not enabled.",
+        source="deepagents", step_id="step-1",
+        checkpoint_verified=True, resumable=False,
+        checkpoint_bytes={"password": "must-not-leak"},
+    ))
+    assert events == [{
+        "type": "CUSTOM", "name": "karen.checkpoint",
+        "value": {
+            "step_id": "step-1",
+            "checkpoint_verified": True,
+            "resumable": False,
+            "message": "Agent checkpoint persisted. Resume is not available.",
+        },
+    }]
+    assert "must-not-leak" not in str(events)
+
+
+def test_checkpoint_without_verifiable_saved_state_is_only_an_ordinary_status():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    events = p.project(chunk(
+        "status", "Checkpoint requested",
+        source="deepagents", step_id="step-1",
+        checkpoint_verified=False, resumable=True,
+    ))
+    assert not any(e.get("name") == "karen.checkpoint" for e in events)
+    assert not any(e.get("value", {}).get("resumable") is True for e in events)
