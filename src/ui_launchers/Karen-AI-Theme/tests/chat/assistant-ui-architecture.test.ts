@@ -77,6 +77,16 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("setSelectedProvider");
   });
 
+  it("labels observed plans, subagents and steps without adding an execution path", () => {
+    expect(component).toContain('"agui-activity/KAREN_AGENT_STEP": KarenAgentStep');
+    expect(component).toContain('"agui-activity/KAREN_DEEPAGENTS_PLAN": KarenAgentPlan');
+    expect(component).toContain('"agui-activity/KAREN_DEEPAGENTS_SUBAGENT": KarenSubagent');
+    expect(component).toContain('category="Plan"');
+    expect(component).toContain('category="Subagent"');
+    expect(component).toContain('Reported status:');
+    expect(component).not.toContain("executeSubagent(");
+  });
+
   it("only exposes backend-observed data parts and does not invent resume or tool execution", () => {
     expect(component).toContain("agui-activity/KAREN_AGENT_STEP");
     expect(component).toContain("agui-activity/KAREN_DEEPAGENTS_PLAN");
