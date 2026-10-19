@@ -24,6 +24,9 @@ class LearningSettings:
     # Learning is consulted by default, but NEVER overrides policy, an
     # explicit user model selection or unverified provider capabilities.
     model_routing_signals_enabled: bool = True
+    # Learning is consulted normally, but operational evidence cannot
+    # promote a routing policy by itself. Requires evaluated promotion.
+    model_routing_adaptive_enabled: bool = False
     model_routing_min_samples: int = 12
     model_routing_history_limit: int = 500
     model_routing_history_days: int = 90
@@ -82,6 +85,18 @@ class LearningSettings:
             }:
                 raise ValueError("LEARNING_MODEL_ROUTING_SIGNALS_ENABLED must be boolean")
             self.model_routing_signals_enabled = raw_model_enabled.strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+        raw_adaptive_enabled = env("LEARNING_MODEL_ROUTING_ADAPTIVE_ENABLED")
+        if raw_adaptive_enabled is not None:
+            normalized = raw_adaptive_enabled.strip().lower()
+            if normalized not in {
+                "1", "0", "true", "false", "yes", "no", "on", "off",
+            }:
+                raise ValueError(
+                    "LEARNING_MODEL_ROUTING_ADAPTIVE_ENABLED must be boolean"
+                )
+            self.model_routing_adaptive_enabled = normalized in {
                 "1", "true", "yes", "on",
             }
         numeric_settings = (
