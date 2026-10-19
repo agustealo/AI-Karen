@@ -39,7 +39,7 @@ def observation(*, outcome_id="observed-1", correct=True, model="candidate"):
 
 
 @pytest.mark.asyncio
-async def test_durable_scoped_predictor_outcomes_survive_adapter_restart():
+async def test_scoped_predictor_outcomes_survive_adapter_recreation_with_same_store():
     store = InMemoryOutcomeStore()
     first = GovernedMLLearningEvidence(
         tenant_id=TENANT, user_id=USER, store=store,
@@ -132,7 +132,7 @@ async def test_scoped_reader_never_uses_other_user_or_tenant_training_data():
 
 
 @pytest.mark.asyncio
-async def test_process_restart_profiles_rebuild_only_from_persisted_evidence():
+async def test_new_adapter_rebuilds_profiles_from_store_without_process_cache():
     store = InMemoryOutcomeStore()
     service = GovernedMLLearningEvidence(
         tenant_id=TENANT, user_id=USER, store=store,
