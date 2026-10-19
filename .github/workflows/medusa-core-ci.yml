@@ -15,6 +15,11 @@ on:
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - 'src/ai_karen_engine/core/intelligence/ml/model_outcome_signals.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/durable_outcomes.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/online_learning.py'
+      - 'src/ai_karen_engine/core/runtime/outcome/store.py'
+      - 'tests/unit/core/intelligence/ml/test_durable_outcomes.py'
+      - 'supabase/migrations/20261019020000_37_intelligence_ml_outcome_evidence.sql'
       - 'src/ai_karen_engine/config/learning.py'
       - 'tests/core/intelligence/ml/test_model_outcome_signals.py'
       - 'tests/core/model_runtime/test_structured_tool_chat_model.py'
@@ -33,6 +38,11 @@ on:
       - 'src/ai_karen_engine/core/model_runtime/provider_execution.py'
       - 'src/ai_karen_engine/core/model_runtime/structured_tool_chat_model.py'
       - 'src/ai_karen_engine/core/intelligence/ml/model_outcome_signals.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/durable_outcomes.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/online_learning.py'
+      - 'src/ai_karen_engine/core/runtime/outcome/store.py'
+      - 'tests/unit/core/intelligence/ml/test_durable_outcomes.py'
+      - 'supabase/migrations/20261019020000_37_intelligence_ml_outcome_evidence.sql'
       - 'src/ai_karen_engine/config/learning.py'
       - 'tests/core/intelligence/ml/test_model_outcome_signals.py'
       - 'tests/core/model_runtime/test_structured_tool_chat_model.py'
@@ -221,6 +231,7 @@ jobs:
             tests/core/runtime/test_deepagents_primary_routing.py \
             tests/core/runtime/test_deepagents_learning_context.py \
             tests/core/intelligence/ml/test_model_outcome_signals.py \
+            tests/unit/core/intelligence/ml/test_durable_outcomes.py \
             tests/core/runtime/test_deepagents_live_activity.py \
             tests/core/model_runtime/test_structured_tool_provider_execution.py \
             tests/core/model_runtime/test_structured_tool_chat_model.py \
