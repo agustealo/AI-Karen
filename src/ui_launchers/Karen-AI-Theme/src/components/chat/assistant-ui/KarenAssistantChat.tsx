@@ -66,9 +66,10 @@ function KarenActivity({ data, category = "Agent step" }: { data: unknown; categ
     : typeof fields.occurred_at === "string" ? fields.occurred_at : "";
   const reportedAt = rawTimestamp && !Number.isNaN(Date.parse(rawTimestamp))
     ? new Date(rawTimestamp).toLocaleString() : "";
-  const normalized = status.toLowerCase();
-  const failed = normalized.includes("fail") || normalized.includes("error");
-  const done = normalized.includes("finish") || normalized.includes("complete") || normalized.includes("success");
+  // Unknown statuses remain observed, never inferred as success.
+  const normalized = status.trim().toLowerCase();
+  const failed = ["failed", "failure", "error", "errored", "cancelled", "canceled"].includes(normalized);
+  const done = ["finished", "completed", "complete", "succeeded", "success"].includes(normalized);
   const StatusIcon = failed ? CircleAlert : done ? CheckCircle2 : Clock3;
   return (
     <details data-testid="karen-agent-activity" className="my-2 rounded-xl border border-border/60 bg-muted/20 text-sm" open={failed || undefined}>
