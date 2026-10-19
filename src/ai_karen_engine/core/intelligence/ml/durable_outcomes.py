@@ -197,6 +197,7 @@ class GovernedMLLearningEvidence:
         records = await asyncio.to_thread(
             self.store.list_for_tenant,
             self.tenant_id, limit=limit, user_id=self.user_id,
+            source="intelligence.ml",
         )
         restored: list[MLOutcomeRecord] = []
         seen: set[str] = set()
