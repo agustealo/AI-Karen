@@ -6,6 +6,8 @@ const settings = readFileSync(resolve(process.cwd(), 'src/components/settings/Se
 const models = readFileSync(resolve(process.cwd(), 'src/components/settings/ModelSettings.tsx'), 'utf8');
 const expression = readFileSync(resolve(process.cwd(), 'src/components/settings/ExpressionSettings.tsx'), 'utf8');
 const downloads = readFileSync(resolve(process.cwd(), 'src/components/settings/ModelDownloads.tsx'), 'utf8');
+const facts = readFileSync(resolve(process.cwd(), 'src/components/settings/PersonalFactsSettings.tsx'), 'utf8');
+const privacy = readFileSync(resolve(process.cwd(), 'src/components/settings/PrivacySettings.tsx'), 'utf8');
 
 describe('settings UX ownership contract', () => {
   it('keeps settings navigation in the shell and persistence in existing panels', () => {
@@ -73,6 +75,14 @@ describe('settings UX ownership contract', () => {
     expect(downloads).toContain('!endpointErrors.channels;');
     expect(downloads).toContain('disabled={Boolean(endpointErrors.jobs) || !canPauseJob');
     expect(downloads).toContain('disabled={Boolean(endpointErrors.jobs) || retryingJobs');
+  });
+
+  it('does not invent personal memory creation times or reuse stale privacy request status', () => {
+    expect(facts).toContain('created_at:');
+    expect(facts).not.toContain('new Date().toISOString()');
+    expect(privacy).toContain('setRequestStatus(null)');
+    expect(privacy).toContain('setRequestStatus(response)');
+    expect(privacy).toContain('setLastRequest(response)');
   });
 
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
