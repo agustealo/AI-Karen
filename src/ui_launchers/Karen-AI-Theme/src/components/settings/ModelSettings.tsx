@@ -187,6 +187,11 @@ export default function ModelSettings() {
     return Boolean(provider.requires_api_key);
   }, []);
 
+  const hasUnsavedSelection = Boolean(normalizedSettings && (
+    selectedProvider !== normalizedSettings.selected_provider ||
+    selectedModel !== normalizedSettings.selected_model
+  ));
+
   const selectedProviderDetails = useMemo(() => {
     return normalizedSettings?.providers.find((p) => p.id === selectedProvider) ?? null;
   }, [normalizedSettings, selectedProvider]);
@@ -469,7 +474,7 @@ export default function ModelSettings() {
         chat_response_mode: chatResponseMode,
       });
       applyNormalizedSettings(response);
-      toast({ title: 'Model settings saved', description: `${selectedProviderLabel || selectedProviderDetails.display_name} is configured.` });
+      toast({ title: 'Model settings saved', description: `Karen confirmed the saved configuration for ${selectedProviderLabel || selectedProviderDetails.display_name}. Runtime health is checked separately.` });
     } catch (error) {
       const message = formatProviderCredentialMessage(
         selectedProviderLabel || selectedProviderDetails.display_name,
@@ -555,6 +560,14 @@ export default function ModelSettings() {
 
   return (
     <div className="flex flex-col gap-6">
+      <div role="status" className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 text-sm">
+        <p className="font-semibold">Saved model: {normalizedSettings?.selected_model || 'None configured'}</p>
+        <p className="mt-1 text-muted-foreground">
+          {hasUnsavedSelection
+            ? 'Provider or model selection changed locally. Save to request an update; Karen must confirm the saved configuration.'
+            : 'This is your saved selection, not proof of a currently executing model. Runtime availability is reported separately.'}
+        </p>
+      </div>
       <div className={cn("grid gap-8 pb-32", !isMobile && "grid-cols-12")}>
         {/* Main Configuration Card */}
         <div className={cn("space-y-6", !isMobile ? "col-span-12 xl:col-span-8" : "w-full")}>
@@ -565,7 +578,7 @@ export default function ModelSettings() {
                   <CardTitle className="text-xl font-bold flex items-center gap-2">
                     <Bot className="h-5 w-5 text-primary" /> Model Selection
                   </CardTitle>
-                  <CardDescription>Select the brain and runtime environment for Karen.</CardDescription>
+                  <CardDescription>Choose a provider and model from Karen’s registered inventory. Saving does not guarantee the runtime is healthy.</CardDescription>
                 </div>
                 <TooltipProvider>
                   <Tooltip>
@@ -1063,7 +1076,7 @@ export default function ModelSettings() {
                   </div>
                   <div>
                     <CardTitle className="text-sm font-bold uppercase tracking-widest">{selectedProviderLabel || selectedProviderDetails.display_name}</CardTitle>
-                    <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-tight">Active Node Status</p>
+                    <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-tight">Registered provider details</p>
                   </div>
                 </div>
               </CardHeader>
@@ -1088,7 +1101,7 @@ export default function ModelSettings() {
                     </div>
                     {selectedProviderDetails.selected_model && (
                       <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="text-muted-foreground">Active Model</span>
+                        <span className="text-muted-foreground">Saved provider model</span>
                         <span className="max-w-[120px] truncate font-mono text-primary/70">{selectedProviderDetails.selected_model}</span>
                       </div>
                     )}
