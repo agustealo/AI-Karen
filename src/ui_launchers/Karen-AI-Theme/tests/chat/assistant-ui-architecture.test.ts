@@ -6,6 +6,7 @@ const component = readFileSync(
   resolve(process.cwd(), "src/components/chat/assistant-ui/KarenAssistantChat.tsx"),
   "utf8",
 );
+const legacyChat = readFileSync(resolve(process.cwd(), "src/components/chat/ChatInterface.tsx"), "utf8");
 const dashboard = readFileSync(
   resolve(process.cwd(), "src/app/dashboard/page.tsx"),
   "utf8",
@@ -56,6 +57,11 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("setCopied(false)");
     expect(component).toContain("overflow-x-auto");
     expect(component).not.toContain("dangerouslySetInnerHTML");
+  });
+
+  it("keeps Web Speech constructor typing scoped instead of conflicting with browser globals", () => {
+    expect(legacyChat).toContain("const speechWindow = window as unknown as {");
+    expect(legacyChat).not.toContain("declare global {\\n  interface Window {\\n    SpeechRecognition");
   });
 
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
