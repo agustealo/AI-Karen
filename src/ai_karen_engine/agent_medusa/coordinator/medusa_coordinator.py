@@ -498,6 +498,8 @@ class MedusaCoordinator:
             session_id=request.session_id,
             correlation_id=self._correlation_id(request),
             step_id=step.id,
+            preferred_provider=request.context.get("preferred_provider"),
+            preferred_model=request.context.get("preferred_model"),
             budget_meter=meter,
             event_emitter=emitter,
         )
