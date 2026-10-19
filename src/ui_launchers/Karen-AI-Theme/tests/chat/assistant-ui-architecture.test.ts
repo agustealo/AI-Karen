@@ -99,7 +99,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("Unable to create a conversation.");
     expect(component).toContain('{navigationError && <p role="alert"');
     expect(component).toContain('<details data-testid="karen-agent-activity"');
-    expect(component).toContain("defaultOpen={failed}");
+    expect(component).toContain("open={failed || undefined}");
     expect(component).toContain('<details data-testid="karen-learning-provenance"');
     expect(component).toContain('<details data-testid="karen-checkpoint-evidence"');
     expect(component).toContain("value.stepId");
