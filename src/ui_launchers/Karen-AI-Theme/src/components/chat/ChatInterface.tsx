@@ -2279,7 +2279,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
-    const speechWindow = window as Window & {
+    const speechWindow = window as unknown as {
       SpeechRecognition?: SpeechRecognitionConstructor;
       webkitSpeechRecognition?: SpeechRecognitionConstructor;
     };
