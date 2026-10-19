@@ -1316,6 +1316,7 @@ export default function ModelDownloads({
   ]);
 
   const saveModelsRoot = useCallback(async () => {
+    if (!adminMode) return;
     const nextRoot = modelsRootDraft.trim();
     if (!nextRoot || nextRoot === storageSettings?.models_root) return;
     setSavingModelsRoot(true);
@@ -1340,7 +1341,7 @@ export default function ModelDownloads({
     } finally {
       setSavingModelsRoot(false);
     }
-  }, [modelsRootDraft, refreshAll, storageSettings?.models_root, toast]);
+  }, [adminMode, modelsRootDraft, refreshAll, storageSettings?.models_root, toast]);
 
   const renderPolicyRow = (
     label: string,
@@ -1880,13 +1881,14 @@ export default function ModelDownloads({
               value={modelsRootDraft}
               onChange={(event) => setModelsRootDraft(event.target.value)}
               placeholder="/path/to/karen-models"
-              disabled={storageSettings?.env_override}
+              disabled={!adminMode || storageSettings?.env_override}
             />
             <Button
               type="button"
               variant="outline"
               onClick={() => void saveModelsRoot()}
               disabled={
+                !adminMode ||
                 savingModelsRoot ||
                 !modelsRootDraft.trim() ||
                 modelsRootDraft.trim() === storageSettings?.models_root ||
