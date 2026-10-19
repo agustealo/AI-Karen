@@ -7,7 +7,7 @@
  * execution policy, or synthetic agent activity. The canonical Karen backend
  * owns all run execution and durable conversations.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AssistantRuntimeProvider,
   AuiIf,
@@ -320,6 +320,15 @@ export default function KarenAssistantChat() {
   } = useSession();
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const historySearchRef = useRef<HTMLInputElement>(null);
+  const historyTriggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (historyOpen) historySearchRef.current?.focus();
+  }, [historyOpen]);
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+    historyTriggerRef.current?.focus();
+  }, []);
   const matchingSessions = useMemo(() => sessions.filter((session) =>
     (session.title || "Untitled conversation").toLowerCase().includes(historyQuery.trim().toLowerCase()),
   ), [sessions, historyQuery]);
@@ -350,7 +359,7 @@ export default function KarenAssistantChat() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <button
-            type="button" aria-expanded={historyOpen} aria-controls="karen-conversation-history"
+            type="button" ref={historyTriggerRef} aria-label="Find conversations" aria-expanded={historyOpen} aria-controls={historyOpen ? "karen-conversation-history" : undefined}
             onClick={() => setHistoryOpen((open) => !open)}
             className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-input px-3 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
           >
@@ -366,11 +375,12 @@ export default function KarenAssistantChat() {
       </header>
       {historyOpen && (
         <section id="karen-conversation-history" aria-label="Conversation history"
-          className="border-b border-border/60 bg-background px-4 py-3">
+          className="border-b border-border/60 bg-background px-4 py-3"
+          onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeHistory(); } }}>
           <label htmlFor="karen-history-search" className="mb-2 block text-sm font-medium">Find a conversation</label>
           <div className="relative max-w-lg">
             <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <input id="karen-history-search" type="search" value={historyQuery}
+            <input id="karen-history-search" ref={historySearchRef} type="search" value={historyQuery}
               onChange={(event) => setHistoryQuery(event.target.value)}
               placeholder="Search conversation titles"
               className="h-11 w-full rounded-xl border border-input bg-background pl-10 pr-3 text-base outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring" />
@@ -381,7 +391,7 @@ export default function KarenAssistantChat() {
             ) : matchingSessions.map((session) => (
               <button key={session.id} type="button"
                 aria-current={session.id === currentSession.id ? "page" : undefined}
-                onClick={() => { setHistoryOpen(false); void loadSession(session.id); }}
+                onClick={() => { closeHistory(); void loadSession(session.id); }}
                 className="block min-h-11 w-full truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-[current=page]:bg-muted aria-[current=page]:font-semibold">
                 {session.title || "Untitled conversation"}
               </button>
