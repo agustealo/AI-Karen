@@ -114,6 +114,10 @@ class GovernedMLLearningEvidence:
         if (
             not isinstance(label_evidence_ref, str)
             or not 1 <= len(label_evidence_ref) <= 256
+            or not label_evidence_ref.isascii()
+            or not all(
+                ch.isalnum() or ch in "-._:/" for ch in label_evidence_ref
+            )
         ):
             raise ValueError("Verified ML outcome requires an evaluation evidence reference")
         data = self._validated_metrics(result)
