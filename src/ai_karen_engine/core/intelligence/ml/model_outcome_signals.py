@@ -13,7 +13,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import Any
 
 from ai_karen_engine.config.learning import get_learning_settings
 from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
