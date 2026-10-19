@@ -60,6 +60,26 @@ describe('AG-UI stream proxy', () => {
     expect(output).toContain('CHAT_STREAM_UPSTREAM_INTERRUPTED');
   });
 
+  it('rejects a second terminal event instead of reporting an unambiguous success', async () => {
+    const payload = 'data: {"type":"RUN_FINISHED"}\\n\\ndata: {"type":"RUN_ERROR"}\\n\\n';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(payload, {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    await expect((await POST(request())).text()).rejects.toThrow(
+      'AG-UI events received after terminal event',
+    );
+  });
+
+  it('rejects message output after terminal completion', async () => {
+    const payload = 'data: {"type":"RUN_FINISHED"}\\n\\ndata: {"type":"TEXT_MESSAGE_CONTENT","delta":"late"}\\n\\n';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(payload, {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    await expect((await POST(request())).text()).rejects.toThrow(
+      'AG-UI events received after terminal event',
+    );
+  });
+
   it('fails closed when the upstream stream ends without completion', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', {
       headers: { 'content-type': 'text/event-stream' },
