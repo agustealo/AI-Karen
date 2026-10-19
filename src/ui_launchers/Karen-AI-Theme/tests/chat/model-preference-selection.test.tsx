@@ -62,7 +62,8 @@ describe('personal chat model preference', () => {
       );
     });
 
-    expect(apiMocks.put).toHaveBeenCalledExactlyOnceWith('/api/settings/model-selection', {
+    expect(apiMocks.put).toHaveBeenCalledTimes(1);
+    expect(apiMocks.put).toHaveBeenCalledWith('/api/settings/model-selection', {
       provider: 'ollama',
       model: 'installed:latest',
     });
