@@ -31,6 +31,7 @@ import { Separator } from '../ui/separator';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/useAuth';
 import { ApiError, apiClient } from '@/lib/api';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
@@ -174,6 +175,8 @@ export default function ModelSettings() {
   const [apiKeyValidationMessage, setApiKeyValidationMessage] = useState('');
   const validationRequestId = useRef(0);
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canManageRuntime = Boolean(user?.roles?.some((role) => role === 'admin' || role === 'super_admin'));
 
   const normalizedSettings = useMemo(
     () => (settings ? normalizeModelSettingsResponse(settings) : null),
@@ -432,7 +435,7 @@ export default function ModelSettings() {
   };
 
   const handleSave = async () => {
-    if (!selectedProviderDetails) return;
+    if (!selectedProviderDetails || !canManageRuntime) return;
     if (!canSaveProviderModelSelection(selectedModel, availableModels, {
       isLoading: isLoadingModels,
       manualEntryAllowed: canEnterModelManually,
@@ -480,7 +483,7 @@ export default function ModelSettings() {
   };
 
   const handleClearApiKey = async () => {
-    if (!selectedProviderDetails?.api_key_configured) return;
+    if (!canManageRuntime || !selectedProviderDetails?.api_key_configured) return;
     setIsClearingKey(true);
     try {
       const response = await apiClient.put<ModelSettingsResponse>('/api/settings/model', {
@@ -498,6 +501,7 @@ export default function ModelSettings() {
   };
 
   const handleCreateCustomProvider = async () => {
+    if (!canManageRuntime) return;
     if (!customProviderForm.name.trim() || !customProviderForm.displayName.trim() || !customProviderForm.baseUrl.trim() || !customProviderForm.model.trim()) {
       toast({ title: 'Missing details', description: 'All fields except description are required.', variant: 'destructive' });
       return;
@@ -537,6 +541,12 @@ export default function ModelSettings() {
 
   return (
     <div className="flex flex-col gap-6">
+      {!canManageRuntime && (
+        <Alert className="border-border/60 bg-muted/20">
+          <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+          <AlertDescription>Provider configuration is managed by an administrator. You can inspect available providers and models here; changing shared runtime settings requires administrator access.</AlertDescription>
+        </Alert>
+      )}
       <div className={cn("grid gap-8 pb-32", !isMobile && "grid-cols-12")}>
         {/* Main Configuration Card */}
         <div className={cn("space-y-6", !isMobile ? "col-span-12 xl:col-span-8" : "w-full")}>
@@ -568,7 +578,7 @@ export default function ModelSettings() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="ai-provider" className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Select Provider</Label>
-                  <Dialog open={isCustomDialogOpen} onOpenChange={setIsCustomDialogOpen}>
+                  {canManageRuntime && <Dialog open={isCustomDialogOpen} onOpenChange={setIsCustomDialogOpen}>
                     <DialogTrigger asChild>
                       <Button variant="ghost" size="sm" className="h-8 text-primary hover:text-primary hover:bg-primary/5">
                         <PlusCircle className="mr-2 h-4 w-4" /> Add Custom
@@ -612,7 +622,7 @@ export default function ModelSettings() {
                         </Button>
                       </DialogFooter>
                     </DialogContent>
-                  </Dialog>
+                  </Dialog>}
                 </div>
 
                 {!selectableCloudProviders.length ? (
@@ -969,7 +979,7 @@ export default function ModelSettings() {
                             <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Encrypted Backend Storage</p>
                           </div>
 
-                          {selectedProviderDetails.api_key_configured && (
+                          {canManageRuntime && selectedProviderDetails.api_key_configured && (
                             <div className="flex justify-end">
                               <Button variant="outline" size="sm" onClick={handleClearApiKey} disabled={isClearingKey} className="h-7 text-[10px] font-bold border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/10">
                                 Clear Secret
