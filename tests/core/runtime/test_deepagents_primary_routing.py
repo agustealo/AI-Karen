@@ -198,3 +198,82 @@ async def test_explicit_workflow_uses_existing_langgraph_not_deepagents(enabled,
     )
     assert text == "custom graph output"
     rt._get_orchestrator.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_deepagents_runtime_consults_scoped_learning_once_before_medusa(
+    enabled, monkeypatch,
+):
+    from ai_karen_engine.core.intelligence.ml import model_outcome_signals as learning
+    from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+        ScopedModelSignals, MODEL_SIGNAL_VERSION,
+    )
+
+    observed = []
+    signals = ScopedModelSignals(
+        "t-1", "u-1", "general_assist",
+        MODEL_SIGNAL_VERSION, "cold_start", (),
+    )
+
+    class ExistingIntelligenceService:
+        async def for_execution(self, **kwargs):
+            observed.append(kwargs)
+            return signals
+
+    monkeypatch.setattr(
+        learning, "get_model_outcome_signal_service",
+        lambda: ExistingIntelligenceService(),
+    )
+    requests = []
+
+    async def handle(_self, medusa_request):
+        requests.append(medusa_request)
+        return RuntimeResponse(
+            request_id="req-1", content="Authorized answer",
+            status=ResponseStatus.SUCCESS,
+        )
+
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator."
+        "MedusaCoordinator.handle_request", handle,
+    )
+    output, _ = await WorkflowRuntime().run(request(), decision(), plan())
+    assert output == "Authorized answer"
+    assert observed == [{
+        "tenant_id": "t-1", "user_id": "u-1",
+        "task_type": "general_assist",
+    }]
+    assert requests[0].context["learned_model_signals"] is signals
+    assert requests[0].context["learning_task_type"] == "general_assist"
+
+
+@pytest.mark.asyncio
+async def test_explicit_requested_model_skips_advisory_read(
+    enabled, monkeypatch,
+):
+    from ai_karen_engine.core.intelligence.ml import model_outcome_signals as learning
+
+    class MustNotConsult:
+        async def for_execution(self, **kwargs):
+            raise AssertionError("Explicit model must win without advisory query")
+
+    monkeypatch.setattr(
+        learning, "get_model_outcome_signal_service",
+        lambda: MustNotConsult(),
+    )
+    async def handle(_self, medusa_request):
+        assert medusa_request.context["preferred_model"] == "selected-by-user"
+        assert medusa_request.context["learned_model_signals"] is None
+        return RuntimeResponse(
+            request_id="req-1", content="User-model result",
+            status=ResponseStatus.SUCCESS,
+        )
+
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator."
+        "MedusaCoordinator.handle_request", handle,
+    )
+    req = request()
+    req.preferred_model = "selected-by-user"
+    output, _ = await WorkflowRuntime().run(req, decision(), plan())
+    assert output == "User-model result"
