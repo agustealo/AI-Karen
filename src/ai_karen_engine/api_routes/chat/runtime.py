@@ -628,13 +628,48 @@ async def stream_ag_ui_chat(
     try:
         user_id, _tenant_id = _require_execution_identity(user)
         current_text = request.latest_user_message()
-        session_id = SecurityValidator.sanitize_session_id(request.threadId)
         correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
         response_id = str(uuid.uuid4())
+        # Assistant-ui's canonical threadId is Karen's already-persisted
+        # conversation UUID. Resolve its owner and actual runtime session
+        # using the SAME runtime gateway as existing conversation ingress.
+        # A foreign or missing thread must never silently create a new one.
+        session_id = SecurityValidator.sanitize_session_id(request.threadId)
+        conversation_id = None
+        try:
+            uuid.UUID(request.threadId)
+        except (TypeError, ValueError):
+            # Backward compatibility for historical opaque AG-UI session ids.
+            # The canonical scoped runtime generates its tenant-isolated id.
+            pass
+        else:
+            from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+                get_conversation_runtime_gateway,
+            )
+            lookup_context = _execution_context(
+                user=user,
+                session_id=session_id,
+                conversation_id=request.threadId,
+                request_id=response_id,
+                correlation_id=correlation_id,
+            )
+            try:
+                owned = await get_conversation_runtime_gateway().get_owned_snapshot(
+                    lookup_context, message_limit=0,
+                )
+            except (PermissionError, RuntimeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=404, detail="Conversation is unavailable",
+                ) from exc
+            conversation_id = str(owned.conversation.id)
+            session_id = SecurityValidator.sanitize_session_id(
+                str(owned.conversation.session_id)
+            )
         canonical_request = _stream_execution_request(
             request=ChatStreamRequest(
                 message=current_text,
                 session_id=session_id,
+                conversation_id=conversation_id,
             ),
             user=user,
             session_id=session_id,
