@@ -387,7 +387,7 @@ export default function SettingsDialog({
               </nav>
             </div>
 
-            <section id="settings-active-panel" aria-live="polite" aria-label={activeSection?.label || 'Settings'} className="min-w-0 space-y-6">
+            <section id="settings-active-panel" aria-label={activeSection?.label || 'Settings'} className="min-w-0 space-y-6">
               {activeSection && (
                 <div className="animate-in fade-in duration-500">
                   <div className="mb-4 flex items-center justify-between">
