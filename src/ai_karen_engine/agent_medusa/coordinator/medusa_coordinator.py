@@ -495,6 +495,9 @@ class MedusaCoordinator:
         from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
             ScopedModelSignals,
         )
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
         signal = request.context.get("learned_model_signals")
         current_requirements = ExecutionRequirements(**request.execution_requirements)
         canonical_execution_context = request.context.get("execution_context")
@@ -502,7 +505,7 @@ class MedusaCoordinator:
             signal
             if (
                 isinstance(signal, ScopedModelSignals)
-                and canonical_execution_context is not None
+                and isinstance(canonical_execution_context, ChatExecutionContext)
                 and getattr(canonical_execution_context, "tenant_id", None) == request.tenant_id
                 and getattr(canonical_execution_context, "user_id", None) == request.user_id
                 and getattr(canonical_execution_context, "request_id", None) == request.request_id
@@ -521,7 +524,7 @@ class MedusaCoordinator:
         trusted_prompt = (
             prompt_candidate
             if (
-                canonical_execution_context is not None
+                isinstance(canonical_execution_context, ChatExecutionContext)
                 and getattr(canonical_execution_context, "tenant_id", None) == request.tenant_id
                 and getattr(canonical_execution_context, "user_id", None) == request.user_id
                 and getattr(canonical_execution_context, "request_id", None) == request.request_id
