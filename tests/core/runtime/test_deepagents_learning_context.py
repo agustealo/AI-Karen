@@ -244,3 +244,38 @@ async def test_no_unsupported_or_unverified_model_provenance_can_be_learned():
     )
     assert received[0]["metadata"]["model_attribution"] == "unverified"
     assert received[0]["metadata"]["model_calls"] == 0
+
+
+def test_learning_lineage_survives_canonical_chat_stream_metadata_filter():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatStreamChunk, ChatStreamEventType,
+    )
+
+    chunk = ChatStreamChunk(
+        type=ChatStreamEventType.CONTENT,
+        content="Completed task",
+        correlation_id="corr-1",
+        metadata={
+            "execution_engine": "deepagents",
+            "actual_provider": "ollama-local",
+            "actual_model": "model-b",
+            "model_calls_observed": 3,
+            "model_selection_source": "learning_operational_reliability_v1",
+            "learning_signal_status": "ready",
+            "learning_signal_version": "model_operational_outcome_v1",
+            "learned_context_status": "resolved",
+            "learned_memory_refs_included": 2,
+            "raw_memory": {"secret": "must-not-retain"},
+        },
+    )
+    out = {}
+    object.__new__(ChatRuntime)._accumulate_chunk_metadata(chunk, out)
+    assert out["actual_model"] == "model-b"
+    assert out["model_calls_observed"] == 3
+    assert out["model_selection_source"] == "learning_operational_reliability_v1"
+    assert out["learning_signal_status"] == "ready"
+    assert out["learning_signal_version"] == "model_operational_outcome_v1"
+    assert out["learned_memory_refs_included"] == 2
+    assert "raw_memory" not in out
+    assert "must-not-retain" not in str(out)
