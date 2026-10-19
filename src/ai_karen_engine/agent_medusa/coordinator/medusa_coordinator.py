@@ -498,6 +498,7 @@ class MedusaCoordinator:
         from ai_karen_engine.core.runtime.chat_runtime_contract import (
             ChatExecutionContext,
         )
+
         signal = request.context.get("learned_model_signals")
         current_requirements = ExecutionRequirements(**request.execution_requirements)
         canonical_execution_context = request.context.get("execution_context")
@@ -506,11 +507,14 @@ class MedusaCoordinator:
             if (
                 isinstance(signal, ScopedModelSignals)
                 and isinstance(canonical_execution_context, ChatExecutionContext)
-                and getattr(canonical_execution_context, "tenant_id", None) == request.tenant_id
-                and getattr(canonical_execution_context, "user_id", None) == request.user_id
-                and getattr(canonical_execution_context, "request_id", None) == request.request_id
+                and getattr(canonical_execution_context, "tenant_id", None)
+                == request.tenant_id
+                and getattr(canonical_execution_context, "user_id", None)
+                == request.user_id
+                and getattr(canonical_execution_context, "request_id", None)
+                == request.request_id
                 and getattr(canonical_execution_context, "correlation_id", None)
-                    == current_requirements.correlation_id
+                == current_requirements.correlation_id
                 and signal.tenant_id == request.tenant_id
                 and signal.user_id == request.user_id
                 and signal.task_type == current_requirements.intent
@@ -525,11 +529,14 @@ class MedusaCoordinator:
             prompt_candidate
             if (
                 isinstance(canonical_execution_context, ChatExecutionContext)
-                and getattr(canonical_execution_context, "tenant_id", None) == request.tenant_id
-                and getattr(canonical_execution_context, "user_id", None) == request.user_id
-                and getattr(canonical_execution_context, "request_id", None) == request.request_id
+                and getattr(canonical_execution_context, "tenant_id", None)
+                == request.tenant_id
+                and getattr(canonical_execution_context, "user_id", None)
+                == request.user_id
+                and getattr(canonical_execution_context, "request_id", None)
+                == request.request_id
                 and getattr(canonical_execution_context, "correlation_id", None)
-                    == current_requirements.correlation_id
+                == current_requirements.correlation_id
                 and isinstance(prompt_candidate, list)
                 and bool(prompt_candidate)
                 and len(prompt_candidate) <= 100
