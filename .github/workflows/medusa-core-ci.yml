@@ -18,6 +18,8 @@ on:
       - 'src/ai_karen_engine/core/intelligence/ml/model_policy_evaluation.py'
       - 'tests/core/intelligence/ml/test_model_policy_evaluation.py'
       - 'src/ai_karen_engine/core/intelligence/ml/durable_outcomes.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/evaluation/runner.py'
+      - 'tests/core/intelligence/ml/test_benchmark_durable_learning.py'
       - 'src/ai_karen_engine/core/intelligence/ml/online_learning.py'
       - 'src/ai_karen_engine/core/runtime/outcome/store.py'
       - 'tests/unit/core/intelligence/ml/test_durable_outcomes.py'
@@ -43,6 +45,8 @@ on:
       - 'src/ai_karen_engine/core/intelligence/ml/model_policy_evaluation.py'
       - 'tests/core/intelligence/ml/test_model_policy_evaluation.py'
       - 'src/ai_karen_engine/core/intelligence/ml/durable_outcomes.py'
+      - 'src/ai_karen_engine/core/intelligence/ml/evaluation/runner.py'
+      - 'tests/core/intelligence/ml/test_benchmark_durable_learning.py'
       - 'src/ai_karen_engine/core/intelligence/ml/online_learning.py'
       - 'src/ai_karen_engine/core/runtime/outcome/store.py'
       - 'tests/unit/core/intelligence/ml/test_durable_outcomes.py'
@@ -236,6 +240,7 @@ jobs:
             tests/core/runtime/test_deepagents_learning_context.py \
             tests/core/intelligence/ml/test_model_outcome_signals.py \
             tests/core/intelligence/ml/test_model_policy_evaluation.py \
+            tests/core/intelligence/ml/test_benchmark_durable_learning.py \
             tests/unit/core/intelligence/ml/test_durable_outcomes.py \
             tests/core/runtime/test_deepagents_live_activity.py \
             tests/core/model_runtime/test_structured_tool_provider_execution.py \
