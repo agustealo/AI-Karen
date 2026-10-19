@@ -2445,7 +2445,7 @@ export default function ModelDownloads({
                         onClick={() => void actOnJob(job.job_id, 'pause')}
                       >
                         <Pause className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Pause</span>
+                        <span className="sr-only">Pause {job.model_id}</span>
                       </Button>
                       <Button
                         type="button"
@@ -2456,7 +2456,7 @@ export default function ModelDownloads({
                         onClick={() => void actOnJob(job.job_id, 'resume')}
                       >
                         <Play className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Resume</span>
+                        <span className="sr-only">Resume {job.model_id}</span>
                       </Button>
                       <Button
                         type="button"
@@ -2467,7 +2467,7 @@ export default function ModelDownloads({
                         onClick={() => void actOnJob(job.job_id, 'cancel')}
                       >
                         <Square className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Cancel</span>
+                        <span className="sr-only">Cancel {job.model_id}</span>
                       </Button>
                       {(job.status === 'failed' || job.status === 'cancelled') && (
                         <Button
@@ -2483,7 +2483,7 @@ export default function ModelDownloads({
                           ) : (
                             <RotateCcw className="h-4 w-4" aria-hidden="true" />
                           )}
-                          <span className="sr-only">Retry download</span>
+                          <span className="sr-only">Retry download {job.model_id}</span>
                         </Button>
                       )}
                     </div>
