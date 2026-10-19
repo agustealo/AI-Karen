@@ -506,3 +506,55 @@ async def test_checkpoint_enabled_but_no_durable_readback_fails_honestly(sdk, mo
     )
     with pytest.raises(RuntimeError, match="not durably acknowledged"):
         await specialist.run({"query": "Research"}, execution=execution())
+
+
+@pytest.mark.asyncio
+async def test_deepagents_consumes_authorized_prompt_runtime_messages_not_raw_only(sdk):
+    approved_messages = [
+        {"role": "system", "content": "Trusted user preference from NeuroRecall"},
+        {"role": "user", "content": "Research this topic"},
+    ]
+    ctx = execution()
+    ctx.approved_prompt_messages = approved_messages
+    ctx.learning_context_status = {
+        "status": "resolved", "included_memory_count": 1,
+    }
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
+    )
+    result = await specialist.run(
+        {"query": "Research this topic"}, execution=ctx,
+    )
+    assert sdk["payload"]["messages"] == approved_messages
+    assert result["learned_context_status"] == "resolved"
+    assert result["learned_memory_refs_included"] == 1
+    assert "Trusted user preference" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_deepagents_cold_start_still_executes_without_memory(sdk):
+    ctx = execution()
+    specialist = DeepAgentsResearchSpecialist(
+        registration(),
+        model_factory=lambda *_args: SimpleNamespace(
+            bind_tools=lambda tools: tools,
+            selected_model="registered-local-model",
+            endpoint=SimpleNamespace(
+                provider_id="ollama-local",
+                runtime_engine=SimpleNamespace(value="ollama"),
+            ),
+        ),
+    )
+    result = await specialist.run({"query": "Research"}, execution=ctx)
+    assert sdk["payload"]["messages"] == [
+        {"role": "user", "content": "Research"}
+    ]
+    assert result["learned_context_status"] == "not_supplied"
