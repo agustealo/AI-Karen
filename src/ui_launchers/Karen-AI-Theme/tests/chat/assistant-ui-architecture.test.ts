@@ -77,6 +77,17 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("setSelectedProvider");
   });
 
+  it("renders runtime-supplied event provenance without fabricating task ordering", () => {
+    expect(component).toContain('typeof value.runId === "string"');
+    expect(component).toContain('typeof value.eventId === "string"');
+    expect(component).toContain('Number.isNaN(Date.parse(value.timestamp))');
+    expect(component).toContain('Run: {runId}');
+    expect(component).toContain('Event: {eventId}');
+    expect(component).toContain('Reported: {reportedAt}');
+    expect(component).not.toContain('Date.now()');
+    expect(component).not.toContain('fakeTimeline');
+  });
+
   it("labels observed plans, subagents and steps without adding an execution path", () => {
     expect(component).toContain('"agui-activity/KAREN_AGENT_STEP": KarenAgentStep');
     expect(component).toContain('"agui-activity/KAREN_DEEPAGENTS_PLAN": KarenAgentPlan');
