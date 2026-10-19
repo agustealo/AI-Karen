@@ -336,6 +336,7 @@ export default function KarenAssistantChat() {
   } = useSession();
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
   const historySearchRef = useRef<HTMLInputElement>(null);
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -345,6 +346,24 @@ export default function KarenAssistantChat() {
     setHistoryOpen(false);
     historyTriggerRef.current?.focus();
   }, []);
+  const switchConversation = useCallback(async (id: string) => {
+    setNavigationError(null);
+    try {
+      await loadSession(id);
+      closeHistory();
+    } catch {
+      setNavigationError("Unable to open that conversation. Please try again.");
+    }
+  }, [loadSession, closeHistory]);
+  const startConversation = useCallback(async () => {
+    setNavigationError(null);
+    try {
+      await createNewSession();
+      setHistoryOpen(false);
+    } catch {
+      setNavigationError("Unable to create a conversation. Please try again.");
+    }
+  }, [createNewSession]);
   const matchingSessions = useMemo(() => sessions.filter((session) =>
     (session.title || "Untitled conversation").toLowerCase().includes(historyQuery.trim().toLowerCase()),
   ), [sessions, historyQuery]);
@@ -359,7 +378,7 @@ export default function KarenAssistantChat() {
         <p role={error ? "alert" : undefined} className="text-sm text-muted-foreground">
           {error || "Start a durable conversation to chat with Karen."}
         </p>
-        <button type="button" onClick={() => void createNewSession()}
+        <button type="button" onClick={() => void startConversation()}
           className="rounded-xl bg-primary px-4 py-2 text-primary-foreground">
           New conversation
         </button>
@@ -384,11 +403,12 @@ export default function KarenAssistantChat() {
           </button>
           <button
             title="New conversation" aria-label="New conversation"
-            type="button" onClick={() => { setHistoryOpen(false); void createNewSession(); }}
+            type="button" onClick={() => void startConversation()}
             className="flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted"
           ><Plus className="h-4 w-4" /></button>
         </div>
       </header>
+      {navigationError && <p role="alert" className="border-b border-destructive/40 px-4 py-2 text-sm text-destructive">{navigationError}</p>}
       {historyOpen && (
         <section id="karen-conversation-history" aria-label="Conversation history"
           className="border-b border-border/60 bg-background px-4 py-3"
@@ -407,7 +427,7 @@ export default function KarenAssistantChat() {
             ) : matchingSessions.map((session) => (
               <button key={session.id} type="button"
                 aria-current={session.id === currentSession.id ? "page" : undefined}
-                onClick={() => { closeHistory(); void loadSession(session.id); }}
+                onClick={() => void switchConversation(session.id)}
                 className="block min-h-11 w-full truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-[current=page]:bg-muted aria-[current=page]:font-semibold">
                 {session.title || "Untitled conversation"}
               </button>
