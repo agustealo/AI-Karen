@@ -95,6 +95,15 @@ describe('settings UX ownership contract', () => {
     expect(notifications).toContain("apiClient.put<NotificationSettingsResponse>");
   });
 
+  it('requires confirmation before deleting saved facts and hides unavailable history action', () => {
+    expect(facts).toContain('factPendingDeletion');
+    expect(facts).toContain('Delete saved fact?');
+    expect(facts).toContain('Confirm deletion');
+    expect(facts).toContain('onClick={() => setFactPendingDeletion(fact)}');
+    expect(facts).not.toContain('Use History');
+    expect(facts).toContain('await apiClient.delete');
+  });
+
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
     expect(models).toContain("apiClient.get<ModelSettingsResponse>('/api/settings/model')");
     expect(models).toContain("normalizeModelSettingsResponse");
