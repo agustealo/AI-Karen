@@ -629,3 +629,58 @@ pytest tests/core/runtime/test_deepagents_learning_context.py -q
 
 These fixtures prove **gate semantics**, not actual held-out model
 improvement. No genuine model-quality lift has yet been established.
+
+
+### Canonical benchmark-to-learning writeback, atomic and default-off
+
+The **existing** `core.intelligence.ml.evaluation.BenchmarkRunner.run_and_record`
+is now the only source of automatic independently checked predictor labels.
+It already enforces `TRAINING_EXECUTE` RBAC, the correct tenant-owned
+registered candidate predictor, the immutable candidate artifact, actual
+canonical corpus tests, and a durable evaluation receipt.
+
+With `LEARNING_VERIFIED_EVALUATION_OUTCOMES_ENABLED=true`, after the
+receipt succeeds, the runner projects eligible, correctly attributed
+predictor cases into `GovernedMLLearningEvidence` using the canonical
+OutcomeStore. It excludes missing/failed/fallback predictions and checks
+model/task/version identity. Labels, raw task text, and arbitrary predictor
+metadata are never persisted. Case IDs are hashed into evidence references
+and each saved row records a versioned numeric correctness/calibration
+observation backed by the benchmark receipt.
+
+**Atomicity is required.** The OutcomeStore owner now supports
+`save_unique_outcomes_async`: PostgreSQL validates every row in the exact
+tenant scope and inserts the whole evaluated batch in one strict
+transaction. Duplicate evidence, an unsupported adapter, a database
+error, or a failed second insert aborts the entire writeback. There is no
+fallback loop of individually committed rows. In-memory storage supports
+only the analogous strict contract for unit tests. This prevents a
+partially persisted evaluation being mistaken for an entire benchmark.
+
+The feature is disabled until migration 37, live transaction/RLS proof and
+human verification are complete:
+
+```dotenv
+LEARNING_VERIFIED_EVALUATION_OUTCOMES_ENABLED=false
+```
+
+Unlike user self-reports, these labels originate from the canonical
+held-out benchmark. They are **predictor-evaluation evidence**, distinct
+from generative Deep Agents model selection and task rewards. The new
+OPE adapter, trained-predictor candidate promotion, and the
+`MLModelRegistry` retain their existing separate owners. No training or
+model promotion occurs because a benchmark row was persisted.
+
+Focused proof (test fixtures, not real database execution):
+
+```bash
+pytest tests/core/intelligence/ml/test_benchmark_durable_learning.py -q
+pytest tests/unit/core/intelligence/ml/test_durable_outcomes.py -q
+pytest tests/core/intelligence/ml/test_model_policy_evaluation.py -q
+```
+
+Additional live acceptance gates: apply migration 37 in disposable
+PostgreSQL; exercise tenant RLS with the app DB role; interrupt a batch
+mid-transaction and verify zero visible rows; recreate the training
+worker and re-read the same evidence; demonstrate deletion and RBAC
+boundaries. Do not enable learning writeback on an untested database.
