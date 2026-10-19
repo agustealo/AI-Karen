@@ -3803,6 +3803,15 @@ class ChatRuntime:
                 "actual_provider": (provider_meta or {}).get("actual_provider"),
                 "actual_model": (provider_meta or {}).get("actual_model"),
                 "runtime_engine": (provider_meta or {}).get("runtime_engine"),
+                "model_selection_source": (provider_meta or {}).get(
+                    "model_selection_source"
+                ),
+                "learning_signal_status": (provider_meta or {}).get(
+                    "learning_signal_status"
+                ),
+                "learning_signal_version": (provider_meta or {}).get(
+                    "learning_signal_version"
+                ),
                 "model_attribution": (
                     "single_provider_model"
                     if (
