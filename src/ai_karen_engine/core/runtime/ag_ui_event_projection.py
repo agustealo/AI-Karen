@@ -221,6 +221,23 @@ class AGUIEventProjection:
             })]
 
         if kind in {"status", "warning"}:
+            if (
+                kind == "status"
+                and meta.get("source") == "deepagents"
+                and meta.get("checkpoint_verified") is True
+                and meta.get("resumable") is False
+            ):
+                step_id = _text(meta.get("step_id"), 128)
+                if step_id:
+                    # Read-back was verified upstream by Karen's saver.
+                    # Never expose the checkpoint bytes or a fake resume
+                    # button, and never infer resumability from persistence.
+                    return [self._custom("karen.checkpoint", {
+                        "step_id": step_id,
+                        "checkpoint_verified": True,
+                        "resumable": False,
+                        "message": "Agent checkpoint persisted. Resume is not available.",
+                    })]
             return [self._custom(f"karen.{kind}", {
                 "message": content[:2000],
                 "degraded_mode": meta.get("degraded_mode") is True,
