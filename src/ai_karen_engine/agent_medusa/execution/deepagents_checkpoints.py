@@ -193,11 +193,24 @@ class ScopedPostgresDeepAgentsSaver(BaseCheckpointSaver[str]):
                     :checkpoint_id, :parent_checkpoint_id,
                     :checkpoint_encoding, :checkpoint_bytes,
                     :metadata_encoding, :metadata_bytes
-                ) ON CONFLICT DO NOTHING
+                )
+                ON CONFLICT (
+                    tenant_id, thread_id, checkpoint_ns, checkpoint_id
+                ) DO UPDATE SET
+                    parent_checkpoint_id = EXCLUDED.parent_checkpoint_id,
+                    checkpoint_encoding = EXCLUDED.checkpoint_encoding,
+                    checkpoint_bytes = EXCLUDED.checkpoint_bytes,
+                    metadata_encoding = EXCLUDED.metadata_encoding,
+                    metadata_bytes = EXCLUDED.metadata_bytes
+                WHERE
+                    agent_medusa_deepagents_checkpoints.user_id = EXCLUDED.user_id
+                    AND agent_medusa_deepagents_checkpoints.session_id = EXCLUDED.session_id
+                    AND agent_medusa_deepagents_checkpoints.policy_decision_id = EXCLUDED.policy_decision_id
+                    AND agent_medusa_deepagents_checkpoints.run_id = EXCLUDED.run_id
             """), params)
             if result.rowcount != 1:
                 raise DeepAgentsCheckpointScopeError(
-                    "Checkpoint ID already exists or is outside authorized run scope"
+                    "Checkpoint update rejected for an unauthorized principal or run"
                 )
             await session.commit()
         return self._config(self._thread_id, namespace, checkpoint_id)
