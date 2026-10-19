@@ -103,6 +103,13 @@ _CANONICAL_META_KEYS = (
     "requested_target",
     "actual_provider",
     "actual_model",
+    # Versioned, scalar-only operational learning lineage from Runtime/Medusa.
+    "model_calls_observed",
+    "model_selection_source",
+    "learning_signal_status",
+    "learning_signal_version",
+    "learned_context_status",
+    "learned_memory_refs_included",
     "actual_target",
     "runtime_engine",
     "protocol",
@@ -3311,6 +3318,13 @@ class ChatRuntime:
             "requested_model": request.preferred_model,
             "actual_provider": provider_meta.get("actual_provider"),
             "actual_model": provider_meta.get("actual_model"),
+            "model_selection_source": provider_meta.get("model_selection_source"),
+            "learning_signal_status": provider_meta.get("learning_signal_status"),
+            "learning_signal_version": provider_meta.get("learning_signal_version"),
+            "learned_context_status": provider_meta.get("learned_context_status"),
+            "learned_memory_refs_included": provider_meta.get(
+                "learned_memory_refs_included", 0
+            ),
             "runtime_engine": provider_meta.get("runtime_engine"),
             "protocol": provider_meta.get("protocol"),
             "locality": provider_meta.get("locality"),
