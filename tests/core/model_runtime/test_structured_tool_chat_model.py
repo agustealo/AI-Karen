@@ -175,6 +175,18 @@ def _mock_canonical_model_manager(monkeypatch):
 
 
 def test_auto_model_uses_scoped_intelligence_signals_and_canonical_manager(monkeypatch):
+    # This is the promoted-policy path. Production defaults to shadow.
+    from ai_karen_engine.core.model_runtime import model_manager
+    monkeypatch.setattr(
+        "ai_karen_engine.config.learning.get_learning_settings",
+        lambda: SimpleNamespace(
+            model_routing_signals_enabled=True,
+            model_routing_adaptive_enabled=True,
+            model_routing_min_samples=12,
+            model_routing_max_failure_rate=0.4,
+            model_routing_min_reliability_gain=0.2,
+        ),
+    )
     from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
         MODEL_SIGNAL_VERSION, ModelOperationalProfile, ScopedModelSignals,
     )
@@ -298,3 +310,39 @@ def test_policy_model_allowlist_excludes_learned_favorite(monkeypatch):
     )
     assert model.selected_model == "model-a"
     assert model.selection_source != "learning_operational_reliability_v1"
+
+
+def test_learning_is_consulted_but_model_switch_is_shadow_by_default(monkeypatch):
+    from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+        MODEL_SIGNAL_VERSION, ModelOperationalProfile, ScopedModelSignals,
+    )
+    from ai_karen_engine.config.learning import LearningSettings
+    settings = LearningSettings()
+    assert settings.model_routing_signals_enabled is True
+    assert settings.model_routing_adaptive_enabled is False
+    monkeypatch.setattr(
+        "ai_karen_engine.config.learning.get_learning_settings",
+        lambda: settings,
+    )
+    _mock_canonical_model_manager(monkeypatch)
+    evidence = ScopedModelSignals(
+        "t-1", "u-1", "research", MODEL_SIGNAL_VERSION, "ready",
+        (
+            ModelOperationalProfile("ollama-local", "model-a", 20, 2, 800),
+            ModelOperationalProfile("ollama-local", "model-b", 20, 19, 300),
+        ),
+    )
+    selected = build_medusa_deepagents_model(
+        SimpleNamespace(agent_id="researcher"),
+        _model_selection_execution(signals=evidence),
+    )
+    assert selected.selected_model == "model-a"
+    assert selected.learning_signal_status == "ready"
+    assert selected.selection_source == "shadow_operational_recommendation"
+
+
+def test_invalid_adaptive_flag_fails_closed(monkeypatch):
+    from ai_karen_engine.config.learning import LearningSettings
+    monkeypatch.setenv("LEARNING_MODEL_ROUTING_ADAPTIVE_ENABLED", "maybe")
+    with pytest.raises(ValueError, match="must be boolean"):
+        LearningSettings().apply_env_overrides()
