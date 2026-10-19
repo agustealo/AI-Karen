@@ -145,6 +145,15 @@ jobs:
           pytest tests/core/model_runtime/test_model_orchestrator_remote_listing.py -q
           pytest tests/architecture/test_llm_control_plane_authority.py -q
 
+      - name: Reject retired memory consumer implementations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e src/ai_karen_engine/core/memory/memory_service.py
+          refs=$(grep -R --line-number --include='*.py' 'WebUIMemoryService\|MemoryContextBuilder\|store_web_ui_memory' src/ai_karen_engine || true)
+          test -z "$refs" || { echo "$refs"; exit 1; }
+          ! grep -R --line-number --include='*.py' 'UnifiedMemoryService(' src/ai_karen_engine/agents
+
       - name: Runtime evidence authority proofs
         run: |
           pytest tests/core/runtime/test_context_evidence_contracts.py -q

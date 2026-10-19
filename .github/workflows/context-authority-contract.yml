@@ -2,6 +2,8 @@ name: Context Authority Contract
 
 on:
   pull_request:
+    branches:
+      - main
     paths:
       - 'server/app.py'
       - 'src/ai_karen_engine/app.py'
