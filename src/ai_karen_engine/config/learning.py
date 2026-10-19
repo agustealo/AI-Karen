@@ -27,6 +27,10 @@ class LearningSettings:
     # Learning is consulted normally, but operational evidence cannot
     # promote a routing policy by itself. Requires evaluated promotion.
     model_routing_adaptive_enabled: bool = False
+    # Governed benchmark adapter writes independently verified predictor
+    # labels to existing tenant-RLS OutcomeStore only when explicitly enabled
+    # and its forward-only schema migration is applied.
+    verified_evaluation_outcomes_enabled: bool = False
     model_routing_min_samples: int = 12
     model_routing_history_limit: int = 500
     model_routing_history_days: int = 90
@@ -97,6 +101,20 @@ class LearningSettings:
                     "LEARNING_MODEL_ROUTING_ADAPTIVE_ENABLED must be boolean"
                 )
             self.model_routing_adaptive_enabled = normalized in {
+                "1", "true", "yes", "on",
+            }
+        raw_evaluation_enabled = env(
+            "LEARNING_VERIFIED_EVALUATION_OUTCOMES_ENABLED"
+        )
+        if raw_evaluation_enabled is not None:
+            normalized = raw_evaluation_enabled.strip().lower()
+            if normalized not in {
+                "1", "0", "true", "false", "yes", "no", "on", "off",
+            }:
+                raise ValueError(
+                    "LEARNING_VERIFIED_EVALUATION_OUTCOMES_ENABLED must be boolean"
+                )
+            self.verified_evaluation_outcomes_enabled = normalized in {
                 "1", "true", "yes", "on",
             }
         numeric_settings = (
