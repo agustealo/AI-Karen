@@ -152,6 +152,7 @@ export default function ModelSettings() {
   const [modelDiscoveryNotice, setModelDiscoveryNotice] = useState('');
   const modelDiscoveryRequestId = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isClearingKey, setIsClearingKey] = useState(false);
@@ -241,13 +242,16 @@ export default function ModelSettings() {
 
   const loadSettings = useCallback(async () => {
     setIsLoading(true);
+    setSettingsLoadError('');
     try {
       const response = await apiClient.get<ModelSettingsResponse>('/api/settings/model');
       applyNormalizedSettings(response);
     } catch (error) {
+      const message = formatErrorMessage(error, 'Karen could not load the saved model configuration.');
+      setSettingsLoadError(message);
       toast({
         title: 'Unable to load model settings',
-        description: formatErrorMessage(error, 'Karen could not load the saved model configuration.'),
+        description: message,
         variant: 'destructive',
       });
     } finally {
@@ -531,6 +535,21 @@ export default function ModelSettings() {
           </div>
         </CardContent>
       </Card>
+    );
+  }
+
+  if (!settings || settingsLoadError) {
+    return (
+      <Alert variant="destructive" role="alert" className="space-y-3">
+        <AlertDescription>
+          <p className="font-semibold">Model settings are unavailable</p>
+          <p className="mt-1">{settingsLoadError || 'Karen did not return a usable model configuration.'}</p>
+          <p className="mt-2">Your saved provider and model selection have not been changed by this screen.</p>
+          <Button type="button" variant="outline" className="mt-3" onClick={() => void loadSettings()}>
+            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" /> Retry loading settings
+          </Button>
+        </AlertDescription>
+      </Alert>
     );
   }
 
