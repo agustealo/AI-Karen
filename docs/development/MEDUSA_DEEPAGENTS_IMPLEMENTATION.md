@@ -473,9 +473,12 @@ The conservative model choice path is:
    Models outside the policy model allowlist never enter learning ranks.
 3. If model choice is automatic, baseline is the canonical provider's
    configured default. A verified, sufficient history of **runtime
-   completion/failure** can change that model only when the baseline
-   shows repeated failures and the alternative is materially more
-   reliable. Insufficient samples, staleness, cross-tenant evidence,
+   completion/failure** generates an advisory candidate only when the baseline shows repeated
+   failures and the alternative is materially more reliable.
+   **By default this recommendation is shadow-only**, and the registered
+   baseline is executed. An independently evaluated routing policy must be
+   promoted through Karen's governed policy process before activating
+   adaptive model choice. Insufficient samples, staleness, cross-tenant evidence,
    mixed/fallback provenance, storage failures, and cold starts all
    retain the authorized baseline.
 4. CORTEX/Intelligence advise; ModelManager alone resolves the
@@ -542,6 +545,7 @@ execution flag:
 
 ```dotenv
 LEARNING_MODEL_ROUTING_SIGNALS_ENABLED=true
+LEARNING_MODEL_ROUTING_ADAPTIVE_ENABLED=false
 LEARNING_MODEL_ROUTING_MIN_SAMPLES=12
 LEARNING_MODEL_ROUTING_HISTORY_LIMIT=500
 LEARNING_MODEL_ROUTING_HISTORY_DAYS=90
@@ -583,3 +587,45 @@ Still required before calling this a proven adaptive improvement:
 - Exercise actual AG-UI chat/browser flow and preserve user-visible
   memory/privacy preferences. Keep draft PRs until latest-head CI and
   human acceptance pass.
+
+
+### Shadow routing and independent policy-evaluation gate
+
+The baseline selection remains authoritative until learning produces
+**verified task-quality improvement**, not just higher provider completion.
+`LEARNING_MODEL_ROUTING_SIGNALS_ENABLED=true` enables consulting and
+scoring versioned operational evidence during ordinary execution.
+`LEARNING_MODEL_ROUTING_ADAPTIVE_ENABLED=false` leaves proposed model
+changes in shadow mode. An observed recommendation produces
+`model_selection_source=shadow_operational_recommendation`: Karen still
+uses the authorized baseline, and AG-UI must never suggest the alternative
+actually ran.
+
+The new `core.intelligence.ml.model_policy_evaluation` **adapts to
+Karen's existing OfflinePolicyEvaluator**, not a second optimizer. It
+accepts only canonical `PolicyObservation` records for
+`DecisionType.MODEL_SELECTION` with exact tenant scope, independent
+held-out evaluation or human-review reward receipts, authorized eligible
+models, versioned behavior/candidate policies, real logged propensity
+distributions and non-duplicated observation IDs. It rejects made-up
+propensities and completion-only records as evidence of task quality.
+
+With 100+ eligible observations it delegates IPS, SNIPS, Doubly Robust,
+overlap, segment/drift and promotion evaluation to the existing OPE
+owner. The result is a **report, not model activation**:
+`policy_activated=false`, including when an evaluator declares a
+candidate eligible. There is no API here that changes the active
+policy/provider/model. A separately governed promotion, reproducible
+benchmark, audit and rollback are still required. The adaptive flag is
+an operator-controlled technical capability gate, not evidence that
+review/authorization has occurred. Keep it off until the promotion
+workflow is completed and enforced end-to-end.
+
+```bash
+pytest tests/core/intelligence/ml/test_model_policy_evaluation.py -q
+pytest tests/core/model_runtime/test_structured_tool_chat_model.py -q
+pytest tests/core/runtime/test_deepagents_learning_context.py -q
+```
+
+These fixtures prove **gate semantics**, not actual held-out model
+improvement. No genuine model-quality lift has yet been established.
