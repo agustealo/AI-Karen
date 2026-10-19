@@ -45,6 +45,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const encoder = new TextEncoder();
     let pending = '';
     let terminalSeen = false;
+    let protocolViolation = false;
     let released = false;
     const release = () => {
       if (!released) {
@@ -73,7 +74,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         if (!dataLines.length) continue;
         try {
           const event = JSON.parse(dataLines.join('\n')) as { type?: string };
-          if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
+          if (terminalSeen) {
+            // Once a run ends, further runtime events cannot be trusted.
+            protocolViolation = true;
+          } else if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
             terminalSeen = true;
           }
         } catch {
@@ -86,7 +90,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       controller: ReadableStreamDefaultController<Uint8Array>,
       code: 'CHAT_STREAM_UPSTREAM_TERMINATED' | 'CHAT_STREAM_UPSTREAM_INTERRUPTED',
     ) => {
-      if (terminalSeen || request.signal.aborted) return;
+      if ((terminalSeen && !protocolViolation) || request.signal.aborted) return;
       // Leading blank record separators keep a partial upstream frame from
       // swallowing the transport diagnostic.
       controller.enqueue(encoder.encode(
@@ -111,6 +115,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           }
           if (value) {
             inspect(value);
+            if (protocolViolation) {
+              throw new Error('AG-UI events received after terminal event');
+            }
             controller.enqueue(value);
           }
         } catch (error) {
