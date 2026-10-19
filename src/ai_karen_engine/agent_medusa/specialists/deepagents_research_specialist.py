@@ -354,6 +354,17 @@ class DeepAgentsResearchSpecialist:
                     },
                 )
 
+        checkpoint_verified = False
+        if checkpointer is not None:
+            # An enabled save is not proof of persistence. Read back via the
+            # tenant-bound canonical saver before recording a successful run.
+            observed = await checkpointer.aget_tuple({
+                "configurable": {"thread_id": thread_id}
+            })
+            if observed is None:
+                raise RuntimeError("Deep Agents checkpoint was not durably acknowledged")
+            checkpoint_verified = True
+
         messages = result.get("messages") if isinstance(result, Mapping) else None
         final_message = messages[-1] if isinstance(messages, list) and messages else None
         raw_content = getattr(final_message, "content", None)
@@ -375,6 +386,8 @@ class DeepAgentsResearchSpecialist:
             "search_results": [],  # Receipts, not invented search-result records.
             "tool_receipts": accepted_receipts,
             "harness": "deepagents",
+            "checkpoint_verified": checkpoint_verified,
+            "resumable": False,  # No authorized restart/resume flow exists yet.
             "actual_provider": model.endpoint.provider_id,
             "actual_model": model.selected_model,
             "runtime_engine": model.endpoint.runtime_engine.value,
