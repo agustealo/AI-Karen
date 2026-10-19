@@ -392,3 +392,77 @@ async def test_model_selection_accepts_registered_model_without_writing_shared_s
         "merge": True,
     }]
     assert service.account.preferences["behavior"]["memoryDepth"] == "long"
+
+
+@pytest.mark.asyncio
+async def test_personal_model_preferences_remain_isolated_across_users_and_reload(
+    monkeypatch,
+) -> None:
+    first_id = "11111111-1111-1111-1111-111111111111"
+    second_id = "22222222-2222-2222-2222-222222222222"
+    records = {
+        first_id: SimpleNamespace(
+            id=first_id, tenant_id="tenant-a", preferences={"notifications": {"enabled": False}},
+        ),
+        second_id: SimpleNamespace(
+            id=second_id, tenant_id="tenant-b",
+            preferences={"model_selection": {"provider": "ollama", "model": "model-b"}},
+        ),
+    }
+    writes = []
+
+    class TwoUserAuth:
+        async def get_user_by_id(self, user_id):
+            return records.get(user_id)
+
+        async def update_user_preferences(self, user_id, preferences, *, merge=True):
+            writes.append((user_id, preferences, merge))
+            current = records[user_id]
+            current.preferences = {**current.preferences, **preferences}
+            return current
+
+    async def fake_get_auth_service():
+        # New auth-service facade per call models a fresh request/reload.
+        return TwoUserAuth()
+
+    monkeypatch.setattr(settings_routes, "get_auth_service", fake_get_auth_service)
+    from ai_karen_engine.config import llm_provider_config
+    monkeypatch.setattr(
+        llm_provider_config, "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: SimpleNamespace(enabled=True, models=[])
+            if name == "ollama" else None,
+        ),
+    )
+    first = _principal(user_id=first_id, tenant_id="tenant-a")
+    second = _principal(user_id=second_id, tenant_id="tenant-b")
+    defaults = SimpleNamespace(
+        preferred_provider="shared-default", preferred_model="shared-model",
+        show_degraded_banner=False, degraded_status={}, ui={},
+        active_profile=None, available_profiles=[], profile_assignments={},
+    )
+
+    await settings_routes.update_user_model_selection(
+        settings_routes.ModelSelectionSettings(provider="ollama", model="model-a"),
+        first,
+    )
+    first_reload = await settings_routes.get_settings(defaults, first)
+    second_reload = await settings_routes.get_settings(defaults, second)
+
+    assert (first_reload["preferred_provider"], first_reload["preferred_model"]) == (
+        "ollama", "model-a",
+    )
+    assert (second_reload["preferred_provider"], second_reload["preferred_model"]) == (
+        "ollama", "model-b",
+    )
+    assert records[first_id].preferences["notifications"]["enabled"] is False
+    assert records[second_id].preferences["model_selection"]["model"] == "model-b"
+    assert writes == [(first_id, {
+        "model_selection": {"provider": "ollama", "model": "model-a"},
+    }, True)]
+
+    with pytest.raises(HTTPException) as denied:
+        await settings_routes.get_settings(
+            defaults, _principal(user_id=first_id, tenant_id="tenant-b"),
+        )
+    assert denied.value.status_code == 403
