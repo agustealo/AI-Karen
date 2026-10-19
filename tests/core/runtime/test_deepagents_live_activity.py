@@ -293,3 +293,31 @@ def test_deepagents_progress_requires_actual_sdk_source_and_subagent_identity():
             activity_kind="subagent", source="deepagents",
         ), correlation_id="corr-1",
     ) is None
+
+
+def test_verified_postgres_checkpoint_is_status_only_never_resume_claim():
+    rt = WorkflowRuntime()
+    event = rt._project_medusa_event(
+        _event(
+            AgentEventType.CHECKPOINT_PERSISTED,
+            step_id="step-1", source="deepagents",
+            checkpoint_verified=True, resumable=False,
+            raw_checkpoint={"secret": "private-bytes"},
+        ),
+        correlation_id="corr-1",
+    )
+    assert event.type == ChatStreamEventType.STATUS
+    assert event.metadata["checkpoint_verified"] is True
+    assert event.metadata["resumable"] is False
+    assert event.metadata["step_id"] == "step-1"
+    assert "private-bytes" not in str(event)
+
+    unsafe = rt._project_medusa_event(
+        _event(
+            AgentEventType.CHECKPOINT_PERSISTED,
+            step_id="step-1", source="deepagents",
+            checkpoint_verified=False, resumable=True,
+        ),
+        correlation_id="corr-1",
+    )
+    assert unsafe is None
