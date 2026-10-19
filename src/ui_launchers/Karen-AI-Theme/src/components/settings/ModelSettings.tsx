@@ -1000,7 +1000,7 @@ export default function ModelSettings() {
 
                           {apiKeyValidationMessage && (
                             <div className={cn("flex items-center gap-2 text-xs font-medium px-2 py-1.5 rounded-lg border",
-                              apiKeyValidationState === 'valid' ? "bg-emerald-50/10 border-emerald-500/20 text-emerald-600" : "bg-destructive/5 border-destructive/20 text-destructive")}>
+                              apiKeyValidationState === 'valid' ? "bg-emerald-50/10 border-emerald-500/20 text-emerald-600" : apiKeyValidationState === 'invalid' ? "bg-destructive/5 border-destructive/20 text-destructive" : "bg-muted/20 border-border/40 text-muted-foreground")}>
                               <Info className="h-3 w-3 shrink-0" /> {apiKeyValidationMessage}
                             </div>
                           )}
@@ -1025,7 +1025,7 @@ export default function ModelSettings() {
                   <div className="flex justify-end pt-4">
                     <Button onClick={handleSave} disabled={isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
                       {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-5 w-5" />}
-                      Finalize Intelligence Settings
+                      Save provider settings
                     </Button>
                   </div>
                 </div>
