@@ -39,43 +39,89 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const value = upstream.headers.get(key);
       if (value) responseHeaders.set(key, value);
     }
-    // The AG-UI protocol has no [DONE] sentinel: a complete SSE record
-    // carrying RUN_FINISHED or RUN_ERROR is required.
+    // AG-UI completion must be a fully framed RUN_FINISHED or RUN_ERROR.
+    const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     let pending = '';
     let terminalSeen = false;
-    const guardedStream = upstream.body.pipeThrough(
-      new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) {
-          pending += decoder.decode(chunk, { stream: true });
-          const records = pending.split(/\r?\n\r?\n/);
-          pending = records.pop() || '';
-          for (const record of records) {
-            for (const line of record.split(/\r?\n/)) {
-              if (!line.startsWith('data:')) continue;
-              try {
-                const event = JSON.parse(line.slice(5).trimStart()) as { type?: string };
-                if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
-                  terminalSeen = true;
-                }
-              } catch {
-                // Malformed frames cannot establish completion.
-              }
+    let released = false;
+    const release = () => {
+      if (!released) {
+        released = true;
+        reader.releaseLock();
+      }
+    };
+
+    const inspect = (bytes: Uint8Array) => {
+      pending += decoder.decode(bytes, { stream: true });
+      const records = pending.split(/\r?\n\r?\n/);
+      pending = records.pop() || '';
+      for (const record of records) {
+        for (const line of record.split(/\r?\n/)) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const event = JSON.parse(line.slice(5).trimStart()) as { type?: string };
+            if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
+              terminalSeen = true;
             }
+          } catch {
+            // Malformed SSE does not satisfy the terminal contract.
           }
-          if (pending.length > 1048576) pending = pending.slice(-8192);
-          controller.enqueue(chunk);
-        },
-        flush(controller) {
-          if (!terminalSeen && !request.signal.aborted) {
-            controller.enqueue(encoder.encode(
-              '\n\ndata: {"type":"RUN_ERROR","message":"Backend stream ended before completion.","code":"CHAT_STREAM_UPSTREAM_TERMINATED"}\n\n',
-            ));
+        }
+      }
+      if (pending.length > 1048576) pending = pending.slice(-8192);
+    };
+
+    const fail = (
+      controller: ReadableStreamDefaultController<Uint8Array>,
+      code: 'CHAT_STREAM_UPSTREAM_TERMINATED' | 'CHAT_STREAM_UPSTREAM_INTERRUPTED',
+    ) => {
+      if (terminalSeen || request.signal.aborted) return;
+      // Leading blank record separators keep a partial upstream frame from
+      // swallowing the transport diagnostic.
+      controller.enqueue(encoder.encode(
+        \`\n\ndata: \${JSON.stringify({
+          type: 'RUN_ERROR',
+          message: 'The backend stream ended before runtime completion.',
+          code,
+        })}\n\n\`,
+      ));
+      terminalSeen = true;
+    };
+
+    const guardedStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            fail(controller, 'CHAT_STREAM_UPSTREAM_TERMINATED');
+            controller.close();
+            release();
+            return;
           }
-        },
-      }),
-    );
+          if (value) {
+            inspect(value);
+            controller.enqueue(value);
+          }
+        } catch (error) {
+          if (request.signal.aborted) {
+            controller.error(error);
+          } else {
+            fail(controller, 'CHAT_STREAM_UPSTREAM_INTERRUPTED');
+            controller.close();
+          }
+          release();
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          release();
+        }
+      },
+    });
     return new NextResponse(guardedStream, { status: 200, headers: responseHeaders });
   } catch {
     return NextResponse.json({ detail: 'AG-UI stream unavailable' }, { status: 502 });
