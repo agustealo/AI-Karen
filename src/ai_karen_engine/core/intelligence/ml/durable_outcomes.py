@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import math
-import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -184,6 +183,17 @@ class GovernedMLLearningEvidence:
                 prediction_task = PredictionTask(metadata["task"])
                 if task is not None and prediction_task != task:
                     continue
+                stamp = row.get("recorded_at")
+                if isinstance(stamp, str):
+                    verified_at = datetime.fromisoformat(
+                        stamp.replace("Z", "+00:00")
+                    )
+                elif isinstance(stamp, datetime):
+                    verified_at = stamp
+                else:
+                    continue
+                if verified_at.tzinfo is None:
+                    continue
                 item = MLOutcomeRecord(
                     outcome_id=identity,
                     task=prediction_task,
@@ -199,7 +209,9 @@ class GovernedMLLearningEvidence:
                     latency_ms=float(metadata["latency_ms"]),
                     fallback_used=metadata["fallback_used"] is True,
                     calibration_error=float(metadata["calibration_error"]),
-                    timestamp=str(row.get("recorded_at") or ""),
+                    # OnlineLearning's historical profile-decay contract
+                    # uses Unix seconds, even though OutcomeStore persists ISO.
+                    timestamp=str(verified_at.timestamp()),
                 )
                 self._validated_metrics(item)
             except (ValueError, KeyError, TypeError):
