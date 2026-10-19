@@ -907,7 +907,7 @@ export default function ModelSettings() {
                                       <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{option.status}</p>
                                     </div>
                                     <Badge variant="outline" className={cn("text-[10px] uppercase", option.available ? "text-emerald-600" : "text-amber-600")}>
-                                      {option.available ? "Available" : "Setup Required"}
+                                      {option.available ? "Detected" : "Setup required"}
                                     </Badge>
                                   </div>
                                   <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{option.message}</p>
@@ -920,8 +920,12 @@ export default function ModelSettings() {
                                       size="sm"
                                       className="mt-3 h-8 text-[10px] uppercase tracking-widest"
                                       onClick={async () => {
-                                        await navigator.clipboard.writeText(option.setup_command || '');
-                                        toast({ title: 'Setup command copied', description: option.setup_command || '' });
+                                        try {
+                                          await navigator.clipboard.writeText(option.setup_command || '');
+                                          toast({ title: 'Setup command copied' });
+                                        } catch {
+                                          toast({ title: 'Unable to copy setup command', description: 'Clipboard access was denied. Review the runtime setup instructions.', variant: 'destructive' });
+                                        }
                                       }}
                                     >
                                       Copy Setup Command
@@ -958,6 +962,7 @@ export default function ModelSettings() {
                                 disabled={isLoadingModels}
                                 className="h-7 w-7"
                                 title="Refresh model discovery"
+                                 aria-label="Refresh model discovery"
                               >
                                 {isLoadingModels ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                               </Button>
@@ -977,8 +982,8 @@ export default function ModelSettings() {
                           ) : (
                             <div role="status" className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm text-muted-foreground">
                               {isLoadingModels ? 'Discovering provider models…'
-                                : modelDiscoveryError ? 'Model discovery unavailable. Refresh to retry.'
-                                  : 'No models available on this provider.'}
+                                : modelDiscoveryError ? 'Model discovery failed. Refresh to retry; saved model availability has not been verified.'
+                                  : 'No models were reported by this provider.'}
                             </div>
                           )}
                           {modelDiscoveryNotice && (
