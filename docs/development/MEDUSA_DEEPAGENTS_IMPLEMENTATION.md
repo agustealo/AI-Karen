@@ -211,3 +211,38 @@ pytest tests/core/model_runtime/test_structured_tool_provider_execution.py -q
 pytest tests/core/model_runtime/test_structured_tool_chat_model.py -q
 pytest tests/agent_medusa/test_deepagents_response_ownership.py -q
 ```
+
+## Next delivery: Live Medusa events and real SDK proof (2026-10-19)
+
+The Deep Agents-first path now relays observed Medusa progress through the
+existing canonical chat event contract, not through a duplicate agent API.
+`WorkflowRuntime.stream` attaches a **per-request** sink to its own
+`MedusaCoordinator` instance, reads the sink concurrently with the run, and
+projects only event types with verified correlation identity:
+
+- `AGENT_STARTED` / `AGENT_COMPLETED` / `AGENT_FAILED` ->
+  `agent_step` with `step_id`, `agent_id`, and actual status.
+- `TOOL_CALL_STARTED` / `TOOL_CALL_COMPLETED` / `TOOL_CALL_FAILED` ->
+  `tool` with `tool_call_id`, tool name, step/agent IDs, and phase.
+- Tool arguments, results, internal event metadata, and raw error details are
+  **not** forwarded. Unknown events and cross-correlation events are dropped.
+- Unexpected progress buffer overflow fails the run's visible stream; it is
+  never reported as a successful complete answer.
+- If the chat stream closes, the pending Medusa execution task is cancelled.
+  Canonical `ChatRuntime` still owns the terminal `COMPLETE`/`ERROR` event.
+- `ToolBridge` now emits a **single stable actual tool-call ID** and matching
+  correlation on start and terminal events; it does not invent tool success.
+
+New tests prove an observed event timeline, identity isolation, redaction,
+cancellation, and no fake success after a worker error.
+
+The **existing** `.github/workflows/medusa-core-ci.yml` now contains
+`Deep Agents Real SDK Compatibility`. It installs the pinned
+`requirements/deepagents.txt`, runs the *actual SDK* graph smoke and focused
+governed runner tests. Its success is a required dependency of the existing
+final validation job. This is not a new GitHub Actions workflow.
+
+The feature flag remains off until the real SDK check and real local
+tool-calling model smoke (Ollama/vLLM/LM Studio as applicable) pass, together
+with approval, cancellation, multi-agent budget, tenant, durability and human
+UX acceptance. No packaging before human consumer-readiness verification.
