@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -616,6 +617,8 @@ async def stream_ag_ui_chat(
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     """AG-UI-compatible wire adapter; never a second chat execution path."""
+    if not get_runtime_settings().features.enable_ag_ui_bridge:
+        raise HTTPException(status_code=404, detail="AG-UI bridge is disabled")
     # Reject ungoverned client-provided tools, shared state and context.
     if request.tools or request.state or request.context or request.forwardedProps:
         raise HTTPException(
