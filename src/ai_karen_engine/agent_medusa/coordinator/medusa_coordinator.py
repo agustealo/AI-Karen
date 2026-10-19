@@ -489,6 +489,28 @@ class MedusaCoordinator:
             allowed_plugins=list(step.required_plugins),
             allowed_agents=[step.agent_specialist],
         )
+        # Preserve the typed advisory only when it came through the
+        # authenticated Runtime and matches the exact Medusa scope. A
+        # standalone Medusa caller cannot inject arbitrary learning ranks.
+        from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+            ScopedModelSignals,
+        )
+        signal = request.context.get("learned_model_signals")
+        current_requirements = ExecutionRequirements(**request.execution_requirements)
+        canonical_execution_context = request.context.get("execution_context")
+        trusted_signal = (
+            signal
+            if (
+                isinstance(signal, ScopedModelSignals)
+                and canonical_execution_context is not None
+                and getattr(canonical_execution_context, "tenant_id", None) == request.tenant_id
+                and getattr(canonical_execution_context, "user_id", None) == request.user_id
+                and signal.tenant_id == request.tenant_id
+                and signal.user_id == request.user_id
+                and signal.task_type == current_requirements.intent
+            )
+            else None
+        )
         execution = SpecialistExecutionContext(
             authorized_plan=specialist_plan,
             tenant_id=str(request.tenant_id or "").strip(),
@@ -500,6 +522,8 @@ class MedusaCoordinator:
             step_id=step.id,
             preferred_provider=request.context.get("preferred_provider"),
             preferred_model=request.context.get("preferred_model"),
+            learning_task_type=current_requirements.intent,
+            learned_model_signals=trusted_signal,
             budget_meter=meter,
             event_emitter=emitter,
         )
