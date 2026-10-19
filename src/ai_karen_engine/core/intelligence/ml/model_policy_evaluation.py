@@ -74,7 +74,12 @@ def evaluate_model_routing_candidate(
             or not item.metadata["reward_evidence_ref"]
         ):
             raise ValueError("Independent evaluation or human review is required")
-        if not math.isfinite(item.reward) or not 0 <= item.reward <= 1:
+        if (
+            isinstance(item.reward, bool)
+            or not isinstance(item.reward, (int, float))
+            or not math.isfinite(item.reward)
+            or not 0 <= item.reward <= 1
+        ):
             raise ValueError("Model policy reward must be finite and verified")
         if not item.eligible_actions or item.chosen_action not in item.eligible_actions:
             raise ValueError("Actual chosen model is not in the eligible set")
@@ -83,6 +88,19 @@ def evaluate_model_routing_candidate(
             or not item.candidate_policy_id or not item.candidate_policy_version
         ):
             raise ValueError("Versioned behavior and candidate policy provenance is required")
+        if (
+            any(
+                isinstance(p, bool)
+                or not isinstance(p, (int, float))
+                or not math.isfinite(p)
+                for distribution in (
+                    item.behavior_probabilities,
+                    item.candidate_probabilities,
+                )
+                for p in distribution.values()
+            )
+        ):
+            raise ValueError("Action probabilities must be finite numeric values")
         if (
             validate_probability_distribution(
                 item.behavior_probabilities, item.eligible_actions
