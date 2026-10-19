@@ -147,9 +147,11 @@ def _model_selection_execution(*, explicit_model=None, signals=None):
 
 def _mock_canonical_model_manager(monkeypatch):
     from ai_karen_engine.core.model_runtime import model_manager
+    from dataclasses import replace
+
     registry = SimpleNamespace(
-        get_provider_endpoint=lambda _: endpoint().model_copy(
-            update={"default_model": "model-a"}
+        get_provider_endpoint=lambda _: replace(
+            endpoint(), default_model="model-a"
         ),
         get_registered_models=lambda *_args, **_kwargs: ["model-a", "model-b"],
         is_model_available=lambda _provider, name, healthy_only: (
