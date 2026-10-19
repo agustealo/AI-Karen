@@ -364,6 +364,19 @@ class DeepAgentsResearchSpecialist:
             if observed is None:
                 raise RuntimeError("Deep Agents checkpoint was not durably acknowledged")
             checkpoint_verified = True
+            if execution.event_emitter is not None:
+                await execution.event_emitter.emit(AgentEvent(
+                    type=AgentEventType.CHECKPOINT_PERSISTED,
+                    agent_id=self.registration.agent_id,
+                    message="Deep Agents checkpoint verified in canonical PostgreSQL",
+                    correlation_id=execution.correlation_id,
+                    metadata={
+                        "step_id": execution.step_id,
+                        "source": "deepagents",
+                        "checkpoint_verified": True,
+                        "resumable": False,
+                    },
+                ))
 
         messages = result.get("messages") if isinstance(result, Mapping) else None
         final_message = messages[-1] if isinstance(messages, list) and messages else None
