@@ -221,7 +221,10 @@ class WorkflowRuntime:
             raise RuntimeError("Authorized Medusa agent returned no content")
         return result.content, {
             "execution_engine": "deepagents",
-            "response_source": "agent",
+            "response_source": result.metadata.get("response_source", "agent"),
+            "actual_provider": result.metadata.get("actual_provider"),
+            "actual_model": result.metadata.get("actual_model"),
+            "runtime_engine": result.metadata.get("runtime_engine"),
             "execution_topology": "multi_agent",
             "agent_status": result.status.value,
             "degraded_mode": result.status == ResponseStatus.DEGRADED,
