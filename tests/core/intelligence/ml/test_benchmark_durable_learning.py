@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from ai_karen_engine.core.intelligence.ml.contracts import Prediction, PredictionTask
