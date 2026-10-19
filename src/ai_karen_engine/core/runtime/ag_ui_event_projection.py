@@ -117,6 +117,7 @@ class AGUIEventProjection:
                     "baseline_insufficient_evidence",
                     "baseline_reliable",
                     "baseline_no_verified_alternative",
+                    "shadow_operational_recommendation",
                 }:
                     self._learning_reported = True
                     count = meta.get("learned_memory_refs_included")
