@@ -225,3 +225,30 @@ AG-UI implementations**; do not copy transport normalization into Medusa.
 4. Real local tool-call model smoke under ProviderRuntime selection.
 5. Tenant-scoped checkpoints, reconnection and durable event replay proof
    before advertising resumability. Human acceptance before release.
+
+
+## Deep Agents canonical checkpoint acknowledgement (October 19, 2026)
+
+PR #497 now implements an opt-in tenant-bound LangGraph PostgreSQL
+checkpoint saver backed by Karen's existing database engine, run ledger,
+and forward-only migration. A saver being configured is not proof of
+durability: the worker reads back its checkpoint before raising canonical
+`CHECKPOINT_PERSISTED` activity. Only this observed event projects to
+`status` with `checkpoint_verified=true` and `resumable=false`.
+
+This PR's AG-UI layer maps that precise evidence into
+`CUSTOM(karen.checkpoint)`, excluding private checkpoint content.
+**No AG-UI Resume action is enabled.** The separately authorized
+restart and state replay workflow does not yet exist, and the run ledger
+alone is not sufficient to restart a Deep Agents graph.
+
+Checks in the AG-UI tests require the read-back acknowledgement,
+explicit nonresumability, authenticated user/tenant transport, and
+no secret-bearing checkpoint bytes in the wire payload.
+
+Both production feature gates remain independent and disabled:
+`KAREN_MEDUSA_DEEPAGENTS_CHECKPOINT_ENABLED=false` in the runtime
+and `KARI_ENABLE_AG_UI_BRIDGE=false` for the transport. A successful
+beta model smoke is not a substitute for the explicit Deep Agents native
+tool-call proof, and no successful checkpoint insert alone proves safe
+external action replay, worker claim fencing, or human-authorized resume.
