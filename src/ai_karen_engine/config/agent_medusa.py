@@ -46,6 +46,10 @@ class AgentMedusaRuntimeSettings:
     ledger by default for production execution.
     """
 
+    # Opt-in replacement harness for Medusa's existing researcher specialist.
+    # Never infer readiness from this flag alone: a trusted model factory and
+    # the installed Deep Agents library are also required.
+    deepagents_research_enabled: bool = False
     distributed_run_control_enabled: bool = True
     durable_run_ledger_enabled: bool = False
     durable_run_ledger_required: bool = False
@@ -99,6 +103,9 @@ def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
     global _SETTINGS
     if _SETTINGS is None:
         _SETTINGS = AgentMedusaRuntimeSettings(
+            deepagents_research_enabled=_env_bool(
+                "KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED", False
+            ),
             distributed_run_control_enabled=_env_bool(
                 "KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", True
             ),
