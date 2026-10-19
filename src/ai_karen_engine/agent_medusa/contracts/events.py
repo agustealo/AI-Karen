@@ -16,6 +16,7 @@ class AgentEventType(str, Enum):
     MEMORY_PERSIST = "memory_persist"
     PLAN_CREATED = "plan_created"
     PLAN_UPDATED = "plan_updated"
+    CHECKPOINT_PERSISTED = "checkpoint_persisted"
 
 @dataclass
 class AgentEvent:
