@@ -131,7 +131,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
   it("exposes only persisted conversation history and observed expandable activity", () => {
     expect(component).toContain('id="karen-history-search"');
     expect(component).toContain("matchingSessions.map((session)");
-    expect(component).toContain("loadSession(session.id)");
+    expect(component).toContain("onClick={() => void switchConversation(session.id)}");
     expect(component).toContain('aria-expanded={historyOpen}');
     expect(component).toContain("historySearchRef.current?.focus()");
     expect(component).toContain('event.key === "Escape"');
