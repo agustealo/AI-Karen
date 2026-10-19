@@ -279,3 +279,79 @@ def test_learning_lineage_survives_canonical_chat_stream_metadata_filter():
     assert out["learned_memory_refs_included"] == 2
     assert "raw_memory" not in out
     assert "must-not-retain" not in str(out)
+
+
+@pytest.mark.asyncio
+async def test_expired_and_contradicted_user_memory_never_enters_deepagents(
+    monkeypatch,
+):
+    from datetime import datetime, timedelta, timezone
+    from ai_karen_engine.core.context.contracts import (
+        EvidenceContradiction, EvidenceContradictionStatus,
+        EvidenceTemporalContext,
+    )
+    from ai_karen_engine.core.runtime import prompt as prompt_module
+
+    selection = decision()
+    contradicted = selection.cognitive_context.evidence[0]
+    contradicted.contradiction = EvidenceContradiction(
+        status=EvidenceContradictionStatus.CONFIRMED,
+    )
+    expired = selection.cognitive_context.evidence[1]
+    expired.temporal = EvidenceTemporalContext(
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    observed = []
+
+    async def assemble(request_payload):
+        observed.append(request_payload)
+        return PromptAssemblyResult(
+            messages=request_payload.messages,
+            prompt_id=request_payload.prompt_id,
+            prompt_version=request_payload.prompt_version,
+            prompt_hash="hash",
+        )
+
+    monkeypatch.setattr(
+        prompt_module, "get_prompt_runtime_service",
+        lambda: SimpleNamespace(assemble_prompt=assemble),
+    )
+    result, status = await WorkflowRuntime()._assemble_deepagents_learned_context(
+        request(), selection, plan(),
+    )
+    assert result is not None
+    assert observed[0].memory_items == []
+    assert observed[0].continuity_items == []
+    assert status["included_memory_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_deepagents_learned_prompt_never_exceeds_policy_input_limit(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import prompt as prompt_module
+    decision_instance = decision()
+    decision_instance.token_budget = 48
+    authorised_plan = plan()
+    authorised_plan.budget.max_input_tokens = 32
+    observed = []
+
+    async def assemble(request_payload):
+        observed.append(request_payload.token_budget)
+        return PromptAssemblyResult(
+            messages=request_payload.messages,
+            prompt_id=request_payload.prompt_id,
+            prompt_version=request_payload.prompt_version,
+            prompt_hash="hash",
+            token_estimate=40,
+        )
+
+    monkeypatch.setattr(
+        prompt_module, "get_prompt_runtime_service",
+        lambda: SimpleNamespace(assemble_prompt=assemble),
+    )
+    with pytest.raises(RuntimeError, match="authorized input budget"):
+        await WorkflowRuntime()._assemble_deepagents_learned_context(
+            request(), decision_instance, authorised_plan,
+        )
+    assert observed == [32]
