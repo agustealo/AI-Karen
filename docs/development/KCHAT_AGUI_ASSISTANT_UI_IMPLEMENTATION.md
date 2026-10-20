@@ -312,6 +312,64 @@ history. Once the runtime implements and tests this contract, PR #494 can
 consume a read-only event-history endpoint and render a timeline without
 owning execution state.
 
+
+### Personal planner integration contract (design gate, not shipped)
+
+**Product distinction:** The user-facing Karen Planner manages commitments, not Deep
+Agents' internal `write_todos` reasoning aid. A model-generated plan or remembered
+intention is **not** a saved task. Assistant-ui must show only persisted planner
+state and an explicit confirmation or error from the canonical planner service.
+
+**Repository discovery gate:** Before adding a planner service or tables, audit
+existing task, scheduling, reminder, calendar, notification and automation owners
+across API, runtime, UI, configuration, migrations and tests. Keep the strongest
+active implementation. Search for imports and consumers before moving or deleting
+anything. The conversation gateway currently owns transcript persistence; the
+Medusa event emitter currently owns execution observations. Neither should become
+a duplicate task store. This audit does not claim no planner currently exists.
+
+**Proposed responsibility map (subject to repository audit):**
+
+| Owner | Contract |
+|---|---|
+| Canonical Planner domain service | Tenant-scoped projects, goals, tasks, task dependencies, schedules, recurrence, reminders, completion and revisions |
+| CORTEX | Decide planner intent, required permissions, clarification and approval policy; never directly mutate records |
+| ChatRuntime | Assemble authorized planner context, dispatch governed operations, persist outcomes, correlate receipts and audit |
+| Medusa / Deep Agents | Execute actual multi-step planning workflows through authorized planner tools; no independent task database |
+| Karen Memory / NeuroRecall | Retrieve relevant preferences and meaningful past decisions; never substitute memory for canonical task state |
+| NeuroVault | Apply established governance, retention, deletion and restore policy to memory projections |
+| Execution evidence | Record attempted and verified mutations with canonical receipts; no fabricated successful outcomes |
+| UI | Render backend-owned task data, conflict states and action eligibility; preserve failure visibility |
+
+**Minimum mutation contract:** Every create/update/complete/reschedule/remind
+operation receives trusted tenant, user, conversation and correlation context,
+RBAC decision, an idempotency key, and an expected task revision when modifying
+an existing task. Successful responses include server-issued task ID, new
+revision and durable receipt; conflicts and persistence failures are explicit.
+No task should appear completed solely because an AG-UI tool event ended.
+
+**Memory boundary:** An observed planner mutation may become an episodic-memory
+candidate after confirmed persistence, under the existing memory eligibility,
+consent and retention policy. Store provenance references to canonical planner
+records and receipts as permitted. Deleting or editing planner data must not
+leave an authoritative, stale memory claim that a task remains due. Memory
+recall must not authorize a planner write, re-execute tools or resume a run.
+
+**Planner UX acceptance:** Users can create, view, edit and finish a task through
+the planner directly, and ask Karen to perform the same actions conversationally.
+Both paths must return the same authoritative record and revision. Prove
+timezone-aware recurrence, missed reminders, overdue work, conflicts,
+permission failures, retry idempotency, tenant isolation, reload persistence,
+and truthful failed-save states before rollout. No fake task counts or
+completed-state badges, and no synthetic notifications.
+
+**Delivery order:** (1) inventory active owners and existing schema; (2) choose
+canonical domain owner and typed contracts; (3) implement direct planner CRUD
+and tests; (4) connect governed runtime tools; (5) add selective memory
+formation and contextual recall; (6) add proactive reminders and Medusa
+multi-step workflows; (7) release the planner workspace behind verified gates.
+This work is distinct from the durable agent-event replay contract above.
+
 ### Durable timeline contract (not implemented yet)
 
 A transcript-level AG-UI activity card is an observed event, **not** evidence
