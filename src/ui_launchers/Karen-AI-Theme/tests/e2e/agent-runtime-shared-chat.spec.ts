@@ -12,7 +12,7 @@ test.describe('Karen shared conversation workspace', () => {
     await expect(conversation).toBeVisible();
 
     // Navigate through the actual dashboard menu, not a test-only view setter.
-    await page.getByRole('button', { name: 'Agents', exact: true }).click();
+    await page.getByRole('button', { name: 'Agents', exact: true }).first().click();
     await expect(page.getByTestId('workspace-scroll-region')).toBeVisible();
     await expect(conversation).toBeHidden();
 
