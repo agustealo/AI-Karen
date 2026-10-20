@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     app_name: str = "Kari AI Server"
     environment: str = Field(default_factory=_default_environment, validation_alias="ENVIRONMENT")
     enable_personal_planner_read_api: bool = Field(default=False, validation_alias="KAREN_ENABLE_PERSONAL_PLANNER_READ_API")
+    enable_personal_planner_write_api: bool = Field(default=False, validation_alias="KAREN_ENABLE_PERSONAL_PLANNER_WRITE_API")
     secret_key: str = Field(..., validation_alias="SECRET_KEY")
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
