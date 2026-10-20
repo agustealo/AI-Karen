@@ -167,7 +167,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
 describe("Agent Runtime original-conversation handoff", () => {
   it("uses shared SessionProvider rather than a new chat provider", () => {
     expect(dashboard).toContain("function AgentWorkspaceView");
-    expect(dashboard).toContain("const { loadSession } = useSession()");
+    expect(dashboard).toContain("const { loadSession, setWorkspaceRunId } = useSession()");
     expect(dashboard).toContain("await loadSession(conversationId)");
     expect(dashboard).toContain("onOpenConversation={openConversation}");
     expect(dashboard).not.toContain("<AgentsPage onAskKaren={() => setActiveMainView");
