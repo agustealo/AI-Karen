@@ -41,6 +41,7 @@ import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
 import ChatInterface, {
   SessionProvider,
+  useSession,
 } from "@/components/chat/ChatInterface";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
@@ -107,6 +108,30 @@ type NavSubgroup = {
   icon: React.ComponentType<{ className?: string }>;
   items: NavItem[];
 };
+
+function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
+  const { loadSession } = useSession();
+  const [handoffError, setHandoffError] = useState("");
+
+  const openConversation = useCallback(async (conversationId: string) => {
+    setHandoffError("");
+    try {
+      // Canonical session provider fetches and authorizes the conversation.
+      // Navigate only after a successful backend-owned load.
+      await loadSession(conversationId);
+      openChat();
+    } catch {
+      setHandoffError("Unable to open that conversation. It may be unavailable or you may not have access.");
+    }
+  }, [loadSession, openChat]);
+
+  return (
+    <>
+      {handoffError && <p role="alert" className="mb-3 text-sm text-destructive">{handoffError}</p>}
+      <AgentsPage onAskKaren={openChat} onOpenConversation={openConversation} />
+    </>
+  );
+}
 
 function DashboardNavigationContent({ children }: { children: React.ReactNode }) {
   const { isMobile, setOpenMobile } = useSidebar();
@@ -317,7 +342,7 @@ export default function DashboardPage() {
       settings: <SettingsDialogComponent />,
       pluginOverview: <PluginOverviewPage />,
       agentsOverview: <AgentsOverviewPage />,
-      agents: <AgentsPage onAskKaren={() => setActiveMainView("chat")} />,
+      agents: <AgentWorkspaceView openChat={() => setActiveMainView("chat")} />,
       tasks: <TasksPage />,
       jobs: <JobsPage />,
       cronJobs: <CronJobsPage />,
