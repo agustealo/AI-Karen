@@ -28,3 +28,13 @@ def test_planner_migration_is_distinct_from_automation_execution():
     assert "REFERENCES public.personal_planner_commitments (id, tenant_id, owner_id)" in sql
     assert "app.current_tenant_id" in sql
     assert "ALTER TABLE public.automation_tasks" not in sql
+
+
+def test_idempotent_create_retries_are_serialized_and_fingerprint_checked():
+    source = REPO.read_text()
+    sql = MIGRATION.read_text()
+    assert "pg_advisory_xact_lock" in source
+    assert 'existing["request_fingerprint"] != fingerprint' in source
+    assert 'existing["correlation_id"]' in source
+    assert "request_fingerprint varchar(64) NOT NULL" in sql
+    assert "PRIMARY KEY (tenant_id, owner_id, idempotency_key)" in sql
