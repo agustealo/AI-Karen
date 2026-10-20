@@ -97,7 +97,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain('typeof fields.run_id === "string"');
     expect(component).toContain('typeof fields.event_id === "string"');
     expect(component).toContain('typeof fields.step_id === "string"');
-    expect(component).toContain('Run: {runId}');
+    expect(component).toContain('AG-UI run: {runId}');
     expect(component).toContain('Event: {eventId}');
     expect(component).toContain('Reported: {reportedAt}');
     expect(component).not.toContain('Date.now()');
