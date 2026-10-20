@@ -108,6 +108,7 @@ class DurableRunLedger(Protocol):
         tenant_id: str,
         include_terminal: bool,
         limit: int = 250,
+        user_id: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
     async def list_reconcilable(
@@ -482,8 +483,10 @@ class PostgresDurableRunLedger:
         tenant_id: str,
         include_terminal: bool,
         limit: int = 250,
+        user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 1000))
+        owner_clause = " AND user_id = :user_id" if user_id is not None else ""
         terminal_clause = (
             ""
             if include_terminal
@@ -497,9 +500,10 @@ class PostgresDurableRunLedger:
                         self._select_sql()
                         + " WHERE tenant_id = CAST(:tenant_id AS uuid) "
                         + terminal_clause
+                        + owner_clause
                         + " ORDER BY started_at DESC LIMIT :limit"
                     ),
-                    {"tenant_id": canonical_tenant_id, "limit": safe_limit},
+                    {"tenant_id": canonical_tenant_id, "limit": safe_limit, "user_id": user_id},
                 )
                 return [self._snapshot(dict(row)) for row in result.mappings().all()]
         except SQLAlchemyError as exc:
