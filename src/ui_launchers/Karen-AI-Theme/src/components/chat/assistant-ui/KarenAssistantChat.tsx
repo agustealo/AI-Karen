@@ -404,11 +404,11 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
       const canonicalRun = connected.run.bind(connected);
       // One allowlisted lookup hint; the backend resolves ownership for every
       // request. This never passes client policy, tools, or agent state.
-      connected.run = ((input: Parameters<HttpAgent["run"]>[0], options: Parameters<HttpAgent["run"]>[1]) =>
+      connected.run = ((input: Parameters<HttpAgent["run"]>[0]) =>
         canonicalRun({
           ...input,
           forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {},
-        }, options)) as HttpAgent["run"];
+        })) as HttpAgent["run"];
       return connected;
     },
     [workspaceRunId],
