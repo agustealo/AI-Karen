@@ -605,7 +605,7 @@ export default function ModelSettings() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="ai-provider" className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Select Provider</Label>
-                  <Dialog open={isCustomDialogOpen} onOpenChange={setIsCustomDialogOpen}>
+                  {canManageRuntime && <Dialog open={isCustomDialogOpen} onOpenChange={setIsCustomDialogOpen}>
                     <DialogTrigger asChild>
                       <Button variant="ghost" size="sm" className="h-8 text-primary hover:text-primary hover:bg-primary/5">
                         <PlusCircle className="mr-2 h-4 w-4" /> Add Custom
@@ -649,7 +649,7 @@ export default function ModelSettings() {
                         </Button>
                       </DialogFooter>
                     </DialogContent>
-                  </Dialog>
+                  </Dialog>}
                 </div>
 
                 {!selectableCloudProviders.length ? (
@@ -1011,7 +1011,7 @@ export default function ModelSettings() {
                             <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Encrypted Backend Storage</p>
                           </div>
 
-                          {selectedProviderDetails.api_key_configured && (
+                          {canManageRuntime && selectedProviderDetails.api_key_configured && (
                             <div className="flex justify-end">
                               <Button variant="outline" size="sm" onClick={handleClearApiKey} disabled={!canManageRuntime || isClearingKey} className="h-7 text-[10px] font-bold border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/10">
                                 Clear Secret
