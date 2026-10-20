@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from ai_karen_engine.core.planner.contracts import CommitmentMutation, CommitmentStatus
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
@@ -111,7 +112,7 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
         # An invalid receipt write must roll back the preceding mutation.
         # The foreign-key failure deliberately occurs inside one transaction.
         rollback_id = uuid4()
-        with pytest.raises(Exception):
+        with pytest.raises(IntegrityError):
             async with async_transaction_scope(str(tenant)) as session:
                 await session.execute(text("""
                     INSERT INTO public.personal_planner_commitments
