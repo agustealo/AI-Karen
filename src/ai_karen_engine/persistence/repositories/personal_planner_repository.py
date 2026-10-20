@@ -6,6 +6,8 @@ must pass authenticated owner and tenant identities, never model-supplied ones.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -28,6 +30,11 @@ class PlannerNotFoundError(LookupError):
 
 _COLUMNS = """id, tenant_id, owner_id, project_id, title, description, status,
 priority, due_at, timezone, revision, created_at, updated_at"""
+
+
+def _fingerprint(operation: str, fields: dict[str, object]) -> str:
+    encoded = json.dumps({"operation": operation, "fields": fields}, sort_keys=True, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class PersonalPlannerRepository:
@@ -55,13 +62,30 @@ class PersonalPlannerRepository:
         )
         if not correlation_id or len(correlation_id) > 128:
             raise ValueError("Valid correlation_id required")
+        fingerprint = _fingerprint("create", {"title": draft.title, "timezone": draft.timezone})
         async with async_transaction_scope(str(tenant_id)) as session:
+            await session.execute(text("""
+                SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))
+            """), {"scope": f"planner:{tenant_id}:{owner_id}:{idempotency_key}"})
             existing = (await session.execute(text("""
-                SELECT commitment_id FROM public.personal_planner_mutation_receipts
+                SELECT commitment_id, revision, correlation_id, persisted_at, request_fingerprint
+                FROM public.personal_planner_mutation_receipts
                 WHERE tenant_id=:tenant AND owner_id=:owner AND idempotency_key=:key
-            """), {"tenant": tenant_id, "owner": owner_id, "key": idempotency_key})).scalar_one_or_none()
+            """), {"tenant": tenant_id, "owner": owner_id, "key": idempotency_key})).mappings().first()
             if existing is not None:
-                raise PlannerConflictError("Idempotency key has already been used")
+                if existing["request_fingerprint"] != fingerprint:
+                    raise PlannerConflictError("Idempotency key reused with different request")
+                row = (await session.execute(text(f"""
+                    SELECT {_COLUMNS} FROM public.personal_planner_commitments
+                    WHERE id=:id AND tenant_id=:tenant AND owner_id=:owner
+                """), {"id": existing["commitment_id"], "tenant": tenant_id, "owner": owner_id})).mappings().first()
+                if row is None:
+                    raise PlannerNotFoundError("Previously created commitment unavailable")
+                return PersonalCommitment.model_validate(dict(row)), PersistedCommitmentReceipt(
+                    commitment_id=existing["commitment_id"], tenant_id=tenant_id,
+                    revision=existing["revision"], idempotency_key=idempotency_key,
+                    persisted_at=existing["persisted_at"], correlation_id=existing["correlation_id"],
+                )
             await session.execute(text("""
                 INSERT INTO public.personal_planner_commitments
                 (id, tenant_id, owner_id, title, timezone, revision, created_at, updated_at)
@@ -73,11 +97,11 @@ class PersonalPlannerRepository:
             })
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, commitment_id, revision, correlation_id)
-                VALUES (:tenant, :owner, :key, :id, 1, :correlation)
+                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, revision, correlation_id)
+                VALUES (:tenant, :owner, :key, :fingerprint, :id, 1, :correlation)
             """), {
                 "tenant": tenant_id, "owner": owner_id, "key": idempotency_key,
-                "id": draft.id, "correlation": correlation_id,
+                "id": draft.id, "fingerprint": fingerprint, "correlation": correlation_id,
             })
         return draft, PersistedCommitmentReceipt(
             commitment_id=draft.id, tenant_id=tenant_id, revision=1,
@@ -102,6 +126,7 @@ class PersonalPlannerRepository:
         }
         # Keep unchanged columns untouched, and require at least one change.
         updates = {key: value for key, value in changes.items() if value is not None}
+        fingerprint = _fingerprint("update", {"id": str(commitment_id), "revision": mutation.expected_revision, "changes": updates})
         if not updates:
             raise ValueError("At least one planner field must change")
         async with async_transaction_scope(str(tenant_id)) as session:
@@ -128,11 +153,11 @@ class PersonalPlannerRepository:
                 raise PlannerConflictError("Commitment unavailable or revision changed")
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, commitment_id, revision, correlation_id)
-                VALUES (:tenant, :owner, :key, :id, :revision, :correlation)
+                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, revision, correlation_id)
+                VALUES (:tenant, :owner, :key, :fingerprint, :id, :revision, :correlation)
             """), {
                 "tenant": tenant_id, "owner": owner_id,
                 "key": mutation.idempotency_key, "id": commitment_id,
-                "revision": row["revision"], "correlation": correlation_id,
+                "revision": row["revision"], "fingerprint": fingerprint, "correlation": correlation_id,
             })
             return PersonalCommitment.model_validate(dict(row))
