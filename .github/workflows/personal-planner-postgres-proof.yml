@@ -74,5 +74,44 @@ jobs:
 
           asyncio.run(main())
           PY
+      - name: Prove planner RLS using least-privilege database role
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          import uuid
+          import asyncpg
+
+          async def main():
+              admin = await asyncpg.connect(os.environ["DATABASE_URL"])
+              tenant = uuid.UUID(os.environ["KAREN_TEST_PLANNER_TENANT_ID"])
+              foreign = uuid.uuid4()
+              owner = uuid.UUID(os.environ["KAREN_TEST_PLANNER_USER_ID"])
+              record = uuid.uuid4()
+              try:
+                  await admin.execute("CREATE ROLE karen_ci_planner_reader LOGIN PASSWORD 'planner_ci_only'")
+                  await admin.execute("GRANT USAGE ON SCHEMA public TO karen_ci_planner_reader")
+                  await admin.execute("GRANT SELECT ON public.personal_planner_commitments TO karen_ci_planner_reader")
+                  await admin.execute("INSERT INTO public.personal_planner_commitments (id, tenant_id, owner_id, title, timezone) VALUES ($1, $2, $3, 'RLS proof', 'UTC')", record, tenant, owner)
+                  reader = await asyncpg.connect(
+                      host="127.0.0.1", port=5432, database="ai_karen",
+                      user="karen_ci_planner_reader", password="planner_ci_only",
+                  )
+                  try:
+                      assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments") == 0
+                      async with reader.transaction():
+                          await reader.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(foreign))
+                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments WHERE id=$1", record) == 0
+                      async with reader.transaction():
+                          await reader.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(tenant))
+                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments WHERE id=$1", record) == 1
+                  finally:
+                      await reader.close()
+              finally:
+                  await admin.execute("DELETE FROM public.personal_planner_commitments WHERE id=$1", record)
+                  await admin.close()
+
+          asyncio.run(main())
+          PY
       - name: Verify real PostgreSQL planner behavior
         run: pytest tests/core/planner tests/integration/test_live_personal_planner_postgres.py -q -rs
