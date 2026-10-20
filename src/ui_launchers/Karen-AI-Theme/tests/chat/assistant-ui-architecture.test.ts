@@ -173,3 +173,15 @@ describe("Agent Runtime original-conversation handoff", () => {
     expect(dashboard).not.toContain("<AgentsPage onAskKaren={() => setActiveMainView");
   });
 });
+
+describe("persistent Karen workspace panel", () => {
+  it("keeps exactly one mounted chat and presents it across dashboard workspaces", () => {
+    expect(dashboard).toContain('data-testid="persistent-karen-conversation"');
+    expect(dashboard).toContain("karenPanelOpen");
+    expect(dashboard).toContain('aria-label="Collapse Karen conversation"');
+    expect(dashboard).toContain('aria-controls="persistent-karen-panel"');
+    expect(dashboard.match(/<KarenAssistantChat \/>/g)?.length).toBe(1);
+    expect(dashboard.match(/<ChatInterface \/>/g)?.length).toBe(1);
+    expect(dashboard).toContain("backendStatus === \"ready\" && (activeMainView === \"chat\" || karenPanelOpen)");
+  });
+});
