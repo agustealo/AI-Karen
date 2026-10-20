@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from ai_karen_engine.api_routes.agents.runtime import list_my_agent_runs, get_my_agent_run
+from ai_karen_engine.api_routes.agents.runtime import list_my_agent_runs, get_my_agent_run, get_my_run_context
 
 
 class ControlPlane:
@@ -89,3 +89,23 @@ async def test_selected_run_detail_requires_verified_identity():
         )
     assert error.value.status_code == 403
     assert plane.requests == []
+
+
+@pytest.mark.asyncio
+async def test_context_projection_only_exposes_owner_verified_fields():
+    tenant, owner = str(uuid4()), str(uuid4())
+    plane = DetailControlPlane({
+        "run_id": "owned", "user_id": owner, "status": "completed",
+        "started_at": "2026-10-20T12:00:00Z",
+        "secret": "not-for-ui", "tenant_id": tenant,
+    })
+    principal = SimpleNamespace(tenant_id=tenant, user_id=owner, is_active=True)
+    context = await get_my_run_context("owned", current_user=principal, control_plane=plane)
+    assert context == {
+        "resource_type": "medusa_run", "run_id": "owned", "status": "completed",
+        "started_at": "2026-10-20T12:00:00Z", "completed_at": None, "error_type": None,
+    }
+    plane.record["user_id"] = str(uuid4())
+    with pytest.raises(HTTPException) as error:
+        await get_my_run_context("owned", current_user=principal, control_plane=plane)
+    assert error.value.status_code == 404
