@@ -96,6 +96,7 @@ export default function ExpressionSettings() {
   useEffect(() => { void loadData(); }, [loadData]);
 
   const handleSave = async (engineConfigs?: Record<string, Record<string, unknown>>, newFallbackOrder?: string[]) => {
+    if (!canManageRuntime) return;
     setIsSaving(true);
     try {
       const payload: Record<string, unknown> = {
