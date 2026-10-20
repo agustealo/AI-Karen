@@ -94,6 +94,8 @@ async def test_ag_ui_calls_only_canonical_stream_and_preserves_tenant_scope(monk
         "TEXT_MESSAGE_END", "RUN_FINISHED",
     ]
     assert a[-1]["runId"] == "run-1"
+    # A reused transport run ID does not become shared runtime identity.
+    assert b[0]["runId"] == "run-1"
     assert b[-1]["type"] == "RUN_FINISHED"
     assert len(fake.requests) == 2
     assert fake.requests[0].context.tenant_id == TENANT_A
