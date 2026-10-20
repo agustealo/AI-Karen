@@ -118,6 +118,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runDetailError, setRunDetailError] = useState("");
+  const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
 
   const activeRuns = useMemo(
@@ -211,6 +212,24 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
       setIsLoadingRuns(false);
     }
   }, [isAuthenticated, isAdmin]);
+
+  const copyVerifiedRunContext = useCallback(async (runId: string) => {
+    setContextMessage("");
+    try {
+      const record = await apiClient.get<{
+        resource_type: string; run_id: string; status: string;
+        started_at?: string | null; completed_at?: string | null; error_type?: string | null;
+      }>(`/api/agent-runtime/my-runs/${encodeURIComponent(runId)}/context`);
+      if (record.resource_type !== "medusa_run" || record.run_id !== runId) {
+        throw new Error("Execution identity changed during verification.");
+      }
+      const prompt = `Please explain my Agent Runtime execution ${record.run_id}. Verified status: ${record.status}. Check current permissions and execution state before taking action.`;
+      await navigator.clipboard.writeText(prompt);
+      setContextMessage("Verified run reference copied. Open Karen and paste it to ask about this execution. Karen must independently verify access.");
+    } catch (error) {
+      setContextMessage(error instanceof Error ? error.message : "Could not verify or copy this execution reference.");
+    }
+  }, []);
 
   const loadApprovals = useCallback(async () => {
     if (!isAuthenticated) {
@@ -378,6 +397,11 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
                         <div><dt>Response source</dt><dd>{selectedRun.response_source || "Not recorded"}</dd></div>
                       </dl>
                     </details>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>
+                      {onAskKaren && <Button type="button" size="sm" variant="outline" onClick={onAskKaren}>Open Karen</Button>}
+                    </div>
+                    {contextMessage && <p role="status" className="mt-2 text-sm">{contextMessage}</p>}
                     {selectedRun.cancellable && (
                       <Button className="mt-4" variant="destructive" size="sm"
                         disabled={cancellingRunId === selectedRun.run_id}
