@@ -89,6 +89,8 @@ interface ConversationApiResponse {
 
 interface SessionContextType {
   currentSession: Session | null;
+  workspaceRunId: string | null;
+  setWorkspaceRunId: (runId: string | null) => void;
   sessions: Session[];
   isLoadingSessions: boolean;
   error: string | null;
@@ -204,6 +206,7 @@ interface SessionProviderProps {
 
 export function SessionProvider({ children, initialSessionId }: SessionProviderProps) {
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  const [workspaceRunId, setWorkspaceRunId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -729,6 +732,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   return (
     <SessionContext.Provider value={{
       currentSession,
+      workspaceRunId,
+      setWorkspaceRunId,
       sessions,
       isLoadingSessions,
       error,
@@ -1572,6 +1577,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             .slice(-12),
           session_id: currentSessionRef.current?.runtimeSessionId || sessionIdRef.current,
           conversation_id: sessionIdRef.current,
+          workspace_run_id: workspaceRunId || undefined,
           preferred_llm_provider: preferredProvider,
           preferred_model: preferredModel,
           temperature: 0.7,
