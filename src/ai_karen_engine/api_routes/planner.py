@@ -20,6 +20,7 @@ from ai_karen_engine.services.personal_planner import PersonalPlannerService, Pl
 from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
 
 router = APIRouter(prefix="/api/planner", tags=["personal-planner"])
+write_router = APIRouter(prefix="/api/planner", tags=["personal-planner"])
 
 
 @router.get("/commitments/{commitment_id}", response_model=PersonalCommitment)
@@ -59,7 +60,7 @@ def _planner_http_error(exc: Exception) -> HTTPException:
     raise exc
 
 
-@router.post("/commitments", response_model=PlannerCreateResponse)
+@write_router.post("/commitments", response_model=PlannerCreateResponse)
 async def create_personal_commitment(
     payload: PlannerCreateRequest,
     request: Request,
@@ -77,7 +78,7 @@ async def create_personal_commitment(
         raise _planner_http_error(exc) from exc
 
 
-@router.patch("/commitments/{commitment_id}", response_model=PersonalCommitment)
+@write_router.patch("/commitments/{commitment_id}", response_model=PersonalCommitment)
 async def update_personal_commitment(
     commitment_id: UUID,
     payload: CommitmentMutation,
