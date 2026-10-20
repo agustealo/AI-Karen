@@ -139,6 +139,32 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
                 tenant_id=tenant, owner_id=uuid4(), commitment_id=first.id,
             )
 
+        # Competing identical create requests must commit a single result.
+        concurrent_key = uuid4()
+        simultaneous = await asyncio.gather(*[
+            repo.create(
+                tenant_id=tenant, owner_id=owner,
+                title="Single concurrent commitment", timezone="UTC",
+                idempotency_key=concurrent_key, correlation_id=f"concurrent-{i}",
+            )
+            for i in range(2)
+        ])
+        assert simultaneous[0] == simultaneous[1]
+        concurrent_id = simultaneous[0][0].id
+        try:
+            async with async_transaction_scope(str(tenant)) as session:
+                matches = (await session.execute(text("""
+                    SELECT count(*) FROM public.personal_planner_mutation_receipts
+                    WHERE tenant_id=:tenant AND owner_id=:owner AND idempotency_key=:key
+                """), {"tenant": tenant, "owner": owner, "key": concurrent_key})).scalar_one()
+            assert matches == 1
+        finally:
+            async with async_transaction_scope(str(tenant)) as session:
+                await session.execute(text("""
+                    DELETE FROM public.personal_planner_commitments
+                    WHERE id=:id AND tenant_id=:tenant AND owner_id=:owner
+                """), {"id": concurrent_id, "tenant": tenant, "owner": owner})
+
         # A genuinely separate concurrent update can win only one revision.
         competing = await repo.create(
             tenant_id=tenant, owner_id=owner, title="Concurrent edit",
