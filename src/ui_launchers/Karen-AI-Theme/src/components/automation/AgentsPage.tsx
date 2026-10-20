@@ -116,6 +116,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
   const [actionMessage, setActionMessage] = useState("");
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
+  const [runDetailError, setRunDetailError] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
 
   const activeRuns = useMemo(
@@ -126,7 +128,27 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
     [runs],
   );
 
-  const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
+  const selectedRun = selectedRunId
+    ? (verifiedRun?.run_id === selectedRunId ? verifiedRun : null)
+    : null;
+
+  useEffect(() => {
+    if (!selectedRunId || !isAuthenticated) {
+      setVerifiedRun(null);
+      setRunDetailError("");
+      return;
+    }
+    let active = true;
+    setVerifiedRun(null);
+    setRunDetailError("");
+    // Even an ID from the list is treated as an untrusted lookup key.
+    apiClient.get<AgentRunRecord>(`/api/agent-runtime/my-runs/${encodeURIComponent(selectedRunId)}`)
+      .then((record) => { if (active) setVerifiedRun(record); })
+      .catch((error: unknown) => {
+        if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
+      });
+    return () => { active = false; };
+  }, [selectedRunId, isAuthenticated]);
   const visibleRuns = runs.filter((run) => {
     if (workFilter === "all") return true;
     const status = run.status.toLowerCase();
@@ -328,7 +350,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
                   visibleRuns.length ? visibleRuns.map((run) => (
                     <button type="button" key={run.run_id}
                       className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-                      aria-pressed={selectedRun?.run_id === run.run_id}
+                      aria-pressed={selectedRunId === run.run_id}
                       onClick={() => setSelectedRunId(run.run_id)}>
                       <span className="block text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span>
                       <span className="text-xs text-muted-foreground">{run.status} · {formatTimestamp(run.started_at)}</span>
@@ -336,7 +358,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
                   )) : <p className="rounded-lg border p-4 text-sm text-muted-foreground">No verified executions match this view.</p>}
               </div>
               <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
-                {selectedRun ? (
+                {runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h4 className="font-semibold">Execution details</h4>
@@ -362,7 +384,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
                       </Button>
                     )}
                   </>
-                ) : <p className="text-sm text-muted-foreground">Select an execution to inspect its verified status.</p>}
+                ) : <p className="text-sm text-muted-foreground">{selectedRunId ? "Verifying execution access…" : "Select an execution to inspect its verified status."}</p>}
               </div>
             </div>
             <p className="text-xs text-muted-foreground">{isAdmin ? "Administrative view: tenant-scoped run history." : "Only your verified Medusa runs appear here. Run cancellation is administrator-controlled."}</p>
