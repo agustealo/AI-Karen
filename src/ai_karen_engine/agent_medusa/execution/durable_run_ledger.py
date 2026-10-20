@@ -503,7 +503,11 @@ class PostgresDurableRunLedger:
                         + owner_clause
                         + " ORDER BY started_at DESC LIMIT :limit"
                     ),
-                    {"tenant_id": canonical_tenant_id, "limit": safe_limit, "user_id": user_id},
+                    {
+                        "tenant_id": canonical_tenant_id,
+                        "limit": safe_limit,
+                        "user_id": user_id,
+                    },
                 )
                 return [self._snapshot(dict(row)) for row in result.mappings().all()]
         except SQLAlchemyError as exc:
