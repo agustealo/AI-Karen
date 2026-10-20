@@ -145,3 +145,57 @@ jobs:
           PY
       - name: Verify real PostgreSQL planner behavior
         run: pytest tests/core/planner tests/integration/test_live_personal_planner_postgres.py -q -rs
+
+  planner-full-schema:
+    name: planner-full-schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_karen
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start isolated canonical PostgreSQL image
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install schema proof driver
+        run: python -m pip install asyncpg
+      - name: Apply canonical migrations in order to clean disposable PostgreSQL
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          from pathlib import Path
+          import asyncpg
+
+          async def main():
+              conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+              try:
+                  assert not await conn.fetchval("SELECT to_regclass('public.auth_users') IS NOT NULL"), "Refuse prepopulated database"
+                  migrations = sorted(Path("supabase/migrations").glob("*.sql"))
+                  assert migrations, "No canonical migrations found"
+                  for migration in migrations:
+                      try:
+                          await conn.execute(migration.read_text(encoding="utf-8"))
+                      except Exception as exc:
+                          raise RuntimeError(f"Canonical migration failed: {migration.name}") from exc
+                  for table in ("auth_users", "tenants", "personal_planner_commitments", "personal_planner_mutation_receipts"):
+                      assert await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}"), table
+                  assert await conn.fetchval("""
+                      SELECT relrowsecurity AND relforcerowsecurity
+                      FROM pg_class WHERE oid='public.personal_planner_commitments'::regclass
+                  """)
+                  assert await conn.fetchval("""
+                      SELECT relrowsecurity AND relforcerowsecurity
+                      FROM pg_class WHERE oid='public.personal_planner_mutation_receipts'::regclass
+                  """)
+              finally:
+                  await conn.close()
+
+          asyncio.run(main())
+          PY
