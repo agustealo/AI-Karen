@@ -642,8 +642,17 @@ async def stream_ag_ui_chat(
     """AG-UI-compatible wire adapter; never a second chat execution path."""
     if not get_runtime_settings().features.enable_ag_ui_bridge:
         raise HTTPException(status_code=404, detail="AG-UI bridge is disabled")
+    # AG-UI may carry only a bounded resource lookup hint. Never trust the
+    # client-supplied context, tools, or state as authorization.
+    workspace_ref = request.forwardedProps.get("workspace_run_id")
+    if request.forwardedProps and (
+        set(request.forwardedProps) != {"workspace_run_id"}
+        or not isinstance(workspace_ref, str)
+        or not 1 <= len(workspace_ref) <= 128
+    ):
+        raise HTTPException(status_code=422, detail="Unsupported workspace context")
     # Reject ungoverned client-provided tools, shared state and context.
-    if request.tools or request.state or request.context or request.forwardedProps:
+    if request.tools or request.state or request.context:
         raise HTTPException(
             status_code=422,
             detail="Client-supplied tools, state and context are not supported by Karen",
@@ -693,12 +702,17 @@ async def stream_ag_ui_chat(
                 message=current_text,
                 session_id=session_id,
                 conversation_id=conversation_id,
+                workspace_run_id=workspace_ref,
             ),
             user=user,
             session_id=session_id,
             correlation_id=correlation_id,
             response_id=response_id,
         )
+        if workspace_ref:
+            canonical_request.metadata["verified_workspace_run"] = (
+                await _verified_workspace_run_reference(run_id=workspace_ref, user=user)
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
