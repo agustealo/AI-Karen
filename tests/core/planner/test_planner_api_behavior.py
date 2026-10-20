@@ -10,9 +10,8 @@ from fastapi.testclient import TestClient
 
 from ai_karen_engine.api_routes.planner import router
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.persistence.repositories.personal_planner_repository import (
-    PersonalPlannerRepository, PlannerNotFoundError,
-)
+from ai_karen_engine.persistence.repositories.personal_planner_repository import PlannerNotFoundError
+from ai_karen_engine.services.personal_planner import PersonalPlannerService
 
 
 def _app(*, enabled: bool, user: object | None = None) -> FastAPI:
@@ -52,10 +51,10 @@ def test_bad_trusted_identity_is_rejected(tenant, owner):
 
 def test_nonexistent_and_cross_owner_commitments_are_not_disclosed(monkeypatch):
     tenant, owner, commitment = uuid4(), uuid4(), uuid4()
-    async def unavailable(self, *, tenant_id, owner_id, commitment_id):
-        assert (tenant_id, owner_id, commitment_id) == (tenant, owner, commitment)
+    async def unavailable(self, *, user, commitment_id):
+        assert (user.tenant_id, user.user_id, commitment_id) == (tenant, owner, commitment)
         raise PlannerNotFoundError("Unavailable")
-    monkeypatch.setattr(PersonalPlannerRepository, "get", unavailable)
+    monkeypatch.setattr(PersonalPlannerService, "get", unavailable)
     app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner))
     response = TestClient(app).get(f"/api/planner/commitments/{commitment}")
     assert response.status_code == 404
@@ -71,10 +70,10 @@ def test_valid_authorized_read_uses_authenticated_scope(monkeypatch):
         id=commitment, tenant_id=tenant, owner_id=owner, title="Weekly plan",
         timezone="UTC", revision=1, created_at=now, updated_at=now,
     )
-    async def read(self, *, tenant_id, owner_id, commitment_id):
-        assert (tenant_id, owner_id, commitment_id) == (tenant, owner, commitment)
+    async def read(self, *, user, commitment_id):
+        assert (user.tenant_id, user.user_id, commitment_id) == (tenant, owner, commitment)
         return record
-    monkeypatch.setattr(PersonalPlannerRepository, "get", read)
+    monkeypatch.setattr(PersonalPlannerService, "get", read)
     app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner))
     response = TestClient(app).get(f"/api/planner/commitments/{commitment}")
     assert response.status_code == 200
