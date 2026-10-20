@@ -122,9 +122,9 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
                        "title": "Must roll back", "timezone": "UTC"})
                 await session.execute(text("""
                     INSERT INTO public.personal_planner_mutation_receipts
-                    (tenant_id, owner_id, idempotency_key, request_fingerprint,
+                    (tenant_id, owner_id, idempotency_key, operation, request_fingerprint,
                      commitment_id, result_snapshot, revision, correlation_id)
-                    VALUES (:tenant, :owner, :key, :fingerprint,
+                    VALUES (:tenant, :owner, :key, 'create', :fingerprint,
                             :unknown_id, CAST(:snapshot AS jsonb), 1, :correlation)
                 """), {"tenant": tenant, "owner": owner, "key": uuid4(),
                        "fingerprint": "a" * 64, "unknown_id": uuid4(),
