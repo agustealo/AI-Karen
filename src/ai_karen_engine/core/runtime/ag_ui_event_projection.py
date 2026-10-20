@@ -174,6 +174,8 @@ class AGUIEventProjection:
                     if internal else "KAREN_AGENT_STEP"
                 ),
                 "content": {
+                    # This AG-UI run ID is transport correlation, not a
+                    # verified durable runtime-ledger identifier.
                     "runId": self.run_id,
                     "stepId": step_id,
                     "agentId": agent_id,
