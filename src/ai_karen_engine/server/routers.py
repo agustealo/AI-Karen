@@ -42,6 +42,7 @@ from ai_karen_engine.api_routes.channels.webhooks import (
 from ai_karen_engine.api_routes.content.communications import router as communications_center_router
 from ai_karen_engine.api_routes.extensions.extensions import router as extensions_router
 from ai_karen_engine.api_routes.memory.memory import router as memory_router
+from ai_karen_engine.api_routes.planner import router as personal_planner_router
 from ai_karen_engine.api_routes.models.model_orchestrator import (
     get_current_user as model_orchestrator_current_user,
 )
@@ -312,10 +313,11 @@ def _include_optional_routers(app: FastAPI) -> None:
 
 def wire_routers(app: FastAPI, settings: Any) -> None:
     """Mount canonical routers exactly once and install authentication."""
-    del settings
     configure_authentication_middleware(app)
     app.dependency_overrides[model_orchestrator_current_user] = require_runtime_admin
     _include_specs(app, CORE_ROUTERS)
+    if settings.enable_personal_planner_read_api:
+        app.include_router(personal_planner_router)
     _include_optional_routers(app)
     logger.info("Canonical API routers registered")
 
