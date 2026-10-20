@@ -68,20 +68,15 @@ class PersonalPlannerRepository:
                 SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))
             """), {"scope": f"planner:{tenant_id}:{owner_id}:{idempotency_key}"})
             existing = (await session.execute(text("""
-                SELECT commitment_id, revision, correlation_id, persisted_at, request_fingerprint
+                SELECT commitment_id, revision, correlation_id, persisted_at, request_fingerprint, result_snapshot
                 FROM public.personal_planner_mutation_receipts
                 WHERE tenant_id=:tenant AND owner_id=:owner AND idempotency_key=:key
             """), {"tenant": tenant_id, "owner": owner_id, "key": idempotency_key})).mappings().first()
             if existing is not None:
                 if existing["request_fingerprint"] != fingerprint:
                     raise PlannerConflictError("Idempotency key reused with different request")
-                row = (await session.execute(text(f"""
-                    SELECT {_COLUMNS} FROM public.personal_planner_commitments
-                    WHERE id=:id AND tenant_id=:tenant AND owner_id=:owner
-                """), {"id": existing["commitment_id"], "tenant": tenant_id, "owner": owner_id})).mappings().first()
-                if row is None:
-                    raise PlannerNotFoundError("Previously created commitment unavailable")
-                return PersonalCommitment.model_validate(dict(row)), PersistedCommitmentReceipt(
+                saved = PersonalCommitment.model_validate(existing["result_snapshot"])
+                return saved, PersistedCommitmentReceipt(
                     commitment_id=existing["commitment_id"], tenant_id=tenant_id,
                     revision=existing["revision"], idempotency_key=idempotency_key,
                     persisted_at=existing["persisted_at"], correlation_id=existing["correlation_id"],
@@ -97,11 +92,11 @@ class PersonalPlannerRepository:
             })
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, revision, correlation_id)
-                VALUES (:tenant, :owner, :key, :fingerprint, :id, 1, :correlation)
+                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
+                VALUES (:tenant, :owner, :key, :fingerprint, :id, CAST(:snapshot AS jsonb), 1, :correlation)
             """), {
                 "tenant": tenant_id, "owner": owner_id, "key": idempotency_key,
-                "id": draft.id, "fingerprint": fingerprint, "correlation": correlation_id,
+                "id": draft.id, "fingerprint": fingerprint, "snapshot": draft.model_dump_json(), "correlation": correlation_id,
             })
         return draft, PersistedCommitmentReceipt(
             commitment_id=draft.id, tenant_id=tenant_id, revision=1,
@@ -130,12 +125,18 @@ class PersonalPlannerRepository:
         if not updates:
             raise ValueError("At least one planner field must change")
         async with async_transaction_scope(str(tenant_id)) as session:
+            await session.execute(text("""
+                SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))
+            """), {"scope": f"planner:{tenant_id}:{owner_id}:{mutation.idempotency_key}"})
             already = (await session.execute(text("""
-                SELECT commitment_id FROM public.personal_planner_mutation_receipts
+                SELECT commitment_id, request_fingerprint, result_snapshot
+                FROM public.personal_planner_mutation_receipts
                 WHERE tenant_id=:tenant AND owner_id=:owner AND idempotency_key=:key
-            """), {"tenant": tenant_id, "owner": owner_id, "key": mutation.idempotency_key})).scalar_one_or_none()
+            """), {"tenant": tenant_id, "owner": owner_id, "key": mutation.idempotency_key})).mappings().first()
             if already is not None:
-                raise PlannerConflictError("Idempotency key has already been used")
+                if already["request_fingerprint"] != fingerprint or already["commitment_id"] != commitment_id:
+                    raise PlannerConflictError("Idempotency key reused with different mutation")
+                return PersonalCommitment.model_validate(already["result_snapshot"])
             bind = {
                 "id": commitment_id, "tenant": tenant_id, "owner": owner_id,
                 "expected": mutation.expected_revision, "updated": now, **updates,
@@ -153,11 +154,13 @@ class PersonalPlannerRepository:
                 raise PlannerConflictError("Commitment unavailable or revision changed")
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, revision, correlation_id)
-                VALUES (:tenant, :owner, :key, :fingerprint, :id, :revision, :correlation)
+                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
+                VALUES (:tenant, :owner, :key, :fingerprint, :id, CAST(:snapshot AS jsonb), :revision, :correlation)
             """), {
                 "tenant": tenant_id, "owner": owner_id,
                 "key": mutation.idempotency_key, "id": commitment_id,
-                "revision": row["revision"], "fingerprint": fingerprint, "correlation": correlation_id,
+                "revision": row["revision"], "fingerprint": fingerprint,
+                "snapshot": PersonalCommitment.model_validate(dict(row)).model_dump_json(),
+                "correlation": correlation_id,
             })
             return PersonalCommitment.model_validate(dict(row))
