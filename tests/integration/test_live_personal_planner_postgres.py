@@ -80,7 +80,8 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
             ),
             correlation_id=cid,
         )
-        assert updated.revision == 2
+        assert updated[0].revision == 2
+        assert updated[1].revision == 2
 
         mutation = CommitmentMutation(
             idempotency_key=uuid4(), expected_revision=2,
@@ -90,7 +91,8 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
             tenant_id=tenant, owner_id=owner, commitment_id=first.id,
             mutation=mutation, correlation_id=cid,
         )
-        assert finished.revision == 3
+        assert finished[0].revision == 3
+        assert finished[1].revision == 3
         retry = await repo.update(
             tenant_id=tenant, owner_id=owner, commitment_id=first.id,
             mutation=mutation, correlation_id="another-correlation",
