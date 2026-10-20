@@ -24,6 +24,28 @@ CREATE TABLE public.personal_planner_mutation_receipts (
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     owner_id uuid NOT NULL REFERENCES public.auth_users(user_id) ON DELETE RESTRICT,
     idempotency_key uuid NOT NULL,
+    request_fingerprint varchar(64) NOT NULL CHECK (request_fingerprint ~ '^[0-9a-f]{64}
+    revision integer NOT NULL CHECK (revision >= 1),
+    correlation_id varchar(128) NOT NULL,
+    persisted_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, owner_id, idempotency_key),
+    CONSTRAINT fk_personal_planner_receipt_owner
+        FOREIGN KEY (commitment_id, tenant_id, owner_id)
+        REFERENCES public.personal_planner_commitments (id, tenant_id, owner_id)
+        ON DELETE CASCADE
+);
+ALTER TABLE public.personal_planner_commitments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.personal_planner_commitments FORCE ROW LEVEL SECURITY;
+CREATE POLICY personal_planner_commitments_tenant ON public.personal_planner_commitments
+    USING (tenant_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid);
+ALTER TABLE public.personal_planner_mutation_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.personal_planner_mutation_receipts FORCE ROW LEVEL SECURITY;
+CREATE POLICY personal_planner_receipts_tenant ON public.personal_planner_mutation_receipts
+    USING (tenant_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid);
+COMMIT;
+),
     commitment_id uuid NOT NULL,
     revision integer NOT NULL CHECK (revision >= 1),
     correlation_id varchar(128) NOT NULL,
