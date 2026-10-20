@@ -313,6 +313,41 @@ consume a read-only event-history endpoint and render a timeline without
 owning execution state.
 
 
+### Personal planner existing-implementation inventory (2026-10-19)
+
+Repository-wide tracked-file inventory and targeted source reads identify
+**existing automation infrastructure**. Do not create a new generic task
+runner, cron engine or notification channel for the personal planner.
+
+| Existing implementation | Verified owner and behavior | Reuse assessment |
+|---|---|---|
+| `persistence/repositories/automation_repository.py` | Canonical PostgreSQL task/job/cron/scheduler repository with tenant-scoped transactions | Reuse DB patterns and tenant security; evaluate whether personal commitments need separate typed domain records |
+| `services/automation/definitions.py` | Validates saved automation task definitions and cron commitments, delegates persistence | Reuse for executable automations; avoid representing all personal to-dos as agent execution definitions |
+| `api_routes/automation/tasks.py` | Thin `/api/tasks` ingress for executable saved tasks, review evidence, execution and receipts | Existing route name is occupied: prevent planner route collisions and ambiguous API semantics |
+| `api_routes/automation/cron.py` | Cron definition API and enable/disable lifecycle | Reuse authorized scheduling machinery after timezone/recurrence review |
+| `services/automation/execution.py` | Governs execution of saved automation tasks | Integrate when a planner commitment actually requires an executable agent action |
+| `ui_launchers/Karen-AI-Theme/src/components/automation/TasksPage.tsx` | Automation task workspace with execution verification/review | Retain as automation administration, not a personal day planner |
+| `ui_launchers/Karen-AI-Theme/src/components/settings/NotificationSettings.tsx` | Existing notification settings surface | Reuse preference ownership; verify reminder delivery and user opt-in separately |
+| `supabase/migrations/20260923010000_16_automation_scheduler_authority.sql` | Tenant-scoped `automation_tasks`, jobs and scheduler tables | Preserve schema and migrations; distinguish scheduled execution from human task commitments |
+| `services/scheduling/automation_service.py` | Separate in-memory automation service with dictionaries for definitions/runs/drafts | **Audit references/active usage** before consolidating; never adopt as durable planner storage |
+| Medusa capability planner and LangGraph planner node | Agent/workflow planning internals | Explicitly not the user-facing planner source of truth |
+
+**Key schema mismatch:** Existing `TaskDefinitionRequest` requires agent/task
+execution fields and exposes execution/review endpoints; the inspected
+automation schema does not establish a user-oriented task model with project,
+due-date, recurrence, dependencies, completion revision and reminder semantics.
+No conclusion is made that these fields exist nowhere else in the repository.
+The existing `/api/tasks` prefix is already owned by automation definitions.
+
+**Implementation decision:** Reuse the canonical PostgreSQL transaction,
+tenant-auth, scheduler, notification and outcome patterns; keep automation
+definitions and personal commitments distinct in typed contracts unless a
+full API/schema audit proves one canonical model can represent both cleanly.
+Do not repurpose or break `/api/tasks`. Before adding planner routes, audit
+the remaining UI routing, scheduler migration history, notification delivery
+and references to the legacy in-memory service. Require user task CRUD and
+cross-path conversational mutation tests before wiring proactive planning.
+
 ### Personal planner integration contract (design gate, not shipped)
 
 **Product distinction:** The user-facing Karen Planner manages commitments, not Deep
