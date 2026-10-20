@@ -132,6 +132,7 @@ class ChatStreamRequest(BaseModel):
     # Provisional same-session user turns only. Durable history still comes
     # exclusively from the conversation repository in the runtime.
     recent_user_messages: List[str] = Field(default_factory=list, max_length=12)
+    workspace_run_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
     session_id: Optional[str] = Field(
         default=None,
         pattern=r"^[a-zA-Z0-9_-]+$",
@@ -317,6 +318,23 @@ def _stream_execution_request(
             **({"user_timezone": request.timezone} if request.timezone else {}),
             **({"approval_id": request.approval_id} if request.approval_id else {}),
         },
+    )
+
+
+async def _verified_workspace_run_reference(
+    *, run_id: str, user: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Resolve a chat work reference from the canonical owner-checked Medusa record.
+
+    This is context evidence, never an execution capability or approval.
+    """
+    from ai_karen_engine.api_routes.agents.runtime import (
+        get_my_run_context, get_run_control_plane,
+    )
+    return await get_my_run_context(
+        run_id,
+        current_user=UserData.ensure(user),
+        control_plane=get_run_control_plane(),
     )
 
 
@@ -534,6 +552,11 @@ async def stream_chat_response(
             correlation_id=correlation_id,
             response_id=response_id,
         )
+        if request.workspace_run_id:
+            verified = await _verified_workspace_run_reference(
+                run_id=request.workspace_run_id, user=user,
+            )
+            runtime_request.metadata["verified_workspace_run"] = verified
         conversation_id = runtime_request.context.conversation_id or session_id
 
         structured_logger.log_event(
