@@ -285,6 +285,33 @@ than decoding checkpoint payloads or reconstructing steps from outcomes.
 Coordinate implementation with PR #497's migration ownership; do not
 duplicate its checkpoint tables or bypass its scope requirements.
 
+### Medusa event emitter ownership and replay gap (verified in PR #497)
+
+The current `agent_medusa/execution/event_emitter.py` stores
+`AgentEvent` objects in a per-emitter Python list and synchronously
+forwards them to optional sinks. The coordinator creates a request-scoped
+emitter and assigns its collected events to `trajectory.events`.
+`contracts/events.py` defines event type, agent ID, message, timestamp,
+metadata and optional correlation ID, **but no durable event ID or monotonic
+per-run sequence**. The default emitter contains no database write.
+
+These observations are suitable for **live execution projection**, not
+authoritative history retrieval across process restarts. The existing
+`agent_medusa_runs` checkpoint foreign-key target represents run lifecycle
+ownership but does not itself establish an event ledger or replay API.
+Do not add a second sink/store inside AG-UI, convert timestamps to event
+sequence numbers, or treat `trajectory.events` as persisted evidence.
+
+**Proposed integration boundary:** Medusa/runtime should own a governed
+append-only event persistence adapter attached to the canonical emitter,
+with a backend-issued execution attempt ID, tenant isolation, deduplication
+key, monotonic per-attempt sequence, retention status, and authorized read
+cursor. Its commit/failed-write semantics must be explicit: an event seen
+live but not durably committed cannot later be represented as replayed
+history. Once the runtime implements and tests this contract, PR #494 can
+consume a read-only event-history endpoint and render a timeline without
+owning execution state.
+
 ### Durable timeline contract (not implemented yet)
 
 A transcript-level AG-UI activity card is an observed event, **not** evidence
