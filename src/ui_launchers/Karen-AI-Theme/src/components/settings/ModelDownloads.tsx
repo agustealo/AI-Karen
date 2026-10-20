@@ -843,7 +843,7 @@ export default function ModelDownloads({
   );
 
   const savePolicy = useCallback(async () => {
-    if (!policy) {
+    if (!adminMode || !policy) {
       return;
     }
 
@@ -1333,6 +1333,7 @@ export default function ModelDownloads({
   ]);
 
   const saveModelsRoot = useCallback(async () => {
+    if (!adminMode) return;
     const nextRoot = modelsRootDraft.trim();
     if (!nextRoot || nextRoot === storageSettings?.models_root) return;
     setSavingModelsRoot(true);
@@ -1896,7 +1897,7 @@ export default function ModelDownloads({
               value={modelsRootDraft}
               onChange={(event) => setModelsRootDraft(event.target.value)}
               placeholder="/path/to/karen-models"
-              disabled={storageSettings?.env_override}
+              disabled={!adminMode || storageSettings?.env_override}
             />
             <Button
               type="button"
