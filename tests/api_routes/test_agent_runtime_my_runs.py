@@ -131,3 +131,26 @@ async def test_chat_workspace_reference_reuses_owner_checked_projection(monkeypa
             run_id="run-1", user=principal,
         )
     assert error.value.status_code == 404
+
+
+def test_shared_chat_workspace_contract_rejects_non_bounded_refs():
+    from pydantic import ValidationError
+    from ai_karen_engine.api_routes.chat.runtime import ChatStreamRequest
+    assert ChatStreamRequest(message="Explain", workspace_run_id="owned-run").workspace_run_id == "owned-run"
+    with pytest.raises(ValidationError):
+        ChatStreamRequest(message="Explain", workspace_run_id="x" * 129)
+
+
+@pytest.mark.asyncio
+async def test_chat_context_reference_rejects_unauthorized_run(monkeypatch):
+    from ai_karen_engine.api_routes.chat import runtime as chat_runtime
+    from ai_karen_engine.api_routes.agents import runtime as agent_runtime
+    tenant, owner = str(uuid4()), str(uuid4())
+    plane = DetailControlPlane({"run_id": "run-2", "user_id": str(uuid4()), "status": "running"})
+    monkeypatch.setattr(agent_runtime, "get_run_control_plane", lambda: plane)
+    monkeypatch.setattr(chat_runtime, "UserData", SimpleNamespace(ensure=lambda user: SimpleNamespace(**user)))
+    with pytest.raises(HTTPException) as error:
+        await chat_runtime._verified_workspace_run_reference(
+            run_id="run-2", user={"tenant_id": tenant, "user_id": owner, "is_active": True},
+        )
+    assert error.value.status_code == 404
