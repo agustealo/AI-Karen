@@ -72,3 +72,50 @@ CORTEX classifies and gates. ChatRuntime normalizes and obtains authorized plann
 ## Integration and rollout
 
 Super Productivity may guide UX; evaluate license compatibility before copying code. Vikunja is not automatically selected as a second backend. Feature-flag planner workspace; add migrations and versioned contracts before UI; retain existing automation task endpoints and behavior. A phased PR must not merge until its exact-head tests and relevant human UX checks are green. Report risks and blocked gates precisely.
+
+
+## ADR-001: first-class core domain with governed extensions
+
+**Status:** Accepted architecture direction for implementation planning; delivery remains gated on P0 repository-wide ownership reconciliation.
+
+**Decision:** Karen Personal Planner is a built-in, modular, local-first product domain, comparable to Chat, Memory and Personalization. Its lifecycle and canonical storage remain usable without installed plugins, external calendars, hosted model providers, or agent-graph execution. The user-facing planner is never implemented as a standalone plugin or as a second imported application backend.
+
+| Responsibility | Canonical owner | Non-owners / boundary |
+|---|---|---|
+| Tasks, planned time blocks, appointments, completion, priorities and plan history | Core PersonalPlannerService with scoped repository | Agent automation tasks, chat transcript and frontend state |
+| Goals | Existing canonical personalization/goals authority, linked by stable reference | Planner must not duplicate or fork goal storage |
+| Time recurrence, reminder intentions and delivery receipts | Planner domain + existing durable scheduler/queue/outbox authority | Cron administration UI and automation execution status |
+| Intent/policy/eligibility | CORTEX policy contracts | CORTEX never directly writes planner entities |
+| Identity, authorization, snapshot, approval, mutation and receipts | Karen runtime + canonical planner service | Tools, plugin adapters, UI and external providers never bypass |
+| Complex conflict-solving proposals | Deep Agents only when multi-step planning is actually needed | No graph required for simple CRUD, reminders or completion |
+| Preferences and adaptation | Existing Memory/NeuroRecall/Learning authorities | Planner may consume but must not create competing memory store |
+| Today / Week / Calendar / Goals / History | Core Karen UI using versioned backend contracts | No speculative success toast or browser-only planner fallback |
+| Calendar/email/third-party systems | Permissioned optional plugin adapters | Adapters do not own personal planner data or user authorizations |
+| Chat, WhatsApp, voice and other channels | Authorized channel ingress -> common runtime planner tools | No channel-specific planner databases or permission bypass |
+
+### Core and extension contract
+
+- Core planner must support manual creation, editing, scheduling, completion, postponement, cancellation, proposals, approvals, undo, reminders and recurrence with extensions disabled.
+- Publish versioned, typed planner read and mutation operations. Extensions may propose normalized task/event changes or report external states, but must invoke the same scoped service and approval policy.
+- Each plugin manifest must declare capabilities, permissions, provenance, input/output schema, supported provider actions, and scoped consent. Validate manifest, tenant, user, token scope and RBAC at each call.
+- Inbound suggestions (e.g. email follow-up or imported appointment) are **candidates**, never silently canonical tasks. Deduplicate by scoped source/provider reference and content fingerprint, and require policy-appropriate user authorization to commit.
+- Outbound calendar sync is a separate side effect: preserve local source of truth, durable outbox, idempotency and provider receipts. Expose `local_saved`, `sync_pending`, `synced`, `sync_conflict` and `sync_failed` truthfully. Do not conflate local commit with remote success.
+- Define bidirectional sync policy per connected calendar, including owner, provider ETag/revision, deletion propagation, stale-webhook rejection, and resolution for external changes before enabling writable sync.
+- An automation execution may link to a personal task, but its `success`/`failed` state must not mark the human task `completed`. Completion requires its own authorized evidence.
+- Accessible direct UI editing and natural-language chat both use one mutation path; the user can inspect, reverse when permitted, and audit committed edits from any authorized channel.
+- Reuse existing scheduler, goal, auth, observability and UI infrastructure. Do not vendor Super Productivity or Vikunja as a competing backend. Study third-party UX independently of importing code or incompatible licenses.
+
+### Additional adversarial gates
+
+1. **Plugin absent/offline:** user can still open Today, edit tasks and see authoritative local planner history. Existing reminders are not gated on a calendar connector.
+2. **Email prompt injection:** untrusted email text cannot cause unauthorized task creation, appointments, plugin installation or cross-account reads; user-visible suggestion is provenance-linked.
+3. **Provider partial failure:** local save succeeds but remote update fails; UI shows pending/failed synchronization, never a globally successful claim. Retries do not create duplicates.
+4. **Channel parity:** the same task requested in chat, workspace or WhatsApp observes identical user/tenant scoping, approval requirements, revisions and receipts.
+5. **Shared goal authority:** planner links existing goal IDs; editing a goal cannot fork state or bypass the goals service.
+6. **Revocation and export:** disconnecting integrations invalidates provider access and pending sync work without erasing the user's canonical local task data; export/deletion follows privacy authorization.
+
+### Delivery order and proof
+
+Treat P0 as a hard gate: enumerate all existing planner-like records, service owners, scheduler implementations, extension manifests, integration branches and open PRs. Amend this ADR if an existing canonical planner owner is found. Then implement P1 core persistence/API without requiring plugins; P2 core workspace with real data; P3 runtime-mediated conversational proposals and commits; P4 reminder/recurrence behavior; P5 optional provider adapters; P6 independently benchmarked adaptive planning.
+
+Do not merge based solely on documentation review: each production slice requires exact-head CI, tenant/user isolation tests, conflict/idempotency tests, truthful receipt and synchronization tests, and human UX acceptance appropriate to the slice.
