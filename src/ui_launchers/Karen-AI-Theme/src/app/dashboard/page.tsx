@@ -313,11 +313,7 @@ export default function DashboardPage() {
 
   const staticViewMap = useMemo<Record<string, React.ReactNode>>(
     () => ({
-      chat: (
-        <SessionProvider>
-          {USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />}
-        </SessionProvider>
-      ),
+
       settings: <SettingsDialogComponent />,
       pluginOverview: <PluginOverviewPage />,
       agentsOverview: <AgentsOverviewPage />,
@@ -417,6 +413,7 @@ export default function DashboardPage() {
 
   return (
     <AuthWrapper>
+      <SessionProvider>
       <SidebarProvider>
         <div className="karen-app-shell flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background text-foreground">
           <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl md:px-4">
@@ -440,6 +437,20 @@ export default function DashboardPage() {
               </div>
             </div>
 
+            <div className="flex items-center gap-2">
+              {activeMainView !== "chat" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setActiveMainView("chat")}
+                  aria-label="Return to your Karen conversation"
+                  className="gap-2"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="hidden sm:inline">Ask Karen</span>
+                </Button>
+              )}
             <Sheet>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" aria-label="Settings">
@@ -458,6 +469,7 @@ export default function DashboardPage() {
                 </div>
               </SheetContent>
             </Sheet>
+            </div>
           </header>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -624,15 +636,24 @@ export default function DashboardPage() {
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
                 <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
                   <div
+                    data-testid="persistent-karen-conversation"
+                    className={activeMainView === "chat" && backendStatus === "ready"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "hidden"}
+                    aria-hidden={activeMainView !== "chat" || backendStatus !== "ready"}
+                  >
+                    {USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />}
+                  </div>
+                  <div
                     key={activeMainView}
                     data-testid="workspace-scroll-region"
                     className={
-                      backendStatus !== "ready" || activeMainView !== "chat"
-                        ? "min-h-0 flex-1 overflow-y-auto overscroll-contain"
-                        : "flex min-h-0 flex-1 flex-col overflow-hidden"
+                      activeMainView === "chat" && backendStatus === "ready"
+                        ? "hidden"
+                        : "min-h-0 flex-1 overflow-y-auto overscroll-contain"
                     }
                   >
-                    {backendGate ?? currentViewContent}
+                    {backendGate ?? (activeMainView === "chat" ? null : currentViewContent)}
                   </div>
                 </div>
               </div>
@@ -640,6 +661,7 @@ export default function DashboardPage() {
           </div>
         </div>
       </SidebarProvider>
+      </SessionProvider>
     </AuthWrapper>
   );
 }
