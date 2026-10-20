@@ -24,6 +24,7 @@ CREATE TABLE public.personal_planner_mutation_receipts (
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     owner_id uuid NOT NULL REFERENCES public.auth_users(user_id) ON DELETE RESTRICT,
     idempotency_key uuid NOT NULL,
+    operation varchar(16) NOT NULL CHECK (operation IN ('create', 'update')),
     request_fingerprint varchar(64) NOT NULL
         CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
     commitment_id uuid NOT NULL,
