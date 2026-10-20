@@ -65,3 +65,12 @@ def test_created_receipt_timestamp_is_identical_to_database_row():
     assert ":correlation, :persisted_at)" in source
     assert '"persisted_at": now' in source
     assert 'persisted_at=existing["persisted_at"]' in source
+
+
+def test_mutation_receipts_carry_atomic_operation_provenance():
+    source = REPO.read_text()
+    sql = MIGRATION.read_text()
+    assert "operation varchar(16) NOT NULL" in sql
+    assert "operation IN ('create', 'update')" in sql
+    assert "'create', :fingerprint" in source
+    assert "'update', :fingerprint" in source
