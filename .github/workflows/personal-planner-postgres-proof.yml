@@ -109,17 +109,32 @@ jobs:
                           await reader.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(foreign))
                           assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments WHERE id=$1", record) == 0
                           assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_mutation_receipts") == 0
-                          with_error = False
+                          # A savepoint isolates expected RLS rejection from the
+                          # surrounding read-proof transaction.
+                          denied = False
                           try:
-                              await reader.execute("INSERT INTO public.personal_planner_commitments (id, tenant_id, owner_id, title, timezone) VALUES ($1, $2, $3, 'Denied', 'UTC')", uuid.uuid4(), tenant, owner)
+                              async with reader.transaction():
+                                  await reader.execute("INSERT INTO public.personal_planner_commitments (id, tenant_id, owner_id, title, timezone) VALUES ($1, $2, $3, 'Denied', 'UTC')", uuid.uuid4(), tenant, owner)
                           except asyncpg.InsufficientPrivilegeError:
-                              with_error = True
-                          assert with_error, "Foreign tenant must not create commitment"
+                              denied = True
+                          assert denied, "Foreign tenant must not create commitment"
+                          denied_receipt = False
+                          try:
+                              async with reader.transaction():
+                                  await reader.execute("""
+                                      INSERT INTO public.personal_planner_mutation_receipts
+                                      (tenant_id, owner_id, idempotency_key, request_fingerprint,
+                                       commitment_id, result_snapshot, revision, correlation_id)
+                                      VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 1, 'deny')
+                                  """, tenant, owner, uuid.uuid4(), "b" * 64, record)
+                          except asyncpg.InsufficientPrivilegeError:
+                              denied_receipt = True
+                          assert denied_receipt, "Foreign tenant must not create receipt"
 
                       async with reader.transaction():
                           await reader.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(tenant))
                           assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments WHERE id=$1", record) == 1
-                                  assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_mutation_receipts WHERE commitment_id=$1", record) == 1
+                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_mutation_receipts WHERE commitment_id=$1", record) == 1
                   finally:
                       await reader.close()
               finally:
