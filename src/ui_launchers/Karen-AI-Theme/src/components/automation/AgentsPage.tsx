@@ -100,7 +100,7 @@ function statusVariant(
   return "outline";
 }
 
-export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void> }) {
+export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRun }: { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void>; onDiscussRun?: (runId: string) => void }) {
   const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
   const isAdmin = user?.roles?.includes("admin") ?? false;
 
@@ -398,6 +398,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
                       </dl>
                     </details>
                     <div className="mt-4 flex flex-wrap gap-2">
+                      {onDiscussRun && <Button type="button" size="sm" onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
                       <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>
                       {onAskKaren && <Button type="button" size="sm" variant="outline" onClick={onAskKaren}>Open Karen</Button>}
                     </div>
