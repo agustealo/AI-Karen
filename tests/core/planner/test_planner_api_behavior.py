@@ -44,7 +44,7 @@ def test_missing_auth_is_denied():
     ("default", str(uuid4())),
 ])
 def test_bad_trusted_identity_is_rejected(tenant, owner):
-    app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner))
+    app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner, is_active=True))
     response = TestClient(app).get(f"/api/planner/commitments/{uuid4()}")
     assert response.status_code == 403
 
@@ -55,7 +55,7 @@ def test_nonexistent_and_cross_owner_commitments_are_not_disclosed(monkeypatch):
         assert (user.tenant_id, user.user_id, commitment_id) == (tenant, owner, commitment)
         raise PlannerNotFoundError("Unavailable")
     monkeypatch.setattr(PersonalPlannerService, "get", unavailable)
-    app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner))
+    app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner, is_active=True))
     response = TestClient(app).get(f"/api/planner/commitments/{commitment}")
     assert response.status_code == 404
     assert "tenant" not in response.text.lower()
