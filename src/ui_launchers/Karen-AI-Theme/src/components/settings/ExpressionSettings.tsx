@@ -253,7 +253,7 @@ export default function ExpressionSettings() {
               <CardTitle className="text-xl font-bold flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-primary" /> Expression Engine Management
               </CardTitle>
-              {!canManageRuntime && <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">Expression routing is shared runtime configuration. Only an administrator can change engine or fallback settings.</p>}
+              {!canManageRuntime && <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">Expression routing is shared runtime configuration. You can review it here, but only an administrator can change the primary engine or fallback order.</p>}
               <CardDescription>Configure Karen&apos;s registered expression engines and fallback preferences. Engine activation and runtime health are verified separately.</CardDescription>
             </div>
             <TooltipProvider>
