@@ -202,6 +202,7 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
+  const [karenPanelOpen, setKarenPanelOpen] = useState(false);
   const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
@@ -661,11 +662,12 @@ export default function DashboardPage() {
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
                 <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
                   <div
+                    id="persistent-karen-panel"
                     data-testid="persistent-karen-conversation"
-                    className={activeMainView === "chat" && backendStatus === "ready"
-                      ? "flex min-h-0 flex-1 flex-col"
+                    className={backendStatus === "ready" && (activeMainView === "chat" || karenPanelOpen)
+                      ? activeMainView === "chat" ? "flex min-h-0 flex-1 flex-col" : "fixed inset-y-16 right-3 z-50 flex w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
                       : "hidden"}
-                    aria-hidden={activeMainView !== "chat" || backendStatus !== "ready"}
+                    aria-hidden={backendStatus !== "ready" || (activeMainView !== "chat" && !karenPanelOpen)}
                   >
                     {USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />}
                   </div>
@@ -683,6 +685,14 @@ export default function DashboardPage() {
                 </div>
               </div>
             </SidebarInset>
+            {activeMainView !== "chat" && backendStatus === "ready" && (
+              <div className="fixed bottom-4 right-4 z-[60] flex gap-2">
+                {karenPanelOpen && <Button type="button" variant="outline" onClick={() => setKarenPanelOpen(false)} aria-label="Collapse Karen conversation">Close panel</Button>}
+                <Button type="button" onClick={() => setKarenPanelOpen((open) => !open)} aria-expanded={karenPanelOpen} aria-controls="persistent-karen-panel">
+                  <MessageSquare className="mr-2 h-4 w-4" /> {karenPanelOpen ? "Hide Karen" : "Ask Karen"}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </SidebarProvider>
