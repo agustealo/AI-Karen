@@ -566,7 +566,9 @@ class MedusaRunManager:
             except DistributedRunStoreUnavailable:
                 shared = []
             for snapshot in shared:
-                if (user_id is None or str(snapshot.get("user_id") or "") == user_id) and snapshot["run_id"] not in merged:
+                if (
+                    user_id is None or str(snapshot.get("user_id") or "") == user_id
+                ) and snapshot["run_id"] not in merged:
                     merged[snapshot["run_id"]] = snapshot
 
         if self._settings.durable_run_ledger_enabled:
@@ -574,7 +576,7 @@ class MedusaRunManager:
                 durable_rows = await self._durable_ledger.list_runs(
                     tenant_id=tenant_id,
                     include_terminal=include_terminal,
-                    **({'user_id': user_id} if user_id is not None else {}),
+                    **({"user_id": user_id} if user_id is not None else {}),
                 )
             except DurableRunLedgerUnavailable:
                 if self._settings.durable_run_ledger_required:
