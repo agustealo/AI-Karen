@@ -38,3 +38,22 @@ def test_idempotent_create_retries_are_serialized_and_fingerprint_checked():
     assert 'existing["correlation_id"]' in source
     assert "request_fingerprint varchar(64) NOT NULL" in sql
     assert "PRIMARY KEY (tenant_id, owner_id, idempotency_key)" in sql
+
+
+def test_retry_snapshots_preserve_original_revision_and_result():
+    source = REPO.read_text()
+    sql = MIGRATION.read_text()
+    assert "result_snapshot jsonb NOT NULL" in sql
+    assert "return PersonalCommitment.model_validate(already[\"result_snapshot\"])" in source
+    assert 'saved = PersonalCommitment.model_validate(existing["result_snapshot"])' in source
+    assert 'CAST(:snapshot AS jsonb)' in source
+    assert "pg_advisory_xact_lock" in source
+
+
+def test_migration_has_one_atomic_transaction_and_complete_constraints():
+    sql = MIGRATION.read_text()
+    assert sql.count("BEGIN;") == 1
+    assert sql.count("COMMIT;") == 1
+    assert "CHECK (request_fingerprint ~ '^[0-9a-f]{64}$')" in sql
+    assert "commitment_id uuid NOT NULL" in sql
+    assert sql.rstrip().endswith("COMMIT;")
