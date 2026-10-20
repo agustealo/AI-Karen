@@ -14,10 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.planner.contracts import PersonalCommitment
-from ai_karen_engine.persistence.repositories.personal_planner_repository import (
-    PersonalPlannerRepository,
-    PlannerNotFoundError,
-)
+from ai_karen_engine.persistence.repositories.personal_planner_repository import PlannerNotFoundError
+from ai_karen_engine.services.personal_planner import PersonalPlannerService, PlannerAuthorizationError
 
 router = APIRouter(prefix="/api/planner", tags=["personal-planner"])
 
@@ -29,13 +27,8 @@ async def get_personal_commitment(
 ) -> PersonalCommitment:
     """Fetch a commitment scoped exclusively to verified session identity."""
     try:
-        tenant_id = UUID(str(user.tenant_id))
-        owner_id = UUID(str(user.user_id))
-    except (TypeError, ValueError) as exc:
+        return await PersonalPlannerService().get(user=user, commitment_id=commitment_id)
+    except PlannerAuthorizationError as exc:
         raise HTTPException(status_code=403, detail="Verified tenant and user required") from exc
-    try:
-        return await PersonalPlannerRepository().get(
-            tenant_id=tenant_id, owner_id=owner_id, commitment_id=commitment_id,
-        )
     except PlannerNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Commitment not found") from exc
