@@ -219,6 +219,21 @@ compatibility contracts are proven and assistant-ui integration remains
 feature-gated. PR #494 and PR #497 are **separate owners, not duplicate
 AG-UI implementations**; do not copy transport normalization into Medusa.
 
+### AG-UI run identifiers versus durable execution identity
+
+The existing `/api/chat/ag-ui` ingress currently forwards
+`AGUIRunRequest.runId` into `AGUIEventProjection`; it is an AG-UI
+transport-correlation identifier supplied by the caller. It is not proof that
+the canonical runtime issued, persisted, or authorized a run-ledger row with
+that identifier. An activity card may display **AG-UI run**, but cannot label
+it a verified durable execution, execution receipt, or replay cursor.
+
+Before introducing persisted timelines, map authenticated transport run IDs
+to canonical backend-issued execution attempt identifiers, apply tenant and
+conversation scoping, and read event sequence and terminal state from the
+canonical ledger. Client-supplied identifiers must never authorize cross-run
+access or execution recovery.
+
 ### Durable timeline contract (not implemented yet)
 
 A transcript-level AG-UI activity card is an observed event, **not** evidence
