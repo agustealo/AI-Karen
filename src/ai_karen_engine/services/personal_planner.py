@@ -67,7 +67,7 @@ class PersonalPlannerService:
 
     async def get(self, *, user: UserData, commitment_id: UUID) -> PersonalCommitment:
         identity = PlannerPrincipal.from_authenticated_user(user)
-        _authorize(user, Permission.DATA_READ)
+        _authorize(user, Permission.PLANNER_READ)
         return await self._repository.get(
             tenant_id=identity.tenant_id,
             owner_id=identity.owner_id,
@@ -79,7 +79,7 @@ class PersonalPlannerService:
         idempotency_key: UUID, correlation_id: str,
     ) -> tuple[PersonalCommitment, PersistedCommitmentReceipt]:
         identity = PlannerPrincipal.from_authenticated_user(user)
-        _authorize(user, Permission.DATA_WRITE, correlation_id=correlation_id)
+        _authorize(user, Permission.PLANNER_WRITE, correlation_id=correlation_id)
         if not correlation_id or len(correlation_id) > 128:
             raise ValueError("Correlation ID required")
         return await self._repository.create(
