@@ -185,3 +185,14 @@ describe("persistent Karen workspace panel", () => {
     expect(dashboard).toContain("backendStatus === \"ready\" && (activeMainView === \"chat\" || karenPanelOpen)");
   });
 });
+
+describe("Karen cross-workspace panel accessibility contract", () => {
+  it("supports Escape, focus restoration and mobile-safe panel geometry", () => {
+    expect(dashboard).toContain('event.key === "Escape"');
+    expect(dashboard).toContain("karenLauncherRef.current?.focus()");
+    expect(dashboard).toContain("karenPanelRef.current?.focus()");
+    expect(dashboard).toContain('aria-label={activeMainView !== "chat" && karenPanelOpen ? "Karen conversation" : undefined}');
+    expect(dashboard).toContain("inset-x-2 top-16 bottom-20");
+    expect(dashboard).toContain("sm:w-[min(440px,calc(100vw-24px))]");
+  });
+});
