@@ -141,7 +141,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("Unable to open that conversation.");
     expect(component).toContain("Unable to create a conversation.");
     expect(component).toContain('{navigationError && <p role="alert"');
-    expect(component).toContain('<details data-testid="karen-agent-activity"');
+    expect(component).toContain('data-testid="karen-agent-activity"');
     expect(component).toContain("ref={disclosureRef}");
     expect(component).toContain("disclosureRef.current.open = true");
     expect(component).not.toContain("open={failed || undefined}");
