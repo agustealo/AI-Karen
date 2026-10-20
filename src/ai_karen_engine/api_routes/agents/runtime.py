@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.auth.session import get_current_user
+from ai_karen_engine.agent_medusa.control_plane import AgentMedusaControlPlane, get_agent_control_plane
 
 from ai_karen_engine.agent_medusa.service import (
     AgentMedusaService,
@@ -62,3 +65,31 @@ async def get_agent_catalog(
 
 
 __all__ = ["router"]
+
+
+def get_run_control_plane() -> AgentMedusaControlPlane:
+    """Reuse Medusa's existing run projection; never create separate run storage."""
+    return get_agent_control_plane()
+
+
+@router.get("/my-runs")
+async def list_my_agent_runs(
+    current_user: UserData = Depends(get_current_user),
+    control_plane: AgentMedusaControlPlane = Depends(get_run_control_plane),
+) -> Dict[str, Any]:
+    """Return only authenticated user's tenant-scoped Medusa runs.
+
+    Filtering occurs on the server, never from client-provided user IDs.
+    This is a consumer read projection, not administrative run control.
+    """
+    tenant_id = str(current_user.tenant_id or "").strip()
+    owner_id = str(current_user.user_id or "").strip()
+    if not current_user.is_active or not owner_id or not tenant_id or tenant_id == "default":
+        raise HTTPException(status_code=403, detail="Verified active user and tenant required")
+    result = await control_plane.list_runs(tenant_id=tenant_id, include_terminal=True)
+    owned = [run for run in result["runs"] if str(run.get("user_id") or "") == owner_id]
+    return {
+        "runs": owned,
+        "total": len(owned),
+        "generated_at": result["generated_at"],
+    }
