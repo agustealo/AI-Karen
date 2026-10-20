@@ -57,6 +57,13 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
         assert duplicate == first
         assert duplicate_receipt == receipt
 
+        # A new repository instance must read the committed record from storage,
+        # not a process-local planner cache.
+        reopened = PersonalPlannerRepository()
+        assert await reopened.get(
+            tenant_id=tenant, owner_id=owner, commitment_id=first.id,
+        ) == first
+
         with pytest.raises(PlannerConflictError):
             await repo.create(
                 tenant_id=tenant, owner_id=owner, title="Different task",
@@ -99,6 +106,31 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
                     idempotency_key=uuid4(), expected_revision=1, title="Stale edit"
                 ),
                 correlation_id=cid,
+            )
+
+        # An invalid receipt write must roll back the preceding mutation.
+        # The foreign-key failure deliberately occurs inside one transaction.
+        rollback_id = uuid4()
+        with pytest.raises(Exception):
+            async with async_transaction_scope(str(tenant)) as session:
+                await session.execute(text("""
+                    INSERT INTO public.personal_planner_commitments
+                    (id, tenant_id, owner_id, title, timezone)
+                    VALUES (:id, :tenant, :owner, :title, :timezone)
+                """), {"id": rollback_id, "tenant": tenant, "owner": owner,
+                       "title": "Must roll back", "timezone": "UTC"})
+                await session.execute(text("""
+                    INSERT INTO public.personal_planner_mutation_receipts
+                    (tenant_id, owner_id, idempotency_key, request_fingerprint,
+                     commitment_id, result_snapshot, revision, correlation_id)
+                    VALUES (:tenant, :owner, :key, :fingerprint,
+                            :unknown_id, CAST(:snapshot AS jsonb), 1, :correlation)
+                """), {"tenant": tenant, "owner": owner, "key": uuid4(),
+                       "fingerprint": "a" * 64, "unknown_id": uuid4(),
+                       "snapshot": "{}", "correlation": cid})
+        with pytest.raises(PlannerNotFoundError):
+            await reopened.get(
+                tenant_id=tenant, owner_id=owner, commitment_id=rollback_id,
             )
 
         with pytest.raises(PlannerNotFoundError):
