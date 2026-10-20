@@ -50,3 +50,27 @@ async def test_prompt_context_is_bounded(monkeypatch):
     assert context["run_id"] == "run-123"
     assert "extra_private" not in context
     assert observed[0].tool_contracts == []
+
+
+@pytest.mark.asyncio
+async def test_non_medusa_context_never_reaches_prompt(monkeypatch):
+    from ai_karen_engine.core.runtime import chat_runtime as runtime
+    from ai_karen_engine.core.runtime import prompt
+    observed = []
+    class Finished(Exception):
+        pass
+    class Recorder:
+        async def assemble_prompt(self, argument):
+            observed.append(argument)
+            raise Finished()
+    monkeypatch.setattr(prompt, "get_prompt_runtime_service", lambda: Recorder())
+    decision = SimpleNamespace(memory_recall_required=False, tool_requirements=[],
+        workflow_id=None, workflow_version=None, requires_human_gate=False,
+        requires_resumability=False, token_budget=512)
+    request = SimpleNamespace(messages=[{"role":"user","content":"Explain"}],
+        metadata={"verified_workspace_run":{"resource_type":"untrusted",
+            "run_id":"other","status":"running"}})
+    with pytest.raises(Finished):
+        await runtime.ChatRuntime._assemble_prompt_with_telemetry(
+            object(), request, decision)
+    assert "verified_workspace_run" not in observed[0].workflow_context
