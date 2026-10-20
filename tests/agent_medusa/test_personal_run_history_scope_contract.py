@@ -11,7 +11,7 @@ CONTROL = (ROOT / "src/ai_karen_engine/agent_medusa/control_plane.py").read_text
 def test_run_manager_scopes_every_history_source():
     assert "and (user_id is None or run.user_id == user_id)" in MANAGER
     assert 'str(snapshot.get("user_id") or "") == user_id' in MANAGER
-    assert "'user_id': user_id" in MANAGER
+    assert '"user_id": user_id' in MANAGER
     assert "user_id: str | None = None" in CONTROL
 
 
