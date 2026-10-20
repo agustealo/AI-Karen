@@ -86,7 +86,7 @@ async def list_my_agent_runs(
     owner_id = str(current_user.user_id or "").strip()
     if not current_user.is_active or not owner_id or not tenant_id or tenant_id == "default":
         raise HTTPException(status_code=403, detail="Verified active user and tenant required")
-    result = await control_plane.list_runs(tenant_id=tenant_id, include_terminal=True)
+    result = await control_plane.list_runs(tenant_id=tenant_id, include_terminal=True, user_id=owner_id)
     owned = [run for run in result["runs"] if str(run.get("user_id") or "") == owner_id]
     return {
         "runs": owned,
