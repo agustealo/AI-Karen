@@ -108,7 +108,7 @@ class PersonalPlannerRepository:
     async def update(
         self, *, tenant_id: UUID, owner_id: UUID, commitment_id: UUID,
         mutation: CommitmentMutation, correlation_id: str,
-    ) -> PersonalCommitment:
+    ) -> tuple[PersonalCommitment, PersistedCommitmentReceipt]:
         if mutation.expected_revision is None:
             raise ValueError("Update requires expected_revision")
         if not correlation_id or len(correlation_id) > 128:
@@ -130,14 +130,18 @@ class PersonalPlannerRepository:
                 SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))
             """), {"scope": f"planner:{tenant_id}:{owner_id}:{mutation.idempotency_key}"})
             already = (await session.execute(text("""
-                SELECT commitment_id, request_fingerprint, result_snapshot
+                SELECT commitment_id, request_fingerprint, result_snapshot, revision, persisted_at, correlation_id
                 FROM public.personal_planner_mutation_receipts
                 WHERE tenant_id=:tenant AND owner_id=:owner AND idempotency_key=:key
             """), {"tenant": tenant_id, "owner": owner_id, "key": mutation.idempotency_key})).mappings().first()
             if already is not None:
                 if already["request_fingerprint"] != fingerprint or already["commitment_id"] != commitment_id:
                     raise PlannerConflictError("Idempotency key reused with different mutation")
-                return PersonalCommitment.model_validate(already["result_snapshot"])
+                return PersonalCommitment.model_validate(already["result_snapshot"]), PersistedCommitmentReceipt(
+                    commitment_id=commitment_id, tenant_id=tenant_id, revision=already["revision"],
+                    idempotency_key=mutation.idempotency_key, persisted_at=already["persisted_at"],
+                    correlation_id=already["correlation_id"],
+                )
             bind = {
                 "id": commitment_id, "tenant": tenant_id, "owner": owner_id,
                 "expected": mutation.expected_revision, "updated": now, **updates,
@@ -155,13 +159,17 @@ class PersonalPlannerRepository:
                 raise PlannerConflictError("Commitment unavailable or revision changed")
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, operation, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
-                VALUES (:tenant, :owner, :key, 'update', :fingerprint, :id, CAST(:snapshot AS jsonb), :revision, :correlation)
+                (tenant_id, owner_id, idempotency_key, operation, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id, persisted_at)
+                VALUES (:tenant, :owner, :key, 'update', :fingerprint, :id, CAST(:snapshot AS jsonb), :revision, :correlation, :persisted_at)
             """), {
                 "tenant": tenant_id, "owner": owner_id,
                 "key": mutation.idempotency_key, "id": commitment_id,
                 "revision": row["revision"], "fingerprint": fingerprint,
                 "snapshot": PersonalCommitment.model_validate(dict(row)).model_dump_json(),
-                "correlation": correlation_id,
+                "correlation": correlation_id, "persisted_at": now,
             })
-            return PersonalCommitment.model_validate(dict(row))
+            return PersonalCommitment.model_validate(dict(row)), PersistedCommitmentReceipt(
+                commitment_id=commitment_id, tenant_id=tenant_id, revision=row["revision"],
+                idempotency_key=mutation.idempotency_key, persisted_at=now,
+                correlation_id=correlation_id,
+            )
