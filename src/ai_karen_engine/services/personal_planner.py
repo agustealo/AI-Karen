@@ -34,7 +34,7 @@ class PlannerPrincipal:
 
     @classmethod
     def from_authenticated_user(cls, user: UserData) -> "PlannerPrincipal":
-        if not user or not user.is_active:
+        if not user or getattr(user, "is_active", False) is not True:
             raise PlannerAuthorizationError("Active authenticated user required")
         if str(user.tenant_id or "").strip() in ("", "default"):
             raise PlannerAuthorizationError("Verified tenant identity required")
