@@ -112,3 +112,31 @@ async def test_permission_denied_blocks_repository(monkeypatch):
     assert repository.calls == []
     assert len(sink.events) == 1
     assert sink.events[0].event_type.value == "access_denied"
+
+
+@pytest.mark.asyncio
+async def test_update_permission_denial_never_reaches_repository(monkeypatch):
+    user = UserData(user_id=str(uuid4()), tenant_id=str(uuid4()), roles=["readonly"])
+    repository = RecordingRepository()
+    service = PersonalPlannerService(repository=repository)
+
+    class Deny:
+        def has_permission(self, principal, permission):
+            assert permission.value == "planner:write"
+            return False
+
+    class AuditSink:
+        def log_audit_event(self, event):
+            assert event.event_type.value == "access_denied"
+
+    monkeypatch.setattr(planner_module, "get_rbac_manager", lambda: Deny())
+    monkeypatch.setattr(planner_module, "get_audit_logger", lambda: AuditSink())
+    with pytest.raises(PlannerAuthorizationError):
+        await service.update(
+            user=user, commitment_id=uuid4(),
+            mutation=CommitmentMutation(
+                idempotency_key=uuid4(), expected_revision=1, title="Forbidden edit"
+            ),
+            correlation_id="denied-update",
+        )
+    assert repository.calls == []
