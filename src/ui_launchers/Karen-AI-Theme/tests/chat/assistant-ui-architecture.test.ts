@@ -196,3 +196,19 @@ describe("Karen cross-workspace panel accessibility contract", () => {
     expect(dashboard).toContain("sm:w-[min(440px,calc(100vw-24px))]");
   });
 });
+
+describe("shared governed Agent Runtime context", () => {
+  it("keeps one workspace reference in the canonical session and both chat transports", () => {
+    expect(legacyChat).toContain("workspaceRunId: string | null");
+    expect(legacyChat).toContain("setWorkspaceRunId: (runId: string | null) => void");
+    expect(legacyChat).toContain("workspace_run_id: workspaceRunId || undefined");
+    expect(component).toContain("workspaceRunId } = useSession()");
+    expect(component).toContain("forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {}");
+    expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
+  });
+
+  it("clears scoped work reference when switching conversations", () => {
+    expect(legacyChat).toContain("if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null)");
+    expect(legacyChat).toContain("setWorkspaceRunId(null);");
+  });
+});
