@@ -259,6 +259,32 @@ there is no such store, implement it in the canonical runtime owner rather
 than in the chat API adapter, projection, or React. Do not mark replay
 supported until restart and cross-tenant denial tests pass.
 
+### Medusa persistence candidates verified against PR #497
+
+PR #497 contains the existing
+`agent_medusa/execution/deepagents_checkpoints.py` scoped PostgreSQL
+checkpointer and migration
+`supabase/migrations/20261019010000_36_medusa_deepagents_checkpoints.sql`.
+The migration creates `agent_medusa_deepagents_checkpoints` and
+`agent_medusa_deepagents_checkpoint_writes`, and ties checkpoint run/tenant
+scope to `agent_medusa_runs` through a foreign key. The saver also requires
+trusted tenant, user, session, policy, run and thread identity.
+
+These are **recovery checkpoints and checkpoint writes**, not automatically
+ordered AG-UI `agent_step` events or verified tool side-effect receipts.
+The separate canonical `core/runtime/outcome/store.py` provides governed
+outcome evidence, but outcome evidence likewise must not be silently
+reinterpreted as a complete execution-event replay.
+
+**Next backend-owned audit:** inspect the existing `agent_medusa_runs`
+schema and its run lifecycle event storage/migrations; confirm whether it
+has tenant-scoped, monotonically sequenced, append-only event reads. Compare
+it with Medusa's actual event emitter and the governed outcome store before
+adding any persistence. Replay must use an authorized event ledger rather
+than decoding checkpoint payloads or reconstructing steps from outcomes.
+Coordinate implementation with PR #497's migration ownership; do not
+duplicate its checkpoint tables or bypass its scope requirements.
+
 ### Durable timeline contract (not implemented yet)
 
 A transcript-level AG-UI activity card is an observed event, **not** evidence
