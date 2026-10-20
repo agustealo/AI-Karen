@@ -88,7 +88,7 @@ function KarenActivity({ data, category = "Agent step" }: { data: unknown; categ
       <div className="border-t border-border/50 px-3 py-3 text-muted-foreground">
         {description ? <p className="whitespace-pre-wrap">{description}</p> : <p>No further activity details were reported.</p>}
         {(typeof fields.step_id === "string" && fields.step_id || value.stepId) ? <p className="mt-2 break-all text-xs">Step: {typeof fields.step_id === "string" ? fields.step_id : value.stepId}</p> : null}
-        {runId ? <p className="mt-1 break-all text-xs">Run: {runId}</p> : null}
+        {runId ? <p className="mt-1 break-all text-xs">AG-UI run: {runId}</p> : null}
         {eventId ? <p className="mt-1 break-all text-xs">Event: {eventId}</p> : null}
         {reportedAt ? <p className="mt-1 text-xs">Reported: {reportedAt}</p> : null}
       </div>
