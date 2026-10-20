@@ -423,7 +423,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
 
       <section aria-label="Needs your review" className="space-y-3" data-testid="agent-runtime-approvals">
         <h3 className="text-lg font-semibold">Needs your review</h3>
-        <p className="text-sm text-muted-foreground">These requests come from Karen's authorized approval service. A decision alone does not execute an action.</p>
+        <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
         {approvalsError && <p role="alert" className="text-sm text-destructive">{approvalsError}</p>}
         {approvals.length === 0 && !approvalsError ? (
           <p className="rounded-lg border p-4 text-sm text-muted-foreground">No actionable approval requests are available.</p>
