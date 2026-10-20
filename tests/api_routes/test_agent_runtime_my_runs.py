@@ -154,3 +154,36 @@ async def test_chat_context_reference_rejects_unauthorized_run(monkeypatch):
             run_id="run-2", user={"tenant_id": tenant, "user_id": owner, "is_active": True},
         )
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_chat_workspace_reference_rejects_cross_tenant_and_inactive_identity(monkeypatch):
+    from ai_karen_engine.api_routes.chat import runtime as chat_runtime
+    from ai_karen_engine.api_routes.agents import runtime as agent_runtime
+    owner = str(uuid4())
+    original_tenant = str(uuid4())
+    other_tenant = str(uuid4())
+    plane = DetailControlPlane({"run_id": "restricted-run", "user_id": owner, "status": "running"})
+    monkeypatch.setattr(agent_runtime, "get_run_control_plane", lambda: plane)
+    monkeypatch.setattr(chat_runtime, "UserData", SimpleNamespace(ensure=lambda user: SimpleNamespace(**user)))
+    for principal in (
+        {"tenant_id": "default", "user_id": owner, "is_active": True},
+        {"tenant_id": original_tenant, "user_id": owner, "is_active": False},
+    ):
+        with pytest.raises(HTTPException) as error:
+            await chat_runtime._verified_workspace_run_reference(
+                run_id="restricted-run", user=principal,
+            )
+        assert error.value.status_code == 403
+    assert plane.requests == []
+    # A run in another tenant must be rejected by the canonical lookup.
+    from ai_karen_engine.agent_medusa.execution.run_manager import RunTenantMismatchError
+    async def mismatch(*, run_id, tenant_id):
+        raise RunTenantMismatchError("tenant mismatch")
+    plane.get_run = mismatch
+    with pytest.raises(HTTPException) as error:
+        await chat_runtime._verified_workspace_run_reference(
+            run_id="restricted-run",
+            user={"tenant_id": other_tenant, "user_id": owner, "is_active": True},
+        )
+    assert error.value.status_code == 404
