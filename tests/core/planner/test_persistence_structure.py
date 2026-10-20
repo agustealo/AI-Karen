@@ -23,5 +23,8 @@ def test_planner_migration_is_distinct_from_automation_execution():
     assert "CREATE TABLE public.personal_planner_mutation_receipts" in sql
     assert "ENABLE ROW LEVEL SECURITY" in sql
     assert "FORCE ROW LEVEL SECURITY" in sql
+    assert "UNIQUE (id, tenant_id, owner_id)" in sql
+    assert "FOREIGN KEY (commitment_id, tenant_id, owner_id)" in sql
+    assert "REFERENCES public.personal_planner_commitments (id, tenant_id, owner_id)" in sql
     assert "app.current_tenant_id" in sql
     assert "ALTER TABLE public.automation_tasks" not in sql
