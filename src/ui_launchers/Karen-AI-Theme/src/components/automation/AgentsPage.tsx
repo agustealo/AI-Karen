@@ -142,13 +142,15 @@ export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKa
     setVerifiedRun(null);
     setRunDetailError("");
     // Even an ID from the list is treated as an untrusted lookup key.
-    apiClient.get<AgentRunRecord>(`/api/agent-runtime/my-runs/${encodeURIComponent(selectedRunId)}`)
+    apiClient.get<AgentRunRecord>(isAdmin
+      ? `/api/admin/agents/runs/${encodeURIComponent(selectedRunId)}`
+      : `/api/agent-runtime/my-runs/${encodeURIComponent(selectedRunId)}`)
       .then((record) => { if (active) setVerifiedRun(record); })
       .catch((error: unknown) => {
         if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
       });
     return () => { active = false; };
-  }, [selectedRunId, isAuthenticated]);
+  }, [selectedRunId, isAuthenticated, isAdmin]);
   const visibleRuns = runs.filter((run) => {
     if (workFilter === "all") return true;
     const status = run.status.toLowerCase();
