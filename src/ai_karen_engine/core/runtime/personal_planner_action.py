@@ -9,19 +9,23 @@ from __future__ import annotations
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.planner.action_contract import AuthorizedPlannerAction, PlannerAction
 from ai_karen_engine.core.planner.contracts import CommitmentMutation, PersonalCommitment, PersistedCommitmentReceipt
-from ai_karen_engine.services.personal_planner import PersonalPlannerService, PlannerAuthorizationError
+from ai_karen_engine.services.personal_planner import PersonalPlannerService, PlannerAuthorizationError, PlannerPrincipal
+from ai_karen_engine.core.runtime.planner_approval import PlannerRuntimeApproval
 
 
 async def execute_authorized_planner_action(
     action: AuthorizedPlannerAction,
     *,
     authenticated_user: UserData,
-    runtime_policy_approved: bool,
+    runtime_approval: PlannerRuntimeApproval | None,
     service: PersonalPlannerService | None = None,
 ) -> tuple[PersonalCommitment, PersistedCommitmentReceipt]:
     """Run only after ChatRuntime policy explicitly permits this mutation."""
-    if runtime_policy_approved is not True:
-        raise PlannerAuthorizationError("Runtime policy denied planner mutation")
+    if runtime_approval is None:
+        raise PlannerAuthorizationError("Runtime approval required for planner mutation")
+    principal = PlannerPrincipal.from_authenticated_user(authenticated_user)
+    if not runtime_approval.matches(tenant_id=principal.tenant_id, owner_id=principal.owner_id, action=action):
+        raise PlannerAuthorizationError("Runtime approval does not match principal and action")
     owner = service if service is not None else PersonalPlannerService()
     if action.action is PlannerAction.CREATE:
         assert action.title is not None and action.timezone is not None
