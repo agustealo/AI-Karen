@@ -93,3 +93,32 @@ async def list_my_agent_runs(
         "total": len(owned),
         "generated_at": result["generated_at"],
     }
+
+
+@router.get("/my-runs/{run_id}")
+async def get_my_agent_run(
+    run_id: str,
+    current_user: UserData = Depends(get_current_user),
+    control_plane: AgentMedusaControlPlane = Depends(get_run_control_plane),
+) -> Dict[str, Any]:
+    """Resolve a selected run using authoritative tenant + owner constraints.
+
+    A user-provided run ID is only a lookup key. Ownership is established
+    independently by the canonical Medusa run record before returning details.
+    """
+    tenant_id = str(current_user.tenant_id or "").strip()
+    owner_id = str(current_user.user_id or "").strip()
+    if not current_user.is_active or not owner_id or not tenant_id or tenant_id == "default":
+        raise HTTPException(status_code=403, detail="Verified active user and tenant required")
+    if not run_id or len(run_id) > 128:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    from ai_karen_engine.agent_medusa.execution.run_manager import (
+        RunNotFoundError, RunTenantMismatchError,
+    )
+    try:
+        record = await control_plane.get_run(run_id=run_id, tenant_id=tenant_id)
+    except (RunNotFoundError, RunTenantMismatchError) as exc:
+        raise HTTPException(status_code=404, detail="Execution not found") from exc
+    if str(record.get("user_id") or "") != owner_id:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return record
