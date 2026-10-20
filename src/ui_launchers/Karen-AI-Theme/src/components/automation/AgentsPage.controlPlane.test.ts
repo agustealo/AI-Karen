@@ -25,9 +25,28 @@ describe("AgentsPage canonical Medusa boundary", () => {
   });
 
   it("keeps execution authority in ChatRuntime and RuntimePolicy", () => {
-    expect(source).toContain("Chat remains the execution entry point");
-    expect(source).toContain("CORTEX decides");
-    expect(source).toContain("RuntimePolicy authorizes");
+    expect(source).toContain("Ask Karen");
+    expect(source).toContain("Your AI workspace");
+    expect(source).toContain('data-testid="agent-workspace"');
+    expect(source).toContain("CORTEX and RuntimePolicy approval");
+    expect(source).toContain("ChatRuntime after CORTEX");
     expect(source).toContain("Per-agent daemon");
+  });
+});
+
+describe("Agent Runtime task-first UI contract", () => {
+  it("offers master-detail, filtering and progressive diagnostics", () => {
+    expect(source).toContain('aria-label="Execution list"');
+    expect(source).toContain('aria-label="Selected execution details"');
+    expect(source).toContain("setSelectedRunId");
+    expect(source).toContain("setWorkFilter");
+    expect(source).toContain("<details");
+    expect(source).toContain("Technical details");
+  });
+
+  it("does not misrepresent admin history as personal work or cancellation as completion", () => {
+    expect(source).toContain("Personal work history requires a separately authorized user-scoped endpoint.");
+    expect(source).toContain("Request cancellation");
+    expect(source).toContain("Cancellation requested for");
   });
 });
