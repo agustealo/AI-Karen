@@ -100,7 +100,7 @@ function statusVariant(
   return "outline";
 }
 
-export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) {
+export default function AgentsPage({ onAskKaren, onOpenConversation }: { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void> }) {
   const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
   const isAdmin = user?.roles?.includes("admin") ?? false;
 
@@ -391,6 +391,7 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
             <p className="text-xs text-muted-foreground">Review this decision in its original conversation before asking Karen to continue. Navigating to Chat does not automatically select a conversation or execute work.</p>
             {approval.reason_codes.length > 0 && <p className="text-sm text-muted-foreground">Reasons: {approval.reason_codes.join(", ")}</p>}
             <div className="flex flex-wrap gap-2">
+              {approval.conversation_id && onOpenConversation && <Button size="sm" variant="outline" onClick={() => void onOpenConversation(approval.conversation_id!)}>Open original conversation</Button>}
               {onAskKaren && <Button size="sm" variant="outline" onClick={onAskKaren}>Open Karen chat</Button>}
               <Button size="sm" disabled={decidingApprovalId !== null}
                 onClick={() => void decideApproval(approval.approval_id, "approved")}>Approve</Button>
