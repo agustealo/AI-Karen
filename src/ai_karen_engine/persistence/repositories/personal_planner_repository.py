@@ -92,8 +92,8 @@ class PersonalPlannerRepository:
             })
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id, persisted_at)
-                VALUES (:tenant, :owner, :key, :fingerprint, :id, CAST(:snapshot AS jsonb), 1, :correlation, :persisted_at)
+                (tenant_id, owner_id, idempotency_key, operation, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id, persisted_at)
+                VALUES (:tenant, :owner, :key, 'create', :fingerprint, :id, CAST(:snapshot AS jsonb), 1, :correlation, :persisted_at)
             """), {
                 "tenant": tenant_id, "owner": owner_id, "key": idempotency_key,
                 "id": draft.id, "fingerprint": fingerprint, "snapshot": draft.model_dump_json(), "correlation": correlation_id,
@@ -155,8 +155,8 @@ class PersonalPlannerRepository:
                 raise PlannerConflictError("Commitment unavailable or revision changed")
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
-                VALUES (:tenant, :owner, :key, :fingerprint, :id, CAST(:snapshot AS jsonb), :revision, :correlation)
+                (tenant_id, owner_id, idempotency_key, operation, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
+                VALUES (:tenant, :owner, :key, 'update', :fingerprint, :id, CAST(:snapshot AS jsonb), :revision, :correlation)
             """), {
                 "tenant": tenant_id, "owner": owner_id,
                 "key": mutation.idempotency_key, "id": commitment_id,
