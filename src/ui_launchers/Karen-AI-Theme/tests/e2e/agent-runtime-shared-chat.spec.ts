@@ -38,6 +38,8 @@ test.describe('Karen shared conversation workspace', () => {
     await openChat(page);
     const mounted = page.getByTestId('persistent-karen-conversation');
     const original = await mounted.locator('[data-testid="chat-input"]').count();
+    const draft = 'Browser continuity draft, not submitted';
+    if (original > 0) await mounted.getByTestId('chat-input').fill(draft);
     // The assistant-ui feature flag uses a different composer; this case
     // asserts lifecycle continuity without imposing legacy UI selectors.
     await page.getByRole('button', { name: 'Agents', exact: true }).first().click();
@@ -46,9 +48,11 @@ test.describe('Karen shared conversation workspace', () => {
     await expect(mounted).toHaveCount(1);
     if (original > 0) {
       await expect(mounted.getByTestId('chat-input')).toBeVisible();
+      await expect(mounted.getByTestId('chat-input')).toHaveValue(draft);
     }
-    await page.getByRole('button', { name: 'Ask Karen', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Ask Karen', exact: true }).last().click();
     await expect(mounted).toHaveCount(1);
+    if (original > 0) await expect(mounted.getByTestId('chat-input')).toHaveValue(draft);
   });
 
   test('backend denies an unverified execution reference', async ({ page }) => {
