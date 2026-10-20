@@ -51,3 +51,15 @@ describe("Agent Runtime task-first UI contract", () => {
     expect(source).toContain("Cancellation requested for");
   });
 });
+
+describe("Agent Runtime governed approvals", () => {
+  it("uses backend-owned approval records and decisions without auto-execution", () => {
+    expect(source).toContain('"/api/approvals/"');
+    expect(source).toContain("/api/approvals/\u0024{encodeURIComponent(approvalId)}/decision");
+    expect(source).toContain('data-testid="agent-runtime-approvals"');
+    expect(source).toContain("Approve");
+    expect(source).toContain("Reject");
+    expect(source).toContain("A decision alone does not execute an action.");
+    expect(source).toContain("Karen must still revalidate and resume the original request.");
+  });
+});
