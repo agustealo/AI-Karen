@@ -149,3 +149,29 @@ A scoped open-PR search for `planner`, `calendar`, `reminder`, `notification`, `
 - Record exact reuse sites and test locations. Only then select new schema identifiers and implement P1.
 
 **Status:** source-grounded partial audit recorded; P0 remains open. No runtime security claim, no tests executed, no production code changed.
+
+
+## P0 follow-up: authoritative goal, identity and transaction tracing (2026-10-19)
+
+Direct default-branch reads substantiate and refine previous P0 conclusions:
+
+| Verified source | Evidence | Binding P1 consequence |
+|---|---|---|
+| `core/personalization/persistence/repository.py` | Abstract repository contract explicitly states user facts, preferences, **goals, commitments and open loops remain canonical Memory/NeuroVault state**; personalization reads those and persists only non-authoritative behavior evidence. | Goal API/write authority must be traced through Memory/NeuroVault before planner-linked goals. Store references, not a second independent goal entity. |
+| `core/personalization/goals/contracts.py` | Goal semantics layered on `core.memory.contracts` GoalState and ProspectiveMemory. | Link canonical memory-goal IDs with tenant/user scope; avoid double recurrence/prospective state. |
+| `core/services/dependencies.py` | `bypass_user_context_func = get_user_context`. Normal path resolves real auth user and validates tenant+user; configured developer-auth bypass permits synthetic dev context. | Correct earlier shorthand: this is **not evidence of unconditional unauthenticated access**. Audit production `should_bypass_auth` conditions and scheduler admin/tenant checks; fail closed in production. |
+| `persistence/postgres/transactions.py` | `async_transaction_scope(tenant_id)` sets `app.current_tenant_id` and compatibility `app.tenant_id`, with transaction-local scope; does **not** set authenticated user context. | P1 needs an explicitly authorized user-scoped transaction context or scoped SQL predicates plus DB policies that independently enforce owner identity; no user spoofing from client input. |
+| `services/database/repositories/queue_accessor.py` | Canonical durable queue accessor delegates to `PostgresQueueClient`; success uses real enqueue result rather than no-op fallback. | Reminder intent/dispatch must reuse queue authority, but add separate delivery outbox/idempotency and receipt semantics. |
+| `services/automation/definitions.py` | Agent task CRUD explicitly filters `created_by=user.user_id`, while cron list/delete calls are tenant-scoped. | Do not transplant cron permissions for private user calendars. Human planning read/write scope is both tenant AND owner by default. |
+| `persistence/repositories/automation_repository.py` | PostgreSQL owns agent task/job/cron state with transactional operations, including claim and review state. | New planner repository should reuse scoped transaction patterns without sharing automation state machines or mutating existing automation tables. |
+
+### P1 implementation contract, conditional on closing remaining P0 search
+
+- **Core contracts:** immutable task/event identifiers, owner scope, task-versus-event distinction, due time versus allocated time, IANA time zone and DST policy, revision, lifecycle and deletion provenance; goal reference uses Memory authority.
+- **SQL:** migration-owned planner tables, scoped constraints/FKs, owner-specific RLS and testable transaction-local authenticated identity, optimistic revision checks, idempotency register, immutable change-set/approval/receipt records. Unique idempotency scope includes tenant, user, operation key.
+- **Service:** single `PersonalPlannerService` owns validation, read projections, atomic mutations and undo; no direct writes by CORTEX/Deep Agents, external adapters, chat routes or browser.
+- **Thin API:** authenticated scoped GET/list/POST/PATCH/complete/cancel with `409` stale-revision conflicts, stable machine-readable errors, mutation receipts and policy-aware approval path.
+- **Core UX readiness:** predictable state and date formatting, complete refresh and error semantics; P2 will reuse assistant-ui and existing app navigation rather than create an alternate task dashboard.
+- **Mandatory test proof:** different-tenant and same-tenant-different-user reads and writes denied; invalid auth/bypass denied; concurrent revisions; repeated idempotency keys; transaction rollback and restart durability; goal references cannot cross owners; no false persistence success.
+
+**Remaining P0 uncertainty:** repository-wide tree/PR-file inventory, Memory goal write path and DB schema, production auth-bypass configuration, scheduler/notification actual delivery consumers, frontend nav and versioned runtime tools still need source verification. This ADR does not falsely certify P0 closed, code implemented, CI green or merge readiness.
