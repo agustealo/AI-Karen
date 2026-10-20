@@ -122,3 +122,27 @@ async def get_my_agent_run(
     if str(record.get("user_id") or "") != owner_id:
         raise HTTPException(status_code=404, detail="Execution not found")
     return record
+
+
+@router.get("/my-runs/{run_id}/context")
+async def get_my_run_context(
+    run_id: str,
+    current_user: UserData = Depends(get_current_user),
+    control_plane: AgentMedusaControlPlane = Depends(get_run_control_plane),
+) -> Dict[str, Any]:
+    """Return a minimal, owner-verified reference for conversational follow-up.
+
+    This is evidence for a user-facing question, not an authorization grant for
+    ChatRuntime tools. Runtime must independently verify any subsequent action.
+    """
+    record = await get_my_agent_run(
+        run_id, current_user=current_user, control_plane=control_plane
+    )
+    return {
+        "resource_type": "medusa_run",
+        "run_id": record["run_id"],
+        "status": record["status"],
+        "started_at": record.get("started_at"),
+        "completed_at": record.get("completed_at"),
+        "error_type": record.get("error_type"),
+    }
