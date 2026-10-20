@@ -57,3 +57,11 @@ def test_migration_has_one_atomic_transaction_and_complete_constraints():
     assert "CHECK (request_fingerprint ~ '^[0-9a-f]{64}$')" in sql
     assert "commitment_id uuid NOT NULL" in sql
     assert sql.rstrip().endswith("COMMIT;")
+
+
+def test_created_receipt_timestamp_is_identical_to_database_row():
+    source = REPO.read_text()
+    assert "revision, correlation_id, persisted_at)" in source
+    assert ":correlation, :persisted_at)" in source
+    assert '"persisted_at": now' in source
+    assert 'persisted_at=existing["persisted_at"]' in source
