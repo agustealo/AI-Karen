@@ -92,11 +92,12 @@ class PersonalPlannerRepository:
             })
             await session.execute(text("""
                 INSERT INTO public.personal_planner_mutation_receipts
-                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
-                VALUES (:tenant, :owner, :key, :fingerprint, :id, CAST(:snapshot AS jsonb), 1, :correlation)
+                (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id, persisted_at)
+                VALUES (:tenant, :owner, :key, :fingerprint, :id, CAST(:snapshot AS jsonb), 1, :correlation, :persisted_at)
             """), {
                 "tenant": tenant_id, "owner": owner_id, "key": idempotency_key,
                 "id": draft.id, "fingerprint": fingerprint, "snapshot": draft.model_dump_json(), "correlation": correlation_id,
+                "persisted_at": now,
             })
         return draft, PersistedCommitmentReceipt(
             commitment_id=draft.id, tenant_id=tenant_id, revision=1,
