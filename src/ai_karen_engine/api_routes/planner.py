@@ -43,7 +43,7 @@ class PlannerCreateRequest(BaseModel):
     idempotency_key: UUID
 
 
-class PlannerCreateResponse(BaseModel):
+class PlannerMutationResponse(BaseModel):
     commitment: PersonalCommitment
     receipt: PersistedCommitmentReceipt
 
@@ -60,12 +60,12 @@ def _planner_http_error(exc: Exception) -> HTTPException:
     raise exc
 
 
-@write_router.post("/commitments", response_model=PlannerCreateResponse)
+@write_router.post("/commitments", response_model=PlannerMutationResponse)
 async def create_personal_commitment(
     payload: PlannerCreateRequest,
     request: Request,
     user: UserData = Depends(get_current_user),
-) -> PlannerCreateResponse:
+) -> PlannerMutationResponse:
     correlation_id = get_request_correlation_id(request)
     try:
         commitment, receipt = await PersonalPlannerService().create(
@@ -73,23 +73,24 @@ async def create_personal_commitment(
             idempotency_key=payload.idempotency_key,
             correlation_id=correlation_id,
         )
-        return PlannerCreateResponse(commitment=commitment, receipt=receipt)
+        return PlannerMutationResponse(commitment=commitment, receipt=receipt)
     except (PlannerAuthorizationError, PlannerConflictError, ValueError) as exc:
         raise _planner_http_error(exc) from exc
 
 
-@write_router.patch("/commitments/{commitment_id}", response_model=PersonalCommitment)
+@write_router.patch("/commitments/{commitment_id}", response_model=PlannerMutationResponse)
 async def update_personal_commitment(
     commitment_id: UUID,
     payload: CommitmentMutation,
     request: Request,
     user: UserData = Depends(get_current_user),
-) -> PersonalCommitment:
+) -> PlannerMutationResponse:
     correlation_id = get_request_correlation_id(request)
     try:
-        return await PersonalPlannerService().update(
+        commitment, receipt = await PersonalPlannerService().update(
             user=user, commitment_id=commitment_id,
             mutation=payload, correlation_id=correlation_id,
         )
+        return PlannerMutationResponse(commitment=commitment, receipt=receipt)
     except (PlannerAuthorizationError, PlannerConflictError, PlannerNotFoundError, ValueError) as exc:
         raise _planner_http_error(exc) from exc
