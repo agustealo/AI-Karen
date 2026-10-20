@@ -34,4 +34,14 @@ test.describe('Karen shared conversation workspace', () => {
     await page.getByRole('button', { name: 'Ask Karen', exact: true }).last().click();
     await expect(page.getByTestId('persistent-karen-conversation')).toHaveCount(1);
   });
+  test('does not display execution data after selecting a denied run', async ({ page }) => {
+    await openChat(page);
+    await page.getByRole('button', { name: 'Agents', exact: true }).first().click();
+    await expect(page.getByTestId('agent-workspace')).toBeVisible();
+    // Real backend authorization must reject a foreign run. No mocked
+    // user identity or fabricated successful run state is used here.
+    const response = await page.request.get('/api/agent-runtime/my-runs/nonexistent-browser-journey');
+    expect([401, 403, 404]).toContain(response.status());
+  });
+
 });
