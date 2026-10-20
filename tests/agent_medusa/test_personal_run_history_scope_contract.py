@@ -17,5 +17,6 @@ def test_run_manager_scopes_every_history_source():
 
 def test_durable_history_filters_by_owner_before_limit():
     assert 'owner_clause = " AND user_id = :user_id" if user_id is not None else ""' in LEDGER
-    assert '"+ owner_clause' in LEDGER
+    assert '+ owner_clause' in LEDGER
+    assert LEDGER.index('+ owner_clause') < LEDGER.index('ORDER BY started_at DESC LIMIT :limit')
     assert '"user_id": user_id' in LEDGER
