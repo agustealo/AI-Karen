@@ -258,6 +258,19 @@ async def update_user_model_selection(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Provider or model selection is not configured",
         )
+    # Explicitly catalogued providers must not accept invented model IDs.
+    # An empty catalog is not evidence that a dynamically discovered local
+    # model is unavailable; the canonical runtime still verifies execution.
+    configured_models = {
+        str(item.id).strip()
+        for item in (getattr(provider_config, "models", None) or [])
+        if str(getattr(item, "id", "")).strip()
+    }
+    if configured_models and model not in configured_models:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Model is not in the configured provider catalog",
+        )
     updated_user = await auth_service.update_user_preferences(
         user_id=str(current_user.user_id),
         preferences={"model_selection": {"provider": provider, "model": model}},

@@ -826,7 +826,7 @@ export default function ModelDownloads({
   );
 
   const savePolicy = useCallback(async () => {
-    if (!policy) {
+    if (!adminMode || !policy) {
       return;
     }
 
@@ -855,7 +855,7 @@ export default function ModelDownloads({
     } finally {
       setSavingPolicy(false);
     }
-  }, [policy, toast]);
+  }, [adminMode, policy, toast]);
 
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
@@ -1316,6 +1316,7 @@ export default function ModelDownloads({
   ]);
 
   const saveModelsRoot = useCallback(async () => {
+    if (!adminMode) return;
     const nextRoot = modelsRootDraft.trim();
     if (!nextRoot || nextRoot === storageSettings?.models_root) return;
     setSavingModelsRoot(true);
@@ -1340,7 +1341,7 @@ export default function ModelDownloads({
     } finally {
       setSavingModelsRoot(false);
     }
-  }, [modelsRootDraft, refreshAll, storageSettings?.models_root, toast]);
+  }, [adminMode, modelsRootDraft, refreshAll, storageSettings?.models_root, toast]);
 
   const renderPolicyRow = (
     label: string,
@@ -1363,7 +1364,8 @@ export default function ModelDownloads({
 
         <Switch
           checked={Boolean(value)}
-          disabled={disabled}
+          disabled={!adminMode || disabled}
+          aria-label={label}
           onCheckedChange={(checked) =>
             updatePolicyField(key, checked as never)
           }
@@ -1879,13 +1881,14 @@ export default function ModelDownloads({
               value={modelsRootDraft}
               onChange={(event) => setModelsRootDraft(event.target.value)}
               placeholder="/path/to/karen-models"
-              disabled={storageSettings?.env_override}
+              disabled={!adminMode || storageSettings?.env_override}
             />
             <Button
               type="button"
               variant="outline"
               onClick={() => void saveModelsRoot()}
               disabled={
+                !adminMode ||
                 savingModelsRoot ||
                 !modelsRootDraft.trim() ||
                 modelsRootDraft.trim() === storageSettings?.models_root ||
@@ -1958,6 +1961,7 @@ export default function ModelDownloads({
           </CardHeader>
 
           <CardContent className="space-y-4">
+            {!adminMode && <p role="status" className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm text-muted-foreground">Download safety policy is managed by an administrator. Its current values are shown for transparency; you cannot change the system-wide policy here.</p>}
             {loading || !policy ? (
               <div
                 className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -2022,6 +2026,7 @@ export default function ModelDownloads({
                   <Switch
                     checked={policy.trust_remote_code}
                     disabled={!adminMode}
+                    aria-label="Trust remote model code"
                     onCheckedChange={(checked) =>
                       updatePolicyField('trust_remote_code', checked)
                     }
@@ -2061,6 +2066,7 @@ export default function ModelDownloads({
                     min={1}
                     max={8}
                     value={policy.max_concurrent_downloads}
+                    disabled={!adminMode}
                     onChange={(event) =>
                       updatePolicyField(
                         'max_concurrent_downloads',
@@ -2074,7 +2080,7 @@ export default function ModelDownloads({
                   <Button
                     type="button"
                     onClick={() => void savePolicy()}
-                    disabled={savingPolicy}
+                    disabled={!adminMode || savingPolicy}
                   >
                     {savingPolicy ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
@@ -2441,7 +2447,7 @@ export default function ModelDownloads({
                         onClick={() => void actOnJob(job.job_id, 'pause')}
                       >
                         <Pause className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Pause</span>
+                        <span className="sr-only">Pause {job.model_id}</span>
                       </Button>
                       <Button
                         type="button"
@@ -2452,7 +2458,7 @@ export default function ModelDownloads({
                         onClick={() => void actOnJob(job.job_id, 'resume')}
                       >
                         <Play className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Resume</span>
+                        <span className="sr-only">Resume {job.model_id}</span>
                       </Button>
                       <Button
                         type="button"
@@ -2463,7 +2469,7 @@ export default function ModelDownloads({
                         onClick={() => void actOnJob(job.job_id, 'cancel')}
                       >
                         <Square className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Cancel</span>
+                        <span className="sr-only">Cancel {job.model_id}</span>
                       </Button>
                       {(job.status === 'failed' || job.status === 'cancelled') && (
                         <Button
@@ -2479,7 +2485,7 @@ export default function ModelDownloads({
                           ) : (
                             <RotateCcw className="h-4 w-4" aria-hidden="true" />
                           )}
-                          <span className="sr-only">Retry download</span>
+                          <span className="sr-only">Retry download {job.model_id}</span>
                         </Button>
                       )}
                     </div>
