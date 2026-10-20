@@ -68,6 +68,16 @@ interface AgentRunRecord {
   } | null;
 }
 
+interface RuntimeApproval {
+  approval_id: string;
+  conversation_id?: string | null;
+  intent: string;
+  risk_level: string;
+  reason_codes: string[];
+  status: string;
+  expires_at: string;
+}
+
 interface AgentRunsResponse {
   runs: AgentRunRecord[];
   total: number;
@@ -96,6 +106,9 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
 
   const [catalog, setCatalog] = useState<AgentCatalogResponse | null>(null);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
+  const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
+  const [approvalsError, setApprovalsError] = useState("");
+  const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [isLoadingRuns, setIsLoadingRuns] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -175,10 +188,46 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
     }
   }, [isAuthenticated, isAdmin]);
 
+  const loadApprovals = useCallback(async () => {
+    if (!isAuthenticated) {
+      setApprovals([]);
+      return;
+    }
+    try {
+      const records = await apiClient.get<RuntimeApproval[]>("/api/approvals/");
+      setApprovals(records);
+      setApprovalsError("");
+    } catch (error) {
+      setApprovals([]);
+      setApprovalsError(error instanceof Error ? error.message : "Could not load approval requests.");
+    }
+  }, [isAuthenticated]);
+
+  const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
+    setDecidingApprovalId(approvalId);
+    setApprovalsError("");
+    try {
+      const result = await apiClient.post<RuntimeApproval>(
+        `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
+        { decision },
+      );
+      setActionMessage(
+        result.status === decision
+          ? `Decision recorded: ${decision}. Karen must still revalidate and resume the original request.`
+          : `Approval status: ${result.status}. No action has been executed by this decision.`,
+      );
+      await loadApprovals();
+    } catch (error) {
+      setApprovalsError(error instanceof Error ? error.message : "Approval decision was not recorded.");
+    } finally {
+      setDecidingApprovalId(null);
+    }
+  }, [loadApprovals]);
+
   const refresh = useCallback(async () => {
     setActionMessage("");
-    await Promise.all([loadCatalog(), loadRuns()]);
-  }, [loadCatalog, loadRuns]);
+    await Promise.all([loadCatalog(), loadRuns(), loadApprovals()]);
+  }, [loadCatalog, loadRuns, loadApprovals]);
 
   useEffect(() => {
     if (isAuthLoading) return;
@@ -319,6 +368,30 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
         ) : (
           <p className="rounded-lg border p-4 text-sm text-muted-foreground">Sign in to view your authorized work history.</p>
         )}
+      </section>
+
+      <section aria-label="Needs your review" className="space-y-3" data-testid="agent-runtime-approvals">
+        <h3 className="text-lg font-semibold">Needs your review</h3>
+        <p className="text-sm text-muted-foreground">These requests come from Karen's authorized approval service. A decision alone does not execute an action.</p>
+        {approvalsError && <p role="alert" className="text-sm text-destructive">{approvalsError}</p>}
+        {approvals.length === 0 && !approvalsError ? (
+          <p className="rounded-lg border p-4 text-sm text-muted-foreground">No actionable approval requests are available.</p>
+        ) : approvals.map((approval) => (
+          <div key={approval.approval_id} className="rounded-lg border p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="font-medium">{approval.intent}</h4>
+              <Badge variant="outline">{approval.risk_level} risk</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">Expires {formatTimestamp(approval.expires_at)}</p>
+            {approval.reason_codes.length > 0 && <p className="text-sm text-muted-foreground">Reasons: {approval.reason_codes.join(", ")}</p>}
+            <div className="flex gap-2">
+              <Button size="sm" disabled={decidingApprovalId !== null}
+                onClick={() => void decideApproval(approval.approval_id, "approved")}>Approve</Button>
+              <Button size="sm" variant="outline" disabled={decidingApprovalId !== null}
+                onClick={() => void decideApproval(approval.approval_id, "rejected")}>Reject</Button>
+            </div>
+          </div>
+        ))}
       </section>
 
       <details className="rounded-lg border border-border p-3 text-sm"><summary className="cursor-pointer font-medium">Runtime architecture and authorization</summary><Alert className="mt-3">
