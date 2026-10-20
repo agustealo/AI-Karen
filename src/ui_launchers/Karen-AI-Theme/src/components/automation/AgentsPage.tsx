@@ -343,6 +343,8 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
                       <Badge variant={statusVariant(selectedRun.status)}>{selectedRun.status}</Badge>
                     </div>
                     <p className="mt-2 text-sm text-muted-foreground">Started {formatTimestamp(selectedRun.started_at)}</p>
+                    {selectedRun.completed_at && <p className="mt-1 text-sm text-muted-foreground">Ended {formatTimestamp(selectedRun.completed_at)}</p>}
+                    <p className="mt-2 text-sm text-muted-foreground">{selectedRun.status.toLowerCase() === "completed" ? "Execution completed. A saved artifact is not implied by this status." : selectedRun.status.toLowerCase() === "cancelling" ? "Cancellation requested, awaiting confirmed terminal status." : "This status comes from the Medusa run ledger, not a simulated progress estimate."}</p>
                     {selectedRun.error_type && <p role="alert" className="mt-3 text-sm text-destructive">Reported failure: {selectedRun.error_type}</p>}
                     <details className="mt-4 text-sm">
                       <summary className="cursor-pointer font-medium">Technical details</summary>
@@ -383,8 +385,13 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
               <Badge variant="outline">{approval.risk_level} risk</Badge>
             </div>
             <p className="text-sm text-muted-foreground">Expires {formatTimestamp(approval.expires_at)}</p>
+            {approval.conversation_id && (
+              <p className="text-xs text-muted-foreground">Related conversation: <span className="font-mono break-all">{approval.conversation_id}</span></p>
+            )}
+            <p className="text-xs text-muted-foreground">Review this decision in its original conversation before asking Karen to continue. Navigating to Chat does not automatically select a conversation or execute work.</p>
             {approval.reason_codes.length > 0 && <p className="text-sm text-muted-foreground">Reasons: {approval.reason_codes.join(", ")}</p>}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {onAskKaren && <Button size="sm" variant="outline" onClick={onAskKaren}>Open Karen chat</Button>}
               <Button size="sm" disabled={decidingApprovalId !== null}
                 onClick={() => void decideApproval(approval.approval_id, "approved")}>Approve</Button>
               <Button size="sm" variant="outline" disabled={decidingApprovalId !== null}
