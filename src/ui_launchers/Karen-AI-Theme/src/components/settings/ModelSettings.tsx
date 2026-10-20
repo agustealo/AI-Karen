@@ -31,6 +31,7 @@ import { Separator } from '../ui/separator';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/lib/useAuth';
 import { ApiError, apiClient } from '@/lib/api';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
@@ -175,6 +176,8 @@ export default function ModelSettings() {
   const [apiKeyValidationMessage, setApiKeyValidationMessage] = useState('');
   const validationRequestId = useRef(0);
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canManageRuntime = Boolean(user?.roles?.some((role) => role === 'admin' || role === 'super_admin'));
 
   const normalizedSettings = useMemo(
     () => (settings ? normalizeModelSettingsResponse(settings) : null),
@@ -437,6 +440,7 @@ export default function ModelSettings() {
   };
 
   const handleSave = async () => {
+    if (!canManageRuntime) return;
     if (!selectedProviderDetails) return;
     if (!canSaveProviderModelSelection(selectedModel, availableModels, {
       isLoading: isLoadingModels,
@@ -488,6 +492,7 @@ export default function ModelSettings() {
   };
 
   const handleClearApiKey = async () => {
+    if (!canManageRuntime) return;
     if (!selectedProviderDetails?.api_key_configured) return;
     setIsClearingKey(true);
     try {
@@ -506,6 +511,7 @@ export default function ModelSettings() {
   };
 
   const handleCreateCustomProvider = async () => {
+    if (!canManageRuntime) return;
     if (!customProviderForm.name.trim() || !customProviderForm.displayName.trim() || !customProviderForm.baseUrl.trim() || !customProviderForm.model.trim()) {
       toast({ title: 'Missing details', description: 'All fields except description are required.', variant: 'destructive' });
       return;
@@ -638,7 +644,7 @@ export default function ModelSettings() {
                       </div>
                       <DialogFooter>
                         <Button variant="outline" onClick={() => setIsCustomDialogOpen(false)}>Cancel</Button>
-                        <Button onClick={handleCreateCustomProvider} disabled={isAddingCustom}>
+                        <Button onClick={handleCreateCustomProvider} disabled={!canManageRuntime || isAddingCustom}>
                           {isAddingCustom ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Create Provider
                         </Button>
                       </DialogFooter>
@@ -1007,7 +1013,7 @@ export default function ModelSettings() {
 
                           {selectedProviderDetails.api_key_configured && (
                             <div className="flex justify-end">
-                              <Button variant="outline" size="sm" onClick={handleClearApiKey} disabled={isClearingKey} className="h-7 text-[10px] font-bold border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/10">
+                              <Button variant="outline" size="sm" onClick={handleClearApiKey} disabled={!canManageRuntime || isClearingKey} className="h-7 text-[10px] font-bold border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/10">
                                 Clear Secret
                               </Button>
                             </div>
@@ -1059,7 +1065,7 @@ export default function ModelSettings() {
                     </div>
 
                   <div className="flex justify-end pt-4">
-                    <Button onClick={handleSave} disabled={isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
+                    <Button onClick={handleSave} disabled={!canManageRuntime || isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
                       {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-5 w-5" />}
                       Finalize Intelligence Settings
                     </Button>
