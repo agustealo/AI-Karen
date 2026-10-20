@@ -90,7 +90,7 @@ function statusVariant(
   return "outline";
 }
 
-export default function AgentsPage() {
+export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) {
   const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
   const isAdmin = user?.roles?.includes("admin") ?? false;
 
@@ -102,6 +102,8 @@ export default function AgentsPage() {
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
 
   const activeRuns = useMemo(
     () =>
@@ -110,6 +112,15 @@ export default function AgentsPage() {
       ),
     [runs],
   );
+
+  const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
+  const visibleRuns = runs.filter((run) => {
+    if (workFilter === "all") return true;
+    const status = run.status.toLowerCase();
+    if (workFilter === "active") return ["queued", "running", "cancelling"].includes(status);
+    if (workFilter === "completed") return ["completed", "succeeded"].includes(status);
+    return ["failed", "cancelled", "canceled"].includes(status);
+  });
 
   const loadCatalog = useCallback(async () => {
     if (!isAuthenticated) {
@@ -220,10 +231,7 @@ export default function AgentsPage() {
               Agent Runtime
             </h2>
             <p className="karen-page-description mt-1">
-              Agent Medusa is KAREN&apos;s canonical multi-agent coordinator.
-              Chat remains the execution entry point: CORTEX decides when
-              specialist delegation is required, RuntimePolicy authorizes it,
-              and Medusa coordinates only the approved plan.
+              Delegate work to Karen, monitor verified execution progress, and inspect outcomes. Agent diagnostics are available below.
             </p>
           </div>
         </div>
@@ -243,7 +251,77 @@ export default function AgentsPage() {
         </Button>
       </div>
 
-      <Alert>
+      <section aria-label="Your AI work" className="space-y-4" data-testid="agent-workspace">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
+          <div>
+            <h3 className="text-lg font-semibold">Your AI workspace</h3>
+            <p className="text-sm text-muted-foreground">Ask Karen to work on a goal, then return to review real progress and results.</p>
+          </div>
+          <Button type="button" onClick={onAskKaren} disabled={!onAskKaren}>
+            <Bot className="mr-2 h-4 w-4" /> Ask Karen
+          </Button>
+        </div>
+        {isAdmin ? (
+          <>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
+              {(["all", "active", "completed", "failed"] as const).map((filter) => (
+                <Button key={filter} type="button" size="sm"
+                  variant={workFilter === filter ? "default" : "outline"}
+                  aria-pressed={workFilter === filter}
+                  onClick={() => setWorkFilter(filter)}>
+                  {filter === "all" ? "All work" : filter === "active" ? "In progress" : filter === "completed" ? "Completed" : "Failed or cancelled"}
+                </Button>
+              ))}
+            </div>
+            <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)]">
+              <div className="space-y-2" aria-label="Execution list">
+                {isLoadingRuns ? <p className="text-sm text-muted-foreground">Loading verified work…</p> :
+                  visibleRuns.length ? visibleRuns.map((run) => (
+                    <button type="button" key={run.run_id}
+                      className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                      aria-pressed={selectedRun?.run_id === run.run_id}
+                      onClick={() => setSelectedRunId(run.run_id)}>
+                      <span className="block text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span>
+                      <span className="text-xs text-muted-foreground">{run.status} · {formatTimestamp(run.started_at)}</span>
+                    </button>
+                  )) : <p className="rounded-lg border p-4 text-sm text-muted-foreground">No verified executions match this view.</p>}
+              </div>
+              <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
+                {selectedRun ? (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="font-semibold">Execution details</h4>
+                      <Badge variant={statusVariant(selectedRun.status)}>{selectedRun.status}</Badge>
+                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground">Started {formatTimestamp(selectedRun.started_at)}</p>
+                    {selectedRun.error_type && <p role="alert" className="mt-3 text-sm text-destructive">Reported failure: {selectedRun.error_type}</p>}
+                    <details className="mt-4 text-sm">
+                      <summary className="cursor-pointer font-medium">Technical details</summary>
+                      <dl className="mt-2 space-y-2 text-xs text-muted-foreground">
+                        <div><dt>Run ID</dt><dd className="break-all">{selectedRun.run_id}</dd></div>
+                        <div><dt>Correlation ID</dt><dd className="break-all">{selectedRun.correlation_id || "Not recorded"}</dd></div>
+                        <div><dt>Response source</dt><dd>{selectedRun.response_source || "Not recorded"}</dd></div>
+                      </dl>
+                    </details>
+                    {selectedRun.cancellable && (
+                      <Button className="mt-4" variant="destructive" size="sm"
+                        disabled={cancellingRunId === selectedRun.run_id}
+                        onClick={() => void cancelRun(selectedRun.run_id)}>
+                        <CircleStop className="mr-2 h-4 w-4" /> Request cancellation
+                      </Button>
+                    )}
+                  </>
+                ) : <p className="text-sm text-muted-foreground">Select an execution to inspect its verified status.</p>}
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">This administrative view shows tenant-scoped runs. Personal work history requires a separately authorized user-scoped endpoint.</p>
+          </>
+        ) : (
+          <p className="rounded-lg border p-4 text-sm text-muted-foreground">Your agent activity remains available through Karen's conversation. A personal, permission-scoped work history is not yet available in this window.</p>
+        )}
+      </section>
+
+      <details className="rounded-lg border border-border p-3 text-sm"><summary className="cursor-pointer font-medium">Runtime architecture and authorization</summary><Alert className="mt-3">
         <ShieldCheck className="h-4 w-4" />
         <AlertTitle>Canonical ownership</AlertTitle>
         <AlertDescription>
@@ -252,7 +330,7 @@ export default function AgentsPage() {
           by ChatRuntime after CORTEX and RuntimePolicy approval; concrete runs
           can be observed and, for administrators, cancelled by run ID.
         </AlertDescription>
-      </Alert>
+      </Alert></details>
 
       {catalogError && (
         <Alert variant="destructive">
@@ -269,7 +347,7 @@ export default function AgentsPage() {
         </Alert>
       )}
 
-      <section className="space-y-3">
+      <details className="space-y-3 rounded-lg border border-border p-3"><summary className="cursor-pointer font-medium">Registered specialists and diagnostics</summary><section className="mt-3 space-y-3">
         <div>
           <h3 className="text-lg font-semibold">Registered specialists</h3>
           <p className="text-sm text-muted-foreground">
@@ -352,9 +430,9 @@ export default function AgentsPage() {
             </CardContent>
           </Card>
         )}
-      </section>
+      </section></details>
 
-      <section className="space-y-3">
+      <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer font-medium">Administrative execution diagnostics</summary><section className="mt-3 space-y-3">
         <div className="flex items-center gap-2">
           <Workflow className="h-5 w-5 text-primary" />
           <div>
@@ -500,7 +578,7 @@ export default function AgentsPage() {
             )}
           </>
         )}
-      </section>
+      </section></details>
     </div>
   );
 }
