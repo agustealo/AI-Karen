@@ -94,6 +94,7 @@ class PersonalPlannerService:
         mutation: CommitmentMutation, correlation_id: str,
     ) -> PersonalCommitment:
         identity = PlannerPrincipal.from_authenticated_user(user)
+        _authorize(user, Permission.PLANNER_WRITE, correlation_id=correlation_id)
         if not correlation_id or len(correlation_id) > 128:
             raise ValueError("Correlation ID required")
         return await self._repository.update(
