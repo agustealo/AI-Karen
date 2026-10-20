@@ -45,7 +45,8 @@ describe("Agent Runtime task-first UI contract", () => {
   });
 
   it("does not misrepresent admin history as personal work or cancellation as completion", () => {
-    expect(source).toContain("Personal work history requires a separately authorized user-scoped endpoint.");
+    expect(source).toContain("/api/agent-runtime/my-runs");
+    expect(source).toContain("Only your verified Medusa runs appear here.");
     expect(source).toContain("Request cancellation");
     expect(source).toContain("Cancellation requested for");
   });
