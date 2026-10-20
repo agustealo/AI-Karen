@@ -150,7 +150,7 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
   }, [isAuthenticated]);
 
   const loadRuns = useCallback(async () => {
-    if (!isAuthenticated || !isAdmin) {
+    if (!isAuthenticated) {
       setRuns([]);
       setRunsError("");
       return;
@@ -160,7 +160,7 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
     setRunsError("");
     try {
       const response = await apiClient.get<AgentRunsResponse>(
-        "/api/admin/agents/runs?include_terminal=true",
+        isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
       );
       setRuns(response.runs || []);
     } catch (error) {
@@ -261,7 +261,7 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
             <Bot className="mr-2 h-4 w-4" /> Ask Karen
           </Button>
         </div>
-        {isAdmin ? (
+        {isAuthenticated ? (
           <>
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
               {(["all", "active", "completed", "failed"] as const).map((filter) => (
@@ -314,10 +314,10 @@ export default function AgentsPage({ onAskKaren }: { onAskKaren?: () => void }) 
                 ) : <p className="text-sm text-muted-foreground">Select an execution to inspect its verified status.</p>}
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">This administrative view shows tenant-scoped runs. Personal work history requires a separately authorized user-scoped endpoint.</p>
+            <p className="text-xs text-muted-foreground">{isAdmin ? "Administrative view: tenant-scoped run history." : "Only your verified Medusa runs appear here. Run cancellation is administrator-controlled."}</p>
           </>
         ) : (
-          <p className="rounded-lg border p-4 text-sm text-muted-foreground">Your agent activity remains available through Karen's conversation. A personal, permission-scoped work history is not yet available in this window.</p>
+          <p className="rounded-lg border p-4 text-sm text-muted-foreground">Sign in to view your authorized work history.</p>
         )}
       </section>
 
