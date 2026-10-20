@@ -203,6 +203,22 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
   const [karenPanelOpen, setKarenPanelOpen] = useState(false);
+  const karenLauncherRef = useRef<HTMLButtonElement | null>(null);
+  const karenPanelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!karenPanelOpen || activeMainView === "chat") return;
+    karenPanelRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setKarenPanelOpen(false);
+        karenLauncherRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [karenPanelOpen, activeMainView]);
   const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
@@ -663,9 +679,13 @@ export default function DashboardPage() {
                 <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
                   <div
                     id="persistent-karen-panel"
+                    ref={karenPanelRef}
+                    tabIndex={-1}
+                    role={activeMainView !== "chat" && karenPanelOpen ? "dialog" : undefined}
+                    aria-label={activeMainView !== "chat" && karenPanelOpen ? "Karen conversation" : undefined}
                     data-testid="persistent-karen-conversation"
                     className={backendStatus === "ready" && (activeMainView === "chat" || karenPanelOpen)
-                      ? activeMainView === "chat" ? "flex min-h-0 flex-1 flex-col" : "fixed inset-y-16 right-3 z-50 flex w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+                      ? activeMainView === "chat" ? "flex min-h-0 flex-1 flex-col" : "fixed inset-x-2 top-16 bottom-20 z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl sm:inset-x-auto sm:right-3 sm:bottom-20 sm:w-[min(440px,calc(100vw-24px))]"
                       : "hidden"}
                     aria-hidden={backendStatus !== "ready" || (activeMainView !== "chat" && !karenPanelOpen)}
                   >
@@ -688,7 +708,7 @@ export default function DashboardPage() {
             {activeMainView !== "chat" && backendStatus === "ready" && (
               <div className="fixed bottom-4 right-4 z-[60] flex gap-2">
                 {karenPanelOpen && <Button type="button" variant="outline" onClick={() => setKarenPanelOpen(false)} aria-label="Collapse Karen conversation">Close panel</Button>}
-                <Button type="button" onClick={() => setKarenPanelOpen((open) => !open)} aria-expanded={karenPanelOpen} aria-controls="persistent-karen-panel">
+                <Button ref={karenLauncherRef} type="button" onClick={() => setKarenPanelOpen((open) => !open)} aria-expanded={karenPanelOpen} aria-controls="persistent-karen-panel">
                   <MessageSquare className="mr-2 h-4 w-4" /> {karenPanelOpen ? "Hide Karen" : "Ask Karen"}
                 </Button>
               </div>
