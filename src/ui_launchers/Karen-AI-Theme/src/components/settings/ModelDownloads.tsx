@@ -1976,6 +1976,11 @@ export default function ModelDownloads({
           </CardHeader>
 
           <CardContent className="space-y-4">
+            {!adminMode && (
+              <p role="status" className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm text-muted-foreground">
+                Download safety policy is managed by an administrator. Its current values are shown for transparency; you cannot change the system-wide policy here.
+              </p>
+            )}
             {loading || !policy ? (
               <div
                 className="flex items-center gap-2 text-sm text-muted-foreground"
