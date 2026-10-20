@@ -317,7 +317,7 @@ export default function DashboardPage() {
       settings: <SettingsDialogComponent />,
       pluginOverview: <PluginOverviewPage />,
       agentsOverview: <AgentsOverviewPage />,
-      agents: <AgentsPage />,
+      agents: <AgentsPage onAskKaren={() => setActiveMainView("chat")} />,
       tasks: <TasksPage />,
       jobs: <JobsPage />,
       cronJobs: <CronJobsPage />,
