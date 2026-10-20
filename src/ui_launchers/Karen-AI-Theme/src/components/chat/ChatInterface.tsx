@@ -997,6 +997,7 @@ const removeSessionState = (sessionId: string): void => {
 export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const { 
     currentSession, 
+    workspaceRunId,
     sessions, 
     isLoadingSessions, 
     error, 
