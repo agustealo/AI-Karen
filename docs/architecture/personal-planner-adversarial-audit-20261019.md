@@ -119,3 +119,33 @@ Super Productivity may guide UX; evaluate license compatibility before copying c
 Treat P0 as a hard gate: enumerate all existing planner-like records, service owners, scheduler implementations, extension manifests, integration branches and open PRs. Amend this ADR if an existing canonical planner owner is found. Then implement P1 core persistence/API without requiring plugins; P2 core workspace with real data; P3 runtime-mediated conversational proposals and commits; P4 reminder/recurrence behavior; P5 optional provider adapters; P6 independently benchmarked adaptive planning.
 
 Do not merge based solely on documentation review: each production slice requires exact-head CI, tenant/user isolation tests, conflict/idempotency tests, truthful receipt and synchronization tests, and human UX acceptance appropriate to the slice.
+
+
+## P0 ownership reconciliation: verified source findings (2026-10-19)
+
+**Verification method:** Direct GitHub default-branch file reads for the paths below. GitHub repository-wide code search returned no file matches for planner, reminder, calendar, notification, goal or scheduler terms. Therefore this is a **partial owner reconciliation**, not a claim that no competing module exists. Do not advance the P0 gate until tree/reference and open-PR inventory succeeds.
+
+| Source verified | Observed behavior | Owner decision / follow-up |
+|---|---|---|
+| `src/ai_karen_engine/api_routes/automation/tasks.py` | `/api/tasks` accepts agent assignments, instructions, acceptance criteria, verification contracts and execution review state. Delegates to automation definition/execution services. | **Keep in automation**. Do not repurpose route, records or `Pending/Running/Success/Failed` status as human plans. |
+| `src/ui_launchers/Karen-AI-Theme/src/components/automation/TasksPage.tsx` | Reads `/api/tasks/` and agent catalog; agent task/result/review UI. | Keep automation UI distinct from the new personal Today/Week experience. |
+| `src/ai_karen_engine/api_routes/automation/cron.py` | Uses automation repository claim leases and durable queue, job type and execution-target dispatch. | **Reuse infrastructure patterns/queue authority** for reminders, with a distinct queue job contract and delivery receipts; don't execute a personal task as an agent job. |
+| `supabase/migrations/20260923010000_16_automation_scheduler_authority.sql` | Defines agent automation tasks, jobs, cron and queue; task status only `Pending/Running/Success/Failed`; automation task RLS checks tenant context, not personal task owner. | **New personal planner table/policy required unless another canonical schema is found**. Enforce tenant AND user identity and independently test same-tenant isolation. |
+| `src/ai_karen_engine/api_routes/automation/scheduler.py` | Autonomous training scheduler routes use `bypass_user_context_func` as a dependency including role checks. | **P0 security review**: establish whether the bypass can be reached in production and prove RBAC before reusing any path. No personal-planner calls may depend on bypass auth. |
+| `src/ai_karen_engine/core/personalization/runtime.py` | Reads repository-owned preferences/behaviors/goals and derives user snapshots, without claiming second durable goal authority. | Planner consumes scoped projections and links canonical goals; no new independent goals storage. |
+| `src/ai_karen_engine/core/personalization/goals/contracts.py` | Defines semantic goal lifecycle/contracts. | Reuse validated stable goal IDs via existing repository; verify actual goal write owner and migrations in full P0. |
+
+### Open-PR overlap check (partial)
+
+A scoped open-PR search for `planner`, `calendar`, `reminder`, `notification`, `scheduler`, and `goals` returned PR #499 for the first three matching terms and `scheduler`, with no matches for the others. This is **not** a full review of all active branches or PR file lists. Before P1, enumerate every open PR and compare file overlap with backend services, schemas, app navigation, AG-UI, notifications and goals.
+
+### P0 blocker checklist before P1
+
+- Enumerate default-branch tree and all migrations for potential canonical personal planning tables.
+- Trace scheduler queue consumers, notification delivery providers, job retries and their dependency injection and secrets boundaries.
+- Trace canonical goal writes/IDs from API through repository to database; confirm ownership and tenant-user scoping.
+- Inventory router registration, memory/CORTEX runtime tool contract, frontend navigation, UX components and overlapping PR branches.
+- Confirm safe authenticated service/worker context, row-security posture, and audit-event ownership.
+- Record exact reuse sites and test locations. Only then select new schema identifiers and implement P1.
+
+**Status:** source-grounded partial audit recorded; P0 remains open. No runtime security claim, no tests executed, no production code changed.
