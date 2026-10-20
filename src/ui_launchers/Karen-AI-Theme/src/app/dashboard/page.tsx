@@ -112,6 +112,7 @@ type NavSubgroup = {
 function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
   const { loadSession, setWorkspaceRunId } = useSession();
   const [handoffError, setHandoffError] = useState("");
+  const { workspaceRunId } = useSession();
 
   const openConversation = useCallback(async (conversationId: string) => {
     setHandoffError("");
@@ -128,6 +129,7 @@ function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
   return (
     <>
       {handoffError && <p role="alert" className="mb-3 text-sm text-destructive">{handoffError}</p>}
+      {workspaceRunId && <div className="mb-3 flex items-center gap-2 rounded-lg border p-2 text-xs"><span>Context: execution {workspaceRunId.slice(0, 8)}</span><Button type="button" size="sm" variant="outline" onClick={() => setWorkspaceRunId(null)}>Clear context</Button></div>}
       <AgentsPage onAskKaren={openChat} onOpenConversation={openConversation}
         onDiscussRun={(runId) => { setWorkspaceRunId(runId); openChat(); }} />
     </>
