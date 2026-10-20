@@ -12,7 +12,7 @@ test.describe('Karen shared conversation workspace', () => {
     await expect(conversation).toBeVisible();
 
     // Navigate through the actual dashboard menu, not a test-only view setter.
-    await page.getByRole('button', { name: 'Agent Runtime', exact: true }).click();
+    await page.getByRole('button', { name: 'Agents', exact: true }).click();
     await expect(page.getByTestId('workspace-scroll-region')).toBeVisible();
     await expect(conversation).toBeHidden();
 
@@ -30,7 +30,7 @@ test.describe('Karen shared conversation workspace', () => {
   test('chat has only one persistent conversation container after workspace navigation', async ({ page }) => {
     await openChat(page);
     await expect(page.getByTestId('persistent-karen-conversation')).toHaveCount(1);
-    await page.getByRole('button', { name: 'Agent Runtime', exact: true }).click();
+    await page.getByRole('button', { name: 'Agents', exact: true }).click();
     await page.getByRole('button', { name: 'Ask Karen', exact: true }).last().click();
     await expect(page.getByTestId('persistent-karen-conversation')).toHaveCount(1);
   });
