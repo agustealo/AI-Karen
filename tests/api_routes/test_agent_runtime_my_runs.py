@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from ai_karen_engine.api_routes.agents.runtime import list_my_agent_runs
+from ai_karen_engine.api_routes.agents.runtime import list_my_agent_runs, get_my_agent_run
 
 
 class ControlPlane:
@@ -52,3 +52,40 @@ async def test_invalid_identity_cannot_read_history(tenant, owner, active):
         )
     assert error.value.status_code == 403
     assert plane.tenants == []
+
+
+class DetailControlPlane:
+    def __init__(self, record):
+        self.record = record
+        self.requests = []
+
+    async def get_run(self, *, run_id, tenant_id):
+        self.requests.append((run_id, tenant_id))
+        return self.record
+
+
+@pytest.mark.asyncio
+async def test_selected_run_detail_requires_record_owner():
+    tenant, owner = str(uuid4()), str(uuid4())
+    plane = DetailControlPlane({"run_id": "run-1", "user_id": str(uuid4())})
+    principal = SimpleNamespace(tenant_id=tenant, user_id=owner, is_active=True)
+    with pytest.raises(HTTPException) as error:
+        await get_my_agent_run("run-1", current_user=principal, control_plane=plane)
+    assert error.value.status_code == 404
+    assert plane.requests == [("run-1", tenant)]
+    plane.record = {"run_id": "run-1", "user_id": owner, "status": "running"}
+    result = await get_my_agent_run("run-1", current_user=principal, control_plane=plane)
+    assert result["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_selected_run_detail_requires_verified_identity():
+    plane = DetailControlPlane({"run_id": "run-1", "user_id": "someone"})
+    with pytest.raises(HTTPException) as error:
+        await get_my_agent_run(
+            "run-1",
+            current_user=SimpleNamespace(tenant_id="default", user_id=str(uuid4()), is_active=True),
+            control_plane=plane,
+        )
+    assert error.value.status_code == 403
+    assert plane.requests == []
