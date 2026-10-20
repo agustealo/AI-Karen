@@ -40,3 +40,14 @@ def test_explicit_planner_grant_works_without_broad_data_permission():
     principal = user_with(permissions=[Permission.PLANNER_READ.value])
     assert manager.has_permission(principal, Permission.PLANNER_READ)
     assert not manager.has_permission(principal, Permission.PLANNER_WRITE)
+
+
+def test_effective_permission_asset_grants_planner_access_to_users():
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    config = json.loads((root / "config_assets/permissions.json").read_text())
+    for role in ("user", "admin"):
+        permissions = config["role_permissions"][role]["permissions"]
+        assert Permission.PLANNER_READ.value in permissions
+        assert Permission.PLANNER_WRITE.value in permissions
