@@ -96,8 +96,8 @@ jobs:
                   await admin.execute("INSERT INTO public.personal_planner_commitments (id, tenant_id, owner_id, title, timezone) VALUES ($1, $2, $3, 'RLS proof', 'UTC')", record, tenant, owner)
                   await admin.execute("""
                               INSERT INTO public.personal_planner_mutation_receipts
-                              (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
-                              VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 1, 'rls-proof')
+                              (tenant_id, owner_id, idempotency_key, operation, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
+                              VALUES ($1, $2, $3, 'create', $4, $5, '{}'::jsonb, 1, 'rls-proof')
                           """, tenant, owner, uuid.uuid4(), "a" * 64, record)
                   reader = await asyncpg.connect(
                       host="127.0.0.1", port=5432, database="ai_karen",
@@ -123,9 +123,9 @@ jobs:
                               async with reader.transaction():
                                   await reader.execute("""
                                       INSERT INTO public.personal_planner_mutation_receipts
-                                      (tenant_id, owner_id, idempotency_key, request_fingerprint,
+                                      (tenant_id, owner_id, idempotency_key, operation, request_fingerprint,
                                        commitment_id, result_snapshot, revision, correlation_id)
-                                      VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 1, 'deny')
+                                      VALUES ($1, $2, $3, 'create', $4, $5, '{}'::jsonb, 1, 'deny')
                                   """, tenant, owner, uuid.uuid4(), "b" * 64, record)
                           except asyncpg.InsufficientPrivilegeError:
                               denied_receipt = True
