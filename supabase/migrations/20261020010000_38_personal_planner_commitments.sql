@@ -15,7 +15,8 @@ CREATE TABLE public.personal_planner_commitments (
     timezone varchar(128) NOT NULL,
     revision integer NOT NULL DEFAULT 1 CHECK (revision >= 1),
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT uq_personal_planner_commitment_scope UNIQUE (id, tenant_id, owner_id)
 );
 CREATE INDEX idx_personal_planner_owner_due
     ON public.personal_planner_commitments (tenant_id, owner_id, due_at);
@@ -23,11 +24,15 @@ CREATE TABLE public.personal_planner_mutation_receipts (
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     owner_id uuid NOT NULL REFERENCES public.auth_users(user_id) ON DELETE RESTRICT,
     idempotency_key uuid NOT NULL,
-    commitment_id uuid NOT NULL REFERENCES public.personal_planner_commitments(id) ON DELETE CASCADE,
+    commitment_id uuid NOT NULL,
     revision integer NOT NULL CHECK (revision >= 1),
     correlation_id varchar(128) NOT NULL,
     persisted_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (tenant_id, owner_id, idempotency_key)
+    PRIMARY KEY (tenant_id, owner_id, idempotency_key),
+    CONSTRAINT fk_personal_planner_receipt_owner
+        FOREIGN KEY (commitment_id, tenant_id, owner_id)
+        REFERENCES public.personal_planner_commitments (id, tenant_id, owner_id)
+        ON DELETE CASCADE
 );
 ALTER TABLE public.personal_planner_commitments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.personal_planner_commitments FORCE ROW LEVEL SECURITY;
