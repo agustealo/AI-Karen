@@ -234,6 +234,31 @@ conversation scoping, and read event sequence and terminal state from the
 canonical ledger. Client-supplied identifiers must never authorize cross-run
 access or execution recovery.
 
+### Verified persistence owner audit (PR #494)
+
+The canonical `ConversationRuntimeGateway`
+(`src/ai_karen_engine/core/runtime/conversation_runtime_gateway.py`)
+provides tenant-scoped conversation snapshots, transcript history, and
+`persist_completed_turn`. The completed-turn writer persists user and
+assistant messages through the existing conversation repository, using
+conversation/tenant IDs and request/correlation metadata. It does **not**
+expose an ordered history of `agent_step`, `tool`, or
+`ACTIVITY_SNAPSHOT` events through this API.
+
+The AG-UI ingress in `api_routes/chat/runtime.py` forwards approved
+`ChatStreamChunk` events through `AGUIEventProjection`, which is an
+in-memory per-stream serializer. The bridge must not reconstruct a purported
+execution timeline from persisted assistant text, transport run IDs, or
+transcript message timestamps.
+
+**Integration acceptance before enabling timeline replay:** locate and reuse
+the backend-owned persisted execution-event/attempt store, if one exists;
+validate its durable monotonic event sequence and tenant/owner authorization;
+then add an explicit read-only runtime gateway and authenticated route. If
+there is no such store, implement it in the canonical runtime owner rather
+than in the chat API adapter, projection, or React. Do not mark replay
+supported until restart and cross-tenant denial tests pass.
+
 ### Durable timeline contract (not implemented yet)
 
 A transcript-level AG-UI activity card is an observed event, **not** evidence
