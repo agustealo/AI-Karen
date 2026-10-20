@@ -73,3 +73,14 @@ describe("Agent Runtime provenance and continuation", () => {
     expect(source).toContain("Cancellation requested, awaiting confirmed terminal status.");
   });
 });
+
+describe("Agent Runtime owner-verified execution detail", () => {
+  it("loads selected consumer run details from backend and retains admin read boundary", () => {
+    expect(source).toContain("/api/agent-runtime/my-runs/");
+    expect(source).toContain("/api/admin/agents/runs/");
+    expect(source).toContain("setVerifiedRun(null)");
+    expect(source).toContain("Verifying execution access…");
+    expect(source).toContain("if (active) setVerifiedRun(record)");
+    expect(source).toContain("return () => { active = false; }");
+  });
+});
