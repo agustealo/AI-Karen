@@ -1975,7 +1975,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       setStreamingMetrics(null);
     }
 
-  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, setInput, setMessages, setIsLoading, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, scrollChatToBottom, refreshActionableApprovals]);
+  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, setInput, setMessages, setIsLoading, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, scrollChatToBottom, refreshActionableApprovals, workspaceRunId]);
 
   // Process injected messages from other parts of the app
   useEffect(() => {
