@@ -14,8 +14,8 @@ class ControlPlane:
         self.rows = rows
         self.tenants = []
 
-    async def list_runs(self, *, tenant_id, include_terminal):
-        self.tenants.append((tenant_id, include_terminal))
+    async def list_runs(self, *, tenant_id, include_terminal, user_id):
+        self.tenants.append((tenant_id, include_terminal, user_id))
         return {"runs": self.rows, "generated_at": "2026-10-20T00:00:00Z"}
 
 
@@ -33,7 +33,7 @@ async def test_history_excludes_other_user_and_tenant_unknown_rows():
     )
     assert result["runs"] == [{"run_id": "mine", "user_id": owner}]
     assert result["total"] == 1
-    assert plane.tenants == [(tenant, True)]
+    assert plane.tenants == [(tenant, True, owner)]
 
 
 @pytest.mark.asyncio
