@@ -92,7 +92,7 @@ class PersonalPlannerService:
     async def update(
         self, *, user: UserData, commitment_id: UUID,
         mutation: CommitmentMutation, correlation_id: str,
-    ) -> PersonalCommitment:
+    ) -> tuple[PersonalCommitment, PersistedCommitmentReceipt]:
         identity = PlannerPrincipal.from_authenticated_user(user)
         _authorize(user, Permission.PLANNER_WRITE, correlation_id=correlation_id)
         if not correlation_id or len(correlation_id) > 128:
