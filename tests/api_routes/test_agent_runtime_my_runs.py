@@ -116,17 +116,13 @@ async def test_chat_workspace_reference_reuses_owner_checked_projection(monkeypa
     from ai_karen_engine.api_routes.chat import runtime as chat_runtime
     tenant, owner = str(uuid4()), str(uuid4())
     plane = DetailControlPlane({"run_id": "run-1", "user_id": owner, "status": "running"})
-    monkeypatch.setattr(chat_runtime, "get_my_run_context", get_my_run_context, raising=False)
     from ai_karen_engine.api_routes.agents import runtime as agent_runtime
     monkeypatch.setattr(agent_runtime, "get_run_control_plane", lambda: plane)
-    from ai_karen_engine.auth.models import UserData
     principal = {"tenant_id": tenant, "user_id": owner, "is_active": True}
-    try:
-        reference = await chat_runtime._verified_workspace_run_reference(
-            run_id="run-1", user=principal,
-        )
-    except (TypeError, ValueError):
-        pytest.skip("UserData principal fixture requires canonical auth claims")
+    monkeypatch.setattr(chat_runtime, "UserData", SimpleNamespace(ensure=lambda user: SimpleNamespace(**user)))
+    reference = await chat_runtime._verified_workspace_run_reference(
+        run_id="run-1", user=principal,
+    )
     assert reference["resource_type"] == "medusa_run"
     assert reference["run_id"] == "run-1"
     plane.record["user_id"] = str(uuid4())
