@@ -95,7 +95,7 @@ class AgentMedusaControlPlane:
         runs = await self._run_manager.list_runs(
             tenant_id=tenant_id,
             include_terminal=include_terminal,
-            **({'user_id': user_id} if user_id is not None else {}),
+            **({"user_id": user_id} if user_id is not None else {}),
         )
         return {
             "runs": runs,
