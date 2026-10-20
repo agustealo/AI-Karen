@@ -63,3 +63,13 @@ describe("Agent Runtime governed approvals", () => {
     expect(source).toContain("Karen must still revalidate and resume the original request.");
   });
 });
+
+describe("Agent Runtime provenance and continuation", () => {
+  it("shows conversation association without pretending navigation resumes a request", () => {
+    expect(source).toContain("Related conversation:");
+    expect(source).toContain("Open Karen chat");
+    expect(source).toContain("does not automatically select a conversation or execute work");
+    expect(source).toContain("A saved artifact is not implied by this status.");
+    expect(source).toContain("Cancellation requested, awaiting confirmed terminal status.");
+  });
+});
