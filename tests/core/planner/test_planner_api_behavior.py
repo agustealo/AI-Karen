@@ -74,7 +74,7 @@ def test_valid_authorized_read_uses_authenticated_scope(monkeypatch):
         assert (user.tenant_id, user.user_id, commitment_id) == (tenant, owner, commitment)
         return record
     monkeypatch.setattr(PersonalPlannerService, "get", read)
-    app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner))
+    app = _app(enabled=True, user=SimpleNamespace(tenant_id=tenant, user_id=owner, is_active=True))
     response = TestClient(app).get(f"/api/planner/commitments/{commitment}")
     assert response.status_code == 200
     assert response.json()["title"] == "Weekly plan"
