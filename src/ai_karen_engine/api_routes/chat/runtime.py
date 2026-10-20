@@ -686,6 +686,8 @@ async def stream_ag_ui_chat(
             "endpoint": "/api/chat/ag-ui",
             "correlation_id": correlation_id,
             "response_id": response_id,
+            # Caller-issued AG-UI run correlation is not a durable ledger ID.
+            "ag_ui_transport_run_id": request.runId,
             "conversation_id": canonical_request.context.conversation_id,
             "transport": "ag-ui",
         },
