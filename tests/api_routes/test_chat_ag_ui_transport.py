@@ -419,3 +419,51 @@ async def test_ag_ui_rejects_unowned_uuid_thread_instead_of_creating_conversatio
         )
     assert exc.value.status_code == 404
     assert exc.value.detail == "Conversation is unavailable"
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_workspace_context_requires_server_verification(monkeypatch):
+    fake = FakeRuntime()
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: fake)
+    observed = []
+
+    async def verified(*, run_id, user):
+        observed.append((run_id, user["user_id"], user["tenant_id"]))
+        return {"resource_type": "medusa_run", "run_id": run_id, "status": "running"}
+
+    monkeypatch.setattr(chat_ingress, "_verified_workspace_run_reference", verified)
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(forwardedProps={"workspace_run_id": "owned-run"}),
+        http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    await _drain_workspace_stream(response)
+    assert observed == [("owned-run", USER, TENANT_A)]
+    assert fake.requests[0].metadata["verified_workspace_run"]["run_id"] == "owned-run"
+
+
+async def _drain_workspace_stream(response):
+    return "".join([part async for part in response.body_iterator])
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_workspace_context_rejects_untrusted_fields_and_foreign_run(monkeypatch):
+    with pytest.raises(HTTPException) as error:
+        await chat_ingress.stream_ag_ui_chat(
+            request=agui_run(forwardedProps={"workspace_run_id": "owned", "admin": True}),
+            http_request=SimpleNamespace(headers={}),
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert error.value.status_code == 422
+
+    async def denied(*, run_id, user):
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    monkeypatch.setattr(chat_ingress, "_verified_workspace_run_reference", denied)
+    with pytest.raises(HTTPException) as error:
+        await chat_ingress.stream_ag_ui_chat(
+            request=agui_run(forwardedProps={"workspace_run_id": "foreign-run"}),
+            http_request=SimpleNamespace(headers={}),
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert error.value.status_code == 404
