@@ -91,9 +91,14 @@ jobs:
               try:
                   await admin.execute("CREATE ROLE karen_ci_planner_reader LOGIN PASSWORD 'planner_ci_only'")
                   await admin.execute("GRANT USAGE ON SCHEMA public TO karen_ci_planner_reader")
-                  await admin.execute("GRANT SELECT, INSERT ON public.personal_planner_commitments TO karen_ci_planner_reader");
+                  await admin.execute("GRANT SELECT, INSERT ON public.personal_planner_commitments TO karen_ci_planner_reader")
                   await admin.execute("GRANT SELECT, INSERT ON public.personal_planner_mutation_receipts TO karen_ci_planner_reader")
                   await admin.execute("INSERT INTO public.personal_planner_commitments (id, tenant_id, owner_id, title, timezone) VALUES ($1, $2, $3, 'RLS proof', 'UTC')", record, tenant, owner)
+                  await admin.execute("""
+                              INSERT INTO public.personal_planner_mutation_receipts
+                              (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
+                              VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 1, 'rls-proof')
+                          """, tenant, owner, uuid.uuid4(), "a" * 64, record)
                   reader = await asyncpg.connect(
                       host="127.0.0.1", port=5432, database="ai_karen",
                       user="karen_ci_planner_reader", password="planner_ci_only",
@@ -114,12 +119,7 @@ jobs:
                       async with reader.transaction():
                           await reader.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(tenant))
                           assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments WHERE id=$1", record) == 1
-                          await admin.execute("""
-                              INSERT INTO public.personal_planner_mutation_receipts
-                              (tenant_id, owner_id, idempotency_key, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
-                              VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 1, 'rls-proof')
-                          """, tenant, owner, uuid.uuid4(), "a" * 64, record)
-                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_mutation_receipts WHERE commitment_id=$1", record) == 1
+                                  assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_mutation_receipts WHERE commitment_id=$1", record) == 1
                   finally:
                       await reader.close()
               finally:
