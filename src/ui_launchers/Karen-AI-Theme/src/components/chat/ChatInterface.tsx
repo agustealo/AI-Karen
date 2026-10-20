@@ -283,6 +283,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   // Create a new durable session. The UI does not present a conversation
   // as created until the server has acknowledged the canonical session id.
   const createNewSession = useCallback(async () => {
+    setWorkspaceRunId(null);
     const sessionId = createSessionId();
     setIsLoadingSessions(true);
     setError(null);
@@ -327,6 +328,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
 
   // Load a specific session
   const loadSession = useCallback(async (sessionId: string) => {
+    if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null);
     setIsLoadingSessions(true);
     setError(null);
 
