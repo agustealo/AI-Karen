@@ -6,6 +6,8 @@ from uuid import uuid4
 import pytest
 
 from ai_karen_engine.core.planner.contracts import CommitmentMutation
+from ai_karen_engine.auth.models import UserData
+import ai_karen_engine.services.personal_planner as planner_module
 from ai_karen_engine.services.personal_planner import (
     PersonalPlannerService,
     PlannerAuthorizationError,
@@ -30,7 +32,8 @@ class RecordingRepository:
 
 
 @pytest.mark.asyncio
-async def test_all_paths_derive_scope_only_from_principal():
+async def test_all_paths_derive_scope_only_from_principal(monkeypatch):
+    monkeypatch.setattr(planner_module, '_authorize', lambda *args, **kwargs: None)
     tenant, owner, commitment, key = uuid4(), uuid4(), uuid4(), uuid4()
     principal = SimpleNamespace(tenant_id=str(tenant), user_id=str(owner), is_active=True)
     repository = RecordingRepository()
@@ -68,7 +71,8 @@ async def test_invalid_identity_fails_before_repository_access(principal):
 
 
 @pytest.mark.asyncio
-async def test_invalid_correlation_rejected_before_write():
+async def test_invalid_correlation_rejected_before_write(monkeypatch):
+    monkeypatch.setattr(planner_module, '_authorize', lambda *args, **kwargs: None)
     principal = SimpleNamespace(tenant_id=str(uuid4()), user_id=str(uuid4()), is_active=True)
     repository = RecordingRepository()
     service = PersonalPlannerService(repository=repository)
@@ -78,3 +82,33 @@ async def test_invalid_correlation_rejected_before_write():
             idempotency_key=uuid4(), correlation_id="",
         )
     assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_permission_denied_blocks_repository(monkeypatch):
+    user = UserData(user_id=str(uuid4()), tenant_id=str(uuid4()), roles=["user"])
+    repository = RecordingRepository()
+    service = PersonalPlannerService(repository=repository)
+
+    class Deny:
+        def has_permission(self, principal, permission):
+            return False
+
+    class AuditSink:
+        def __init__(self):
+            self.events = []
+
+        def log_audit_event(self, event):
+            self.events.append(event)
+
+    sink = AuditSink()
+    monkeypatch.setattr(planner_module, "get_rbac_manager", lambda: Deny())
+    monkeypatch.setattr(planner_module, "get_audit_logger", lambda: sink)
+    with pytest.raises(PlannerAuthorizationError):
+        await service.create(
+            user=user, title="Denied", timezone="UTC",
+            idempotency_key=uuid4(), correlation_id="rbac-denied",
+        )
+    assert repository.calls == []
+    assert len(sink.events) == 1
+    assert sink.events[0].event_type.value == "access_denied"
