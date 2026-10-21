@@ -4,7 +4,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.auth.models import UserData
 
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
@@ -82,6 +85,7 @@ class ChatExecutionContext:
     correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     roles: List[str] = field(default_factory=list)
     permissions: List[str] = field(default_factory=list)
+    authenticated_user: Optional["UserData"] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.conversation_id or not self.session_id:
