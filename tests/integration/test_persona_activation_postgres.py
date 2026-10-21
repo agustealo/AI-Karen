@@ -137,6 +137,29 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
         fresh = await reopened.get_user_preferences(user_id, tenant_id)
         assert fresh.active_persona_id == "assistant"
 
+        # Overlapping writes to independent settings must both survive.
+        await asyncio.gather(
+            service.update_user_preferences(
+                user_id, tenant_id, {"default_language": "fr_FR"}
+            ),
+            reopened.update_user_preferences(
+                user_id, tenant_id, {"show_style_controls": False}
+            ),
+        )
+        async with db.get_async_session() as session:
+            persisted_style = await session.execute(
+                text(
+                    "SELECT active_persona_id, default_language, show_style_controls "
+                    "FROM user_persona_preferences "
+                    "WHERE tenant_id=:tenant AND user_id=:user"
+                ),
+                {"tenant": tenant_id, "user": user_id},
+            )
+            active_id, language, controls = persisted_style.one()
+        assert active_id == "assistant"
+        assert language == "fr_FR"
+        assert controls is False
+
     finally:
         await service._delete_persona_record(user_id, tenant_id, persona_id)
         service._user_preferences_cache.pop(service._cache_key(user_id, tenant_id), None)
