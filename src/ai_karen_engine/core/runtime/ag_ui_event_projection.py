@@ -36,7 +36,8 @@ def _validated_presentation(raw: Any) -> dict[str, Any] | None:
     }
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
-    if raw.get("component_type") not in {"weather.observation", "weather.comparison"}:
+    component_type = raw.get("component_type")
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
