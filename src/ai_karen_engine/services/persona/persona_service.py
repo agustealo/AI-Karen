@@ -584,7 +584,7 @@ class PersonaService:
             result = await session.execute(
                 text(
                     "UPDATE user_persona_preferences SET active_persona_id = :persona_id, "
-                    "updated_at = CURRENT_TIMESTAMP "
+                    "revision = revision + 1, updated_at = CURRENT_TIMESTAMP "
                     "WHERE tenant_id = :tenant_id AND user_id = :user_id"
                 ),
                 {
