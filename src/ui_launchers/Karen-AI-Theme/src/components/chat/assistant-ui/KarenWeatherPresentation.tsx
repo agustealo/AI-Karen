@@ -99,7 +99,7 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   // A numeric temperature without a Fahrenheit field is only accepted when its unit is explicit.
   const hasFahrenheit = numeric(data.temperature_f) !== null || numeric(data.temperatureF) !== null || (typeof data.temperature === "string" && /°?\s*F\s*$/i.test(data.temperature));
   if (!hasFahrenheit) return null;
-  if (!location || temperatureF === null || temperatureF < -150 || temperatureF > 150) return null;
+  if (!location || location.length > 160 || temperatureF === null || temperatureF < -150 || temperatureF > 150) return null;
   const percentage = (...keys: string[]) => {
     const n = numberFrom(data, ...keys);
     return n !== null && n >= 0 && n <= 100 ? n : null;
@@ -110,6 +110,8 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   };
   const wind = numberFrom(data, "wind_speed_mph", "windMph");
   const weatherCode = numberFrom(data, "weather_code", "weatherCode");
+  const observedAt = optionalString(data.observed_at);
+  if (observedAt && (observedAt.length > 64 || !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:\\d{2})?$/.test(observedAt) || Number.isNaN(Date.parse(observedAt)))) return null;
   const source = optionalString(data.source_url);
   let sourceUrl: string | null = null;
   if (source) {
@@ -120,7 +122,7 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   }
   return {
     location,
-    observedAt: optionalString(data.observed_at),
+    observedAt,
     timezone: optionalString(data.timezone),
     temperatureF,
     highF: range("high_f", "high"),
