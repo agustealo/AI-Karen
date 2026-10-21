@@ -35,7 +35,7 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const tasks = (value as Record<string, unknown>).tasks;
-    if (!Array.isArray(tasks) || tasks.length < 1 || tasks.length > 20 || !tasks.every((item) => item && typeof item === "object" && !Array.isArray(item) && typeof item.id === "string" && item.id.length > 0 && item.id.length <= 160 && typeof item.title === "string" && item.title.trim().length > 0 && item.title.length <= 240 && ["todo", "in_progress", "completed", "blocked"].includes(item.status))) return null;
+    if (!Array.isArray(tasks) || tasks.length < 1 || tasks.length > 20 || !tasks.every((item) => item && typeof item === "object" && !Array.isArray(item) && typeof item.id === "string" && item.id.length > 0 && item.id.length <= 160 && typeof item.title === "string" && item.title.trim().length > 0 && item.title.length <= 240 && ["todo", "in_progress", "completed", "cancelled"].includes(item.status))) return null;
   } else if (result.data.component_type === "weather.comparison") {
     const items = result.data.data;
     if (!Array.isArray(items) || items.length < 2 || items.length > 5 || !items.every((item) => normalizeWeatherObservation(item))) return null;
