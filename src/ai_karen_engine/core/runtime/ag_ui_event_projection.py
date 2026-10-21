@@ -91,13 +91,33 @@ def _validated_presentation(raw: Any) -> dict[str, Any] | None:
     observations = data if isinstance(data, list) else [data]
     if not all(weather_observation(item) for item in observations):
         return None
+    # Never expose arbitrary tool payload fields (tokens, debug internals,
+    # request arguments, personal data) through a presentation renderer.
+    allowed_weather_fields = frozenset({
+        "location", "temperature_f", "temperatureF", "temperature",
+        "high_f", "low_f", "high", "low", "humidity",
+        "wind_speed_mph", "windMph", "precipitation_probability",
+        "weather_code", "weatherCode", "observed_at", "timezone",
+        "provider", "source_url",
+    })
+    safe_observations = [
+        {key: value for key, value in item.items() if key in allowed_weather_fields}
+        for item in observations
+    ]
+    safe = {
+        key: value for key, value in raw.items() if key != "data"
+    }
+    safe["data"] = (
+        safe_observations if component_type == "weather.comparison"
+        else safe_observations[0]
+    )
     try:
-        encoded = json.dumps(raw, allow_nan=False, separators=(",", ":"))
+        encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
     except (TypeError, ValueError, OverflowError):
         return None
     if len(encoded.encode("utf-8")) > 32768:
         return None
-    return dict(raw)
+    return safe
 
 
 class AGUIEventProjection:
