@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { KarenPresentationRegistry, parseKarenPresentation } from "./KarenPresentationRegistry";
+import { KarenPresentationRegistry, parseKarenPresentation, presentationFromStructuredContent } from "./KarenPresentationRegistry";
 
 const valid = {
   schema_version: 1,
@@ -11,6 +11,15 @@ const valid = {
 } as const;
 
 describe("versioned presentation registry", () => {
+  it("restores only allowlisted envelopes nested in canonical metadata", () => {
+    expect(presentationFromStructuredContent({ presentation: valid })?.presentation_id).toBe(valid.presentation_id);
+    expect(presentationFromStructuredContent(valid)).toBeNull();
+    expect(presentationFromStructuredContent({ presentation: { ...valid, evidence_ref: "" } })).toBeNull();
+    expect(presentationFromStructuredContent({ presentation: { ...valid, component_type: "unsafe.html" } })).toBeNull();
+    expect(presentationFromStructuredContent(null)).toBeNull();
+    expect(presentationFromStructuredContent([])).toBeNull();
+  });
+
   it("renders validated weather evidence", () => {
     expect(parseKarenPresentation(valid)?.presentation_id).toBe("weather-detroit-1");
     const html = renderToStaticMarkup(<KarenPresentationRegistry data={valid} />);
