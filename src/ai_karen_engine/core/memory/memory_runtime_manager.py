@@ -294,6 +294,7 @@ class MemoryRuntimeManager:
             metadata={
                 "include_embeddings": bool(include_embeddings),
                 "latency_budget_ms": kwargs.get("latency_budget_ms"),
+                "persona_filter": kwargs.get("persona_filter"),
             },
         )
         result = await self._neuro_recall.recall(request)
