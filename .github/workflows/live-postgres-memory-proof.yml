@@ -23,6 +23,7 @@ on:
       - "tests/integration/test_live_name_formation_path.py"
       - "tests/integration/test_live_automation_task_claims.py"
       - "tests/integration/test_persona_activation_postgres.py"
+      - "tests/integration/test_live_persona_memory_provenance.py"
       - "src/ai_karen_engine/services/persona/**"
       - "src/ai_karen_engine/core/persona/**"
       - "src/ai_karen_engine/services/automation/**"
@@ -251,3 +252,4 @@ jobs:
           asyncio.run(check())
           PY
           pytest tests/integration/test_persona_activation_postgres.py -q -rs
+          pytest tests/integration/test_live_persona_memory_provenance.py -q -rs
