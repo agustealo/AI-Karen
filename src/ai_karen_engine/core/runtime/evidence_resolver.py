@@ -203,6 +203,31 @@ class RuntimeEvidenceResolver:
             },
         )
 
+        persona_filter: str | None = None
+        try:
+            from ai_karen_engine.services.persona.persona_service import get_persona_service
+
+            preferences = await get_persona_service().get_user_preferences(
+                user_id=ctx.user_id, tenant_id=ctx.tenant_id
+            )
+            if (
+                preferences.enable_persona_memory_filtering
+                and not preferences.cross_persona_memory_sharing
+                and preferences.active_persona_id
+            ):
+                persona_filter = preferences.active_persona_id
+        except Exception as exc:
+            # A failed preference read must not broaden a requested
+            # persona-isolated recall into unrestricted personal memories.
+            cognitive_context.metadata["memory_recall_status"] = "unavailable"
+            cognitive_context.metadata["memory_degraded"] = True
+            cognitive_context.metadata["memory_degradation_reason"] = "persona_scope_unavailable"
+            logger.warning(
+                "memory.persona_scope_unavailable",
+                extra={"correlation_id": ctx.correlation_id, "error_type": type(exc).__name__},
+            )
+            return
+
         try:
             memory_manager = self._memory_manager or self._get_memory_manager()
             result = await memory_manager.recall_context(
@@ -215,6 +240,7 @@ class RuntimeEvidenceResolver:
                 conversation_id=ctx.conversation_id,
                 correlation_id=ctx.correlation_id,
                 request_id=ctx.request_id,
+                persona_filter=persona_filter,
             )
         except Exception as exc:
             logger.warning(
