@@ -107,3 +107,17 @@ assistant-ui documentation (https://www.assistant-ui.com/docs/primitives/chain-o
 Migrate to `MessagePrimitive.GroupedParts` once verified against the pinned `@assistant-ui/react` version and existing data renderers; preserve activity components and text ordering. A separate public reasoning-summary feature would require an explicit backend-owned, audited summary contract rather than raw model thinking.
 
 Acceptance: no trace on messages without grouped tool activity; only observed status labels; no synthetic successful tool execution; collapsed/expanded keyboard behavior; historical restoration using persisted AG-UI activity; no leakage of private reasoning across tenants.
+
+
+## Verified canonical backend ownership (source audit)
+
+The backend owner has now been located through `src/ai_karen_engine/server/routers.py`, rather than guessed.
+
+- `src/ai_karen_engine/api_routes/chat/runtime.py`: thin `/api/chat/ag-ui` ingress validates caller-supplied context, resolves conversation ownership using `get_conversation_runtime_gateway().get_owned_snapshot`, then delegates to `get_chat_runtime().execute_stream`.
+- `src/ai_karen_engine/core/runtime/ag_ui_event_projection.py`: existing `AGUIEventProjection` translates canonical runtime chunks to `CUSTOM`, `TOOL_CALL_*`, activity, text and terminal events; it owns no persistence or tools.
+- `src/ai_karen_engine/api_routes/chat/conversation.py`: serializes messages read from canonical conversation snapshots. `_canonical_message_to_response` currently surfaces metadata and selected function fields, but not a standalone `structured_content` field in its actual Pydantic response model.
+- `src/ai_karen_engine/core/runtime/conversation_runtime_gateway.py`: the existing authorized conversation read/write gateway. Inspect this and the canonical ChatRuntime persistence call site before changing any schema.
+
+**Critical mismatch:** the frontend's `MessageResponse` TypeScript interface includes `structured_content`, but the backend's actual `MessageResponse` Pydantic schema does not declare that field. Do not rely on it for replay until the backend explicitly supports it. Persisted presentation data must be committed through the existing conversation owner, not the event projector or thin API route.
+
+The next implementation must trace the canonical completion/persistence transaction first, identify which runtime-origin data represents a verified weather tool result, and add an evidence-bound, bounded presentation field there. After that, extend the existing response schema and AG-UI projection with the same versioned envelope and add restart-replay, tenant/RBAC and idempotence proofs. Do not create a dormant presentation event or a second store without an actual runtime producer.
