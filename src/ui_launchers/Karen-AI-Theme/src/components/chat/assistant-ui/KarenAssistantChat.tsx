@@ -24,6 +24,7 @@ import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
+import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/ChatInterface";
@@ -175,6 +176,7 @@ const agentParts = {
   data: {
     by_name: {
       "karen.learning_decision": KarenLearningDecision,
+      "karen.presentation.v1": KarenPresentationRegistry,
       "karen.weather": KarenWeatherPresentation,
       "karen.weather_observation": KarenWeatherPresentation,
       "karen.checkpoint": KarenCheckpoint,
