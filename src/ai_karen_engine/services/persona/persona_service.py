@@ -498,23 +498,35 @@ class PersonaService:
                 user_id, tenant_id, updates["active_persona_id"]
             )
 
-        # Work on a detached copy so failed persistence cannot mutate the
-        # cached authoritative state.
-        preferences = UserPersonaPreferences(**preferences.dict())
+        if not updates:
+            return await self.get_user_preferences(user_id, tenant_id)
+
+        # Only update requested fields. A prior whole-row upsert could
+        # overwrite concurrent persona selection and unrelated style changes.
+        await self.get_user_preferences(user_id, tenant_id)
+        field_values = {}
         for key, value in updates.items():
-            setattr(preferences, key, value)
+            if hasattr(value, "value"):
+                value = value.value
+            field_values[key] = value
 
-        if preferences.active_persona_id:
-            active_persona = await self.get_persona(preferences.active_persona_id, user_id, tenant_id)
-            if active_persona is None or not active_persona.is_active:
-                raise ValueError("Selected persona is unavailable")
-
-        preferences.updated_at = datetime.utcnow()
-        if not await self._save_user_preferences(user_id, tenant_id, preferences):
-            raise RuntimeError("Persona preferences were not persisted")
-        self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
-        logger.info("Updated preferences for user %s", user_id)
-        return preferences
+        assignments = ", ".join(
+            f"{key} = :{key}" for key in sorted(field_values)
+        )
+        statement = text(
+            "UPDATE user_persona_preferences SET " + assignments
+            + ", updated_at = CURRENT_TIMESTAMP "
+            "WHERE tenant_id = :tenant_id AND user_id = :user_id"
+        )
+        async with self._tenant_session(tenant_id) as session:
+            result = await session.execute(
+                statement,
+                {"tenant_id": tenant_id, "user_id": user_id, **field_values},
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("Persona preferences were not persisted")
+        self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
+        return await self.get_user_preferences(user_id, tenant_id)
 
     async def switch_persona(
         self,
