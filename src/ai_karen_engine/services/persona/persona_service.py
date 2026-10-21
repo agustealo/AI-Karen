@@ -475,8 +475,9 @@ class PersonaService:
         user_id: str,
         tenant_id: str,
         updates: Dict[str, Any],
+        expected_revision: Optional[int] = None,
     ) -> UserPersonaPreferences:
-        """Update user's persona preferences."""
+        """Update style settings; reject stale revisions when supplied."""
         tenant_id = self._normalize_tenant_id(tenant_id)
         preferences = await self.get_user_preferences(user_id, tenant_id)
         allowed_fields = {
@@ -519,17 +520,23 @@ class PersonaService:
         assignments = ", ".join(
             f"{key} = :{key}" for key in sorted(field_values)
         )
+        if expected_revision is not None and expected_revision < 0:
+            raise ValueError("expected_revision must be nonnegative")
         statement = text(
             "UPDATE user_persona_preferences SET " + assignments
-            + ", updated_at = CURRENT_TIMESTAMP "
+            + ", revision = revision + 1, updated_at = CURRENT_TIMESTAMP "
             "WHERE tenant_id = :tenant_id AND user_id = :user_id"
+            + (" AND revision = :expected_revision" if expected_revision is not None else "")
         )
         async with self._tenant_session(tenant_id) as session:
             result = await session.execute(
                 statement,
-                {"tenant_id": tenant_id, "user_id": user_id, **field_values},
+                {"tenant_id": tenant_id, "user_id": user_id, **field_values,
+                 **({"expected_revision": expected_revision} if expected_revision is not None else {})},
             )
             if result.rowcount != 1:
+                if expected_revision is not None:
+                    raise ValueError("Persona preference revision conflict")
                 raise RuntimeError("Persona preferences were not persisted")
         self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
         return await self.get_user_preferences(user_id, tenant_id)
