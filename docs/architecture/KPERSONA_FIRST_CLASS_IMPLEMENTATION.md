@@ -457,3 +457,8 @@ Test denial of cross-tenant/persona access and of unapproved skill execution; re
 - KP-09: plain-language onboarding, retention/privacy docs, receipts, screenshots and tested rollout flags.
 
 **Exit criteria**: first-use user can create, understand, activate and improve Troy without learning implementation vocabulary; runtime cannot cross persona knowledge boundary or grant tool privileges; every claimed save/learn/execute event has backend proof. Remain on PR #501 until verified. 
+
+
+## Persona Skills & Learning Data companion
+
+See [Persona Skills & Learning Data Guide](PERSONA_SKILLS_LEARNING_DATA_GUIDE.md) for user/admin/developer flows, the Data Needs Advisor, industry-neutral evidence categories, ingestion governance, consent, dataset sufficiency, and skill evaluation. The companion guide is design-only and does not imply a deployed training capability.
