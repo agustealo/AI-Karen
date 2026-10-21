@@ -165,14 +165,18 @@ jobs:
           PY
           python - <<'PY'
           import asyncio
+          import os
           from pathlib import Path
-          from ai_karen_engine.persistence.postgres import get_postgres_engine
+          import asyncpg
 
           async def apply_selection_integrity():
-              engine = get_postgres_engine().async_engine
               sql = Path("supabase/migrations/20261021010000_39_persona_selection_integrity.sql").read_text()
-              async with engine.begin() as conn:
-                  await conn.exec_driver_sql(sql)
+              connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+              try:
+                  async with connection.transaction():
+                      await connection.execute(sql)
+              finally:
+                  await connection.close()
 
           asyncio.run(apply_selection_integrity())
           PY
