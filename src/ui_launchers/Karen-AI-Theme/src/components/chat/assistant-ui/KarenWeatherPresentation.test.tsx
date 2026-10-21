@@ -40,6 +40,12 @@ describe("governed weather presentation", () => {
     expect(renderToStaticMarkup(<KarenWeatherPresentation data={result} />)).toContain("Mainly clear");
   });
 
+  it("refuses contradictory duplicate temperatures, allowing harmless rounding", () => {
+    expect(normalizeWeatherObservation({ ...observation, temperature: "85.0 °F" })).toBeNull();
+    expect(normalizeWeatherObservation({ ...observation, temperatureF: 72 })).toBeNull();
+    expect(normalizeWeatherObservation({ ...observation, temperature: "60.4 °F" })?.temperatureF).toBe(60.3);
+  });
+
   it("rejects conflicting units rather than silently relabelling fields", () => {
     expect(normalizeWeatherObservation({ ...observation, temperature_f: "70%", temperature: undefined })).toBeNull();
     expect(normalizeWeatherObservation({ ...observation, high_f: "30%", high: undefined })?.highF).toBeNull();
