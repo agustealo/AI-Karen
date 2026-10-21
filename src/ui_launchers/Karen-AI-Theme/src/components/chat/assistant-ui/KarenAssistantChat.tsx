@@ -442,9 +442,10 @@ async function readOwnedHistory(conversationId: string) {
     throw new Error("Conversation history identity mismatch");
   }
   const saved = (conversation.messages || []) as DurableMessage[];
-  const converted = saved
-    .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-    .map((m, i) => ({
+  const eligible = saved.filter((m) =>
+    (m.role === "user" || m.role === "assistant") && typeof m.content === "string",
+  );
+  const converted = eligible.map((m, i) => ({
       id: m.id || `${conversationId}-persisted-${i}`,
       role: m.role as "user" | "assistant",
       content: m.content,
@@ -456,7 +457,7 @@ async function readOwnedHistory(conversationId: string) {
   // Keep assistant-ui's canonical text conversion; augment only a confirmed
   // persisted, allowlisted read-only presentation. No local persistence.
   return imported.map((message, index) => {
-    const original = saved.filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")[index];
+    const original = eligible[index];
     const envelope = original?.role === "assistant"
       ? restoredPresentation(original.structured_content) : null;
     if (!envelope) return message;
