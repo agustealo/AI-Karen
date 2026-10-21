@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, Field
 
 from ai_karen_engine.auth.models import UserData
@@ -21,6 +21,18 @@ from ai_karen_engine.middleware.correlation_middleware import get_request_correl
 
 router = APIRouter(prefix="/api/planner", tags=["personal-planner"])
 write_router = APIRouter(prefix="/api/planner", tags=["personal-planner"])
+
+
+@router.get("/commitments", response_model=list[PersonalCommitment])
+async def list_personal_commitments(
+    limit: int = Query(default=20, ge=1, le=20),
+    user: UserData = Depends(get_current_user),
+) -> list[PersonalCommitment]:
+    """Read only commitments belonging to the authenticated planner principal."""
+    try:
+        return await PersonalPlannerService().list_owned(user=user, limit=limit)
+    except PlannerAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail="Planner permission denied") from exc
 
 
 @router.get("/commitments/{commitment_id}", response_model=PersonalCommitment)
