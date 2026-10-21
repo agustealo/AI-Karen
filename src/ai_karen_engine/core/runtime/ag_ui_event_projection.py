@@ -55,6 +55,42 @@ def _validated_presentation(raw: Any) -> dict[str, Any] | None:
         return None
     if raw["component_type"] == "weather.observation" and not isinstance(data, dict):
         return None
+    def weather_observation(item: Any) -> bool:
+        if not isinstance(item, Mapping):
+            return False
+        location = item.get("location")
+        if not isinstance(location, str) or not 1 <= len(location.strip()) <= 160:
+            return False
+        temperatures = [
+            item.get(key) for key in ("temperature_f", "temperatureF")
+            if key in item
+        ]
+        # A unitless generic temperature must not be relabeled Fahrenheit.
+        if not temperatures:
+            generic = item.get("temperature")
+            if not (isinstance(generic, str) and generic.strip().lower().endswith("f")):
+                return False
+            temperatures = [generic]
+        import re
+        values: list[float] = []
+        for temperature in temperatures:
+            if type(temperature) in (int, float):
+                value = float(temperature)
+            elif isinstance(temperature, str) and re.fullmatch(
+                r"-?\\d+(?:\\.\\d+)?\\s*(?:°\\s*F)?", temperature.strip(),
+                flags=re.IGNORECASE,
+            ):
+                value = float(re.match(r"-?\\d+(?:\\.\\d+)?", temperature.strip()).group())
+            else:
+                return False
+            if not -150 <= value <= 150:
+                return False
+            values.append(value)
+        return bool(values) and max(values) - min(values) <= 0.15
+
+    observations = data if isinstance(data, list) else [data]
+    if not all(weather_observation(item) for item in observations):
+        return None
     try:
         encoded = json.dumps(raw, allow_nan=False, separators=(",", ":"))
     except (TypeError, ValueError, OverflowError):
