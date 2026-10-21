@@ -180,4 +180,51 @@ jobs:
 
           asyncio.run(apply_selection_integrity())
           PY
+          python - <<'PY'
+          import asyncio
+          import os
+          from pathlib import Path
+          import asyncpg
+
+          async def check():
+              conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+              try:
+                  await conn.execute(Path("supabase/migrations/20261021020000_40_persona_tenant_rls.sql").read_text())
+                  for table in ("custom_personas", "user_persona_preferences", "persona_memory_entries"):
+                      enabled = await conn.fetchrow(
+                          "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid=$1::regclass",
+                          "public." + table,
+                      )
+                      assert enabled["relrowsecurity"] and enabled["relforcerowsecurity"]
+                      assert await conn.fetchval(
+                          "SELECT count(*) FROM pg_policies WHERE schemaname='public' "
+                          "AND tablename=$1 AND policyname='persona_tenant_isolation'", table
+                      ) == 1
+                  await conn.execute("CREATE ROLE karen_ci_persona_reader NOLOGIN")
+                  await conn.execute("GRANT USAGE ON SCHEMA public TO karen_ci_persona_reader")
+                  await conn.execute(
+                      "GRANT SELECT ON public.custom_personas, public.user_persona_preferences, "
+                      "public.persona_memory_entries TO karen_ci_persona_reader"
+                  )
+                  await conn.execute(
+                      "INSERT INTO public.custom_personas "
+                      "(id, tenant_id, user_id, name, system_prompt, default_tone, default_verbosity, default_language) "
+                      "VALUES ('rls-proof-persona', 'rls-tenant-a', 'rls-user-a', 'RLS proof', 'RLS proof prompt', "
+                      "'friendly', 'balanced', 'en_US')"
+                  )
+                  async with conn.transaction():
+                      await conn.execute("SET LOCAL ROLE karen_ci_persona_reader")
+                      await conn.execute("SELECT set_config('app.current_tenant_id', 'rls-tenant-b', true)")
+                      assert await conn.fetchval(
+                          "SELECT count(*) FROM public.custom_personas WHERE id='rls-proof-persona'"
+                      ) == 0
+                      await conn.execute("SELECT set_config('app.current_tenant_id', 'rls-tenant-a', true)")
+                      assert await conn.fetchval(
+                          "SELECT count(*) FROM public.custom_personas WHERE id='rls-proof-persona'"
+                      ) == 1
+              finally:
+                  await conn.close()
+
+          asyncio.run(check())
+          PY
           pytest tests/integration/test_persona_activation_postgres.py -q -rs
