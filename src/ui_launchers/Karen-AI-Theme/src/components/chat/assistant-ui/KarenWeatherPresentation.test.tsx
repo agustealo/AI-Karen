@@ -34,6 +34,12 @@ describe("governed weather presentation", () => {
     expect(html).not.toContain("Precipitation chance");
   });
 
+  it("renders MCP and AG-UI structuredContent tool results", () => {
+    const result = { content: [{ type: "text", text: "Weather retrieved" }], structuredContent: observation };
+    expect(normalizeWeatherObservation(result)?.windMph).toBe(0.3);
+    expect(renderToStaticMarkup(<KarenWeatherPresentation data={result} />)).toContain("Mainly clear");
+  });
+
   it("rejects invalid and unrelated tool results", () => {
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: "NaN" })).toBeNull();
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: 9999 })).toBeNull();
