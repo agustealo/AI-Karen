@@ -105,6 +105,13 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   // A numeric temperature without a Fahrenheit field is only accepted when its unit is explicit.
   const hasFahrenheit = numeric(data.temperature_f, "fahrenheit") !== null || numeric(data.temperatureF, "fahrenheit") !== null || (typeof data.temperature === "string" && /°?\s*F\s*$/i.test(data.temperature));
   if (!hasFahrenheit) return null;
+  // Do not choose one of two contradictory measurements silently.
+  const reportedTemperature = typeof data.temperature === "string" && /°?\\s*F\\s*$/i.test(data.temperature)
+    ? numeric(data.temperature, "fahrenheit") : null;
+  if (reportedTemperature !== null && temperatureF !== null && Math.abs(reportedTemperature - temperatureF) > 0.15) return null;
+  const alternateTemperature = numeric(data.temperatureF, "fahrenheit");
+  const snakeTemperature = numeric(data.temperature_f, "fahrenheit");
+  if (alternateTemperature !== null && snakeTemperature !== null && Math.abs(alternateTemperature - snakeTemperature) > 0.15) return null;
   if (!location || location.length > 160 || temperatureF === null || temperatureF < -150 || temperatureF > 150) return null;
   const percentage = (...keys: string[]) => {
     const n = numberFrom(data, "percentage", ...keys);
