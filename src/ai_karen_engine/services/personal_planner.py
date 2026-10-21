@@ -65,6 +65,13 @@ class PersonalPlannerService:
     def __init__(self, repository: PersonalPlannerRepository | None = None) -> None:
         self._repository = repository if repository is not None else PersonalPlannerRepository()
 
+    async def list_owned(self, *, user: UserData, limit: int = 20) -> list[PersonalCommitment]:
+        identity = PlannerPrincipal.from_authenticated_user(user)
+        _authorize(user, Permission.PLANNER_READ)
+        return await self._repository.list_owned(
+            tenant_id=identity.tenant_id, owner_id=identity.owner_id, limit=limit,
+        )
+
     async def get(self, *, user: UserData, commitment_id: UUID) -> PersonalCommitment:
         identity = PlannerPrincipal.from_authenticated_user(user)
         _authorize(user, Permission.PLANNER_READ)
