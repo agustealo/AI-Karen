@@ -202,6 +202,17 @@ class MemoryRuntimeManager:
         )
 
         merged_metadata = dict(metadata or {})
+        # Persona metadata is provenance, never a source of permission or
+        # memory-scope authority. ChatRuntime owns the authorized identity and
+        # RuntimePolicy decision supplied separately in policy_context.
+        if "persona_id" in merged_metadata:
+            persona_id = merged_metadata["persona_id"]
+            if not isinstance(persona_id, str) or not persona_id.strip() or len(persona_id) > 64:
+                raise ValueError("persona_id metadata must be a nonempty identifier")
+        for forbidden in ("persona_tenant_id", "persona_user_id", "persona_policy_context",
+                          "persona_memory_write", "persona_consent_granted"):
+            if forbidden in merged_metadata:
+                raise ValueError("Persona metadata cannot override memory authority")
         if session_id:
             merged_metadata.setdefault("session_id", session_id)
         if conversation_id:
