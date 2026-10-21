@@ -46,6 +46,12 @@ describe("governed weather presentation", () => {
     expect(normalizeWeatherObservation({ ...observation, location: "x".repeat(500) })).toBeNull();
   });
 
+  it("unwraps camelCase tool results without confusing wrapper fields", () => {
+    const result = { structuredContent: { location: "Detroit", temperatureF: 60.3, windMph: 0.3 } };
+    expect(normalizeWeatherObservation(result)?.temperatureF).toBe(60.3);
+    expect(normalizeWeatherObservation(result)?.windMph).toBe(0.3);
+  });
+
   it("rejects invalid and unrelated tool results", () => {
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: "NaN" })).toBeNull();
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: "NaN", temperature: 60.3 })).toBeNull();
