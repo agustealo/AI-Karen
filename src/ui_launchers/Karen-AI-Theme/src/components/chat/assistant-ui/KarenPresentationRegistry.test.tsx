@@ -17,7 +17,7 @@ describe("versioned presentation registry", () => {
       component_type: "planner.task_list",
       data: { tasks: [
         { id: "task-1", title: "Review project", status: "todo" },
-        { id: "task-2", title: "Approve draft", status: "blocked" },
+        { id: "task-2", title: "Approve draft", status: "cancelled" },
       ] },
     };
     expect(parseKarenPresentation(envelope)).not.toBeNull();
