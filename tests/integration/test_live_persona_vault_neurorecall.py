@@ -45,6 +45,26 @@ async def test_vault_to_recall_persona_filter_and_revocation():
             request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
             actor_id=str(user), policy_context={"memory_write_authorized": True},
         )
+        # A persona label is not a write grant. Verify real NeuroVault
+        # denies an otherwise well-scoped entry with no policy capability.
+        from ai_karen_engine.platform.memory.postgres.vault import NeuroVaultAuthorizationError
+        denied_entry = MemoryEntry(
+            id=str(uuid.uuid4()), content="Unauthorized persona write",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user),
+                source="chat_user",
+                custom={"persona_id": "assistant", "consent_scope": "persona-proof"},
+            ),
+        )
+        denied_context = VaultContext(
+            tenant_id=str(tenant), user_id=str(user),
+            request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+            policy_context={},
+        )
+        with pytest.raises(NeuroVaultAuthorizationError):
+            await vault.persist(denied_entry, context=denied_context)
+
         for memory_id, persona in zip(ids, ("assistant", "expert", None)):
             custom = {"consent_scope": "persona-proof"}
             if persona:
