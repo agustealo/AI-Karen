@@ -30,10 +30,12 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
   } catch {
     return null;
   }
-  // Never permit a typed card unless its underlying factual payload validates.
+  // Validate each data record; the model may select layout, never invent measurements.
   if (result.data.component_type === "weather.comparison") {
     const items = result.data.data;
     if (!Array.isArray(items) || items.length < 2 || items.length > 5 || !items.every((item) => normalizeWeatherObservation(item))) return null;
+    const uniqueLocations = new Set(items.map((item) => normalizeWeatherObservation(item)?.location.toLocaleLowerCase().trim()));
+    if (uniqueLocations.size !== items.length) return null;
   } else if (!normalizeWeatherObservation(result.data.data)) return null;
   return result.data;
 }
