@@ -80,6 +80,7 @@ class PersonaResponse(BaseModel):
 
 
 class UpdatePreferencesRequest(BaseModel):
+    expected_revision: Optional[int] = Field(None, ge=0)
     active_persona_id: Optional[str] = None
     default_tone: Optional[ToneEnum] = None
     default_verbosity: Optional[VerbosityEnum] = None
@@ -94,6 +95,7 @@ class UpdatePreferencesRequest(BaseModel):
 
 
 class PreferencesResponse(BaseModel):
+    revision: int = Field(ge=0)
     user_id: str
     tenant_id: str
     active_persona_id: Optional[str]
@@ -314,19 +316,22 @@ async def update_my_preferences(
     persona_service = get_persona_service()
 
     try:
-        updates = {
-            key: value
-            for key, value in request.dict().items()
-            if value is not None
-        }
+        updates = request.model_dump(
+            exclude_unset=True, exclude={"expected_revision"}
+        )
         preferences = await persona_service.update_user_preferences(
             user_id=user_id,
             tenant_id=tenant_id,
             updates=updates,
+            expected_revision=request.expected_revision,
         )
 
         return PreferencesResponse(**preferences.dict(exclude={"custom_personas"}))
 
+    except ValueError as exc:
+        if "revision conflict" in str(exc):
+            raise HTTPException(status_code=409, detail="Persona preference revision conflict")
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"Failed to update preferences: {exc}")
         raise HTTPException(status_code=500, detail="Failed to update preferences")
