@@ -246,3 +246,118 @@ The shared assistant-ui composer identifies the active persona by name and title
 6. Proficiency and quality are evaluated, never inferred from a title or dataset count.
 7. Users can inspect, refuse, update and revoke what each persona knows.
 8. Privacy and authorization outrank seamless switching or personalization.
+
+
+---
+
+# Adversarial Review: Facts Convergence, Minimal Data Needs and Delivery Contract
+**Revision:** 2026-10-21. **Status:** architecture correction, not implementation or verified runtime performance.
+
+## Engineering verdict
+
+Retain the *user outcome* of the Advisor, not its proposed subsystem footprint. The first release needs a task-aware "What would help?" projection using existing persona, UserModel, facts, memory retrieval and skill registry authority. The guide's catalog, lifecycle and scoring descriptions are **logical contracts**, not approval to create tables, agents, stores, distinct AI evaluators or an independent registry.
+
+### Repository evidence inspected
+
+- \`src/ui_launchers/Karen-AI-Theme/src/components/settings/PersonalFactsSettings.tsx\`: currently presents facts with \`id,text,visibility,domain,category,importance,confidence,source,sourceType,usage_count,created_at,last_used\`; fetches \`/api/memory/facts\` and \`/api/memory/facts/suggestions\`. UI \`visibility\` and \`domain\` enums are coarse and should **not** be treated as proof of correct resource authorization.
+- \`src/ai_karen_engine/core/memory/signals/general_fact_classifier.py\`: recognizes explicit first-person identity, work, business, project, skill and routine facts; explicitly does not persist by itself.
+- \`src/ai_karen_engine/core/personalization/contracts.py\`: UserModel already has evidence/provenance and scoped preferences and goals, with an existing preference scope enum. Persona-scoped targeting may need a canonical typed extension, not an independent preference engine.
+- \`supabase/migrations/20261015020000_25_profile_fact_tenant_rls.sql\`: enables and forces RLS on \`public.profile_fact\`, documenting it as a **rebuildable projection derived from governed \`memory_event\`**. Existing migration does not itself prove production RLS or every Facts API path is safe.
+- \`src/ai_karen_engine/services/persona/persona_service.py\` and \`src/ai_karen_engine/core/persona/contracts.py\`: existing PersonaService, core dataclasses and caches require active-path contract reconciliation before expanding persona features.
+
+These observations are file-level checks, **not** runtime tracing or completed security tests. Do not assume frontend Facts necessarily maps one-to-one to \`profile_fact\` or all UI CRUD operations are correctly wired: trace the actual API-to-storage path in KP-01.
+
+## Canonical concepts and one owner each
+
+| Concept | Authoritative owner | Persona relationship | Never do |
+|---|---|---|---|
+| User's factual assertions and their evidence | Existing governed memory event store / Facts projection | Scoped, authorized reference; view from persona | Replicate raw fact in every persona |
+| User preferences, evidence and goals | UserModel with governed persistence | Approved scope filter or revised persona contract | Fork a persona-specific preference inference engine |
+| Persona name, role, collaboration contract, revision | PersonaService | Canonical definition | Store credentials/tools as a persona permission |
+| Files, design assets, documents | Existing resource/connector and ACL owner | References intersected with source ACL | Copy all asset contents into persona tables |
+| Knowledge sufficiency recommendation | ChatRuntime orchestration using intent, existing policy and resource metadata | Ephemeral, explainable task-scoped assessment | Create another autonomous orchestrator or persist every gap |
+| Executable tools and skills | Existing manifest/registry plus CORTEX/RBAC | Descriptive, non-authorizing binding reference | Treat badge, industry or title as an installed capability |
+| Chat/stream rendering | Shared assistant-ui; optional authenticated AG-UI observed events | Show backend-confirmed effective persona state | Maintain client-side second source of truth |
+
+### Facts and persona-scoped knowledge resolution
+
+A fact can be globally relevant to the owner, scoped to a project/persona, or too sensitive to surface. These are **use constraints**, not a new copy of the fact. Store a canonical reference, purpose, consent/policy ID, effective scope, validity and revocation metadata in the existing governed infrastructure wherever possible. Permission for use is the **intersection** of tenant + authenticated actor + underlying resource ACL + purpose + persona scope + active consent + conversation boundaries. "Global" does not mean public, cross-tenant or every-persona visibility.
+
+Example: "Brand A uses black and ivory" may be stored once as a source-backed brand fact; Troy is approved to use it on Brand A tasks. Morgan may access it only if separately permitted; Maya may not see it. An explicit user correction can be offered as a persona-scoped preference without turning the preference into a universal asserted fact. Separate assertions about external reality from opinions, preferences and operational instructions.
+
+**Conflicts:** show source provenance, validity and competing claims. A recent high-confidence assertion does not automatically overwrite an approved fact; route correction through canonical lifecycle. **Revocation:** deny new retrieval immediately through authorization checks, then propagate cache/index and derived-view removal under governance. Do not falsely promise physical deletion of already-issued responses or legally retained audit records.
+
+## Reduce Advisor to three outcomes
+
+For an intended task, the Advisor returns only:
+1. **Ready:** Karen has enough authorized, current evidence and eligible capabilities to attempt the task. Not a guarantee of correctness.
+2. **Helpful next information:** at most three context-specific data or preference recommendations, with benefit, source class and user-controlled attach action.
+3. **Blocked/unknown:** one genuinely required datum, capability or authorization is missing; distinguish absent from inaccessible, stale, unindexed or service failure, without leaking unauthorized existence.
+
+No mandatory dataset at persona creation. No invented "skill learned" or percentage-complete meter. No LLM-generated automatic grants. The original algebraic recommendation formula is a **hypothesis**, not a shipping requirement: begin with deterministic task requirement rules and explicit reason codes; introduce rank models only after measured quality uplift, privacy cost and consent evaluation.
+
+### Type-level logical minimum
+
+\`DataNeedAssessment\`:
+\`persona_id\`, \`persona_revision\`, \`task_family\`, \`outcome\` (ready | helpful | blocked | unknown), \`requirements[]\`, \`authorized_source_refs[]\`, \`recommended_actions[]\`, \`reason_codes[]\`, \`policy_version\`, \`correlation_id\`, \`inventory_health\`.
+
+\`DataNeedRequirement\`: \`category\`, \`purpose\`, \`criticality\`, \`acceptable_source_types\`, \`minimum_evidence\`, \`freshness_rule\`, \`sensitivity\`, \`status\`. A requirement is associated with task intent, not mechanically inferred from industry alone.
+
+\`RecommendedAction\`: \`action_type\`, \`benefit\`, \`target_scope\`, \`confirmation_required\`, \`reason_code\`. All mutations happen via existing authorized APIs; this assessment itself is read-only and does not persist user content.
+
+Do not create these as tables or new URL routes until current services, schemas, storage and access control have been traced. Schema versions, unknown/degraded status and authorized redaction must be explicit.
+
+### Five example assessments (non-binding product contract)
+
+| Persona / intent | Minimum context needed | Optional quality improvement | Unsafe default to avoid |
+|---|---|---|---|
+| Troy / draft a Brand A logo concept | Brand name, intended audience, requested medium | Current brand guide, approved style references | Full client drive, unrestricted external image search |
+| Morgan / prepare client proposal | Scope, customer requirements, requested output | Approved price sheet, current policy | All company contracts and mailboxes |
+| Echo / explain chord progression | User's musical question | Genre/reference preferences | Bulk import of copyrighted tracks |
+| Maya / plan household meals | Household dietary choices user opts to share, time/budget as relevant | Approved shopping list and existing recipes | Profiling absent household members |
+| Coach / teach Python | Learning goal and current difficulty | Approved curriculum, learner corrections | Entire device files or private school records |
+
+The advisor should be *useful from the first task*. If no external resource is necessary, say so. If a user asks for the same goal across roles, use persona-scoped preferences without duplicate fact persistence.
+
+## User, administrator and developer responsibilities
+
+**User-facing:** Persona Studio has one **Improve this persona** action, not a separate training console. Start with real work; surface no more than three targeted requests inline when useful. Show **What Karen knows**, **What Troy can use**, **Suggested improvement**, **Not now** and **Remove access**. The first is a view on canonical Facts/evidence; the second is an authorization-filtered projection, not a second facts list. Keep explicit confirmed actions for attach/approve/revoke. Show the current persona in the one shared assistant-ui composer; never require users to learn dataset jargon.
+
+**Admin-facing:** govern approved data types and size, sensitive-content rules, retention, import quarantine, policy versions, connector eligibility and aggregate health. Don't expose other tenants' fact titles or private preference contents. Don't provide a universal training permission.
+
+**Developer-facing:** resolve the current \`/api/memory/facts\` path, \`profile_fact\` lineage, memory admission, UserModel preference repository and PersonaService; identify any duplicate stores before new migrations. Build assessment as a pure/testable service function owned by existing runtime or its canonical subordinate service. Thin API ingress delegates. On degraded retrieval, return \`unknown\`, not zero sources. Log reason codes, latencies and scoped counts, never fact text or secrets. Scope cache keys by tenant, actor, persona revision, resource/consent policy version and relevant task fingerprint. Evaluate invalidation on revocation and new approvals.
+
+## assistant-ui and AG-UI boundaries
+
+**assistant-ui extensively where applicable:** reuse shared composer, thread view, persona selector, user-confirmation actions, inline evidence/source chips, attachment picker, feedback actions, inspect/compare and accessible empty/error states. These components are views of server-confirmed state, not app-level duplication. Verify \`@assistant-ui/react\` installation and import/build health before migrating components. Avoid a persona-specific chat runtime.
+
+**AG-UI only when useful:** typed, versioned, authenticated projections of genuine long-running data ingestion/validation, scoped knowledge retrieval, evaluation progress or persona activation/learning receipts. Ordinary facts list CRUD, simple switching and static recommendations should use normal API state updates, not extra streaming infrastructure. AG-UI must never carry raw facts, unredacted filenames or other-persona context unnecessarily. Replay, reconnect, retry, cancellation and cross-tenant redaction require proofs.
+
+## Adversarial acceptance matrix (must fail closed)
+
+1. Personal Facts UI visibility=\`global\` still cannot cross tenant or implicitly authorize Maya to retrieve Troy-only project facts.
+2. A single approved brand fact is reused across multiple authorized personas without duplicating canonical content; later source correction updates the governed projection.
+3. The same text can be a preference ("I like gradients") or fact ("Brand A's logo has a gradient"); they do not share unintended lifecycle or scope.
+4. Existing UI \`/api/memory/facts\` behavior is traced to the actual persistent owner; malformed, rejected and unavailable states are truthful.
+5. No document produces "trained" status or skill verification merely on attachment; only consented evaluation can support measured proficiency.
+6. Revoked data is rejected at the retrieval authorization boundary even if a stale vector/cache match returns it.
+7. The Advisor suggests at most three useful actions or explicitly confirms none needed; it never demands bulk datasets for general knowledge.
+8. Missing metadata on connector outage returns \`unknown\`, not \`ready\` or \`no data\`.
+9. Unapproved feedback remains proposal only; acceptance is revision-checked, audited, tenant-scoped and rollbackable.
+10. assistant-ui navigation/reload preserves backend-selected persona; AG-UI replay never reveals unauthorized facts and does not create alternate state.
+11. A malicious uploaded source cannot install skills, override prompts, change model/provider or grant external tool access.
+12. Paired real-model tasks show the advisor improves usefulness when relevant data is provided, with unchanged fact correctness and bounded cost/latency.
+
+## Updated gates and ruthless scope budget
+
+- **KP-01 (must precede migration):** inspect and document runtime call graph of Facts UI → API → memory event / profile fact; UserModel proposals and PersonaService contracts. Confirm what exists versus what only appears in UI. Provide an owner matrix and duplicate data flow audit.
+- **KP-02:** align typed persona/facts scope contracts, classification of fact vs preference vs resource reference, and reason codes. No standalone data-need registry without demonstrated requirement.
+- **KP-03/04:** single real Postgres-backed vertical path: create Troy, authorize one source, resolve once per turn, retrieve under ACL, apply one approved scoped preference, persist receipt and survive restart. Prove RLS/rollback, concurrency and revocation.
+- **KP-05:** deliver simple task-triggered Advisor in shared assistant-ui; existing Facts gets an authorized cross-link and truthful empty/degraded states.
+- **KP-06:** evaluate against no-Advisor baseline on held-out tasks, measuring factual accuracy, task completion, user effort, latency, token/retrieval cost, accidental over-collection and denied-access leaks.
+- **KP-07/08:** defer drift scoring, passport, broad catalogs and skill evidence ranking until KP-06 verifies material value.
+- **KP-09:** browser, accessibility, tenant/RBAC, streaming, deletion and admin policy acceptance. Human review before consumer exposure.
+
+**Deletion rule:** if a new persona capability duplicates Facts/UserModel/memory, replace it with an authorization-scoped projection and delete the duplicate only after reference and migration audits. Never delete memory events, RLS, auth or audit implementations merely because a simpler design exists.
+
+**Final decision:** Ship one trustworthy, task-aware "What would help?" interaction. No new training platform, no new memory system and no independent Advisor agent. One runtime, governed Facts, scoped persona revisions, truthful receipts and measured usefulness.
