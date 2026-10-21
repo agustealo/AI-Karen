@@ -72,3 +72,25 @@ No raw model-authored React code, no direct DOM execution of model payloads, no 
 ## Current incremental implementation
 
 The first slice registers a read-only weather presentation in existing assistant-ui AG-UI data rendering and the tool-result fallback. This does not yet satisfy the compositional, interaction, persistence, or backend normalization gates. Keep rollout feature-flagged and avoid merging as a complete generative implementation until those gates pass.
+
+
+## Canonical persistence and AG-UI replay handoff
+
+The dashboard frontend proxies AG-UI through `src/ui_launchers/Karen-AI-Theme/src/app/api/chat/ag-ui/route.ts`. That route is deliberately transport-only and **must not** parse, authorize, or persist presentations. Existing conversation history is loaded through `readOwnedHistory()` in `KarenAssistantChat.tsx`, which currently passes only `id`, `role` and `content` to `fromAgUiMessages` even though `MessageResponse` also declares `structured_content`, `function_response` and `metadata`.
+
+The canonical backend owner must:
+
+1. Trace the actual `/api/chat/ag-ui` implementation and the conversation serializer; add no new route or store until these owners are identified.
+2. Associate every presentation with an authorized tool-result receipt, the message ID, conversation, tenant and correlation ID. Validate the evidence reference **server-side**; frontend `evidence_ref` checks are only shape validation.
+3. Persist an authoritative, versioned presentation payload or structured AG-UI activity alongside the existing assistant message within its current transaction. Scope all reads and writes to authorized tenant and user.
+4. Expose the persisted structure in the existing authorized conversation GET response. Preserve message ordering and stable IDs.
+5. Convert the durable structure into documented AG-UI message/activity records accepted by `fromAgUiMessages`; do not invent new assistant-ui message fields or stash JSON in visible text.
+6. For live streaming, emit `CUSTOM` with a distinct allowlisted name such as `karen.presentation.v1` and typed `value` only after backend validation. Keep the conventional natural-language assistant response.
+7. Ensure `MESSAGES_SNAPSHOT` does not silently erase custom presentation parts. The AG-UI runtime documentation notes that snapshot-only assistant messages can replace and drop in-flight data parts. Persist/restore the final authoritative presentation instead of replaying an uncommitted temporary event.
+8. Reject unsupported versions, invalid evidence, cross-tenant references, and stale authorizations. Fail to text without claiming the original visual is still available.
+
+Frontend integration should only begin once a verified real backend response contains the canonical persisted AG-UI structure. The existing text-only history fallback must continue working for older conversations. No frontend-only history append writes and no client-side source-of-truth cache.
+
+**Additional AG-UI interoperability:** Tool results may carry a structured `structuredContent` field with a model-facing summary in `content`. Weather normalization accepts both this documented shape and the earlier extracted-data shape. The backend must not replace an authorized structured result with raw debug JSON prose.
+
+Source: https://www.assistant-ui.com/docs/runtimes/ag-ui/runtime-options
