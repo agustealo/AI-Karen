@@ -1,8 +1,4 @@
-"""Legacy persona memory must expose failures rather than invent success.
-
-This is a fail-closed transition guard, not an alternative memory runtime.
-The eventual durable memory owner remains canonical NeuroVault.
-"""
+"""Legacy persona memory operations must not bypass canonical governance."""
 import pytest
 
 from ai_karen_engine.core.persona.contracts import ChatStyleContext
@@ -10,22 +6,25 @@ from ai_karen_engine.services.persona.persona_service import PersonaService
 
 
 @pytest.mark.asyncio
-async def test_legacy_memory_store_failure_is_not_reported_as_success():
+async def test_legacy_persona_memory_write_is_denied_without_runtime_policy():
     service = PersonaService.__new__(PersonaService)
-    async def failed_store(entry):
-        return False
-    service._store_memory_entry = failed_store
-    context = ChatStyleContext()
-    with pytest.raises(RuntimeError, match="not persisted"):
+    with pytest.raises(RuntimeError, match="authorized memory runtime"):
         await service.store_persona_memory(
-            user_id="u", tenant_id="t", content="Relevant user statement",
-            context=context,
+            user_id="u", tenant_id="t", content="User statement",
+            context=ChatStyleContext(),
         )
 
 
 @pytest.mark.asyncio
-async def test_legacy_recall_unavailable_is_not_reported_as_empty_memory():
+async def test_legacy_persona_recall_is_denied_without_neurorecall():
     service = PersonaService.__new__(PersonaService)
-    service.db_client = None
-    with pytest.raises(RuntimeError, match="unavailable"):
-        await service._retrieve_memories("what did I say", {"user_id": "u", "tenant_id": "t"}, 5)
+    with pytest.raises(RuntimeError, match="canonical NeuroRecall"):
+        await service.recall_persona_memories(
+            user_id="u", tenant_id="t", query="my statement",
+            context=ChatStyleContext(),
+        )
+
+
+def test_persona_service_has_no_direct_memory_sql_helpers():
+    assert not hasattr(PersonaService, "_store_memory_entry")
+    assert not hasattr(PersonaService, "_retrieve_memories")
