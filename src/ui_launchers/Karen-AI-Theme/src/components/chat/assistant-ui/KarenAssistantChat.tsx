@@ -454,10 +454,11 @@ async function readOwnedHistory(conversationId: string) {
     converted as Parameters<typeof fromAgUiMessages>[0],
     { showThinking: false },
   );
+  const persistedById = new Map(converted.map((item, index) => [item.id, eligible[index]]));
   // Keep assistant-ui's canonical text conversion; augment only a confirmed
   // persisted, allowlisted read-only presentation. No local persistence.
-  return imported.map((message, index) => {
-    const original = eligible[index];
+  return imported.map((message) => {
+    const original = persistedById.get(message.id);
     const envelope = original?.role === "assistant"
       ? restoredPresentation(original.structured_content) : null;
     if (!envelope) return message;
