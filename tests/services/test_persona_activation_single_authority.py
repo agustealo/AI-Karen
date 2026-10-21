@@ -9,7 +9,7 @@ async def test_preferences_activation_uses_atomic_owner():
     service = PersonaService.__new__(PersonaService)
     called = []
 
-    async def atomic(user_id, tenant_id, persona_id):
+    async def atomic(user_id, tenant_id, persona_id, expected_revision=None):
         called.append((user_id, tenant_id, persona_id))
         return {"active_persona_id": persona_id}
 
