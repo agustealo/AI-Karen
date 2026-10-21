@@ -668,26 +668,15 @@ class PersonaService:
         conversation_id: Optional[str] = None,
         importance_score: float = 0.5,
     ) -> PersonaMemoryEntry:
-        """Store a memory entry with persona context."""
-        memory_entry = PersonaMemoryEntry(
-            content=content,
-            user_id=user_id,
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            importance_score=importance_score,
+        """Disallow ungoverned legacy memory writes.
+
+        ChatRuntime must authorize memory formation and use canonical
+        MemoryRuntimeManager/NeuroVault with VaultContext. PersonaService
+        cannot infer RBAC, consent, request IDs or tenant authority.
+        """
+        raise RuntimeError(
+            "Direct persona memory writes are unavailable; use the authorized memory runtime"
         )
-        if context.persona:
-            memory_entry.persona_id = context.persona.id
-            memory_entry.persona_name = context.persona.name
-            memory_entry.tone_used = context.get_effective_tone()
-            memory_entry.verbosity_used = context.get_effective_verbosity()
-        # Legacy persona_memory_entries is NOT NeuroVault. Never claim this
-        # operation succeeded when its write failed, and never silently fall
-        # back to an ungoverned memory path.
-        if not await self._store_memory_entry(memory_entry):
-            raise RuntimeError("Persona memory was not persisted")
-        logger.debug("Stored legacy persona memory for user %s", user_id)
-        return memory_entry
 
     async def recall_persona_memories(
         self,
@@ -697,15 +686,10 @@ class PersonaService:
         context: ChatStyleContext,
         limit: int = 10,
     ) -> List[PersonaMemoryEntry]:
-        """Recall memories with persona-aware filtering."""
-        filters = {"user_id": user_id, "tenant_id": tenant_id}
-        if context.memory_persona_filter:
-            filters["persona_id"] = context.memory_persona_filter
-        if context.memory_tone_filter:
-            filters["tone_used"] = context.memory_tone_filter.value
-        memories = await self._retrieve_memories(query, filters, limit)
-        logger.debug("Retrieved %d persona memories for user %s", len(memories), user_id)
-        return memories
+        """Disallow legacy recall that bypasses NeuroRecall governance."""
+        raise RuntimeError(
+            "Direct persona memory recall is unavailable; use canonical NeuroRecall"
+        )
 
     async def _load_user_preferences(self, user_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Load user preferences from database."""
@@ -834,161 +818,6 @@ class PersonaService:
             logger.error("Failed to save user preferences: %s", exc)
             return False
 
-    async def _store_memory_entry(self, memory_entry: PersonaMemoryEntry) -> bool:
-        """Store memory entry in database."""
-        if not self.db_client:
-            logger.warning("No database client available for storing memory")
-            return False
-        try:
-            query = text(
-                """
-                INSERT INTO persona_memory_entries (
-                    id,
-                    tenant_id,
-                    user_id,
-                    conversation_id,
-                    persona_id,
-                    persona_name,
-                    tone_used,
-                    verbosity_used,
-                    content,
-                    memory_type,
-                    importance_score,
-                    embedding_id,
-                    created_at,
-                    accessed_at
-                ) VALUES (
-                    :id,
-                    :tenant_id,
-                    :user_id,
-                    :conversation_id,
-                    :persona_id,
-                    :persona_name,
-                    :tone_used,
-                    :verbosity_used,
-                    :content,
-                    :memory_type,
-                    :importance_score,
-                    :embedding_id,
-                    :created_at,
-                    :accessed_at
-                )
-                ON CONFLICT (id) DO UPDATE SET
-                    conversation_id = EXCLUDED.conversation_id,
-                    persona_id = EXCLUDED.persona_id,
-                    persona_name = EXCLUDED.persona_name,
-                    tone_used = EXCLUDED.tone_used,
-                    verbosity_used = EXCLUDED.verbosity_used,
-                    content = EXCLUDED.content,
-                    memory_type = EXCLUDED.memory_type,
-                    importance_score = EXCLUDED.importance_score,
-                    embedding_id = EXCLUDED.embedding_id,
-                    accessed_at = EXCLUDED.accessed_at
-                """
-            )
-            payload = {
-                "id": memory_entry.id,
-                "tenant_id": memory_entry.tenant_id,
-                "user_id": memory_entry.user_id,
-                "conversation_id": memory_entry.conversation_id,
-                "persona_id": memory_entry.persona_id,
-                "persona_name": memory_entry.persona_name,
-                "tone_used": memory_entry.tone_used.value if memory_entry.tone_used else None,
-                "verbosity_used": memory_entry.verbosity_used.value if memory_entry.verbosity_used else None,
-                "content": memory_entry.content,
-                "memory_type": memory_entry.memory_type,
-                "importance_score": memory_entry.importance_score,
-                "embedding_id": memory_entry.embedding_id,
-                "created_at": memory_entry.created_at,
-                "accessed_at": memory_entry.accessed_at,
-            }
-            async with self._tenant_session(memory_entry.tenant_id) as session:
-                await session.execute(query, payload)
-            return True
-        except Exception as exc:
-            logger.error("Failed to store memory entry: %s", exc)
-            return False
-
-    async def _retrieve_memories(
-        self,
-        query: str,
-        filters: Dict[str, Any],
-        limit: int,
-    ) -> List[PersonaMemoryEntry]:
-        """Retrieve memories from database with filtering."""
-        if not self.db_client:
-            raise RuntimeError("Persona memory storage is unavailable")
-        try:
-            clauses = [
-                "user_id = :user_id",
-                "tenant_id = :tenant_id",
-            ]
-            params: Dict[str, Any] = {
-                "user_id": filters.get("user_id"),
-                "tenant_id": filters.get("tenant_id"),
-                "limit": limit,
-            }
-            if filters.get("persona_id"):
-                clauses.append("persona_id = :persona_id")
-                params["persona_id"] = filters["persona_id"]
-            if filters.get("tone_used"):
-                clauses.append("tone_used = :tone_used")
-                params["tone_used"] = filters["tone_used"]
-            if query.strip():
-                clauses.append("(content ILIKE :pattern OR COALESCE(persona_name, '') ILIKE :pattern)")
-                params["pattern"] = f"%{query.strip()}%"
-
-            sql = text(
-                f"""
-                SELECT
-                    id,
-                    tenant_id,
-                    user_id,
-                    conversation_id,
-                    persona_id,
-                    persona_name,
-                    tone_used,
-                    verbosity_used,
-                    content,
-                    memory_type,
-                    importance_score,
-                    embedding_id,
-                    created_at,
-                    accessed_at
-                FROM persona_memory_entries
-                WHERE {' AND '.join(clauses)}
-                ORDER BY importance_score DESC, created_at DESC
-                LIMIT :limit
-                """
-            )
-            async with self._tenant_session(str(filters["tenant_id"])) as session:
-                result = await session.execute(sql, params)
-                rows = result.fetchall()
-
-            memories: List[PersonaMemoryEntry] = []
-            for row in rows:
-                memories.append(
-                    PersonaMemoryEntry(
-                        id=row.id,
-                        content=row.content,
-                        persona_id=row.persona_id,
-                        persona_name=row.persona_name,
-                        tone_used=ToneEnum(row.tone_used) if row.tone_used else None,
-                        verbosity_used=VerbosityEnum(row.verbosity_used) if row.verbosity_used else None,
-                        user_id=row.user_id,
-                        tenant_id=row.tenant_id,
-                        conversation_id=row.conversation_id,
-                        memory_type=row.memory_type,
-                        importance_score=row.importance_score,
-                        created_at=row.created_at,
-                        accessed_at=row.accessed_at,
-                        embedding_id=row.embedding_id,
-                    )
-                )
-            return memories
-        except Exception as exc:
-            logger.error("Failed to retrieve memories: %s", exc)
-            raise RuntimeError("Persona memory retrieval failed") from exc
 
 
 class MockNLPAnalyzer:
