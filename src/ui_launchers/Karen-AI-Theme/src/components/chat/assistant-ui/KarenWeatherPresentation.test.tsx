@@ -40,6 +40,12 @@ describe("governed weather presentation", () => {
     expect(renderToStaticMarkup(<KarenWeatherPresentation data={result} />)).toContain("Mainly clear");
   });
 
+  it("rejects malformed timestamps and oversized location labels", () => {
+    expect(normalizeWeatherObservation({ ...observation, observed_at: "not-a-date" })).toBeNull();
+    expect(normalizeWeatherObservation({ ...observation, observed_at: "2026-10-21T12:45" })?.observedAt).toBe("2026-10-21T12:45");
+    expect(normalizeWeatherObservation({ ...observation, location: "x".repeat(500) })).toBeNull();
+  });
+
   it("rejects invalid and unrelated tool results", () => {
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: "NaN" })).toBeNull();
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: "NaN", temperature: 60.3 })).toBeNull();
