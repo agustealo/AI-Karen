@@ -54,18 +54,24 @@ const CONDITIONS: Record<number, { label: string; icon: typeof Sun }> = {
   99: { label: "Severe thunderstorm with hail", icon: CloudRain },
 };
 
-function numeric(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && /^-?\d+(?:\.\d+)?(?:\s*°?\s*F|\s*%|\s*mph)?$/i.test(value.trim())) {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
+function numeric(value: unknown, unit: "fahrenheit" | "percentage" | "mph" | "plain"): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const pattern = {
+    fahrenheit: /^(-?\\d+(?:\\.\\d+)?)\\s*(?:°\\s*F)?$/i,
+    percentage: /^(-?\\d+(?:\\.\\d+)?)\\s*%?$/,
+    mph: /^(-?\\d+(?:\\.\\d+)?)\\s*(?:mph)?$/i,
+    plain: /^(-?\\d+(?:\\.\\d+)?)$/,
+  }[unit];
+  const match = value.trim().match(pattern);
+  if (!match) return null;
+  const result = Number(match[1]);
+  return Number.isFinite(result) ? result : null;
 }
 
-function numberFrom(record: WeatherFields, ...keys: string[]): number | null {
+function numberFrom(record: WeatherFields, unit: "fahrenheit" | "percentage" | "mph" | "plain", ...keys: string[]): number | null {
   for (const key of keys) {
-    const value = numeric(record[key]);
+    const value = numeric(record[key], unit);
     if (value !== null) return value;
   }
   return null;
@@ -95,21 +101,21 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   const data = unwrap(value);
   if (!data) return null;
   const location = optionalString(data.location);
-  const temperatureF = numberFrom(data, "temperature_f", "temperatureF", "temperature");
+  const temperatureF = numberFrom(data, "fahrenheit", "temperature_f", "temperatureF", "temperature");
   // A numeric temperature without a Fahrenheit field is only accepted when its unit is explicit.
-  const hasFahrenheit = numeric(data.temperature_f) !== null || numeric(data.temperatureF) !== null || (typeof data.temperature === "string" && /°?\s*F\s*$/i.test(data.temperature));
+  const hasFahrenheit = numeric(data.temperature_f, "fahrenheit") !== null || numeric(data.temperatureF, "fahrenheit") !== null || (typeof data.temperature === "string" && /°?\s*F\s*$/i.test(data.temperature));
   if (!hasFahrenheit) return null;
   if (!location || location.length > 160 || temperatureF === null || temperatureF < -150 || temperatureF > 150) return null;
   const percentage = (...keys: string[]) => {
-    const n = numberFrom(data, ...keys);
+    const n = numberFrom(data, "percentage", ...keys);
     return n !== null && n >= 0 && n <= 100 ? n : null;
   };
   const range = (...keys: string[]) => {
     const n = numberFrom(data, ...keys);
     return n !== null && n >= -150 && n <= 150 ? n : null;
   };
-  const wind = numberFrom(data, "wind_speed_mph", "windMph");
-  const weatherCode = numberFrom(data, "weather_code", "weatherCode");
+  const wind = numberFrom(data, "mph", "wind_speed_mph", "windMph");
+  const weatherCode = numberFrom(data, "plain", "weather_code", "weatherCode");
   const observedAt = optionalString(data.observed_at);
   if (observedAt && (observedAt.length > 64 || !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:\\d{2})?$/.test(observedAt) || Number.isNaN(Date.parse(observedAt)))) return null;
   const source = optionalString(data.source_url);
