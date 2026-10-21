@@ -4,6 +4,19 @@ Status: audited design and execution contract, not implementation-complete
 Base: main at 2e3a46b85beb25c648ee46a9687408948a8cabdf (2026-10-21)
 Owner: canonical ChatRuntime / PromptRuntime for execution; PersonaService for scoped definition persistence; UserModelRuntime for evidence-based personalization; UI for presentation only.
 
+## Persistent Karen conversation is existing infrastructure
+
+The shared application-shell SessionProvider, mounted Karen chat panel, floating conversation surface, preserved drafts and workspace handoff already exist, substantially established by PRs #494 and #500. Persona Studio is a **workspace consumer** of that foundation, never another conversation owner.
+
+- Keep exactly one shared SessionProvider and one mounted composer across Chat, Agent Runtime, Planner, Persona Studio, Settings, Workflows and Models.
+- Persona Studio contributes a scoped workspace-context projection and server-confirmed persona settings to the same conversation. It does not mount a Thread/Composer instance, replace the current conversation, spawn another ChatRuntime, or reset unsent drafts on activation.
+- Reuse the existing assistant-ui/legacy-chat feature flag. AG-UI presents authorized runtime events through the same shared session.
+- Persona changes affect subsequent runtime prompt presentation after backend confirmation. Historical user/assistant messages, conversation_id, session_id and the current draft remain unchanged.
+- Workspace persistence is not model-context persistence. RuntimeEvidenceResolver, conversation repository and canonical memory-context assembly govern long-history retrieval, retention and token budgets.
+- Rejections, version conflicts, permission errors, and failed saves must be visible in Persona Studio without synthetic chat messages or success toasts.
+
+**Acceptance proof:** mount the application shell once; navigate Chat → Agent Runtime → Persona Studio → Planner; verify identical conversation/session IDs, preserved thread and unsent draft, a backend-confirmed persona switch, a post-switch model turn using the new presentation settings, refresh restoration, AG-UI and assistant-ui/legacy parity, tenant isolation and no duplicate composer mounts. Capture regression screenshots through the existing UI test harness, not a second chat implementation.
+
 ## Objective and non-negotiable boundaries
 
 Persona becomes a durable, switchable, explainable, user-owned **communication and collaboration profile**, available from any Karen workspace. It never acts as a provider router, alternate agent, executable prompt policy, permission grant, or memory owner. The product must demonstrate observable differences on real local models and survive navigation/reload without pretending that save, activation, or memory succeeded.
