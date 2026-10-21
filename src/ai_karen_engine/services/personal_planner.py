@@ -13,6 +13,7 @@ from uuid import UUID
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
 from ai_karen_engine.services.audit.audit_logging import AuditEvent, AuditEventType, AuditSeverity, get_audit_logger
+from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 from ai_karen_engine.core.planner.contracts import (
     CommitmentMutation,
     PersonalCommitment,
@@ -71,6 +72,31 @@ class PersonalPlannerService:
         return await self._repository.list_owned(
             tenant_id=identity.tenant_id, owner_id=identity.owner_id, limit=limit,
         )
+
+    async def list_presentation(
+        self, *, user: UserData, correlation_id: str, limit: int = 20,
+    ) -> dict:
+        """Read-only presentation derived exclusively from authorized planner records."""
+        if not isinstance(correlation_id, str) or not 1 <= len(correlation_id) <= 120:
+            raise ValueError("Valid planner correlation ID required")
+        commitments = await self.list_owned(user=user, limit=limit)
+        if not commitments:
+            return {"presentation": None, "empty": True}
+        candidate = {
+            "schema_version": 1,
+            "presentation_id": f"planner-{correlation_id}",
+            "component_type": "planner.task_list",
+            "evidence_ref": f"planner-owned-read:{correlation_id}",
+            "correlation_id": correlation_id,
+            "data": {"tasks": [
+                {"id": str(item.id), "title": item.title, "status": item.status.value}
+                for item in commitments
+            ]},
+        }
+        presentation = validate_presentation(candidate)
+        if presentation is None:
+            raise ValueError("Planner presentation unavailable")
+        return {"presentation": presentation, "empty": False}
 
     async def get(self, *, user: UserData, commitment_id: UUID) -> PersonalCommitment:
         identity = PlannerPrincipal.from_authenticated_user(user)
