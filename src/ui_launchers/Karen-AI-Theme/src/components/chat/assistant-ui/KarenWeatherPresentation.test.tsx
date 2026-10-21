@@ -42,6 +42,7 @@ describe("governed weather presentation", () => {
 
   it("rejects invalid and unrelated tool results", () => {
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: "NaN" })).toBeNull();
+    expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: "NaN", temperature: 60.3 })).toBeNull();
     expect(normalizeWeatherObservation({ location: "Detroit", temperature_f: 9999 })).toBeNull();
     expect(normalizeWeatherObservation({ result: { status: "complete" } })).toBeNull();
   });
