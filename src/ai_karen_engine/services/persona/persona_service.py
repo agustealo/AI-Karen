@@ -318,11 +318,10 @@ class PersonaService:
             raise ValueError(f"Persona name '{persona.name}' already exists")
 
         await self._insert_persona(user_id, tenant_id, persona)
-        preferences.custom_personas.append(persona)
-        preferences.updated_at = datetime.utcnow()
-        await self._save_user_preferences(user_id, tenant_id, preferences)
-
-        self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
+        # The custom_personas table is authoritative for definitions. Do not
+        # write a second, unrelated preferences record or mutate a cached
+        # preferences object before the persona insert succeeds.
+        self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
         logger.info("Created persona '%s' for user %s", persona.name, user_id)
         return persona
 
@@ -357,11 +356,8 @@ class PersonaService:
         updated_persona = Persona(**persona_dict)
 
         await self._update_persona_record(user_id, tenant_id, updated_persona)
-        preferences.custom_personas[persona_index] = updated_persona
-        preferences.updated_at = datetime.utcnow()
-        await self._save_user_preferences(user_id, tenant_id, preferences)
-
-        self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
+        # Reload definitions from their database owner on the next read.
+        self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
         logger.info("Updated persona '%s' for user %s", updated_persona.name, user_id)
         return updated_persona
 
