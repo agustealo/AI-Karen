@@ -25,7 +25,7 @@ import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
-import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
+import { KarenPresentationRegistry, parseKarenPresentation } from "./KarenPresentationRegistry";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/ChatInterface";
@@ -420,7 +420,19 @@ function KarenThread() {
   );
 }
 
-type DurableMessage = { id?: string; role: string; content: string };
+type DurableMessage = {
+  id?: string;
+  role: string;
+  content: string;
+  structured_content?: Record<string, unknown> | null;
+};
+
+function restoredPresentation(value: DurableMessage["structured_content"]) {
+  if (!value || typeof value !== "object") return null;
+  // Backend stores capability output under structured_content.presentation.
+  // Reject unrelated metadata and unsupported envelope versions.
+  return parseKarenPresentation(value.presentation);
+}
 
 async function readOwnedHistory(conversationId: string) {
   const conversation = await apiClient.get<ConversationResponse>(
@@ -437,10 +449,25 @@ async function readOwnedHistory(conversationId: string) {
       role: m.role as "user" | "assistant",
       content: m.content,
     }));
-  return fromAgUiMessages(
+  const imported = fromAgUiMessages(
     converted as Parameters<typeof fromAgUiMessages>[0],
     { showThinking: false },
   );
+  // Keep assistant-ui's canonical text conversion; augment only a confirmed
+  // persisted, allowlisted read-only presentation. No local persistence.
+  return imported.map((message, index) => {
+    const original = saved.filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")[index];
+    const envelope = original?.role === "assistant"
+      ? restoredPresentation(original.structured_content) : null;
+    if (!envelope) return message;
+    return {
+      ...message,
+      content: [
+        ...message.content,
+        { type: "data" as const, name: "karen.presentation.v1", data: envelope },
+      ],
+    };
+  });
 }
 
 function KarenAgUiRuntime({ threadId }: { threadId: string }) {
