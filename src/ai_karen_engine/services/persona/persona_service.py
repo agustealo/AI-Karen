@@ -496,7 +496,7 @@ class PersonaService:
             if len(updates) != 1:
                 raise ValueError("Update active_persona_id separately from style settings")
             return await self._switch_persona_atomically(
-                user_id, tenant_id, updates["active_persona_id"]
+                user_id, tenant_id, updates["active_persona_id"], expected_revision
             )
 
         if not updates:
@@ -551,7 +551,8 @@ class PersonaService:
         return await self._switch_persona_atomically(user_id, tenant_id, persona_id)
 
     async def _switch_persona_atomically(
-        self, user_id: str, tenant_id: str, persona_id: Optional[str]
+        self, user_id: str, tenant_id: str, persona_id: Optional[str],
+        expected_revision: Optional[int] = None,
     ) -> UserPersonaPreferences:
         """Serialize selection with deletion and validate ownership in SQL."""
         tenant_id = self._normalize_tenant_id(tenant_id)
@@ -586,14 +587,18 @@ class PersonaService:
                     "UPDATE user_persona_preferences SET active_persona_id = :persona_id, "
                     "revision = revision + 1, updated_at = CURRENT_TIMESTAMP "
                     "WHERE tenant_id = :tenant_id AND user_id = :user_id"
+                    + (" AND revision = :expected_revision" if expected_revision is not None else "")
                 ),
                 {
                     "persona_id": persona_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,
+                    **({"expected_revision": expected_revision} if expected_revision is not None else {}),
                 },
             )
             if result.rowcount != 1:
+                if expected_revision is not None:
+                    raise ValueError("Persona preference revision conflict")
                 raise RuntimeError("Persona activation was not persisted")
         self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
         return await self.get_user_preferences(user_id, tenant_id)
