@@ -48,6 +48,18 @@ describe("governed weather presentation", () => {
     expect(html).not.toContain("javascript:");
   });
 
+
+  it("accepts explicit Fahrenheit and rejects unlabelled numeric temperatures", () => {
+    expect(normalizeWeatherObservation({ location: "Detroit", temperature: "60.3 °F" })?.temperatureF).toBe(60.3);
+    expect(normalizeWeatherObservation({ location: "Detroit", temperature: 60.3 })).toBeNull();
+  });
+
+  it("bounds nested and recursive serialized envelopes", () => {
+    let data: unknown = { location: "Detroit", temperature_f: 60.3 };
+    for (let i = 0; i < 9; i += 1) data = { result: data };
+    expect(normalizeWeatherObservation(data)).toBeNull();
+  });
+
   it("does not fabricate conditions for unknown weather codes", () => {
     const html = renderToStaticMarkup(
       <KarenWeatherPresentation data={{ ...observation, weather_code: 500 }} />,
