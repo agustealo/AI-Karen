@@ -451,3 +451,47 @@ Use the shared assistant-ui thread and message actions for "Why this memory?", "
 15. Verify browser continuity, semantic accessibility, degraded states, task completion, cost and latency.
 
 **Scope constraint:** Finish M0/M1 before new Dataset Advisor catalogs. Deduplicate retrieval at the canonical selection layer, never by hiding repeated rows solely in React. Repair existing paths before introducing schema churn. Do not add a persona memory engine, second Facts write service, tool router or telemetry system.
+
+
+
+## Implementation gate: canonical convergence execution contract (M0/M1)
+
+This section converts the convergence proposal into engineering acceptance criteria; it does not assert that the existing production paths have passed.
+
+**Decisive principle:** A displayed fact, a retrieved candidate, a selected context item, and a committed memory event are four different states. Every interface must derive its status from the matching canonical stage receipt.
+
+### One-turn trace envelope
+
+For each sampled authenticated turn, trace correlation_id and tenant-scoped opaque IDs across:
+1. request and intent decision, including confidence *kind* (calibrated_probability | rule_match | uncalibrated_score | unavailable);
+2. recall request and source adapter health, raw candidate count and IDs;
+3. deduplication by stable canonical fact identity, with contradictory evidence retained rather than text-flattened;
+4. per-candidate ACL/purpose filter outcomes, eligible count, and actually injected context references;
+5. formation proposals and adjudication reasons, with explicit **not persisted** when no durable receipt exists;
+6. NeuroVault mutation receipt and downstream projection status (pending | caught_up | failed), with watermark/version;
+7. user-visible Facts record and persona-safe context receipt, including authorized source provenance and memory health.
+
+These are fields on existing structured telemetry/receipts or adapters, not a proposed second event store. Use safe identifiers, redaction, retention and RBAC on diagnostics.
+
+### Consistency and privacy edge cases
+
+- **Projection lag:** A durable event can be committed while Personal Facts projection has not caught up. Display "saved, syncing" only with a valid durable commit receipt; do not show "not saved" or "visible in Facts" until confirmed by the proper stage.
+- **Deletion and revocation:** A tombstone/revocation version must be checked at final context selection, including when a stale vector, Redis cache or search index still returns the record. Rebuilds never resurrect a revoked fact.
+- **Contradictions:** Two claims from different sources can conflict without being duplicates. Keep evidence and temporal validity, resolve against canonical governance; never discard disagreement using a normalized text hash alone.
+- **Unknown health:** Failed recall must not be represented as empty memory or successful zero results. Partial failures name the affected stage through safe reason codes, not leaked infrastructure diagnostics.
+- **Streaming:** The turn's authorized persona/context snapshot is immutable for normal edits; security revocation triggers appropriate abort/redaction policy instead of reusing stale scope. No tool privileges derive from persona or Fact content.
+- **Fallbacks:** Provider fallback reuses runtime-authorized context and does not re-open denied sources or promote ineligible skills.
+
+### Acceptance sequence and proof repository
+
+**Gate A: active-path ownership**. Record exact file/function/API/migration owners with code references for Facts read, corrective write, memory formation, NeuroVault commit, projection, PersonaService resolution and PromptRuntime assembly. If an existing path is dead or legacy, classify it explicitly before changing it. No new schema during this gate.
+
+**Gate B: replayable truth**. One authenticated local test turn produces a machine-correlatable ledger of counts and receipts: raw_hits >= unique_hits >= authorized_hits >= injected_hits; proposals >= admitted durable commits, subject to exact stage-specific semantics. Document cases where different stage populations make these comparisons inappropriate. No claimed persisted event without a commit receipt.
+
+**Gate C: relevance and security**. Test repeated identical name evidence in weather recall, preserve disagreements, select relevant authorized location when useful, reject cross-tenant resource IDs, verify revoke-then-recall with stale cache, and prove Family cannot inherit Troy's unauthorized thread summary. Run against real PostgreSQL RLS, not mock ACL only.
+
+**Gate D: user-facing concordance**. Facts reflects eventual projection truth; Turn Intelligence accurately names used context and admission outcomes; Persona Studio shows authorized references to the same canonical facts. Shared assistant-ui state survives workspace navigation without leaking context. AG-UI may stream authenticated redacted observability events but cannot mutate either memory or persona state.
+
+**Gate E: minimal useful Advisor**. Given a specific task, return only missing high-value context and a reason; distinguish already-authorized evidence from optional sources. Do not demand a dataset when model general knowledge is sufficient. Measure factual task success, question burden, retrieval latency and unsafe leakage before enabling broader templates.
+
+**Order:** A -> B -> C -> D -> E. Do not call gates green without executable test artifacts or backend receipts. Keep PR #501 Draft until implementation and relevant tests are verified. Avoid extending the plan with additional runtime owners, registries or new persona-specific stores.
