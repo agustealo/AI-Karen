@@ -20,6 +20,49 @@ def _event_type(chunk: Any) -> str:
     return str(getattr(value, "value", value))
 
 
+def _validated_presentation(raw: Any) -> dict[str, Any] | None:
+    """Allow only bounded, JSON-native, evidence-referenced UI envelopes.
+
+    The owning runtime must supply trusted evidence; this transport check is
+    defense in depth and never confers provenance or execution authority.
+    """
+    import json
+
+    if not isinstance(raw, Mapping):
+        return None
+    allowed = {
+        "schema_version", "presentation_id", "component_type",
+        "data", "evidence_ref", "correlation_id",
+    }
+    if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
+        return None
+    if raw.get("component_type") not in {"weather.observation", "weather.comparison"}:
+        return None
+    for key in ("presentation_id", "evidence_ref"):
+        value = raw.get(key)
+        if not isinstance(value, str) or not 1 <= len(value) <= 160:
+            return None
+    correlation = raw.get("correlation_id")
+    if correlation is not None and (not isinstance(correlation, str) or len(correlation) > 160):
+        return None
+    data = raw.get("data")
+    if not isinstance(data, (dict, list)):
+        return None
+    if raw["component_type"] == "weather.comparison" and (
+        not isinstance(data, list) or not 2 <= len(data) <= 5
+    ):
+        return None
+    if raw["component_type"] == "weather.observation" and not isinstance(data, dict):
+        return None
+    try:
+        encoded = json.dumps(raw, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if len(encoded.encode("utf-8")) > 32768:
+        return None
+    return dict(raw)
+
+
 class AGUIEventProjection:
     """Map one canonical runtime stream to one AG-UI run lifecycle.
 
@@ -249,6 +292,15 @@ class AGUIEventProjection:
             # CUSTOM retains the observed failed/cancelled outcome; AG-UI
             # TOOL_CALL_END means only that the invocation is no longer active.
             return events
+
+        if kind == "presentation":
+            # Only explicitly runtime-origin, evidence-backed projections.
+            if meta.get("presentation_verified") is not True:
+                return []
+            validated = _validated_presentation(meta.get("presentation"))
+            if validated is None:
+                return []
+            return [self._custom("karen.presentation.v1", validated)]
 
         if kind == "citation":
             raw_citations = meta.get("citations")
