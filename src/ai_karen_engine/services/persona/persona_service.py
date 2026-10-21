@@ -285,6 +285,11 @@ class PersonaService:
             await session.execute(query, payload)
 
     async def _delete_persona_record(self, user_id: str, tenant_id: str, persona_id: str) -> int:
+        params = {
+            "persona_id": persona_id,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+        }
         async with self.db_client.get_async_session() as session:
             result = await session.execute(
                 text(
@@ -293,13 +298,24 @@ class PersonaService:
                     WHERE id = :persona_id AND tenant_id = :tenant_id AND user_id = :user_id
                     """
                 ),
-                {
-                    "persona_id": persona_id,
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                },
+                params,
             )
-        return int(result.rowcount or 0)
+            deleted = int(result.rowcount or 0)
+            if deleted:
+                # Clear selection in the same database transaction. A failure
+                # must roll back deletion instead of leaving an orphaned active ID.
+                await session.execute(
+                    text(
+                        """
+                        UPDATE user_persona_preferences
+                        SET active_persona_id = NULL, updated_at = CURRENT_TIMESTAMP
+                        WHERE tenant_id = :tenant_id AND user_id = :user_id
+                          AND active_persona_id = :persona_id
+                        """
+                    ),
+                    params,
+                )
+        return deleted
 
     async def create_persona(
         self,
@@ -367,20 +383,11 @@ class PersonaService:
         if persona_id in {p.id for p in SYSTEM_PERSONAS}:
             raise ValueError("System personas cannot be deleted")
 
-        preferences = await self.get_user_preferences(user_id, tenant_id)
         deleted = await self._delete_persona_record(user_id, tenant_id, persona_id)
         if deleted == 0:
             return False
 
-        preferences.custom_personas = [
-            persona for persona in preferences.custom_personas if persona.id != persona_id
-        ]
-        if preferences.active_persona_id == persona_id:
-            preferences.active_persona_id = None
-        preferences.updated_at = datetime.utcnow()
-        await self._save_user_preferences(user_id, tenant_id, preferences)
-
-        self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
+        self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
         logger.info("Deleted persona %s for user %s", persona_id, user_id)
         return True
 
