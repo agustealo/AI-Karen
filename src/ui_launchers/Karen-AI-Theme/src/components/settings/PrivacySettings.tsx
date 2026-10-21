@@ -318,6 +318,7 @@ export default function PrivacySettings() {
       );
 
       setLastRequest(response);
+      setRequestStatus(null);
       setRequestId(response.request_id);
       setVerificationToken(response.verification_token);
       setShowVerificationToken(false);
@@ -408,6 +409,7 @@ export default function PrivacySettings() {
     }
 
     setIsLoadingStatus(true);
+    setRequestStatus(null);
     setAuthRequired(false);
     setActionAccessDenied('status', false);
 

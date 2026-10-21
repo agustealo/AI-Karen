@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
+from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -130,6 +132,7 @@ class ChatStreamRequest(BaseModel):
     # Provisional same-session user turns only. Durable history still comes
     # exclusively from the conversation repository in the runtime.
     recent_user_messages: List[str] = Field(default_factory=list, max_length=12)
+    workspace_run_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
     session_id: Optional[str] = Field(
         default=None,
         pattern=r"^[a-zA-Z0-9_-]+$",
@@ -168,6 +171,47 @@ class ChatStreamRequest(BaseModel):
         if any(not value or len(value) > 500 for value in normalized):
             raise ValueError("Recent user messages must contain 1-500 characters")
         return normalized
+
+
+
+class AGUIRunRequest(BaseModel):
+    """Restricted AG-UI RunAgentInput ingress.
+
+    The caller may provide a thread identity and its current user turn.
+    Backend-owned history, tools, model selection, policy, and state are never
+    accepted as authority from this transport.
+    """
+
+    threadId: str = Field(..., min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    runId: str = Field(..., min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    messages: List[Dict[str, Any]] = Field(..., min_length=1, max_length=50)
+    tools: List[Dict[str, Any]] = Field(default_factory=list)
+    context: List[Dict[str, Any]] = Field(default_factory=list)
+    state: Dict[str, Any] = Field(default_factory=dict)
+    forwardedProps: Dict[str, Any] = Field(default_factory=dict)
+
+    def latest_user_message(self) -> str:
+        last = self.messages[-1]
+        if last.get("role") != "user":
+            raise ValueError("AG-UI run must end with a user message")
+        content = last.get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts: List[str] = []
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "text":
+                    raise ValueError("AG-UI multimodal messages are not yet supported")
+                value = part.get("text")
+                if not isinstance(value, str):
+                    raise ValueError("Invalid AG-UI text message part")
+                parts.append(value)
+            text = "".join(parts)
+        else:
+            raise ValueError("AG-UI user message must contain text")
+        if not 1 <= len(text.strip()) <= 10000:
+            raise ValueError("AG-UI user message must contain 1-10000 characters")
+        return text.strip()
 
 
 class SecurityValidator:
@@ -274,6 +318,23 @@ def _stream_execution_request(
             **({"user_timezone": request.timezone} if request.timezone else {}),
             **({"approval_id": request.approval_id} if request.approval_id else {}),
         },
+    )
+
+
+async def _verified_workspace_run_reference(
+    *, run_id: str, user: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Resolve a chat work reference from the canonical owner-checked Medusa record.
+
+    This is context evidence, never an execution capability or approval.
+    """
+    from ai_karen_engine.api_routes.agents.runtime import (
+        get_my_run_context, get_run_control_plane,
+    )
+    return await get_my_run_context(
+        run_id,
+        current_user=UserData.ensure(user),
+        control_plane=get_run_control_plane(),
     )
 
 
@@ -491,6 +552,11 @@ async def stream_chat_response(
             correlation_id=correlation_id,
             response_id=response_id,
         )
+        if request.workspace_run_id:
+            verified = await _verified_workspace_run_reference(
+                run_id=request.workspace_run_id, user=user,
+            )
+            runtime_request.metadata["verified_workspace_run"] = verified
         conversation_id = runtime_request.context.conversation_id or session_id
 
         structured_logger.log_event(
@@ -529,6 +595,154 @@ async def stream_chat_response(
             context="validation_error",
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+
+async def _ag_ui_sse(
+    runtime_request: ChatExecutionRequest, *, thread_id: str, run_id: str
+):
+    """Translate the same authorized runtime stream into AG-UI event framing."""
+    projection = AGUIEventProjection(thread_id=thread_id, run_id=run_id)
+    yield ": stream_connected\n\n"
+    yield f"data: {json.dumps(projection.begin())}\n\n"
+
+    try:
+        async for chunk in get_chat_runtime().execute_stream(runtime_request):
+            for event in projection.project(chunk):
+                yield f"data: {json.dumps(event)}\n\n"
+            if projection.terminal:
+                break
+    except Exception as exc:
+        logger.exception(
+            "AG-UI runtime projection failed",
+            extra={
+                "correlation_id": runtime_request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        error_chunk = ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content="Chat streaming failed before completion.",
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={"error_code": "CHAT_STREAM_RUNTIME_EXCEPTION"},
+        )
+        for event in projection.project(error_chunk):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    for event in projection.fail_incomplete():
+        yield f"data: {json.dumps(event)}\n\n"
+
+
+@router.post("/chat/ag-ui")
+async def stream_ag_ui_chat(
+    request: AGUIRunRequest,
+    http_request: Request,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """AG-UI-compatible wire adapter; never a second chat execution path."""
+    if not get_runtime_settings().features.enable_ag_ui_bridge:
+        raise HTTPException(status_code=404, detail="AG-UI bridge is disabled")
+    # AG-UI may carry only a bounded resource lookup hint. Never trust the
+    # client-supplied context, tools, or state as authorization.
+    workspace_ref = request.forwardedProps.get("workspace_run_id")
+    if request.forwardedProps and (
+        set(request.forwardedProps) != {"workspace_run_id"}
+        or not isinstance(workspace_ref, str)
+        or not 1 <= len(workspace_ref) <= 128
+    ):
+        raise HTTPException(status_code=422, detail="Unsupported workspace context")
+    # Reject ungoverned client-provided tools, shared state and context.
+    if request.tools or request.state or request.context:
+        raise HTTPException(
+            status_code=422,
+            detail="Client-supplied tools, state and context are not supported by Karen",
+        )
+    try:
+        user_id, _tenant_id = _require_execution_identity(user)
+        current_text = request.latest_user_message()
+        correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
+        response_id = str(uuid.uuid4())
+        # Assistant-ui's canonical threadId is Karen's already-persisted
+        # conversation UUID. Resolve its owner and actual runtime session
+        # using the SAME runtime gateway as existing conversation ingress.
+        # A foreign or missing thread must never silently create a new one.
+        session_id = SecurityValidator.sanitize_session_id(request.threadId)
+        conversation_id = None
+        try:
+            uuid.UUID(request.threadId)
+        except (TypeError, ValueError):
+            # Backward compatibility for historical opaque AG-UI session ids.
+            # The canonical scoped runtime generates its tenant-isolated id.
+            pass
+        else:
+            from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+                get_conversation_runtime_gateway,
+            )
+            lookup_context = _execution_context(
+                user=user,
+                session_id=session_id,
+                conversation_id=request.threadId,
+                request_id=response_id,
+                correlation_id=correlation_id,
+            )
+            try:
+                owned = await get_conversation_runtime_gateway().get_owned_snapshot(
+                    lookup_context, message_limit=0,
+                )
+            except (PermissionError, RuntimeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=404, detail="Conversation is unavailable",
+                ) from exc
+            conversation_id = str(owned.conversation.id)
+            session_id = SecurityValidator.sanitize_session_id(
+                str(owned.conversation.session_id)
+            )
+        canonical_request = _stream_execution_request(
+            request=ChatStreamRequest(
+                message=current_text,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                workspace_run_id=workspace_ref,
+            ),
+            user=user,
+            session_id=session_id,
+            correlation_id=correlation_id,
+            response_id=response_id,
+        )
+        if workspace_ref:
+            canonical_request.metadata["verified_workspace_run"] = (
+                await _verified_workspace_run_reference(run_id=workspace_ref, user=user)
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    get_structured_logger().log_event(
+        event="chat_stream_started",
+        user_id=user_id,
+        details={
+            "endpoint": "/api/chat/ag-ui",
+            "correlation_id": correlation_id,
+            "response_id": response_id,
+            # Caller-issued AG-UI run correlation is not a durable ledger ID.
+            "ag_ui_transport_run_id": request.runId,
+            "conversation_id": canonical_request.context.conversation_id,
+            "transport": "ag-ui",
+        },
+    )
+    return StreamingResponse(
+        _ag_ui_sse(
+            canonical_request,
+            thread_id=request.threadId,
+            run_id=request.runId,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "X-Correlation-Id": correlation_id,
+            "X-Response-Id": response_id,
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/chat/approvals/{approval_id}/resume")

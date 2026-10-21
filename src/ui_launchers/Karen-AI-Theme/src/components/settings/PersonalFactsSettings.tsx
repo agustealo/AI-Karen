@@ -8,7 +8,6 @@ import {
   Clock,
   FileText,
   Globe,
-  History,
   Lightbulb,
   Lock,
   Mail,
@@ -214,7 +213,7 @@ const normalizeFact = (value: unknown): Fact | null => {
       ? Math.max(0, Number(value.usage_count))
       : 0,
     created_at:
-      cleanString(value.created_at || value.createdAt) || new Date().toISOString(),
+      cleanString(value.created_at || value.createdAt),
     last_used: cleanString(value.last_used || value.lastUsed) || null,
   };
 };
@@ -324,6 +323,7 @@ export default function PersonalFactsSettings() {
   const [domainFilter, setDomainFilter] = useState<'all' | FactDomain>('all');
   const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [factPendingDeletion, setFactPendingDeletion] = useState<Fact | null>(null);
   const [isSavingFact, setIsSavingFact] = useState(false);
   const [endpointStatus, setEndpointStatus] = useState<ApiEndpointStatus>({
     factsAvailable: true,
@@ -556,6 +556,7 @@ export default function PersonalFactsSettings() {
       try {
         await apiClient.delete(`${FACTS_ENDPOINT}/${encodeURIComponent(id)}`);
         await loadData();
+        setFactPendingDeletion(null);
 
         toast({
           title: 'Memory Deleted',
@@ -857,14 +858,9 @@ export default function PersonalFactsSettings() {
                             align="end"
                             className="w-48 rounded-xl border-border/40 p-1"
                           >
-                            <DropdownMenuItem className="cursor-pointer rounded-lg text-[10px] font-bold uppercase tracking-widest">
-                              <History className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                              Use History
-                            </DropdownMenuItem>
-
                             <DropdownMenuItem
                               className="cursor-pointer rounded-lg text-[10px] font-bold uppercase tracking-widest text-rose-500 focus:text-rose-500"
-                              onClick={() => void handleDeleteFact(fact.id)}
+                              onClick={() => setFactPendingDeletion(fact)}
                               disabled={isDeleting}
                             >
                               <Trash2 className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
@@ -1150,6 +1146,23 @@ export default function PersonalFactsSettings() {
               disabled={!newFactText.trim() || isSavingFact}
             >
               {isSavingFact ? 'SYNCING...' : 'INITIALIZE SYNC'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(factPendingDeletion)} onOpenChange={(open) => { if (!open && !deletingFactIds[factPendingDeletion?.id || '']) setFactPendingDeletion(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete saved fact?</DialogTitle>
+            <DialogDescription>
+              This requests deletion from Karen&apos;s live memory. Other retained records may be governed by separate retention rules.
+            </DialogDescription>
+          </DialogHeader>
+          <p className="max-h-36 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-3 text-sm">{factPendingDeletion?.text}</p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setFactPendingDeletion(null)} disabled={Boolean(factPendingDeletion && deletingFactIds[factPendingDeletion.id])}>Cancel</Button>
+            <Button type="button" variant="destructive" disabled={!factPendingDeletion || Boolean(deletingFactIds[factPendingDeletion.id])} onClick={() => { if (factPendingDeletion) void handleDeleteFact(factPendingDeletion.id); }}>
+              {factPendingDeletion && deletingFactIds[factPendingDeletion.id] ? 'Deleting…' : 'Confirm deletion'}
             </Button>
           </DialogFooter>
         </DialogContent>

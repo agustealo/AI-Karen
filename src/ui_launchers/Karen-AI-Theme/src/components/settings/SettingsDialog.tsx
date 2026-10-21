@@ -70,6 +70,7 @@ type SettingsCategoryId = 'assistant' | 'personal' | 'runtime' | 'admin';
 type SettingsSection = {
   id: SettingsSectionId;
   label: string;
+  description?: string;
   icon: LucideIcon;
   render: () => ReactNode;
 };
@@ -116,21 +117,24 @@ export default function SettingsDialog({
       {
         id: 'model',
         label: 'Providers',
+        description: 'Choose a connected model provider, inspect available models, and configure its runtime connection.',
         icon: Server,
         render: () => <ModelSettings />,
       },
       {
         id: 'expression',
         label: 'Expression',
+        description: 'Review how Karen routes reasoning and responses between configured engines and fallbacks.',
         icon: Sparkles,
         render: () => <ExpressionSettings />,
       },
-      {
-        id: 'model-downloads',
+      ...(adminMode ? [{
+        id: 'model-downloads' as const,
         label: 'Model Downloads',
+        description: 'Administer local model downloads, installed inventory, and download jobs.',
         icon: HardDrive,
         render: () => <ModelDownloads adminMode={adminMode} />,
-      },
+      }] : []),
     ];
 
     if (adminMode) {
@@ -355,7 +359,16 @@ export default function SettingsDialog({
                 </span>
               </div>
 
-              <div className="flex flex-wrap gap-2">
+              <p className="px-1 text-sm text-muted-foreground">
+                {activeCategory.id === 'runtime'
+                  ? 'Available providers, routing controls, and saved settings are reported by Karen. Changes are only applied when the backend confirms them.'
+                  : activeCategory.id === 'personal'
+                    ? 'Review personal information, notifications, and privacy controls.'
+                    : activeCategory.id === 'assistant'
+                      ? 'Customize how Karen behaves, speaks, and presents itself.'
+                      : 'Manage authorized administration controls.'}
+              </p>
+              <nav aria-label={`${activeCategory.label} settings sections`} className="flex flex-wrap gap-2">
                 {activeCategory.sections.map((section) => {
                   const Icon = section.icon;
                   const isActive = section.id === activeSectionId;
@@ -365,7 +378,9 @@ export default function SettingsDialog({
                       key={section.id}
                       type="button"
                       onClick={() => handleSectionChange(section.id)}
-                      aria-pressed={isActive}
+                      aria-current={isActive ? 'page' : undefined}
+                      aria-controls="settings-active-panel"
+                      title={section.description || section.label}
                       className={[
                         'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-medium transition-all',
                         isActive
@@ -378,10 +393,10 @@ export default function SettingsDialog({
                     </button>
                   );
                 })}
-              </div>
+              </nav>
             </div>
 
-            <section className="min-w-0 space-y-6">
+            <section id="settings-active-panel" aria-label={activeSection?.label || 'Settings'} className="min-w-0 space-y-6">
               {activeSection && (
                 <div className="animate-in fade-in duration-500">
                   <div className="mb-4 flex items-center justify-between">
@@ -393,6 +408,11 @@ export default function SettingsDialog({
                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground/70">
                         {activeCategory.label} &rsaquo; {activeSection.label}
                       </p>
+                      {activeSection.description && (
+                        <p className="mt-2 max-w-2xl text-sm font-normal normal-case tracking-normal text-muted-foreground">
+                          {activeSection.description}
+                        </p>
+                      )}
                     </div>
                   </div>
 

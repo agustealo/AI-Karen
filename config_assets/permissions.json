@@ -31,6 +31,8 @@
         "audit:read",
         "data:read",
         "data:write",
+        "planner:read",
+        "planner:write",
         "plugins:manage",
         "read",
         "scheduler:execute",
@@ -50,10 +52,12 @@
     "user": {
       "description": "Standard user access",
       "permissions": [
+        "channel.consent",
         "chat:use",
         "data:read_own",
-        "profile:manage_own",
-        "channel.consent"
+        "planner:read",
+        "planner:write",
+        "profile:manage_own"
       ],
       "inherits_from": "readonly"
     }

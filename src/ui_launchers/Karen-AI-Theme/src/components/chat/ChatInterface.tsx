@@ -89,6 +89,8 @@ interface ConversationApiResponse {
 
 interface SessionContextType {
   currentSession: Session | null;
+  workspaceRunId: string | null;
+  setWorkspaceRunId: (runId: string | null) => void;
   sessions: Session[];
   isLoadingSessions: boolean;
   error: string | null;
@@ -204,6 +206,7 @@ interface SessionProviderProps {
 
 export function SessionProvider({ children, initialSessionId }: SessionProviderProps) {
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  const [workspaceRunId, setWorkspaceRunId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -280,6 +283,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   // Create a new durable session. The UI does not present a conversation
   // as created until the server has acknowledged the canonical session id.
   const createNewSession = useCallback(async () => {
+    setWorkspaceRunId(null);
     const sessionId = createSessionId();
     setIsLoadingSessions(true);
     setError(null);
@@ -324,6 +328,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
 
   // Load a specific session
   const loadSession = useCallback(async (sessionId: string) => {
+    if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null);
     setIsLoadingSessions(true);
     setError(null);
 
@@ -729,6 +734,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   return (
     <SessionContext.Provider value={{
       currentSession,
+      workspaceRunId,
+      setWorkspaceRunId,
       sessions,
       isLoadingSessions,
       error,
@@ -782,13 +789,6 @@ interface SpeechRecognitionAlternative {
 interface SpeechRecognitionErrorEvent {
   error: string;
   message: string;
-}
-
-declare global {
-  interface Window {
-    SpeechRecognition: SpeechRecognitionConstructor | undefined;
-    webkitSpeechRecognition: SpeechRecognitionConstructor | undefined;
-  }
 }
 
 const createSessionId = (): string => {
@@ -997,6 +997,7 @@ const removeSessionState = (sessionId: string): void => {
 export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   const { 
     currentSession, 
+    workspaceRunId,
     sessions, 
     isLoadingSessions, 
     error, 
@@ -1579,6 +1580,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
             .slice(-12),
           session_id: currentSessionRef.current?.runtimeSessionId || sessionIdRef.current,
           conversation_id: sessionIdRef.current,
+          workspace_run_id: workspaceRunId || undefined,
           preferred_llm_provider: preferredProvider,
           preferred_model: preferredModel,
           temperature: 0.7,
@@ -1974,7 +1976,7 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
       setStreamingMetrics(null);
     }
 
-  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, setInput, setMessages, setIsLoading, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, scrollChatToBottom, refreshActionableApprovals]);
+  }, [input, isAuthLoading, messages, displayName, preferredAddressName, recentMessages, selectedProvider, selectedModel, toast, setInput, setMessages, setIsLoading, setProcessingStatus, setStreamedContent, setStreamingMetrics, activeRequestControllerRef, sessionIdRef, isAuthenticated, processingStatus, scrollChatToBottom, refreshActionableApprovals, workspaceRunId]);
 
   // Process injected messages from other parts of the app
   useEffect(() => {
@@ -2286,7 +2288,11 @@ export default function ChatInterface({ isActive = true }: ChatInterfaceProps) {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
-    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const speechWindow = window as unknown as {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+    const SpeechRecognitionAPI = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) {
       setSpeechRecognitionSupported(false);
       return;
