@@ -111,7 +111,7 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
     return n !== null && n >= 0 && n <= 100 ? n : null;
   };
   const range = (...keys: string[]) => {
-    const n = numberFrom(data, ...keys);
+    const n = numberFrom(data, "fahrenheit", ...keys);
     return n !== null && n >= -150 && n <= 150 ? n : null;
   };
   const wind = numberFrom(data, "mph", "wind_speed_mph", "windMph");
