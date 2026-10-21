@@ -2886,6 +2886,19 @@ class ChatRuntime:
                 "workflow_version": decision.workflow_version,
                 "requires_human_gate": decision.requires_human_gate,
                 "requires_resumability": decision.requires_resumability,
+                **({"verified_workspace_run": {
+                    "resource_type": "medusa_run",
+                    "run_id": request.metadata["verified_workspace_run"]["run_id"],
+                    "status": request.metadata["verified_workspace_run"]["status"],
+                    "started_at": request.metadata["verified_workspace_run"].get("started_at"),
+                    "completed_at": request.metadata["verified_workspace_run"].get("completed_at"),
+                    "error_type": request.metadata["verified_workspace_run"].get("error_type"),
+                }}
+                if isinstance((request.metadata or {}).get("verified_workspace_run"), dict)
+                and request.metadata["verified_workspace_run"].get("resource_type") == "medusa_run"
+                and isinstance(request.metadata["verified_workspace_run"].get("run_id"), str)
+                and isinstance(request.metadata["verified_workspace_run"].get("status"), str)
+                else {}),
                 **({"clarification_inputs": dict(request.metadata["clarification_inputs"])}
                    if isinstance((request.metadata or {}).get("clarification_inputs"), dict)
                    and (request.metadata["clarification_inputs"].get("source") == "authorized_conversation")

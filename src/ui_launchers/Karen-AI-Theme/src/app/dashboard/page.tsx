@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import {
   Bell,
   Binary,
@@ -40,6 +41,7 @@ import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
 import ChatInterface, {
   SessionProvider,
+  useSession,
 } from "@/components/chat/ChatInterface";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
@@ -71,6 +73,13 @@ import { Separator } from "@/components/ui/separator";
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
 
+// Keep legacy chat as the default until full assistant-ui/AG-UI proof passes.
+const USE_ASSISTANT_UI_CHAT = process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED === "true";
+const KarenAssistantChat = dynamic(
+  () => import("@/components/chat/assistant-ui/KarenAssistantChat"),
+  { ssr: false },
+);
+
 type ActiveView =
   | "chat"
   | "commsCenter"
@@ -99,6 +108,33 @@ type NavSubgroup = {
   icon: React.ComponentType<{ className?: string }>;
   items: NavItem[];
 };
+
+function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
+  const { loadSession, setWorkspaceRunId } = useSession();
+  const [handoffError, setHandoffError] = useState("");
+  const { workspaceRunId } = useSession();
+
+  const openConversation = useCallback(async (conversationId: string) => {
+    setHandoffError("");
+    try {
+      // Canonical session provider fetches and authorizes the conversation.
+      // Navigate only after a successful backend-owned load.
+      await loadSession(conversationId);
+      openChat();
+    } catch {
+      setHandoffError("Unable to open that conversation. It may be unavailable or you may not have access.");
+    }
+  }, [loadSession, openChat]);
+
+  return (
+    <>
+      {handoffError && <p role="alert" className="mb-3 text-sm text-destructive">{handoffError}</p>}
+      {workspaceRunId && <div className="mb-3 flex items-center gap-2 rounded-lg border p-2 text-xs"><span>Context: execution {workspaceRunId.slice(0, 8)}</span><Button type="button" size="sm" variant="outline" onClick={() => setWorkspaceRunId(null)}>Clear context</Button></div>}
+      <AgentsPage onAskKaren={openChat} onOpenConversation={openConversation}
+        onDiscussRun={(runId) => { setWorkspaceRunId(runId); openChat(); }} />
+    </>
+  );
+}
 
 function DashboardNavigationContent({ children }: { children: React.ReactNode }) {
   const { isMobile, setOpenMobile } = useSidebar();
@@ -169,6 +205,23 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
+  const [karenPanelOpen, setKarenPanelOpen] = useState(false);
+  const karenLauncherRef = useRef<HTMLButtonElement | null>(null);
+  const karenPanelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!karenPanelOpen || activeMainView === "chat") return;
+    karenPanelRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setKarenPanelOpen(false);
+        karenLauncherRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [karenPanelOpen, activeMainView]);
   const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
@@ -305,15 +358,11 @@ export default function DashboardPage() {
 
   const staticViewMap = useMemo<Record<string, React.ReactNode>>(
     () => ({
-      chat: (
-        <SessionProvider>
-          <ChatInterface />
-        </SessionProvider>
-      ),
+
       settings: <SettingsDialogComponent />,
       pluginOverview: <PluginOverviewPage />,
       agentsOverview: <AgentsOverviewPage />,
-      agents: <AgentsPage />,
+      agents: <AgentWorkspaceView openChat={() => setActiveMainView("chat")} />,
       tasks: <TasksPage />,
       jobs: <JobsPage />,
       cronJobs: <CronJobsPage />,
@@ -409,6 +458,7 @@ export default function DashboardPage() {
 
   return (
     <AuthWrapper>
+      <SessionProvider>
       <SidebarProvider>
         <div className="karen-app-shell flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background text-foreground">
           <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl md:px-4">
@@ -432,6 +482,20 @@ export default function DashboardPage() {
               </div>
             </div>
 
+            <div className="flex items-center gap-2">
+              {activeMainView !== "chat" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setActiveMainView("chat")}
+                  aria-label="Return to your Karen conversation"
+                  className="gap-2"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="hidden sm:inline">Ask Karen</span>
+                </Button>
+              )}
             <Sheet>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" aria-label="Settings">
@@ -450,6 +514,7 @@ export default function DashboardPage() {
                 </div>
               </SheetContent>
             </Sheet>
+            </div>
           </header>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -616,22 +681,45 @@ export default function DashboardPage() {
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
                 <div className="karen-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
                   <div
+                    id="persistent-karen-panel"
+                    ref={karenPanelRef}
+                    tabIndex={-1}
+                    role={activeMainView !== "chat" && karenPanelOpen ? "dialog" : undefined}
+                    aria-label={activeMainView !== "chat" && karenPanelOpen ? "Karen conversation" : undefined}
+                    data-testid="persistent-karen-conversation"
+                    className={backendStatus === "ready" && (activeMainView === "chat" || karenPanelOpen)
+                      ? activeMainView === "chat" ? "flex min-h-0 flex-1 flex-col" : "fixed inset-x-2 top-16 bottom-20 z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl sm:inset-x-auto sm:right-3 sm:bottom-20 sm:w-[min(440px,calc(100vw-24px))]"
+                      : "hidden"}
+                    aria-hidden={backendStatus !== "ready" || (activeMainView !== "chat" && !karenPanelOpen)}
+                  >
+                    {USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />}
+                  </div>
+                  <div
                     key={activeMainView}
                     data-testid="workspace-scroll-region"
                     className={
-                      backendStatus !== "ready" || activeMainView !== "chat"
-                        ? "min-h-0 flex-1 overflow-y-auto overscroll-contain"
-                        : "flex min-h-0 flex-1 flex-col overflow-hidden"
+                      activeMainView === "chat" && backendStatus === "ready"
+                        ? "hidden"
+                        : "min-h-0 flex-1 overflow-y-auto overscroll-contain"
                     }
                   >
-                    {backendGate ?? currentViewContent}
+                    {backendGate ?? (activeMainView === "chat" ? null : currentViewContent)}
                   </div>
                 </div>
               </div>
             </SidebarInset>
+            {activeMainView !== "chat" && backendStatus === "ready" && (
+              <div className="fixed bottom-4 right-4 z-[60] flex gap-2">
+                {karenPanelOpen && <Button type="button" variant="outline" onClick={() => setKarenPanelOpen(false)} aria-label="Collapse Karen conversation">Close panel</Button>}
+                <Button ref={karenLauncherRef} type="button" onClick={() => setKarenPanelOpen((open) => !open)} aria-expanded={karenPanelOpen} aria-controls="persistent-karen-panel">
+                  <MessageSquare className="mr-2 h-4 w-4" /> {karenPanelOpen ? "Hide Karen" : "Ask Karen"}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </SidebarProvider>
+      </SessionProvider>
     </AuthWrapper>
   );
 }

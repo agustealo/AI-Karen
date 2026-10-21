@@ -1,5 +1,6 @@
 "use client";
 
+import { useAuth } from '@/lib/useAuth';
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -23,7 +24,6 @@ import { Button } from '../ui/button';
 import { Separator } from '../ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
-import { useAuth } from '@/lib/useAuth';
 import { apiClient } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { normalizeModelSettingsResponse, type RuntimeSettingsResponse } from '@/lib/model-runtime-inventory';
@@ -59,16 +59,18 @@ const getMetadataString = (value: unknown, fallback = 'auto'): string => {
 export default function ExpressionSettings() {
   const [exprSettings, setExprSettings] = useState<ExpressionSettingsResponse | null>(null);
   const [modelSettings, setModelSettings] = useState<ReturnType<typeof normalizeModelSettingsResponse> | null>(null);
+  const { user } = useAuth();
+  const canManageRuntime = Boolean(user?.roles?.some((role) => role === 'admin' || role === 'super_admin'));
   const [activeEngine, setActiveEngine] = useState('builtin');
   const [fallbackOrder, setFallbackOrder] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const { toast } = useToast();
-  const { user } = useAuth();
-  const canManageRuntime = Boolean(user?.roles?.some((role) => role === 'admin' || role === 'super_admin'));
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setLoadError('');
     try {
       const [exprRes, modelRes] = await Promise.all([
         apiClient.get<ExpressionSettingsResponse>('/api/settings/model/expression'),
@@ -80,6 +82,7 @@ export default function ExpressionSettings() {
       setActiveEngine(exprRes.active_engine);
       setFallbackOrder(exprRes.fallback_order || []);
     } catch {
+      setLoadError('Karen could not load expression settings and the registered provider inventory.');
       toast({
         title: 'Initialization Error',
         description: 'Could not synchronize expression and provider systems.',
@@ -214,12 +217,28 @@ export default function ExpressionSettings() {
     );
   }
 
-  // Configuration for the CURRENTLY SELECTED engine/provider in the activeEngine dropdown
-  const currentEngineConfig = exprSettings?.engines?.[activeEngine] || {
-    enabled: true,
-    fallback_eligible: true,
-    metadata: {}
-  };
+  if (loadError || !exprSettings || !modelSettings) {
+    return (
+      <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm">
+        <p className="font-semibold">Expression settings unavailable</p>
+        <p className="mt-2 text-muted-foreground">{loadError || 'Karen did not return a complete configuration.'}</p>
+        <p className="mt-2 text-muted-foreground">No engine selection or fallback policy was changed by this screen.</p>
+        <Button type="button" variant="outline" className="mt-4" onClick={() => void loadData()}>Retry loading expression settings</Button>
+      </div>
+    );
+  }
+
+  // Only backend-described engines may expose engine-specific controls.
+  const currentEngineConfig = exprSettings.engines?.[activeEngine];
+  if (!currentEngineConfig) {
+    return (
+      <div role="alert" className="rounded-xl border border-destructive/40 p-4 text-sm">
+        <p className="font-semibold">Unknown expression engine</p>
+        <p className="mt-2">The selected engine is missing from Karen&apos;s registered engine inventory.</p>
+        <Button type="button" variant="outline" className="mt-4" onClick={() => void loadData()}>Refresh registered engines</Button>
+      </div>
+    );
+  }
 
   const currentModels = getModelsForProvider(activeEngine);
   const preferredSubProvider = getMetadataString(currentEngineConfig.metadata?.preferred_provider);
@@ -227,7 +246,6 @@ export default function ExpressionSettings() {
 
   return (
     <div className="space-y-6">
-      {!canManageRuntime && <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">Expression routing is shared runtime configuration. You can review it here, but only an administrator can change the primary engine or fallback order.</p>}
       <Card className="border-border/40 shadow-sm transition-all hover:shadow-md">
         <CardHeader className="border-b bg-muted/20 pb-4">
           <div className="flex items-center justify-between">
@@ -235,7 +253,8 @@ export default function ExpressionSettings() {
               <CardTitle className="text-xl font-bold flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-primary" /> Expression Engine Management
               </CardTitle>
-              <CardDescription>Direct Karen&apos;s cognition through your configured model providers.</CardDescription>
+              {!canManageRuntime && <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">Expression routing is shared runtime configuration. You can review it here, but only an administrator can change the primary engine or fallback order.</p>}
+              <CardDescription>Configure Karen&apos;s registered expression engines and fallback preferences. Engine activation and runtime health are verified separately.</CardDescription>
             </div>
             <TooltipProvider>
               <Tooltip>
@@ -305,7 +324,7 @@ export default function ExpressionSettings() {
                           <div className="flex items-center gap-2">
                             <h4 className="text-sm font-bold uppercase tracking-tight">{getProviderLabel(activeEngine)}</h4>
                             {exprSettings?.active_engine === activeEngine && (
-                              <Badge className="h-5 text-[8px] bg-primary text-primary-foreground border-none uppercase tracking-widest px-2">Current Primary</Badge>
+                              <Badge className="h-5 text-[8px] bg-primary text-primary-foreground border-none uppercase tracking-widest px-2">Saved primary</Badge>
                             )}
                             <Badge variant={currentEngineConfig.enabled ? "outline" : "secondary"} className={cn("h-5 text-[8px] uppercase px-1.5 font-bold", currentEngineConfig.enabled ? "text-emerald-500 border-emerald-500/30" : "")}>
                               {currentEngineConfig.enabled ? "Enabled" : "Disabled"}
@@ -324,7 +343,7 @@ export default function ExpressionSettings() {
                           disabled={!canManageRuntime || isSaving || exprSettings?.active_engine === activeEngine || !currentEngineConfig.enabled}
                         >
                           {exprSettings?.active_engine === activeEngine ? <ShieldCheck className="h-4 w-4 mr-2" /> : <Zap className="h-4 w-4 mr-2" />}
-                          {exprSettings?.active_engine === activeEngine ? "Primary Active" : "Set as Primary"}
+                          {exprSettings?.active_engine === activeEngine ? "Saved primary" : "Set as Primary"}
                         </Button>
                         
                         <div className="flex items-center bg-background/50 rounded-xl border border-border/60 p-1 shadow-inner gap-1">
@@ -369,7 +388,7 @@ export default function ExpressionSettings() {
                                <SelectItem value="transformers">Transformers (Broad Compatibility)</SelectItem>
                              </SelectContent>
                            </Select>
-                           <p className="text-[10px] text-muted-foreground">Force a specific internal backend or let Karen choose based on model requirements.</p>
+                           <p className="text-[10px] text-muted-foreground">Force a specific internal backend or let Kari choose based on model requirements.</p>
                          </div>
                        )}
 
@@ -435,7 +454,7 @@ export default function ExpressionSettings() {
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <Label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Automatic Fallback Sequence</Label>
-                <p className="text-xs text-muted-foreground">The order in which Karen attempts engines when the active one fails. (Up to 4 steps)</p>
+                <p className="text-xs text-muted-foreground">The order in which Kari attempts engines when the active one fails. (Max 5 steps)</p>
               </div>
               <div className="flex gap-2">
                 <Button 

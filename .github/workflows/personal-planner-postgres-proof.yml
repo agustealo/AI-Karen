@@ -1,0 +1,201 @@
+name: Personal Planner PostgreSQL Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/ai_karen_engine/core/planner/**"
+      - "src/ai_karen_engine/persistence/repositories/personal_planner_repository.py"
+      - "src/ai_karen_engine/persistence/postgres/**"
+      - "tests/core/planner/**"
+      - "tests/integration/test_live_personal_planner_postgres.py"
+      - "supabase/migrations/20261020010000_38_personal_planner_commitments.sql"
+      - ".github/workflows/personal-planner-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  planner-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_karen
+      KAREN_TEST_PLANNER_POSTGRES: "1"
+      KAREN_TEST_DISPOSABLE_DATABASE: "1"
+      KAREN_TEST_PLANNER_TENANT_ID: "a0000000-0000-4000-8000-000000000001"
+      KAREN_TEST_PLANNER_USER_ID: "b0000000-0000-4000-8000-000000000001"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start isolated PostgreSQL
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/chat.txt
+      - name: Apply planner migration on disposable database
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          from pathlib import Path
+          import asyncpg
+
+          async def main():
+              db = await asyncpg.connect(os.environ["DATABASE_URL"])
+              try:
+                  if await db.fetchval("SELECT to_regclass('public.personal_planner_commitments') IS NOT NULL"):
+                      raise RuntimeError("Planner tables already exist: refusing to run destructive fixture")
+                  # Minimal external foreign-key targets only in this disposable
+                  # database. Application databases must use baseline migrations.
+                  await db.execute("CREATE TABLE public.tenants (id uuid PRIMARY KEY)")
+                  await db.execute("CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY)")
+                  await db.execute("INSERT INTO public.tenants VALUES ($1::uuid)", os.environ["KAREN_TEST_PLANNER_TENANT_ID"])
+                  await db.execute("INSERT INTO public.auth_users VALUES ($1::uuid)", os.environ["KAREN_TEST_PLANNER_USER_ID"])
+                  await db.execute(Path("supabase/migrations/20261020010000_38_personal_planner_commitments.sql").read_text())
+                  policies = await db.fetch("""
+                      SELECT tablename, policyname FROM pg_policies
+                      WHERE schemaname='public' AND tablename LIKE 'personal_planner_%'
+                  """)
+                  assert len(policies) == 2, policies
+              finally:
+                  await db.close()
+
+          asyncio.run(main())
+          PY
+      - name: Prove planner RLS using least-privilege database role
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          import uuid
+          import asyncpg
+
+          async def main():
+              admin = await asyncpg.connect(os.environ["DATABASE_URL"])
+              tenant = uuid.UUID(os.environ["KAREN_TEST_PLANNER_TENANT_ID"])
+              foreign = uuid.uuid4()
+              owner = uuid.UUID(os.environ["KAREN_TEST_PLANNER_USER_ID"])
+              record = uuid.uuid4()
+              try:
+                  await admin.execute("CREATE ROLE karen_ci_planner_reader LOGIN PASSWORD 'planner_ci_only'")
+                  await admin.execute("GRANT USAGE ON SCHEMA public TO karen_ci_planner_reader")
+                  await admin.execute("GRANT SELECT, INSERT ON public.personal_planner_commitments TO karen_ci_planner_reader")
+                  await admin.execute("GRANT SELECT, INSERT ON public.personal_planner_mutation_receipts TO karen_ci_planner_reader")
+                  await admin.execute("INSERT INTO public.personal_planner_commitments (id, tenant_id, owner_id, title, timezone) VALUES ($1, $2, $3, 'RLS proof', 'UTC')", record, tenant, owner)
+                  await admin.execute("""
+                              INSERT INTO public.personal_planner_mutation_receipts
+                              (tenant_id, owner_id, idempotency_key, operation, request_fingerprint, commitment_id, result_snapshot, revision, correlation_id)
+                              VALUES ($1, $2, $3, 'create', $4, $5, '{}'::jsonb, 1, 'rls-proof')
+                          """, tenant, owner, uuid.uuid4(), "a" * 64, record)
+                  reader = await asyncpg.connect(
+                      host="127.0.0.1", port=5432, database="ai_karen",
+                      user="karen_ci_planner_reader", password="planner_ci_only",
+                  )
+                  try:
+                      assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments") == 0
+                      async with reader.transaction():
+                          await reader.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(foreign))
+                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments WHERE id=$1", record) == 0
+                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_mutation_receipts") == 0
+                          # A savepoint isolates expected RLS rejection from the
+                          # surrounding read-proof transaction.
+                          denied = False
+                          try:
+                              async with reader.transaction():
+                                  await reader.execute("INSERT INTO public.personal_planner_commitments (id, tenant_id, owner_id, title, timezone) VALUES ($1, $2, $3, 'Denied', 'UTC')", uuid.uuid4(), tenant, owner)
+                          except asyncpg.InsufficientPrivilegeError:
+                              denied = True
+                          assert denied, "Foreign tenant must not create commitment"
+                          denied_receipt = False
+                          try:
+                              async with reader.transaction():
+                                  await reader.execute("""
+                                      INSERT INTO public.personal_planner_mutation_receipts
+                                      (tenant_id, owner_id, idempotency_key, operation, request_fingerprint,
+                                       commitment_id, result_snapshot, revision, correlation_id)
+                                      VALUES ($1, $2, $3, 'create', $4, $5, '{}'::jsonb, 1, 'deny')
+                                  """, tenant, owner, uuid.uuid4(), "b" * 64, record)
+                          except asyncpg.InsufficientPrivilegeError:
+                              denied_receipt = True
+                          assert denied_receipt, "Foreign tenant must not create receipt"
+
+                      async with reader.transaction():
+                          await reader.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(tenant))
+                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_commitments WHERE id=$1", record) == 1
+                          assert await reader.fetchval("SELECT count(*) FROM public.personal_planner_mutation_receipts WHERE commitment_id=$1", record) == 1
+                  finally:
+                      await reader.close()
+              finally:
+                  await admin.execute("DELETE FROM public.personal_planner_commitments WHERE id=$1", record)
+                  await admin.close()
+
+          asyncio.run(main())
+          PY
+      - name: Verify real PostgreSQL planner behavior
+        run: pytest tests/core/planner tests/integration/test_live_personal_planner_postgres.py -q -rs
+
+  planner-full-schema:
+    name: planner-full-schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_karen
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start isolated canonical PostgreSQL image
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install schema proof driver
+        run: python -m pip install asyncpg
+      - name: Apply canonical migrations in order to clean disposable PostgreSQL
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          from pathlib import Path
+          import asyncpg
+
+          async def main():
+              conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+              try:
+                  assert not await conn.fetchval("SELECT to_regclass('public.auth_users') IS NOT NULL"), "Refuse prepopulated database"
+                  migrations = sorted(Path("supabase/migrations").glob("*.sql"))
+                  assert migrations, "No canonical migrations found"
+                  for migration in migrations:
+                      try:
+                          await conn.execute(migration.read_text(encoding="utf-8"))
+                      except Exception as exc:
+                          raise RuntimeError(f"Canonical migration failed: {migration.name}") from exc
+                  for table in ("auth_users", "tenants", "personal_planner_commitments", "personal_planner_mutation_receipts"):
+                      assert await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}"), table
+                  assert await conn.fetchval("""
+                      SELECT relrowsecurity AND relforcerowsecurity
+                      FROM pg_class WHERE oid='public.personal_planner_commitments'::regclass
+                  """)
+                  assert await conn.fetchval("""
+                      SELECT relrowsecurity AND relforcerowsecurity
+                      FROM pg_class WHERE oid='public.personal_planner_mutation_receipts'::regclass
+                  """)
+              finally:
+                  await conn.close()
+
+          asyncio.run(main())
+          PY

@@ -359,6 +359,15 @@ export default function SettingsDialog({
                 </span>
               </div>
 
+              <p className="px-1 text-sm text-muted-foreground">
+                {activeCategory.id === 'runtime'
+                  ? 'Available providers, routing controls, and saved settings are reported by Karen. Changes are only applied when the backend confirms them.'
+                  : activeCategory.id === 'personal'
+                    ? 'Review personal information, notifications, and privacy controls.'
+                    : activeCategory.id === 'assistant'
+                      ? 'Customize how Karen behaves, speaks, and presents itself.'
+                      : 'Manage authorized administration controls.'}
+              </p>
               <nav aria-label={`${activeCategory.label} settings sections`} className="flex flex-wrap gap-2">
                 {activeCategory.sections.map((section) => {
                   const Icon = section.icon;

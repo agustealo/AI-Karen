@@ -620,6 +620,7 @@ export default function ModelDownloads({
     if (jobsResult.status === 'fulfilled') {
       setJobs(Array.isArray(jobsResult.value) ? jobsResult.value : []);
     } else {
+      setJobs([]);
       nextErrors.jobs = getErrorMessage(
         jobsResult.reason,
         'Download jobs endpoint failed.',
@@ -629,6 +630,7 @@ export default function ModelDownloads({
     if (installedResult.status === 'fulfilled') {
       setInstalled(installedResult.value);
     } else {
+      setInstalled(null);
       nextErrors.installed = getErrorMessage(
         installedResult.reason,
         'Installed model inventory endpoint failed.',
@@ -638,6 +640,7 @@ export default function ModelDownloads({
     if (discoveryResult.status === 'fulfilled') {
       setDiscovery(discoveryResult.value);
     } else {
+      setDiscovery(null);
       nextErrors.discovery = getErrorMessage(
         discoveryResult.reason,
         'Model discovery endpoint failed.',
@@ -647,6 +650,7 @@ export default function ModelDownloads({
     if (recommendationsResult.status === 'fulfilled') {
       setRecommendations(recommendationsResult.value);
     } else {
+      setRecommendations(null);
       nextErrors.recommendations = getErrorMessage(
         recommendationsResult.reason,
         'Model source verification request failed.',
@@ -656,10 +660,14 @@ export default function ModelDownloads({
     if (storageResult.status === 'fulfilled') {
       setStorageSettings(storageResult.value);
       setModelsRootDraft(storageResult.value.models_root);
+    } else {
+      setStorageSettings(null);
     }
 
     if (telemetryResult.status === 'fulfilled') {
       setRuntimeTelemetry(telemetryResult.value);
+    } else {
+      setRuntimeTelemetry(null);
     }
 
     setEndpointErrors(nextErrors);
@@ -703,7 +711,13 @@ export default function ModelDownloads({
     try {
       const response = await apiClient.get<DownloadJob[]>(ENDPOINTS.jobs);
       setJobs(Array.isArray(response) ? response : []);
+      setEndpointErrors((current) => {
+        const next = { ...current };
+        delete next.jobs;
+        return next;
+      });
     } catch (error) {
+      setJobs([]);
       setEndpointErrors((current) => ({
         ...current,
         jobs: getErrorMessage(error, 'Download jobs endpoint failed.'),
@@ -791,7 +805,7 @@ export default function ModelDownloads({
     ? recommendations.essential_ready
       ? 'Ready'
       : `${recommendations.essential_installed}/${recommendations.essential_total} ready`
-    : 'Loading';
+    : 'Unavailable';
 
   const resourceSummary = runtimeTelemetry?.resources;
   const storageSummary = runtimeTelemetry?.storage;
@@ -816,7 +830,10 @@ export default function ModelDownloads({
     (validation.requested_revision || '') === revision.trim() &&
     !startingDownload &&
     !channelBlocked &&
-    !downloadsBlocked;
+    !downloadsBlocked &&
+    !endpointErrors.jobs &&
+    !endpointErrors.policy &&
+    !endpointErrors.channels;
 
   const updatePolicyField = useCallback(
     <K extends keyof DownloadPolicy>(key: K, value: DownloadPolicy[K]) => {
@@ -855,7 +872,7 @@ export default function ModelDownloads({
     } finally {
       setSavingPolicy(false);
     }
-  }, [adminMode, policy, toast]);
+  }, [policy, toast]);
 
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
@@ -1341,7 +1358,7 @@ export default function ModelDownloads({
     } finally {
       setSavingModelsRoot(false);
     }
-  }, [adminMode, modelsRootDraft, refreshAll, storageSettings?.models_root, toast]);
+  }, [modelsRootDraft, refreshAll, storageSettings?.models_root, toast]);
 
   const renderPolicyRow = (
     label: string,
@@ -1364,8 +1381,7 @@ export default function ModelDownloads({
 
         <Switch
           checked={Boolean(value)}
-          disabled={!adminMode || disabled}
-          aria-label={label}
+          disabled={disabled}
           onCheckedChange={(checked) =>
             updatePolicyField(key, checked as never)
           }
@@ -1443,21 +1459,21 @@ export default function ModelDownloads({
                 workerSummary
                   ? `${workerSummary.max_concurrent_downloads - workerSummary.available_slots}/${workerSummary.max_concurrent_downloads} active`
                   : activeJobs.length
-                    ? `${activeJobs.length} active`
-                    : 'Idle'
+                    ? `${endpointErrors.jobs ? "Jobs unavailable" : `${activeJobs.length} active`}`
+                    : endpointErrors.jobs ? 'Unavailable' : 'Idle'
               }
               detail={
                 workerSummary
                   ? `${workerSummary.available_slots} slot${workerSummary.available_slots === 1 ? '' : 's'} available`
                   : failedJobs
                     ? `${failedJobs} recent failure${failedJobs === 1 ? '' : 's'}`
-                    : 'No active failures'
+                    : endpointErrors.jobs ? 'Jobs unavailable' : 'No active failures'
               }
             />
             <MetricTile
               icon={<Database className="h-4 w-4" aria-hidden="true" />}
               label="Model storage"
-              value={modelStorageBytes ? formatBytes(modelStorageBytes) : `${installedModels.length} installed`}
+              value={modelStorageBytes ? formatBytes(modelStorageBytes) : installed ? `${installedModels.length} installed` : 'Unavailable'}
               detail={diskFreeBytes ? `${formatBytes(diskFreeBytes)} free` : storageSettings?.models_root || 'Storage loading'}
             />
             <MetricTile
@@ -1469,8 +1485,8 @@ export default function ModelDownloads({
             <MetricTile
               icon={<Activity className="h-4 w-4" aria-hidden="true" />}
               label="Discovery"
-              value={discoveryStatus.replace(/_/g, ' ')}
-              detail={String(discoveryStats.total_models ?? installedModels.length) + ' models indexed'}
+              value={discovery ? discoveryStatus.replace(/_/g, ' ') : 'Unavailable'}
+              detail={discovery ? String(discoveryStats.total_models ?? 'Unknown') + ' models indexed' : 'Discovery status unavailable'}
             />
           </div>
 
@@ -1888,7 +1904,6 @@ export default function ModelDownloads({
               variant="outline"
               onClick={() => void saveModelsRoot()}
               disabled={
-                !adminMode ||
                 savingModelsRoot ||
                 !modelsRootDraft.trim() ||
                 modelsRootDraft.trim() === storageSettings?.models_root ||
@@ -1961,7 +1976,11 @@ export default function ModelDownloads({
           </CardHeader>
 
           <CardContent className="space-y-4">
-            {!adminMode && <p role="status" className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm text-muted-foreground">Download safety policy is managed by an administrator. Its current values are shown for transparency; you cannot change the system-wide policy here.</p>}
+            {!adminMode && (
+              <p role="status" className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm text-muted-foreground">
+                Download safety policy is managed by an administrator. Its current values are shown for transparency; you cannot change the system-wide policy here.
+              </p>
+            )}
             {loading || !policy ? (
               <div
                 className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -2026,7 +2045,6 @@ export default function ModelDownloads({
                   <Switch
                     checked={policy.trust_remote_code}
                     disabled={!adminMode}
-                    aria-label="Trust remote model code"
                     onCheckedChange={(checked) =>
                       updatePolicyField('trust_remote_code', checked)
                     }
@@ -2066,7 +2084,6 @@ export default function ModelDownloads({
                     min={1}
                     max={8}
                     value={policy.max_concurrent_downloads}
-                    disabled={!adminMode}
                     onChange={(event) =>
                       updatePolicyField(
                         'max_concurrent_downloads',
@@ -2080,7 +2097,7 @@ export default function ModelDownloads({
                   <Button
                     type="button"
                     onClick={() => void savePolicy()}
-                    disabled={!adminMode || savingPolicy}
+                    disabled={savingPolicy}
                   >
                     {savingPolicy ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
@@ -2409,7 +2426,9 @@ export default function ModelDownloads({
           </div>
         </CardHeader>
         <CardContent>
-          {jobs.length === 0 ? (
+          {endpointErrors.jobs ? (
+            <p role="alert" className="rounded-xl border border-amber-500/40 p-4 text-sm">Download job status is unavailable. Existing jobs may still be running. Refresh runtime state to verify before starting or retrying downloads.</p>
+          ) : jobs.length === 0 ? (
             <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 bg-muted/5 text-sm text-muted-foreground">
               <Download className="h-8 w-8 opacity-20" aria-hidden="true" />
               No active or recent download jobs.
@@ -2443,33 +2462,33 @@ export default function ModelDownloads({
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        disabled={!canPauseJob(job.status) || busyJobs[job.job_id]}
+                        disabled={Boolean(endpointErrors.jobs) || !canPauseJob(job.status) || busyJobs[job.job_id]}
                         onClick={() => void actOnJob(job.job_id, 'pause')}
                       >
                         <Pause className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Pause {job.model_id}</span>
+                        <span className="sr-only">Pause</span>
                       </Button>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        disabled={!canResumeJob(job.status) || busyJobs[job.job_id]}
+                        disabled={Boolean(endpointErrors.jobs) || !canResumeJob(job.status) || busyJobs[job.job_id]}
                         onClick={() => void actOnJob(job.job_id, 'resume')}
                       >
                         <Play className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Resume {job.model_id}</span>
+                        <span className="sr-only">Resume</span>
                       </Button>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        disabled={!canCancelJob(job.status) || busyJobs[job.job_id]}
+                        disabled={Boolean(endpointErrors.jobs) || !canCancelJob(job.status) || busyJobs[job.job_id]}
                         onClick={() => void actOnJob(job.job_id, 'cancel')}
                       >
                         <Square className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">Cancel {job.model_id}</span>
+                        <span className="sr-only">Cancel</span>
                       </Button>
                       {(job.status === 'failed' || job.status === 'cancelled') && (
                         <Button
@@ -2477,7 +2496,7 @@ export default function ModelDownloads({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
-                          disabled={retryingJobs[job.job_id]}
+                          disabled={Boolean(endpointErrors.jobs) || retryingJobs[job.job_id]}
                           onClick={() => void retryJob(job)}
                         >
                           {retryingJobs[job.job_id] ? (
@@ -2485,7 +2504,7 @@ export default function ModelDownloads({
                           ) : (
                             <RotateCcw className="h-4 w-4" aria-hidden="true" />
                           )}
-                          <span className="sr-only">Retry download {job.model_id}</span>
+                          <span className="sr-only">Retry download</span>
                         </Button>
                       )}
                     </div>

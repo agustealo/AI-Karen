@@ -10,7 +10,7 @@
  * - Success toast only fires after backend save succeeds.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Bell, Loader2, RotateCcw, Save } from 'lucide-react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -166,13 +166,14 @@ export default function NotificationSettings() {
 
   const { toast } = useToast();
 
-  const hasDraft = useMemo(() => Boolean(readDraftSettings()), []);
+  const [hasDraft, setHasDraft] = useState(false);
 
   const loadSettings = useCallback(async () => {
     setIsLoading(true);
     setLoadError('');
 
     const draft = readDraftSettings();
+    setHasDraft(Boolean(draft));
 
     if (draft) {
       setNotifications(draft);
@@ -187,6 +188,7 @@ export default function NotificationSettings() {
       setNotifications(liveSettings);
       setBackendStatus('available');
       clearDraftSettings();
+      setHasDraft(false);
     } catch (error) {
       setBackendStatus('unavailable');
 
@@ -220,6 +222,7 @@ export default function NotificationSettings() {
         };
 
         writeDraftSettings(next);
+        setHasDraft(true);
         return next;
       });
     },
@@ -251,6 +254,7 @@ export default function NotificationSettings() {
 
       setIsSaving(true);
       writeDraftSettings(nextSettings);
+      setHasDraft(true);
 
       try {
         const response = await apiClient.put<NotificationSettingsResponse>(
@@ -263,6 +267,7 @@ export default function NotificationSettings() {
         setBackendStatus('available');
         setLoadError('');
         clearDraftSettings();
+        setHasDraft(false);
 
         toast({
           title: 'Notification Settings Saved',

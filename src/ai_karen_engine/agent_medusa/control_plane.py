@@ -88,12 +88,14 @@ class AgentMedusaControlPlane:
         *,
         tenant_id: str,
         include_terminal: bool = True,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         """Return tenant-scoped execution run snapshots."""
 
         runs = await self._run_manager.list_runs(
             tenant_id=tenant_id,
             include_terminal=include_terminal,
+            **({"user_id": user_id} if user_id is not None else {}),
         )
         return {
             "runs": runs,

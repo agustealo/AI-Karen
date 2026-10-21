@@ -153,6 +153,7 @@ export default function ModelSettings() {
   const [modelDiscoveryNotice, setModelDiscoveryNotice] = useState('');
   const modelDiscoveryRequestId = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isClearingKey, setIsClearingKey] = useState(false);
@@ -188,6 +189,11 @@ export default function ModelSettings() {
     if (provider.selectable !== false) return true;
     return Boolean(provider.requires_api_key);
   }, []);
+
+  const hasUnsavedSelection = Boolean(normalizedSettings && (
+    selectedProvider !== normalizedSettings.selected_provider ||
+    selectedModel !== normalizedSettings.selected_model
+  ));
 
   const selectedProviderDetails = useMemo(() => {
     return normalizedSettings?.providers.find((p) => p.id === selectedProvider) ?? null;
@@ -244,13 +250,16 @@ export default function ModelSettings() {
 
   const loadSettings = useCallback(async () => {
     setIsLoading(true);
+    setSettingsLoadError('');
     try {
       const response = await apiClient.get<ModelSettingsResponse>('/api/settings/model');
       applyNormalizedSettings(response);
     } catch (error) {
+      const message = formatErrorMessage(error, 'Karen could not load the saved model configuration.');
+      setSettingsLoadError(message);
       toast({
         title: 'Unable to load model settings',
-        description: formatErrorMessage(error, 'Karen could not load the saved model configuration.'),
+        description: message,
         variant: 'destructive',
       });
     } finally {
@@ -314,7 +323,6 @@ export default function ModelSettings() {
     setBaseUrl(usesRuntimeOptions ? providerBaseUrl : normalizeDisplayBaseUrl(providerBaseUrl));
     setApiKey('');
     setIsEditingApiKey(false);
-    validationRequestId.current += 1;
     setApiKeyValidationState('idle');
     setApiKeyValidationMessage('');
     setApiKeyHeader(selectedProviderDetails.api_key_header || 'Authorization');
@@ -332,7 +340,7 @@ export default function ModelSettings() {
 
   useEffect(() => {
     if (!selectedProviderDetails?.requires_api_key || !isEditingApiKey) {
-      setApiKeyValidationState('idle');
+      setApiKeyValidationState(selectedProviderDetails?.api_key_configured ? 'valid' : 'idle');
       setApiKeyValidationMessage(
         selectedProviderDetails?.api_key_configured
           ? `${selectedProviderLabel || selectedProviderDetails?.display_name} key is stored.`
@@ -342,7 +350,7 @@ export default function ModelSettings() {
     }
     const candidateKey = apiKey.trim();
     if (!candidateKey) {
-      setApiKeyValidationState('idle');
+      setApiKeyValidationState(selectedProviderDetails.api_key_configured ? 'valid' : 'idle');
       setApiKeyValidationMessage('');
       return;
     }
@@ -376,10 +384,7 @@ export default function ModelSettings() {
         );
       }
     }, 450);
-    return () => {
-      window.clearTimeout(timeoutId);
-      validationRequestId.current += 1;
-    };
+    return () => { window.clearTimeout(timeoutId); };
   }, [apiKey, baseUrl, isEditingApiKey, selectedModel, selectedProviderDetails, selectedProviderLabel]);
 
   const validateProviderCredentialsBeforeSave = async (): Promise<boolean> => {
@@ -435,7 +440,8 @@ export default function ModelSettings() {
   };
 
   const handleSave = async () => {
-    if (!selectedProviderDetails || !canManageRuntime) return;
+    if (!canManageRuntime) return;
+    if (!selectedProviderDetails) return;
     if (!canSaveProviderModelSelection(selectedModel, availableModels, {
       isLoading: isLoadingModels,
       manualEntryAllowed: canEnterModelManually,
@@ -472,18 +478,22 @@ export default function ModelSettings() {
         chat_response_mode: chatResponseMode,
       });
       applyNormalizedSettings(response);
-      toast({ title: 'Model settings saved', description: `${selectedProviderLabel || selectedProviderDetails.display_name} is configured.` });
+      toast({ title: 'Model settings saved', description: `Karen confirmed the saved configuration for ${selectedProviderLabel || selectedProviderDetails.display_name}. Runtime health is checked separately.` });
     } catch (error) {
       const message = formatProviderCredentialMessage(
         selectedProviderLabel || selectedProviderDetails.display_name,
         formatErrorMessage(error, 'Karen could not save configuration.'),
       );
+      setApiKeyValidationState('invalid');
+      setApiKeyValidationMessage(message);
+      setIsEditingApiKey(true);
       toast({ title: `Save failed for ${selectedProviderLabel || selectedProviderDetails.display_name}`, description: message, variant: 'destructive' });
     } finally { setIsSaving(false); }
   };
 
   const handleClearApiKey = async () => {
-    if (!canManageRuntime || !selectedProviderDetails?.api_key_configured) return;
+    if (!canManageRuntime) return;
+    if (!selectedProviderDetails?.api_key_configured) return;
     setIsClearingKey(true);
     try {
       const response = await apiClient.put<ModelSettingsResponse>('/api/settings/model', {
@@ -539,14 +549,31 @@ export default function ModelSettings() {
     );
   }
 
+  if (!settings || settingsLoadError) {
+    return (
+      <Alert variant="destructive" role="alert" className="space-y-3">
+        <AlertDescription>
+          <p className="font-semibold">Model settings are unavailable</p>
+          <p className="mt-1">{settingsLoadError || 'Karen did not return a usable model configuration.'}</p>
+          <p className="mt-2">Your saved provider and model selection have not been changed by this screen.</p>
+          <Button type="button" variant="outline" className="mt-3" onClick={() => void loadSettings()}>
+            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" /> Retry loading settings
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      {!canManageRuntime && (
-        <Alert className="border-border/60 bg-muted/20">
-          <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-          <AlertDescription>Provider configuration is managed by an administrator. You can inspect available providers and models here; changing shared runtime settings requires administrator access.</AlertDescription>
-        </Alert>
-      )}
+      <div role="status" className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 text-sm">
+        <p className="font-semibold">Saved model: {normalizedSettings?.selected_model || 'None configured'}</p>
+        <p className="mt-1 text-muted-foreground">
+          {hasUnsavedSelection
+            ? 'Provider or model selection changed locally. Save to request an update; Karen must confirm the saved configuration.'
+            : 'This is your saved selection, not proof of a currently executing model. Runtime availability is reported separately.'}
+        </p>
+      </div>
       <div className={cn("grid gap-8 pb-32", !isMobile && "grid-cols-12")}>
         {/* Main Configuration Card */}
         <div className={cn("space-y-6", !isMobile ? "col-span-12 xl:col-span-8" : "w-full")}>
@@ -557,7 +584,7 @@ export default function ModelSettings() {
                   <CardTitle className="text-xl font-bold flex items-center gap-2">
                     <Bot className="h-5 w-5 text-primary" /> Model Selection
                   </CardTitle>
-                  <CardDescription>Select the brain and runtime environment for Karen.</CardDescription>
+                  <CardDescription>Choose a provider and model from Karen’s registered inventory. Saving does not guarantee the runtime is healthy.</CardDescription>
                 </div>
                 <TooltipProvider>
                   <Tooltip>
@@ -617,7 +644,7 @@ export default function ModelSettings() {
                       </div>
                       <DialogFooter>
                         <Button variant="outline" onClick={() => setIsCustomDialogOpen(false)}>Cancel</Button>
-                        <Button onClick={handleCreateCustomProvider} disabled={isAddingCustom}>
+                        <Button onClick={handleCreateCustomProvider} disabled={!canManageRuntime || isAddingCustom}>
                           {isAddingCustom ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Create Provider
                         </Button>
                       </DialogFooter>
@@ -886,7 +913,7 @@ export default function ModelSettings() {
                                       <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{option.status}</p>
                                     </div>
                                     <Badge variant="outline" className={cn("text-[10px] uppercase", option.available ? "text-emerald-600" : "text-amber-600")}>
-                                      {option.available ? "Available" : "Setup Required"}
+                                      {option.available ? "Detected" : "Setup required"}
                                     </Badge>
                                   </div>
                                   <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{option.message}</p>
@@ -899,8 +926,12 @@ export default function ModelSettings() {
                                       size="sm"
                                       className="mt-3 h-8 text-[10px] uppercase tracking-widest"
                                       onClick={async () => {
-                                        await navigator.clipboard.writeText(option.setup_command || '');
-                                        toast({ title: 'Setup command copied', description: option.setup_command || '' });
+                                        try {
+                                          await navigator.clipboard.writeText(option.setup_command || '');
+                                          toast({ title: 'Setup command copied' });
+                                        } catch {
+                                          toast({ title: 'Unable to copy setup command', description: 'Clipboard access was denied. Review the runtime setup instructions.', variant: 'destructive' });
+                                        }
                                       }}
                                     >
                                       Copy Setup Command
@@ -937,6 +968,7 @@ export default function ModelSettings() {
                                 disabled={isLoadingModels}
                                 className="h-7 w-7"
                                 title="Refresh model discovery"
+                                 aria-label="Refresh model discovery"
                               >
                                 {isLoadingModels ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                               </Button>
@@ -956,8 +988,8 @@ export default function ModelSettings() {
                           ) : (
                             <div role="status" className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm text-muted-foreground">
                               {isLoadingModels ? 'Discovering provider models…'
-                                : modelDiscoveryError ? 'Model discovery unavailable. Refresh to retry.'
-                                  : 'No models available on this provider.'}
+                                : modelDiscoveryError ? 'Model discovery failed. Refresh to retry; saved model availability has not been verified.'
+                                  : 'No models were reported by this provider.'}
                             </div>
                           )}
                           {modelDiscoveryNotice && (
@@ -981,7 +1013,7 @@ export default function ModelSettings() {
 
                           {canManageRuntime && selectedProviderDetails.api_key_configured && (
                             <div className="flex justify-end">
-                              <Button variant="outline" size="sm" onClick={handleClearApiKey} disabled={isClearingKey} className="h-7 text-[10px] font-bold border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/10">
+                              <Button variant="outline" size="sm" onClick={handleClearApiKey} disabled={!canManageRuntime || isClearingKey} className="h-7 text-[10px] font-bold border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/10">
                                 Clear Secret
                               </Button>
                             </div>
@@ -1010,7 +1042,7 @@ export default function ModelSettings() {
 
                           {apiKeyValidationMessage && (
                             <div className={cn("flex items-center gap-2 text-xs font-medium px-2 py-1.5 rounded-lg border",
-                              apiKeyValidationState === 'valid' ? "bg-emerald-50/10 border-emerald-500/20 text-emerald-600" : apiKeyValidationState === 'invalid' ? "bg-destructive/5 border-destructive/20 text-destructive" : "bg-muted/20 border-border/40 text-muted-foreground")}>
+                              apiKeyValidationState === 'valid' ? "bg-emerald-50/10 border-emerald-500/20 text-emerald-600" : "bg-destructive/5 border-destructive/20 text-destructive")}>
                               <Info className="h-3 w-3 shrink-0" /> {apiKeyValidationMessage}
                             </div>
                           )}
@@ -1033,9 +1065,9 @@ export default function ModelSettings() {
                     </div>
 
                   <div className="flex justify-end pt-4">
-                    <Button onClick={handleSave} disabled={isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
+                    <Button onClick={handleSave} disabled={!canManageRuntime || isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
                       {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-5 w-5" />}
-                      Save provider settings
+                      Finalize Intelligence Settings
                     </Button>
                   </div>
                 </div>
@@ -1055,7 +1087,7 @@ export default function ModelSettings() {
                   </div>
                   <div>
                     <CardTitle className="text-sm font-bold uppercase tracking-widest">{selectedProviderLabel || selectedProviderDetails.display_name}</CardTitle>
-                    <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-tight">Active Node Status</p>
+                    <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-tight">Registered provider details</p>
                   </div>
                 </div>
               </CardHeader>
@@ -1080,7 +1112,7 @@ export default function ModelSettings() {
                     </div>
                     {selectedProviderDetails.selected_model && (
                       <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="text-muted-foreground">Active Model</span>
+                        <span className="text-muted-foreground">Saved provider model</span>
                         <span className="max-w-[120px] truncate font-mono text-primary/70">{selectedProviderDetails.selected_model}</span>
                       </div>
                     )}

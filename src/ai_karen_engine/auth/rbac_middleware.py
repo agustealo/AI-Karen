@@ -81,6 +81,10 @@ class Permission(str, Enum):
     DATA_DELETE = "data:delete"
     DATA_EXPORT = "data:export"
 
+    # Personal planner commitments (distinct from agent automations)
+    PLANNER_READ = "planner:read"
+    PLANNER_WRITE = "planner:write"
+
     # Scheduler
     SCHEDULER_READ = "scheduler:read"
     SCHEDULER_WRITE = "scheduler:write"
@@ -214,6 +218,8 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
                 Permission.CHANNEL_CONSENT.value,
                 Permission.BROWSER.value,
                 Permission.DATA_READ.value,
+                Permission.PLANNER_READ.value,
+                Permission.PLANNER_WRITE.value,
             ],
         },
         Role.READONLY.value: {
