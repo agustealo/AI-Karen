@@ -32,7 +32,7 @@ class PersonaService:
         self.db_client = db_client or MultiTenantPostgresClient()
         self.nlp_analyzer = nlp_analyzer or self._create_default_nlp_analyzer()
 
-        self._persona_cache: Dict[str, Persona] = {}
+        self._persona_cache: Dict[str, Persona] = {}  # System personas only; never cache tenant-owned personas globally.
         self._user_preferences_cache: Dict[str, UserPersonaPreferences] = {}
 
         for persona in SYSTEM_PERSONAS:
@@ -201,7 +201,6 @@ class PersonaService:
             rows = result.fetchall()
         personas = [self._persona_from_row(row) for row in rows]
         for persona in personas:
-            self._persona_cache[persona.id] = persona
         return personas
 
     async def _insert_persona(self, user_id: str, tenant_id: str, persona: Persona) -> None:
@@ -323,7 +322,6 @@ class PersonaService:
         preferences.updated_at = datetime.utcnow()
         await self._save_user_preferences(user_id, tenant_id, preferences)
 
-        self._persona_cache[persona.id] = persona
         self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
         logger.info("Created persona '%s' for user %s", persona.name, user_id)
         return persona
@@ -363,7 +361,6 @@ class PersonaService:
         preferences.updated_at = datetime.utcnow()
         await self._save_user_preferences(user_id, tenant_id, preferences)
 
-        self._persona_cache[persona_id] = updated_persona
         self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
         logger.info("Updated persona '%s' for user %s", updated_persona.name, user_id)
         return updated_persona
@@ -387,7 +384,6 @@ class PersonaService:
         preferences.updated_at = datetime.utcnow()
         await self._save_user_preferences(user_id, tenant_id, preferences)
 
-        self._persona_cache.pop(persona_id, None)
         self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
         logger.info("Deleted persona %s for user %s", persona_id, user_id)
         return True
@@ -399,21 +395,22 @@ class PersonaService:
         tenant_id: Optional[str] = None,
     ) -> Optional[Persona]:
         """Get a persona by ID."""
+        # Only immutable system definitions can be looked up without a user
+        # context. Custom personas must be resolved within the authenticated
+        # user and tenant's preference scope on every lookup.
         if persona_id in self._persona_cache:
             return self._persona_cache[persona_id]
 
-        for persona in SYSTEM_PERSONAS:
-            if persona.id == persona_id:
-                self._persona_cache[persona_id] = persona
-                return persona
+        if not user_id or not tenant_id:
+            return None
 
-        if user_id and tenant_id:
-            preferences = await self.get_user_preferences(user_id, tenant_id)
-            for persona in preferences.custom_personas:
-                if persona.id == persona_id:
-                    self._persona_cache[persona_id] = persona
-                    return persona
-        return None
+        preferences = await self.get_user_preferences(
+            user_id, self._normalize_tenant_id(tenant_id)
+        )
+        return next(
+            (persona for persona in preferences.custom_personas if persona.id == persona_id),
+            None,
+        )
 
     async def list_available_personas(self, user_id: str, tenant_id: str) -> List[Persona]:
         """List all personas available to a user (system + custom)."""
