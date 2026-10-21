@@ -694,7 +694,7 @@ class PersonaService:
     async def _load_user_preferences(self, user_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Load user preferences from database."""
         if not self.db_client:
-            return None
+            raise RuntimeError("Persona preferences database is unavailable")
         try:
             query = text(
                 """
@@ -729,7 +729,7 @@ class PersonaService:
             return preferences.dict(exclude={"custom_personas"})
         except Exception as exc:
             logger.error("Failed to load user preferences: %s", exc)
-            return None
+            raise RuntimeError("Persona preferences could not be loaded") from exc
 
     async def _save_user_preferences(
         self,
