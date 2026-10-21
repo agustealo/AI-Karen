@@ -419,3 +419,37 @@ def test_agui_reports_shadow_learning_without_claiming_an_active_model_switch():
     assert provenance["claim"] == "operational_evidence_only"
     assert "unpromoted-model-b" not in str(events)
     assert "private" not in str(events)
+
+
+def test_presentation_requires_verified_bounded_runtime_evidence():
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "p-1",
+        "component_type": "weather.observation",
+        "data": {"location": "Detroit", "temperature_f": 60.3},
+        "evidence_ref": "tool-receipt-1",
+    }
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    assert projection.project(chunk("presentation", presentation=envelope)) == []
+    assert projection.project(chunk(
+        "presentation", presentation=envelope, presentation_verified=False
+    )) == []
+    events = projection.project(chunk(
+        "presentation", presentation=envelope, presentation_verified=True
+    ))
+    assert events == [{
+        "type": "CUSTOM", "name": "karen.presentation.v1", "value": envelope,
+    }]
+    invalid = [
+        {**envelope, "component_type": "javascript"},
+        {**envelope, "evidence_ref": ""},
+        {**envelope, "data": {"text": "x" * 40000}},
+        {**envelope, "schema_version": True},
+        {**envelope, "data": {"value": float("nan")}},
+        {**envelope, "unexpected": "ignored"},
+    ]
+    for bad in invalid:
+        assert projection.project(chunk(
+            "presentation", presentation=bad, presentation_verified=True
+        )) == []
