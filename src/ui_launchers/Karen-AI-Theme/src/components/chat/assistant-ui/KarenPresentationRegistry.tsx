@@ -23,7 +23,7 @@ export type KarenPresentationEnvelope = z.infer<typeof presentationSchema>;
 export function parseKarenPresentation(value: unknown): KarenPresentationEnvelope | null {
   const result = presentationSchema.safeParse(value);
   if (!result.success) return null;
-  // Bound renderer memory and refuse prototype-bearing, non-JSON payloads.
+  // Bound renderer payload size; Zod validates the allowlisted envelope.
   try {
     const serialized = JSON.stringify(value);
     if (!serialized || serialized.length > MAX_PRESENTATION_BYTES) return null;
