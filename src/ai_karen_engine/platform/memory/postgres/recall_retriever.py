@@ -91,7 +91,7 @@ class PostgresRecallRetriever:
         else:
             async with async_transaction_scope(tenant_id=tenant_id) as session:
                 result = await session.execute(stmt)
-                rows = result.scalars().all()
+                rows = result.all()
 
         return [self._to_entry(row, query, text, payload) for row, payload in rows]
 
