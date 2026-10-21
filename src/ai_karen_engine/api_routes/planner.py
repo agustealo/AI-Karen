@@ -7,7 +7,7 @@ request payload, and does not execute automation tasks.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, Field
@@ -18,6 +18,7 @@ from ai_karen_engine.core.planner.contracts import PersonalCommitment, Commitmen
 from ai_karen_engine.persistence.repositories.personal_planner_repository import PlannerNotFoundError, PlannerConflictError
 from ai_karen_engine.services.personal_planner import PersonalPlannerService, PlannerAuthorizationError
 from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
+from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 
 router = APIRouter(prefix="/api/planner", tags=["personal-planner"])
 write_router = APIRouter(prefix="/api/planner", tags=["personal-planner"])
@@ -33,6 +34,38 @@ async def list_personal_commitments(
         return await PersonalPlannerService().list_owned(user=user, limit=limit)
     except PlannerAuthorizationError as exc:
         raise HTTPException(status_code=403, detail="Planner permission denied") from exc
+
+
+@router.get("/commitments/presentation")
+async def list_personal_commitment_presentation(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=20),
+    user: UserData = Depends(get_current_user),
+) -> dict:
+    """Present authorized planner reads only; never execute planner changes."""
+    try:
+        commitments = await PersonalPlannerService().list_owned(user=user, limit=limit)
+    except PlannerAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail="Planner permission denied") from exc
+    if not commitments:
+        return {"presentation": None, "empty": True}
+    correlation_id = get_request_correlation_id(request)
+    correlation_id = str(correlation_id or uuid4())[:128]
+    candidate = {
+        "schema_version": 1,
+        "presentation_id": f"planner-{correlation_id}",
+        "component_type": "planner.task_list",
+        "evidence_ref": f"planner-owned-read:{correlation_id}",
+        "correlation_id": correlation_id,
+        "data": {"tasks": [
+            {"id": str(item.id), "title": item.title, "status": item.status.value}
+            for item in commitments
+        ]},
+    }
+    presentation = validate_presentation(candidate)
+    if presentation is None:
+        raise HTTPException(status_code=500, detail="Planner presentation unavailable")
+    return {"presentation": presentation, "empty": False}
 
 
 @router.get("/commitments/{commitment_id}", response_model=PersonalCommitment)
