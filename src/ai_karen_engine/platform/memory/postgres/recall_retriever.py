@@ -58,7 +58,7 @@ class PostgresRecallRetriever:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         stmt = (
-            select(MemoryAssertion)
+            select(MemoryAssertion, MemoryEvent.payload)
             .join(MemoryEvent, MemoryEvent.event_id == MemoryAssertion.event_id)
             .where(
                 MemoryAssertion.tenant_id == tenant_uuid,
@@ -87,13 +87,13 @@ class PostgresRecallRetriever:
         if self._session_factory is not None:
             async with self._session_factory() as session:
                 result = await session.execute(stmt)
-                rows = result.scalars().all()
+                rows = result.all()
         else:
             async with async_transaction_scope(tenant_id=tenant_id) as session:
                 result = await session.execute(stmt)
                 rows = result.scalars().all()
 
-        return [self._to_entry(row, query, text) for row in rows]
+        return [self._to_entry(row, query, text, payload) for row, payload in rows]
 
     @staticmethod
     def _query_terms(text: str) -> tuple[str, ...]:
@@ -111,14 +111,13 @@ class PostgresRecallRetriever:
         return tuple(terms)
 
     @staticmethod
-    def _to_entry(row: MemoryAssertion, query: MemoryQuery, query_text: str) -> MemoryEntry:
+    def _to_entry(\n        row: MemoryAssertion, query: MemoryQuery, query_text: str,\n        event_payload: dict[str, Any] | None = None,\n    ) -> MemoryEntry:
         content = str(row.content or "")
         relevance = PostgresRecallRetriever._lexical_relevance(query_text, content)
         created_at = row.created_at or datetime.now(timezone.utc).replace(tzinfo=None)
         # The governed ledger event owns the original entry provenance.
         # Recover only persona attribution; never reuse stored identity,
         # consent or authorization metadata in place of assertion checks.
-        event_payload = getattr(getattr(row, "event", None), "payload", None)
         if not isinstance(event_payload, dict):
             event_payload = {}
         saved_metadata = event_payload.get("metadata")
