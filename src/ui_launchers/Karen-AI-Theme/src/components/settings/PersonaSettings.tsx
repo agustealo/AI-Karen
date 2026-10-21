@@ -57,6 +57,7 @@ interface UserPreferences {
 
 interface PersonaPreferences {
   active_persona_id?: string | null;
+  revision: number;
 }
 
 interface AuthProfileResponse {
@@ -78,7 +79,6 @@ const PERSONA_DRAFT_CACHE_KEY = 'karen_persona_draft_cache_v1';
 
 const PERSONAS_ENDPOINT = '/api/personas/';
 const PERSONA_PREFERENCES_ENDPOINT = '/api/personas/preferences/me';
-const PERSONA_SWITCH_ENDPOINT = '/api/personas/preferences/switch';
 const AUTH_ME_ENDPOINT = '/api/auth/me';
 const MEMORY_COMMIT_ENDPOINT = '/api/memory/commit';
 
@@ -200,6 +200,7 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
   );
   const [preferredAddressName, setPreferredAddressName] = useState('');
   const [currentPersonaId, setCurrentPersonaId] = useState<string | null>(null);
+  const [personaRevision, setPersonaRevision] = useState<number | null>(null);
   const [personaApiStatus, setPersonaApiStatus] =
     useState<BackendStatus>('checking');
   const [profileApiStatus, setProfileApiStatus] =
@@ -244,6 +245,7 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         }
 
         setPersonaApiStatus('available');
+        setPersonaRevision(preferences.revision);
 
         const selectedPersona = findEditablePersona(personas, preferences);
 
@@ -323,9 +325,14 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
           personaId = createdPersona.id;
         }
 
-        await apiClient.post(PERSONA_SWITCH_ENDPOINT, {
-          persona_id: personaId,
-        });
+        if (personaRevision === null) {
+          throw new Error('Persona revision is unavailable. Reload settings before saving.');
+        }
+        const selected = await apiClient.put<PersonaPreferences>(
+          PERSONA_PREFERENCES_ENDPOINT,
+          { active_persona_id: personaId, expected_revision: personaRevision },
+        );
+        setPersonaRevision(selected.revision);
 
         setCurrentPersonaId(personaId);
         setInstructions(normalizedInstructions);
@@ -337,6 +344,15 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
           description: "Karen's core persona instructions were synced to backend.",
         });
       } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          setPersonaRevision(null);
+          toast({
+            title: 'Persona changed elsewhere',
+            description: 'Your draft is preserved. Reload Persona Settings before saving again.',
+            variant: 'destructive',
+          });
+          return;
+        }
         setPersonaApiStatus('unavailable');
 
         toast({
@@ -350,7 +366,7 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         setIsSavingPersona(false);
       }
     },
-    [currentPersonaId, isSavingPersona, toast],
+    [currentPersonaId, isSavingPersona, personaRevision, toast],
   );
 
   const handleSave = useCallback(async () => {
