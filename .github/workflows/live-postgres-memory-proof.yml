@@ -218,6 +218,24 @@ jobs:
                       assert await conn.fetchval(
                           "SELECT count(*) FROM public.custom_personas WHERE id='rls-proof-persona'"
                       ) == 0
+                      # RLS is a write boundary too: tenant B cannot modify
+                      # tenant A's row, or insert a tenant A row.
+                      assert await conn.execute(
+                          "UPDATE public.custom_personas SET name='Denied' "
+                          "WHERE id='rls-proof-persona'"
+                      ) == "UPDATE 0"
+                      try:
+                          await conn.execute(
+                              "INSERT INTO public.custom_personas "
+                              "(id, tenant_id, user_id, name, system_prompt, default_tone, "
+                              "default_verbosity, default_language) VALUES "
+                              "('rls-cross-tenant-insert', 'rls-tenant-a', 'rls-user-a', "
+                              "'Denied', 'Denied', 'friendly', 'balanced', 'en_US')"
+                          )
+                      except asyncpg.InsufficientPrivilegeError:
+                          pass
+                      else:
+                          raise AssertionError("Cross-tenant insert bypassed persona RLS")
                       await conn.execute("SELECT set_config('app.current_tenant_id', 'rls-tenant-a', true)")
                       assert await conn.fetchval(
                           "SELECT count(*) FROM public.custom_personas WHERE id='rls-proof-persona'"
