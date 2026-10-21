@@ -370,3 +370,90 @@ Use assistant-ui for composer, threads, actions and accessible presentation. Do 
 ## Delivery instruction
 
 Stay on PR #501 and its existing branch. First reconcile actual code ownership and migrations before changing implementation. Maintain one ChatRuntime/PromptRuntime, one PersonaService persistence owner, one governed memory stack and one CORTEX permission decision path. Commit this revised **design** without claiming implementation, passing tests or live learning. The immediate next work is KP-01/02 with the early vertical slice guiding acceptance.
+
+
+---
+
+# Persona 4.0 extension: Named Roles, Industry Skills and Human-Centered Studio
+
+Status: design-only extension. This supersedes any assumption that a persona is merely a style preset. It does not imply implementation, a deployed UI, or verified runtime behavior.
+
+## Product North Star
+
+A user can say: "Create Troy, my graphic designer, skilled in luxury branding, typography and packaging. Learn how I like to work." Karen proposes an intelligible, editable specialist profile and explains what the role can and cannot do. The user confirms persistence and separately authorizes any knowledge attachments. The same model supports business, entertainment, education, personal life, engineering, household organization and arbitrary user-created categories, with no industry-specific runtime fork.
+
+**Persona = named user-owned collaboration identity + purpose/role + declared specialties + communication contract + scoped knowledge references + approved learning overlay + optional eligible skill bindings.** It is never a separate AI, agent runtime, security principal, model, professional credential or source of tool authorization.
+
+## Adversarial corrections before implementation
+
+1. **Skill ambiguity**: separate *claimed familiarity* (taxonomy or user-declared area of focus), *demonstrated skill* (measured performance with evidence and model/version), and *executable capability* (existing registered tool/workflow with manifest, RBAC, dependency health, input schema and approval). Showing a skill badge must never imply the tool is installed or permission granted.
+2. **Title spoofing**: display profession labels as user-selected roles, not verified licenses, real human identity, certification, work history or guaranteed expertise. Never invent resumes or experience years; sensitive sectors need appropriate caveats and policies.
+3. **Unbounded learning**: the persona may accumulate approved preferences and references but must not automatically edit its own definition, learn secrets, infer household member profiles, or fine-tune models. UserModel proposes; governed memory owns evidence; PersonaService owns approved persona revision; revocation invalidates relevant caches.
+4. **Skill/plugin privilege laundering**: persona-suggested skills cannot install plugins, execute tools, alter model selection, approve actions or widen scopes. CORTEX evaluates eligibility, runtime checks manifest/RBAC and performs actions with existing consent.
+5. **Industry proliferation**: a data-driven catalog of industry/role/skill descriptors is discovery metadata, not separate business/entertainment/family engines. User-created titles and tags work without requiring catalog entries.
+6. **Mixed-use privacy**: same-name personas can exist across tenants; team template adoption cannot attach original owner's data. Personal, family and business resources remain ACL-intersected even in cross-workspace chat. Switch creates a fresh scoped thread when history cannot be safely filtered.
+7. **UX honesty**: don't turn sliders into invented behavioral guarantees, imply that a static model has mastered a skill, or show saved/learned states without committed server receipts. Avoid mandatory multi-page wizards.
+8. **Assistant UI dependency**: reuse installed shared assistant-ui primitives only after dependency/import/bundle checks; no second chat state or runtime. AG-UI events are optional authenticated projections with schema-versioned receipts, not new control paths.
+9. **Learning economics and quality**: cap proposal frequency, evaluation tokens, retrieval budget and derived memory retention. Measure whether approved preferences improve user outcomes without reducing factual fidelity; observe opt-out and deletion.
+10. **Race and downgrade**: immutable persona, skill catalog and tool registry versions belong in each turn snapshot. Version changes affect next turn, not in-flight retries; unavailable skill means honest degradation rather than a fabricated action.
+
+## Canonical, typed contracts (extend existing owners before adding tables)
+
+- PersonaIdentity: persona_id, tenant_id, owner_user_id, display_name, avatar_reference, title, purpose, industry_tags[], role_tags[], visibility, ownership_scope, created_at, updated_at.
+- PersonaSkillDescriptor: skill_id, taxonomy_version, display_name, kind (domain_specialty | collaboration_method | executable_binding), origin, declared_proficiency (optional, explicitly user-provided), measured_evidence_reference (optional), manifest_binding_id (optional), review_state, published_version. Never turn declared_proficiency into verified expertise.
+- PersonaSkillAssociation: persona_id, revision, skill_id, preference_weight, context_scope, added_by, consent_reference, disabled_at. No permission columns and no credential storage.
+- PersonaRevision: immutable definition plus purpose contract, communication DNA, preferred methods, skill associations, safe knowledge-scope references, source fingerprint and author audit data. Proposals are independent until accepted.
+- PersonaLearningProposal: persona_id, scope, proposed field-level change, evidence references, observation provenance, confidence/calibration metadata, consent state, timestamps, expiry and revocation. Approved changes create a new revision via the canonical PersonaService.
+- PersonaExecutionSnapshot: requested persona_id, resolved revision, registry versions, eligible skill receipts, permitted memory scopes, effective communication traits, applied/suppressed reason codes, correlation_id; hash excludes secrets. Persist receipt through existing runtime telemetry and audit.
+
+Use existing tables/config/registries where suitable. If a skill registry already exists, reference it by canonical identifier; do not create a PersonaSkill runtime registry alongside plugin manifests. Do not hardcode industries, specialist titles or tool names into API routes.
+
+## Single runtime path
+
+Authenticated request -> canonical ChatRuntime -> persona selection/activation and ACL resolution -> immutable persona+skill+knowledge snapshot -> CORTEX intent/policy decision -> scoped NeuroRecall/UserModel preference context -> PromptRuntime compiles *presentation and collaboration* constraints -> existing provider router/model executor and governed skills/tools -> streamed response with safe receipts -> persistence/telemetry.
+
+Priority: platform safety/policy/tenant constraints > authenticated user turn intent > active approved persona revision and authorized references > approved scoped preferences > approved global defaults > non-operative suggestions. Persona methods or titles cannot override execution authority. If a user specifies a persona per message, it is an authorized selection input, not a permission request.
+
+## Studio usability contract
+
+The main Library shows human-readable cards: name, role, short purpose, a few skills, source/visibility and actual activation status. The primary CTA is **Create a persona**. New users can type one sentence; assistant-guided setup proposes a name/title/industry/specialties, shows an editable summary, and requires explicit **Create** confirmation. Do not ask for technical setup, memory internals, provider settings or skill IDs.
+
+Progressive disclosure:
+- **Quick create**: purpose -> suggested name/title/specialties -> preview summary -> create -> optionally activate.
+- **Working persona**: current projects/approved knowledge, editable preferences, teach/correct action, skill availability and recent activity with receipts.
+- **Advanced**: revision compare, communication traits, scoped attachment ACLs, tool bindings (view only unless separate authorized management), provenance, lab testing, import/export.
+
+Every persona card supports: Open chat, Edit, See skills, What it knows, Teach, Revision history, and deactivate/archive when authorized. Avoid overcrowding the card: expose secondary actions via an accessible overflow menu.
+
+In the shared assistant-ui composer, display the active persona name/title and a single switcher. Do not duplicate composers across workspaces. Persona changes survive navigation only after backend acknowledgement. Workspace recommendations are suggestions unless an opt-in deterministic rule was approved. AG-UI conveys server-observed changes and preview events but does not persist choices.
+
+Make empty, loading, error, offline/degraded, unauthorized, no-tools-installed, and knowledge-revoked states understandable. Mobile and screen-reader users can complete create/activate/switch/teach/revert flows with keyboard and accessible labels. Do not rely on avatar images/colors to distinguish identities.
+
+## Skill evidence and growth ladder
+
+- Declared: "Troy focuses on typography." User-authored descriptor, no validation of professional expertise.
+- Available: an existing registered design-related tool is enabled, healthy and authorized in this execution context. Display clearly if unavailable.
+- Practiced: with opt-in, preserve bounded task/outcome evidence in governed stores; avoid storing raw private designs needlessly.
+- Improved: UserModel proposes a versioned preference based on feedback; user can review diff, accept/reject/revoke. No silent persistent adaptation.
+- Evaluated: Persona Lab compares actual task outcomes on an authorized model, with tool-disabled preview by default. Label self-report versus objective evidence and separate style fidelity from factual accuracy.
+
+Skills can be grouped by industry and search without assuming a fixed hierarchy. One persona may span multiple industries. Templates are portable role/skill/communication definitions, not privileged instruction bundles.
+
+## Launch acceptance journey
+
+A user creates "Troy (Graphic Designer)" with typography, branding and packaging specialties; saves a confirmed definition; attaches a permitted brand project; activates Troy; gets a genuine local-model response citing only permitted context; suggests "prefer high-contrast minimalist designs"; reviews and approves a scoped revision; sees the preference applied on the next turn and receipt; switches to an independently scoped Family persona; observes no brand content leak; reopens app and confirms durable persona state and revisions.
+
+Test denial of cross-tenant/persona access and of unapproved skill execution; revoked assets cannot be recalled through stale caches; concurrently edited/activated versions remain atomic; assistant-ui build imports succeed; streamed and non-streamed receipts agree; mobile and accessibility checks pass.
+
+## KP plan deltas
+
+- KP-01: inventory persona, skill registry/plugin manifests, user model, tool authorization and active assistant-ui dependency paths; record surviving owners.
+- KP-02: reconcile PersonaService/dataclass plus typed name/title/industry/skill contracts and migration compatibility without duplicating registries.
+- KP-03: persist immutable skill associations alongside persona revisions and scope/consent changes, with RLS and concurrency proof.
+- KP-04: resolve eligibility and knowledge access at turn boundary; report actual capability rather than promised expertise.
+- KP-05: prioritize one-sentence creation, understandable cards, shared switcher, teach/change review and screen-reader/mobile flows over DNA sliders.
+- KP-06: measure local-model domain task preservation and skill availability; tool-disabled previews cannot fake design artifacts.
+- KP-07/08: deterministic recommendations and user-approved learning; versioned skill evidence and bounded evaluation; no new agent.
+- KP-09: plain-language onboarding, retention/privacy docs, receipts, screenshots and tested rollout flags.
+
+**Exit criteria**: first-use user can create, understand, activate and improve Troy without learning implementation vocabulary; runtime cannot cross persona knowledge boundary or grant tool privileges; every claimed save/learn/execute event has backend proof. Remain on PR #501 until verified. 
