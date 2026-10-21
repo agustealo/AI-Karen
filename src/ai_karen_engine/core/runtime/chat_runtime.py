@@ -2333,10 +2333,10 @@ class ChatRuntime:
                 "evidence_ref": evidence_id,
                 "correlation_id": request.context.correlation_id,
             }
-            from ai_karen_engine.core.runtime.ag_ui_event_projection import (
-                _validated_presentation,
+            from ai_karen_engine.core.runtime.presentation_contract import (
+                validate_presentation,
             )
-            presentation = _validated_presentation(candidate)
+            presentation = validate_presentation(candidate)
 
         return presentation
 
