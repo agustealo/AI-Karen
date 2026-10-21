@@ -290,6 +290,15 @@ class PersonaService:
             "user_id": user_id,
         }
         async with self.db_client.get_async_session() as session:
+            # Match activation's lock order (preferences, then persona) so
+            # concurrent switch/delete cannot deadlock by inverted locks.
+            await session.execute(
+                text(
+                    "SELECT 1 FROM user_persona_preferences "
+                    "WHERE tenant_id = :tenant_id AND user_id = :user_id FOR UPDATE"
+                ),
+                params,
+            )
             result = await session.execute(
                 text(
                     """
