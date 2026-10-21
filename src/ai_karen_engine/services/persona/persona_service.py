@@ -5,6 +5,7 @@ Business logic for managing personas, style controls, and NLP-driven adaptation.
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -47,6 +48,19 @@ class PersonaService:
         except ImportError:
             logger.warning("NLP style analyzer not available, using mock analyzer")
             return MockNLPAnalyzer()
+
+    @asynccontextmanager
+    async def _tenant_session(self, tenant_id: str):
+        """Apply canonical transaction-local RLS scope using the injected DB client."""
+        tenant = str(tenant_id).strip()
+        if not tenant:
+            raise ValueError("tenant_id is required")
+        async with self.db_client.get_async_session() as session:
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                {"tenant": tenant},
+            )
+            yield session
 
     @staticmethod
     def _cache_key(user_id: str, tenant_id: str) -> str:
@@ -200,7 +214,7 @@ class PersonaService:
             ORDER BY created_at ASC
             """
         )
-        async with self.db_client.get_async_session() as session:
+        async with self._tenant_session(tenant_id) as session:
             result = await session.execute(
                 query,
                 {"tenant_id": tenant_id, "user_id": user_id},
@@ -258,7 +272,7 @@ class PersonaService:
         payload = self._persona_payload(persona)
         payload["tenant_id"] = tenant_id
         payload["user_id"] = user_id
-        async with self.db_client.get_async_session() as session:
+        async with self._tenant_session(tenant_id) as session:
             await session.execute(query, payload)
 
     async def _update_persona_record(self, user_id: str, tenant_id: str, persona: Persona) -> None:
@@ -287,7 +301,7 @@ class PersonaService:
         payload = self._persona_payload(persona)
         payload["tenant_id"] = tenant_id
         payload["user_id"] = user_id
-        async with self.db_client.get_async_session() as session:
+        async with self._tenant_session(tenant_id) as session:
             await session.execute(query, payload)
 
     async def _delete_persona_record(self, user_id: str, tenant_id: str, persona_id: str) -> int:
@@ -296,7 +310,7 @@ class PersonaService:
             "tenant_id": tenant_id,
             "user_id": user_id,
         }
-        async with self.db_client.get_async_session() as session:
+        async with self._tenant_session(tenant_id) as session:
             # Match activation's lock order (preferences, then persona) so
             # concurrent switch/delete cannot deadlock by inverted locks.
             await session.execute(
@@ -511,7 +525,7 @@ class PersonaService:
         # Ensure the preferences row exists before locking it. This initial
         # creation is idempotent through the existing tenant/user uniqueness.
         await self.get_user_preferences(user_id, tenant_id)
-        async with self.db_client.get_async_session() as session:
+        async with self._tenant_session(tenant_id) as session:
             await session.execute(
                 text(
                     "SELECT 1 FROM user_persona_preferences "
@@ -677,7 +691,7 @@ class PersonaService:
                 WHERE tenant_id = :tenant_id AND user_id = :user_id
                 """
             )
-            async with self.db_client.get_async_session() as session:
+            async with self._tenant_session(tenant_id) as session:
                 result = await session.execute(
                     query,
                     {"tenant_id": tenant_id, "user_id": user_id},
@@ -770,7 +784,7 @@ class PersonaService:
                 "created_at": self._db_timestamp(preferences.updated_at),
                 "updated_at": self._db_timestamp(preferences.updated_at),
             }
-            async with self.db_client.get_async_session() as session:
+            async with self._tenant_session(tenant_id) as session:
                 await session.execute(query, payload)
             return True
         except Exception as exc:
@@ -845,7 +859,7 @@ class PersonaService:
                 "created_at": memory_entry.created_at,
                 "accessed_at": memory_entry.accessed_at,
             }
-            async with self.db_client.get_async_session() as session:
+            async with self._tenant_session(memory_entry.tenant_id) as session:
                 await session.execute(query, payload)
             return True
         except Exception as exc:
@@ -905,7 +919,7 @@ class PersonaService:
                 LIMIT :limit
                 """
             )
-            async with self.db_client.get_async_session() as session:
+            async with self._tenant_session(str(filters["tenant_id"])) as session:
                 result = await session.execute(sql, params)
                 rows = result.fetchall()
 
