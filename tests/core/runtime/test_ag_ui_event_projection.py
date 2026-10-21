@@ -506,3 +506,30 @@ def test_canonical_presentation_stream_event_projects_through_same_ag_ui_path():
         "name": "karen.presentation.v1",
         "value": payload,
     }]
+
+
+def test_presentation_projection_redacts_unrelated_tool_result_fields():
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "weather-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "receipt-1",
+        "data": {
+            "location": "Detroit", "temperature_f": 60.3,
+            "humidity": 70, "api_key": "never-expose",
+            "tool_arguments": {"secret": "not-public"},
+            "debug": "internal reasoning",
+        },
+    }
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    events = projection.project(chunk(
+        "presentation", presentation=envelope, presentation_verified=True,
+    ))
+    assert len(events) == 1
+    assert events[0]["value"]["data"] == {
+        "location": "Detroit", "temperature_f": 60.3, "humidity": 70,
+    }
+    assert "never-expose" not in str(events)
+    assert "not-public" not in str(events)
+    assert "internal reasoning" not in str(events)
