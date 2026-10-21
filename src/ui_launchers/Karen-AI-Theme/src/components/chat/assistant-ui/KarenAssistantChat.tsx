@@ -23,6 +23,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
+import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/ChatInterface";
@@ -174,6 +175,8 @@ const agentParts = {
   data: {
     by_name: {
       "karen.learning_decision": KarenLearningDecision,
+      "karen.weather": KarenWeatherPresentation,
+      "karen.weather_observation": KarenWeatherPresentation,
       "karen.checkpoint": KarenCheckpoint,
       "karen.approval_required": KarenApprovalNotice,
       "agui-activity/KAREN_AGENT_STEP": KarenAgentStep,
@@ -183,7 +186,10 @@ const agentParts = {
   },
   tools: {
     // Render-only. No client execution, fake tool result, or permission path.
-    Fallback: ({ toolName, status }: { toolName?: string; status?: { type?: string } }) => {
+    Fallback: ({ toolName, status, result }: { toolName?: string; status?: { type?: string }; result?: unknown }) => {
+      if (status?.type === "complete" && normalizeWeatherObservation(result)) {
+        return <KarenWeatherPresentation data={result} />;
+      }
       const observedState = status?.type || "unknown";
       const stateLabel = observedState === "complete"
         ? "Tool call completed"
