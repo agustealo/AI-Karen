@@ -40,6 +40,12 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
   return result.data;
 }
 
+/** Only restore a versioned presentation from backend-owned structured metadata. */
+export function presentationFromStructuredContent(value: unknown): KarenPresentationEnvelope | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return parseKarenPresentation((value as Record<string, unknown>).presentation);
+}
+
 export function KarenPresentationRegistry({ data }: { data: unknown }) {
   const envelope = parseKarenPresentation(data);
   if (!envelope) {
