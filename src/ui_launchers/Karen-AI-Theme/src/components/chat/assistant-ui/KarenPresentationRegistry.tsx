@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.literal("weather.observation"),
+  component_type: z.enum(["weather.observation", "weather.comparison"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -31,7 +31,10 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     return null;
   }
   // Never permit a typed card unless its underlying factual payload validates.
-  if (!normalizeWeatherObservation(result.data)) return null;
+  if (result.data.component_type === "weather.comparison") {
+    const items = result.data.data;
+    if (!Array.isArray(items) || items.length < 2 || items.length > 5 || !items.every((item) => normalizeWeatherObservation(item))) return null;
+  } else if (!normalizeWeatherObservation(result.data.data)) return null;
   return result.data;
 }
 
@@ -48,5 +51,9 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
   switch (envelope.component_type) {
     case "weather.observation":
       return <KarenWeatherPresentation data={envelope.data} />;
+    case "weather.comparison":
+      return <section aria-label="Weather comparison" data-testid="karen-weather-comparison" className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {(envelope.data as unknown[]).map((item, index) => <KarenWeatherPresentation key={index} data={item} />)}
+      </section>;
   }
 }
