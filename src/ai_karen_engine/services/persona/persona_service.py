@@ -186,6 +186,7 @@ class PersonaService:
             show_style_controls=row.show_style_controls,
             enable_quick_style_adjustments=row.enable_quick_style_adjustments,
             updated_at=row.updated_at,
+            revision=row.revision,
         )
 
     async def _load_custom_personas(self, user_id: str, tenant_id: str) -> List[Persona]:
@@ -479,7 +480,6 @@ class PersonaService:
     ) -> UserPersonaPreferences:
         """Update style settings; reject stale revisions when supplied."""
         tenant_id = self._normalize_tenant_id(tenant_id)
-        preferences = await self.get_user_preferences(user_id, tenant_id)
         allowed_fields = {
             "active_persona_id", "default_tone", "default_verbosity",
             "default_language", "enable_style_adaptation",
@@ -719,6 +719,7 @@ class PersonaService:
                     show_persona_selector,
                     show_style_controls,
                     enable_quick_style_adjustments,
+                    revision,
                     updated_at
                 FROM user_persona_preferences
                 WHERE tenant_id = :tenant_id AND user_id = :user_id
