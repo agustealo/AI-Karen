@@ -84,6 +84,16 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
 
         with pytest.raises(ValueError, match="unavailable"):
             await service.switch_persona(user_id, tenant_id, persona_id)
+
+        # A distinct user or tenant cannot select another user's persona,
+        # including when the candidate ID was once valid.
+        for other_user, other_tenant in (
+            ("persona-ci-other-user", tenant_id),
+            (user_id, "persona-ci-other-tenant"),
+        ):
+            with pytest.raises(ValueError, match="unavailable"):
+                await service.switch_persona(other_user, other_tenant, persona_id)
+
     finally:
         await service._delete_persona_record(user_id, tenant_id, persona_id)
         service._user_preferences_cache.pop(service._cache_key(user_id, tenant_id), None)
