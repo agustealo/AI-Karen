@@ -31,6 +31,7 @@ describe("versioned presentation registry", () => {
     expect(html).toContain("0.3 mph");
     expect(html).toContain("2 mph");
     expect(parseKarenPresentation({ ...comparison, data: [valid.data] })).toBeNull();
+    expect(parseKarenPresentation({ ...comparison, data: [valid.data, { ...valid.data, location: " detroit, michigan " }] })).toBeNull();
     expect(parseKarenPresentation({ ...comparison, data: [valid.data, { location: "Bad", temperature_f: 500 }] })).toBeNull();
   });
 
