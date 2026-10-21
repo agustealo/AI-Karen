@@ -453,3 +453,28 @@ def test_presentation_requires_verified_bounded_runtime_evidence():
         assert projection.project(chunk(
             "presentation", presentation=bad, presentation_verified=True
         )) == []
+
+
+def test_presentation_rejects_verified_flag_when_weather_evidence_is_invalid():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "weather-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "receipt-1",
+    }
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    for bad in (
+        {"location": "Detroit"},
+        {"location": "Detroit", "temperature_f": "60%"},
+        {"location": "Detroit", "temperature_f": 60, "temperatureF": 85},
+        {"location": "Detroit", "temperature_f": float("inf")},
+        {"location": "", "temperature_f": 60},
+    ):
+        assert p.project(chunk("presentation", presentation={
+            **base, "data": bad,
+        }, presentation_verified=True)) == []
+    valid = {**base, "data": {"location": "Detroit", "temperature_f": 60.3}}
+    assert p.project(chunk(
+        "presentation", presentation=valid, presentation_verified=True
+    ))[0]["name"] == "karen.presentation.v1"
