@@ -484,17 +484,56 @@ class PersonaService:
         tenant_id: str,
         persona_id: Optional[str],
     ) -> UserPersonaPreferences:
-        """Switch user's active persona."""
-        persona = None
-        if persona_id:
-            persona = await self.get_persona(persona_id, user_id, tenant_id)
-            if not persona or not persona.is_active:
-                raise ValueError("Selected persona is unavailable")
-        return await self.update_user_preferences(
-            user_id,
-            tenant_id,
-            {"active_persona_id": persona_id},
-        )
+        """Select an authorized persona within a serialized DB transaction."""
+        return await self._switch_persona_atomically(user_id, tenant_id, persona_id)
+
+    async def _switch_persona_atomically(
+        self, user_id: str, tenant_id: str, persona_id: Optional[str]
+    ) -> UserPersonaPreferences:
+        """Serialize selection with deletion and validate ownership in SQL."""
+        tenant_id = self._normalize_tenant_id(tenant_id)
+        # Ensure the preferences row exists before locking it. This initial
+        # creation is idempotent through the existing tenant/user uniqueness.
+        await self.get_user_preferences(user_id, tenant_id)
+        async with self.db_client.get_async_session() as session:
+            await session.execute(
+                text(
+                    "SELECT 1 FROM user_persona_preferences "
+                    "WHERE tenant_id = :tenant_id AND user_id = :user_id FOR UPDATE"
+                ),
+                {"tenant_id": tenant_id, "user_id": user_id},
+            )
+            if persona_id and persona_id not in {p.id for p in SYSTEM_PERSONAS}:
+                eligible = await session.execute(
+                    text(
+                        "SELECT 1 FROM custom_personas "
+                        "WHERE id = :persona_id AND tenant_id = :tenant_id "
+                        "AND user_id = :user_id AND is_active = TRUE FOR UPDATE"
+                    ),
+                    {
+                        "persona_id": persona_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    },
+                )
+                if eligible.fetchone() is None:
+                    raise ValueError("Selected persona is unavailable")
+            result = await session.execute(
+                text(
+                    "UPDATE user_persona_preferences SET active_persona_id = :persona_id, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE tenant_id = :tenant_id AND user_id = :user_id"
+                ),
+                {
+                    "persona_id": persona_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                },
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("Persona activation was not persisted")
+        self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
+        return await self.get_user_preferences(user_id, tenant_id)
 
     async def analyze_user_style(self, message: str) -> Dict[str, Any]:
         """Analyze user's writing style using NLP."""
