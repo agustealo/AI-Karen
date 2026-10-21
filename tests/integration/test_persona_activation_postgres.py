@@ -140,7 +140,7 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
         # Overlapping writes to independent settings must both survive.
         await asyncio.gather(
             service.update_user_preferences(
-                user_id, tenant_id, {"default_language": "fr_FR"}
+                user_id, tenant_id, {"default_language": "french"}
             ),
             reopened.update_user_preferences(
                 user_id, tenant_id, {"show_style_controls": False}
@@ -157,7 +157,7 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
             )
             active_id, language, controls = persisted_style.one()
         assert active_id == "assistant"
-        assert language == "fr_FR"
+        assert language == "french"
         assert controls is False
 
     finally:
