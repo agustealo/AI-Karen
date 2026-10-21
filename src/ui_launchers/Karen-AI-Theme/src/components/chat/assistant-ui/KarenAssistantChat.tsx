@@ -14,6 +14,7 @@ import {
   ActionBarPrimitive,
   AuiIf,
   ComposerPrimitive,
+  ChainOfThoughtPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   ExportedMessageRepository,
@@ -272,6 +273,44 @@ function KarenMarkdownText({ text }: { text: string }) {
   );
 }
 
+/**
+ * Compatibility accordion for adjacent tool / reasoning activity parts.
+ * showThinking remains disabled: private model reasoning is never revealed.
+ * Display only runtime-observed tool lifecycle and explicitly public summaries.
+ */
+function KarenExecutionTrace() {
+  return (
+    <ChainOfThoughtPrimitive.Root className="my-3 rounded-xl border border-border/70 bg-muted/20">
+      <ChainOfThoughtPrimitive.AccordionTrigger
+        aria-label="Toggle execution activity"
+        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <span className="flex items-center gap-2"><ShieldCheck className="h-4 w-4" aria-hidden="true" />Execution activity</span>
+        <AuiIf condition={(s) => s.chainOfThought.collapsed}>
+          <ChevronDown className="h-4 w-4 -rotate-90" aria-hidden="true" />
+        </AuiIf>
+        <AuiIf condition={(s) => !s.chainOfThought.collapsed}>
+          <ChevronDown className="h-4 w-4" aria-hidden="true" />
+        </AuiIf>
+      </ChainOfThoughtPrimitive.AccordionTrigger>
+      <AuiIf condition={(s) => !s.chainOfThought.collapsed}>
+        <div className="border-t border-border/50 px-3 py-2">
+          <ChainOfThoughtPrimitive.Parts
+            components={{
+              Reasoning: () => (
+                <p className="text-xs text-muted-foreground">
+                  Internal model reasoning is not exposed. Runtime activity is listed where available.
+                </p>
+              ),
+              tools: agentParts.tools,
+            }}
+          />
+        </div>
+      </AuiIf>
+    </ChainOfThoughtPrimitive.Root>
+  );
+}
+
 function KarenCopyAction() {
   return (
     <ActionBarPrimitive.Root hideWhenRunning className="px-1">
@@ -308,7 +347,7 @@ function AssistantMessage() {
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Bot className="h-4 w-4" aria-hidden="true" /> Karen
         </div>
-        <MessagePrimitive.Parts components={{ ...agentParts, Text: KarenMarkdownText }} />
+        <MessagePrimitive.Parts components={{ ...agentParts, Text: KarenMarkdownText, ChainOfThought: KarenExecutionTrace }} />
       </div>
       <KarenCopyAction />
     </MessagePrimitive.Root>
