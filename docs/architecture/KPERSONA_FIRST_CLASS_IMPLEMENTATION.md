@@ -130,3 +130,121 @@ Use one existing branch/PR per coherent slice, avoid stacked PRs; keep main curr
 ## Immediate engineering action
 
 KP-01/KP-02 first. Confirm whether core/persona/contracts.py is active or legacy and identify correct canonical model in the repo before changing it. Resolve service signature/schema drift and the misleading freeform "core persona" UI copy. Then add immutable revision persistence and a real runtime applied-persona receipt. The new studio and proprietary extensions follow verified authority and persistence.
+
+
+---
+
+# Adversarial revision v2: Adaptive Communication Contract
+
+Status: implementation requirements superseding conflicting earlier design language. This revision extends the existing architecture; it is not evidence that runtime behavior works.
+
+## Architecture correction: three independent planes
+
+1. **Execution authority**: system/tenant policy, CORTEX decisions, RBAC, ChatRuntime, PromptRuntime, tool/model registries and governed memory. Persona has no write or escalation privilege here.
+2. **Communication contract**: explicitly chosen presentation and interaction traits, bounded schemas, per-field applicability, revisioned and user-owned.
+3. **Personalization intelligence**: UserModel can produce evidence-backed suggestions and explicit-consent proposals. Inference does not silently update a persona or activate another persona.
+
+Never encode provider preferences, permissions, routing, tool invocation, background tasks, memory recall scope, workflow selection, safety-policy toggles or tenant settings in Persona DNA. An interest in higher-quality explanations is a presentation preference, not permission for more reasoning tokens, a more expensive model, or deeper agent execution.
+
+## Critical adversarial corrections (implement before the Studio)
+
+### A. Canonical ownership and deletion protocol
+
+KP-01 must trace import graph and actual runtime calls for persona models, APIs, dataclasses, SQL, settings, prompt filtering, active persona resolution, streaming and UserModel. Produce an owner matrix with active/misplaced/legacy/dead classification. Confirm whether core.persona.contracts is canonical or historical *before* editing or deleting it. Preserve the existing PromptRuntime presentation allowlist as authority; a second sanitizer is not a substitute. Every removed alias requires a reference audit.
+
+Acceptance: production imports and one end-to-end resolved prompt path work; no duplicate store/resolver/renderer; old serialized payloads still deserialize or fail explicitly with migration guidance.
+
+### B. Deterministic field-level resolution contract
+
+The previous single ranked merge list is insufficient because fields can be absent, prohibited, conflicting, or context-specific. Introduce a typed, pure resolver returning per-field provenance:
+
+- Input: authenticated tenant/user/session; server-selected active persona revision; validated task/intent presentation contract; explicitly requested turn-level style adjustments; bounded UserModel presentation preference projection; provider output constraints; scoped workspace rules.
+- Fixed authority: platform > tenant/RBAC > intent/task response contract > explicit turn request for allowed presentation fields > user-activated persona > opted-in contextual rule where explicitly authorized > evidence-backed preference defaults > conservative presentation default. Provider formatting feasibility is a *final constraint*, not a higher-trust instruction.
+- A conversation-scoped persona override is separate from a one-turn style request. A pinned selection wins over auto-switch. Ephemeral overrides expire on their declared scope and never persist implicitly.
+- For each field, output: value, source, source_version, applicability, precedence_reason, suppressed_sources, and constraint_reason; expose only safe explainability labels to users. Missing, null, reset and inherited are distinct operations.
+- Reject unknown schema keys and prohibit freeform prompt or arbitrary instruction injection into model-level system authority.
+- Version resolver rules and generate a canonical resolution fingerprint from *non-secret semantic policy inputs*, not raw sensitive prompts.
+
+Acceptance: table-driven tests cover all pairwise conflicts, missing/deleted persona, workspace change, requested language, accessibility constraints, stale selection, and simultaneous edits. Determinism is verified across repeated resolutions.
+
+### C. Execution snapshot and switching semantics
+
+At request acceptance, ChatRuntime freezes persona_id, revision, schema_version, resolved fields and fingerprint under the authenticated context. Streaming chunks, retries, tool returns, resumptions and AG-UI projection refer to that snapshot. A switch during a response applies only to the next turn unless the current run is explicitly cancelled and restarted. Retried calls cannot accidentally re-resolve a newer persona. Conversation branch replay uses its original metadata, never silently reinterpreting history. Persona deletion never removes historic non-secret provenance required for audit.
+
+Activation must have a server receipt, optimistic version, idempotency key and audit event. Reject unauthorized IDs and stale writes without altering the current selection. Cross-tab state uses server reconciliation rather than last-writer-wins local UI guesses.
+
+### D. Capability-aware rendering without model steering
+
+A bounded style compiler in PromptRuntime maps resolved fields into the model's permitted presentation instructions, under token budget and output mode. It may degrade unsupported formatting explicitly. It cannot select models, change budgets, trigger tools, or modify CORTEX classifications. Track requested_style, applied_style, suppressed_fields, renderer_version and outcome with safe metadata. A safety-critical or strict JSON task can override style where needed.
+
+Acceptance: same persona on multiple registered healthy local engines yields truthful fidelity status; strict JSON, citations, multilingual presentation and safety responses preserve task contracts. Persona must not change actual_provider or any RBAC eligibility.
+
+### E. Data lifecycle and privacy
+
+Tenant/user ownership, server-derived identifiers, scoped uniqueness and RLS are tested against the real PostgreSQL schema. Revision records are immutable, activation pointers mutable with optimistic locking; transactional creation/revision/selection prevents orphaned states. Define retention, deletion, tombstone and rollback behavior before schema changes. Never import secrets, memories, executable templates or arbitrary scripts. Export is data-only: strict schema/version, origin metadata and checksum for integrity; cryptographic authenticity requires separately governed signing keys and verification. Import shows a quarantined validation/diff screen and never activates automatically.
+
+The earlier phrase "reversible data transformation" must not imply down-migrating and destroying later user revisions. Document rollback by feature flag plus forward-only compensating migration as appropriate.
+
+### F. Persona Lab isolation and scientific validity
+
+Preview uses the canonical runtime execution path but a separate preview purpose and storage policy. It is authenticated, rate-limited, RBAC/tenant-scoped, cancellable and tool-disabled by default; it performs no external side effects or durable chat-history writes. Preview prompts never receive unrelated private memories. Same factual task, provider/model, parameters, context policy and randomization controls, with token/latency receipts. Seed determinism only if the engine actually supports it. Separate objective task correctness and safety preservation from subjective stylistic fit.
+
+Compare paired real-model outputs in randomized display order; include evaluator calibration, blinded user votes and repeat trials to estimate variability. Do not claim persona improvement from one anecdotal output. If an evaluation model is used, register its provider and disclose cost, bias and confidence; a local deterministic metric should be used where sufficient. Cancellation and failures are visible, not replaced with fabricated outputs.
+
+### G. UserModel feedback governance
+
+User actions such as "shorter", "more examples" or "less formal" create a one-turn adjustment by default. Offer explicit "Apply to this conversation" or "Update my persona" choices, with a diff and activation receipt. Separate behavioral observation from authorized personalization. Do not infer sensitive traits, social intimacy, personality or protected attributes from conversations. Model-generated proposals carry source and confidence, expire, and require a user's explicit confirmation before durable changes.
+
+### H. Adversarial trust boundary tests
+
+Test attempts to inject provider selection, new tools, tool permissions, cross-tenant references, prompt role boundaries, raw hidden prompts, memory writes, background execution, RLS bypass, SSRF-like imported links, hostile unicode/invisible characters, oversized profiles and schema-bomb inputs. Verify denial is audited and the unchanged baseline remains safe. Denial metadata must not reveal secret values. For previews, explicitly prove no tool invocation or side-effect persists even if the adversarial persona asks for one.
+
+## Next-generation product design: progressive disclosure, not a control cockpit
+
+The top-level surface is a small active persona selector in the shared composer. Users can start with a curated baseline, preview with a simple before/after, and explicitly activate. Advanced Studio shows editable Persona DNA, revisions, contextual rules and evidence. The UI must not present a slider percentage as a guaranteed numeric model behavior. Use qualitative anchors and show estimated adherence, including confidence/limitations.
+
+The Persona Studio is a new *view of the canonical state*, not a client-side store of truth. assistant-ui owns the reusable composer/thread/message interaction components; Karen owns visual language and accessibility. A single backend-confirmed persona session state serves assistant-ui and legacy chat. AG-UI is optional event projection, not persona CRUD or orchestration.
+
+## Additional original capabilities as hypothesis-driven work
+
+1. **Persona Contract Inspector**: explain, per message, selected persona versus applied/suppressed traits, with privacy-safe provenance and constraints.
+2. **Adaptive Fidelity**: detect when the available model cannot reliably satisfy particular traits; show truthful reduced-fidelity status instead of claiming behavioral precision.
+3. **Intent-Preserving Style Transform**: an opt-in Lens operation with semantic constraints; compare structured facts/citations and flag possible distortions rather than declaring equivalence.
+4. **Correction-to-Preference Loop**: promote repeated explicit feedback into opt-in proposed revision diffs, not automatic memory/persona writes.
+5. **Accessibility Presets**: presentation defaults for readability and format without inferring any user medical or disability status.
+6. **Persona Contract Test Kit**: a versioned corpus that tests every published Persona DNA revision against safety, factual invariants and typical task families.
+
+Do not schedule Drift Guard model evaluations on every response. Begin with on-demand or sampled, budget-governed checks. No new agent, routing framework, vector collection or evaluation database unless the existing telemetry and canonical repositories are insufficient and the insufficiency is proven.
+
+## Reprioritized implementation waves and acceptance gates
+
+| Gate | Scope | Required proof |
+|---|---|---|
+| P0 / KP-01 | Inventory real ownership, imports, SQL, runtime wiring, security boundaries | Owner matrix, import reproduction, full reference map |
+| P0 / KP-02 | Canonical typed schema, adapters, presentation authority, compatibility | Serialization/CRUD tests, policy denial, import checks |
+| P0 / KP-03 | Revision/activation transactional persistence, isolation and concurrency | PostgreSQL integration, tenant RLS, restart/rollback, racing activations |
+| P0 / KP-04 | Per-field resolver, immutable turn snapshot, safe receipts, capability renderer | Prompt/stream/retry tests; actual model no permission change |
+| P1 / KP-05 | Shared composer selector, creation/editing, revision compare, inspection | Browser reload/navigation, keyboard/mobile, truthful failure states |
+| P1 / KP-06 | Governed preview Lab, real-model paired evaluations | Same-runtime paired runs, no tools or side effects, comparison validity |
+| P2 / KP-07 | Opt-in scoped wardrobe and Lens | Deterministic rules, factual stability checks, explicit consent |
+| P2 / KP-08 | Sampled drift evaluation, correction loop, safe import/export | No silent mutations; rate limits, import fuzzing, reproducible tests |
+| P1 / KP-09 | Accessibility, instrumentation, documentation, screenshots and feature flag rollout | All meaningful quality gates and human browser acceptance |
+
+Milestones may merge independently only when their security and contract gates are proven. Never treat exact-head CI waiver as a successful test. Do not stack unnecessary PRs; update this existing branch until its coherent foundation is green. Preserve a clear distinction between design committed, code implemented, tests run and production enabled.
+
+## Required proof artifacts
+
+- Ownership/reference audit containing explicit surviving owners and deletion reasons.
+- Schema contract plus forward-only migration and documented rollback/retention rules.
+- Golden precedence table and deterministic conflict resolution tests.
+- Real PostgreSQL RLS and concurrency results.
+- Prompt/stream/AG-UI/SSE equivalence tests, including cancellation and retry.
+- Real local-model baseline comparisons with provenance, sample sizes and failures.
+- Playwright screenshots in appropriate docs or README after visual inspection.
+- Security test report: injection, tenant, RBAC, import, preview side effects and logging.
+- Telemetry report: selection, fidelity, drift, failed activations and resolution latency.
+- Final merge-ready checklist distinguishing verified tests from waived external gates.
+
+## Final architectural decision
+
+Persona is a governed **adaptive communication contract**, not an agent, operating mode, personality simulator, provider preference or alternative prompt authority. User intent and explicit choice control its durable evolution; UserModel recommends; PromptRuntime compiles; ChatRuntime resolves and snapshots; CORTEX retains decision eligibility; the registered execution engine runs; UI displays observed truth.
