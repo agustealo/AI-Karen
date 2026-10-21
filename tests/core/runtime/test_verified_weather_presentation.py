@@ -34,3 +34,24 @@ def test_denied_failed_or_degraded_tool_never_generates_presentation():
     assert _run(source="plugin") is None
     assert _run(allowed=()) is None
     assert _run(attempts=[{"type": "tool", "id": "weather_tool", "status": "failed"}]) is None
+
+
+def test_planner_presentations_require_authorized_service_result():
+    decision = SimpleNamespace(intent="planner.read")
+    plan = SimpleNamespace(allowed_capabilities=("planner.read",))
+    envelope = {
+        "schema_version": 1, "presentation_id": "planner-1",
+        "component_type": "planner.task_list",
+        "evidence_ref": "planner-owned-read:1",
+        "data": {"tasks": [{"id": "1", "title": "Review project", "status": "todo"}]},
+    }
+    result = SimpleNamespace(
+        success=True, degraded=False, source="planner",
+        source_id="planner.read", payload={"presentation": envelope},
+    )
+    assert ChatRuntime._verified_planner_presentation(decision, plan, result) == envelope
+    assert ChatRuntime._verified_planner_presentation(
+        decision, SimpleNamespace(allowed_capabilities=()), result,
+    ) is None
+    result.source = "model"
+    assert ChatRuntime._verified_planner_presentation(decision, plan, result) is None
