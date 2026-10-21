@@ -478,3 +478,31 @@ def test_presentation_rejects_verified_flag_when_weather_evidence_is_invalid():
     assert p.project(chunk(
         "presentation", presentation=valid, presentation_verified=True
     ))[0]["name"] == "karen.presentation.v1"
+
+
+def test_canonical_presentation_stream_event_projects_through_same_ag_ui_path():
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatStreamChunk, ChatStreamEventType,
+    )
+
+    payload = {
+        "schema_version": 1,
+        "presentation_id": "weather-request-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "request-1:authorized-weather-tool",
+        "correlation_id": "corr-1",
+        "data": {"location": "Detroit", "temperature_f": 60.3},
+    }
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    event = ChatStreamChunk(
+        type=ChatStreamEventType.PRESENTATION,
+        content="",
+        correlation_id="corr-1",
+        metadata={"presentation_verified": True, "presentation": payload},
+    )
+    assert projection.project(event) == [{
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": payload,
+    }]
