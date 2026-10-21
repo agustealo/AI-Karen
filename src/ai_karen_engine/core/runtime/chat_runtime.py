@@ -1810,6 +1810,24 @@ class ChatRuntime:
             "authorized_session_id": plan.authorized_session_id,
         }
 
+        # Resolve persona provenance from backend-owned, tenant-scoped
+        # preferences only. Never accept a request metadata persona ID.
+        persona_provenance: Dict[str, str] = {}
+        try:
+            from ai_karen_engine.services.persona.persona_service import get_persona_service
+
+            persona_preferences = await get_persona_service().get_user_preferences(
+                user_id=ctx.user_id, tenant_id=ctx.tenant_id,
+            )
+            selected_persona_id = persona_preferences.active_persona_id
+            if selected_persona_id:
+                persona_provenance["persona_id"] = selected_persona_id
+        except Exception:
+            logger.warning(
+                "memory.persona_provenance_unavailable",
+                extra={"correlation_id": ctx.correlation_id},
+            )
+
         try:
             from ai_karen_engine.core.memory import get_memory_manager
 
@@ -1827,6 +1845,7 @@ class ChatRuntime:
                     "request_id": ctx.request_id,
                     "response_length": len(response_text or ""),
                     "memory_actor": "user",
+                    **persona_provenance,
                 },
                 request_id=ctx.request_id,
                 correlation_id=ctx.correlation_id,
