@@ -142,6 +142,7 @@ class MessageResponse(BaseModel):
     content: str
     timestamp: str
     metadata: Dict[str, Any]
+    structured_content: Optional[Dict[str, Any]] = None
     function_call: Optional[Dict[str, Any]]
     function_response: Optional[Dict[str, Any]]
     ui_source: Optional[str]
@@ -204,6 +205,7 @@ def _canonical_message_to_response(message: Any) -> MessageResponse:
         content=str(message.content),
         timestamp=message.created_at.isoformat(),
         metadata=metadata,
+        structured_content=(metadata.get("structured_content") if isinstance(metadata.get("structured_content"), dict) else None),
         function_call=metadata.get("function_call"),
         function_response=metadata.get("function_response"),
         ui_source=metadata.get("ui_source"),
