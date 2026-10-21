@@ -203,7 +203,10 @@ jobs:
                   await conn.execute("CREATE ROLE karen_ci_persona_reader NOLOGIN")
                   await conn.execute("GRANT USAGE ON SCHEMA public TO karen_ci_persona_reader")
                   await conn.execute(
-                      "GRANT SELECT ON public.custom_personas, public.user_persona_preferences, "
+                      "GRANT SELECT, INSERT, UPDATE ON public.custom_personas TO karen_ci_persona_reader"
+                  )
+                  await conn.execute(
+                      "GRANT SELECT ON public.user_persona_preferences, "
                       "public.persona_memory_entries TO karen_ci_persona_reader"
                   )
                   await conn.execute(
@@ -225,14 +228,15 @@ jobs:
                           "WHERE id='rls-proof-persona'"
                       ) == "UPDATE 0"
                       try:
-                          await conn.execute(
-                              "INSERT INTO public.custom_personas "
-                              "(id, tenant_id, user_id, name, system_prompt, default_tone, "
-                              "default_verbosity, default_language) VALUES "
-                              "('rls-cross-tenant-insert', 'rls-tenant-a', 'rls-user-a', "
-                              "'Denied', 'Denied', 'friendly', 'balanced', 'en_US')"
-                          )
-                      except asyncpg.InsufficientPrivilegeError:
+                          async with conn.transaction():
+                              await conn.execute(
+                                  "INSERT INTO public.custom_personas "
+                                  "(id, tenant_id, user_id, name, system_prompt, default_tone, "
+                                  "default_verbosity, default_language) VALUES "
+                                  "('rls-cross-tenant-insert', 'rls-tenant-a', 'rls-user-a', "
+                                  "'Denied', 'Denied', 'friendly', 'balanced', 'en_US')"
+                              )
+                      except asyncpg.CheckViolationError:
                           pass
                       else:
                           raise AssertionError("Cross-tenant insert bypassed persona RLS")
