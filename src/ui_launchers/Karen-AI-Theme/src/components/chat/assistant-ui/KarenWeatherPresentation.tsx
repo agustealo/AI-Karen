@@ -75,15 +75,16 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function unwrap(value: unknown): WeatherFields | null {
+function unwrap(value: unknown, depth = 0): WeatherFields | null {
+  if (depth > 6) return null;
   if (typeof value === "string") {
-    try { return unwrap(JSON.parse(value)); } catch { return null; }
+    try { return unwrap(JSON.parse(value), depth + 1); } catch { return null; }
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const obj = value as WeatherFields;
   for (const key of ["extractedData", "extracted_data", "observation", "result", "data"]) {
     if (obj[key] && obj[key] !== value) {
-      const nested = unwrap(obj[key]);
+      const nested = unwrap(obj[key], depth + 1);
       if (nested && (nested.temperature_f !== undefined || nested.temperature !== undefined)) return nested;
     }
   }
@@ -95,6 +96,9 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   if (!data) return null;
   const location = optionalString(data.location);
   const temperatureF = numberFrom(data, "temperature_f", "temperatureF", "temperature");
+  // A numeric temperature without a Fahrenheit field is only accepted when its unit is explicit.
+  const hasFahrenheit = data.temperature_f !== undefined || data.temperatureF !== undefined || (typeof data.temperature === "string" && /°?\s*F\s*$/i.test(data.temperature));
+  if (!hasFahrenheit) return null;
   if (!location || temperatureF === null || temperatureF < -150 || temperatureF > 150) return null;
   const percentage = (...keys: string[]) => {
     const n = numberFrom(data, ...keys);
