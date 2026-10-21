@@ -7,11 +7,14 @@
 import { z } from "zod";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 
+const MAX_PRESENTATION_BYTES = 32_768;
+
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
   component_type: z.literal("weather.observation"),
   data: z.unknown(),
+  evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
 }).strict();
 
@@ -20,6 +23,13 @@ export type KarenPresentationEnvelope = z.infer<typeof presentationSchema>;
 export function parseKarenPresentation(value: unknown): KarenPresentationEnvelope | null {
   const result = presentationSchema.safeParse(value);
   if (!result.success) return null;
+  // Bound renderer memory and refuse prototype-bearing, non-JSON payloads.
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized || serialized.length > MAX_PRESENTATION_BYTES) return null;
+  } catch {
+    return null;
+  }
   // Never permit a typed card unless its underlying factual payload validates.
   if (!normalizeWeatherObservation(result.data)) return null;
   return result.data;
