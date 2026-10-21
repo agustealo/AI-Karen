@@ -40,6 +40,14 @@ describe("governed weather presentation", () => {
     expect(renderToStaticMarkup(<KarenWeatherPresentation data={result} />)).toContain("Mainly clear");
   });
 
+  it("rejects conflicting units rather than silently relabelling fields", () => {
+    expect(normalizeWeatherObservation({ ...observation, temperature_f: "70%", temperature: undefined })).toBeNull();
+    expect(normalizeWeatherObservation({ ...observation, high_f: "30%", high: undefined })?.highF).toBeNull();
+    expect(normalizeWeatherObservation({ ...observation, humidity: "20 mph" })?.humidity).toBeNull();
+    expect(normalizeWeatherObservation({ ...observation, wind_speed_mph: "35%" })?.windMph).toBeNull();
+    expect(normalizeWeatherObservation({ ...observation, wind_speed_mph: "0 mph" })?.windMph).toBe(0);
+  });
+
   it("rejects malformed timestamps and oversized location labels", () => {
     expect(normalizeWeatherObservation({ ...observation, observed_at: "not-a-date" })).toBeNull();
     expect(normalizeWeatherObservation({ ...observation, observed_at: "2026-10-21T12:45" })?.observedAt).toBe("2026-10-21T12:45");
