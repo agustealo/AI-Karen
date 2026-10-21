@@ -8,6 +8,9 @@ import { expect, test } from "@playwright/test";
 const hasCredentials = Boolean(process.env.KAREN_UX_EMAIL && process.env.KAREN_UX_PASSWORD);
 
 test("KCHAT-14: a draft survives cross-workspace navigation and panel dismissal", async ({ page }) => {
+  if (process.env.KAREN_KCHAT_ACCEPTANCE_REQUIRED === "true" && !hasCredentials) {
+    throw new Error("KCHAT browser acceptance requires sanitized KAREN_UX_EMAIL and KAREN_UX_PASSWORD.");
+  }
   test.skip(!hasCredentials, "Requires KAREN_UX_EMAIL and KAREN_UX_PASSWORD on a sanitized deployment.");
   const email = process.env.KAREN_UX_EMAIL;
   const password = process.env.KAREN_UX_PASSWORD;
