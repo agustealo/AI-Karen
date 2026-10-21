@@ -71,6 +71,7 @@ async def test_authorized_conversation_api_exposes_persisted_presentation():
     conversation = SimpleNamespace(
         id=conversation_id, user_id="owner", tenant_id="tenant-a",
         session_id="session-1", title="Weather", metadata={},
+        summary=None, tags=[],
         is_active=True, created_at=now, updated_at=now,
     )
     # Model optional fields are filled by the canonical snapshot serializer.
