@@ -46,3 +46,28 @@ def test_runtime_rejects_incomplete_or_unsafe_envelopes():
             assert validate_presentation(broken)["data"] == {"location": "Detroit", "temperature_f": 60.3}
         else:
             assert validate_presentation(broken) is None
+
+
+def test_planner_task_list_is_read_only_and_strips_unapproved_fields():
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "tasks-1",
+        "component_type": "planner.task_list",
+        "evidence_ref": "authorized-planner-read-1",
+        "data": {"tasks": [{
+            "id": "task-1", "title": "Review draft", "status": "todo",
+            "action_url": "https://untrusted.invalid/delete",
+            "secret": "never expose",
+        }]},
+    }
+    result = validate_presentation(envelope)
+    assert result is not None
+    assert result["data"] == {"tasks": [{
+        "id": "task-1", "title": "Review draft", "status": "todo",
+    }]}
+    assert validate_presentation({
+        **envelope, "data": {"tasks": [{"id": "task-1", "title": "Review", "status": "executed"}]},
+    }) is None
+    assert validate_presentation({
+        **envelope, "data": {"tasks": []},
+    }) is None
