@@ -12,7 +12,7 @@
 Execute `python scripts/audit/persona_legacy_memory_inventory.py --tenant-id <authorized-tenant>` using a DB role whose app.current_tenant_id session context and RLS have been verified. Results contain aggregate counts only, no content or user IDs. The tool never elevates roles, infers cross-tenant scope or mutates data.
 
 ## Blockers before migration
-1. Audit callers in backend, tests, tools, plugins and UI via local repository-wide search (`rg -n 'persona_memory_entries|store_persona_memory|recall_persona_memories|_store_memory_entry|_retrieve_memories' --glob '!**/node_modules/**' .`). GitHub code search was incomplete, so no claim of zero callers.
+1. Audit callers in backend, tests, tools, plugins and UI using `python scripts/audit/persona_memory_references.py --root . --output persona-memory-references.json` (or `rg -n 'persona_memory_entries|store_persona_memory|recall_persona_memories|_store_memory_entry|_retrieve_memories' --glob '!**/node_modules/**' .`). GitHub code search was incomplete, so no claim of zero callers.
 2. Determine whether each legacy user_id and tenant_id maps to an authorized canonical UUID pair. Quarantine unmatched rows, never invent identity.
 3. Determine per-record consent and permissible retention from authoritative user/tenant policy, not legacy contents or persona tags. No blanket grant.
 4. Design idempotent, transactional, versioned backfill into the existing NeuroVault write protocol, with explicit signed/audited migration authority. Preserve source record IDs solely as provenance and redact secrets.
@@ -21,3 +21,5 @@ Execute `python scripts/audit/persona_legacy_memory_inventory.py --tenant-id <au
 
 ## Outstanding proof
 Persona lifecycle CI tests have been committed but latest-head passage is unverified. An inventory count is not migration completion.
+
+The source scanner reports file, line and symbol, including declarations and tests. Every result must be classified as active, compatibility, migration, test or dead before deletion. A scanner commit alone is **not** a completed repository-wide audit; run it on a full checkout and review the results.
