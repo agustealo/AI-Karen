@@ -94,3 +94,7 @@ Frontend integration should only begin once a verified real backend response con
 **Additional AG-UI interoperability:** Tool results may carry a structured `structuredContent` field with a model-facing summary in `content`. Weather normalization accepts both this documented shape and the earlier extracted-data shape. The backend must not replace an authorized structured result with raw debug JSON prose.
 
 Source: https://www.assistant-ui.com/docs/runtimes/ag-ui/runtime-options
+
+## Weather comparison presentation
+
+The versioned UI registry now supports `weather.observation` and `weather.comparison`. A comparison contains 2–5 independently validated weather records and renders one accessible card per record. No interpolated measurements or client-made lookups are permitted. Comparison results require the same server-validated evidence references as single observations; the frontend validates envelope shape but is not an evidence authorization authority. This scope is a read-only renderer, not proof that backend emission or replay is complete.
