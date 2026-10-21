@@ -3,6 +3,16 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    "planner.read": {
+        "triggers": ["show my planner", "list my tasks", "show my tasks"],
+        "patterns": [
+            r"^(?:please\\s+)?(?:show|list|display)\\s+(?:me\\s+)?my\\s+(?:planner|tasks|commitments)(?:\\s+for\\s+today)?[?!.]*$",
+            r"^what(?:\\x27s|\\s+is)\\s+on\\s+my\\s+planner[?!.]*$",
+        ],
+        "required_capability": "planner.read",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "system.resources": {
         "triggers": ["ram left", "memory left", "free memory", "available ram", "vram left", "disk space"],
         "patterns": [
