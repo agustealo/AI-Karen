@@ -169,12 +169,12 @@
   }
 
   .karen-panel-label {
-    font-family: var(--font-mono);
-    font-size: 0.625rem;
-    font-weight: 700;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 600;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: hsl(var(--muted-foreground));
+    color: hsl(var(--foreground));
   }
 
   .karen-metric {

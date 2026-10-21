@@ -140,7 +140,7 @@ export default function RichResultWorkspace({
         <div className="flex items-center gap-2">
           <FolderKanban className="h-4 w-4 text-primary" />
           <div>
-            <p className="karen-panel-label text-foreground/90">Workspace</p>
+            <p className="karen-panel-label">Workspace</p>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
               Files, artifacts, structured output, and evidence from this turn.
             </p>
