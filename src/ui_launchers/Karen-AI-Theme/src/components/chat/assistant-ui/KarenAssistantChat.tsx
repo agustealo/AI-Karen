@@ -25,7 +25,7 @@ import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
-import { KarenPresentationRegistry, parseKarenPresentation } from "./KarenPresentationRegistry";
+import { KarenPresentationRegistry, presentationFromStructuredContent } from "./KarenPresentationRegistry";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/ChatInterface";
@@ -427,13 +427,6 @@ type DurableMessage = {
   structured_content?: Record<string, unknown> | null;
 };
 
-function restoredPresentation(value: DurableMessage["structured_content"]) {
-  if (!value || typeof value !== "object") return null;
-  // Backend stores capability output under structured_content.presentation.
-  // Reject unrelated metadata and unsupported envelope versions.
-  return parseKarenPresentation(value.presentation);
-}
-
 async function readOwnedHistory(conversationId: string) {
   const conversation = await apiClient.get<ConversationResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}`,
@@ -460,7 +453,7 @@ async function readOwnedHistory(conversationId: string) {
   return imported.map((message) => {
     const original = persistedById.get(message.id);
     const envelope = original?.role === "assistant"
-      ? restoredPresentation(original.structured_content) : null;
+      ? presentationFromStructuredContent(original.structured_content) : null;
     if (!envelope) return message;
     return {
       ...message,
