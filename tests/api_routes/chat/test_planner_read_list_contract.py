@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from ai_karen_engine.api_routes import planner
-from ai_karen_engine.services.personal_planner import PlannerAuthorizationError
+from ai_karen_engine.services.personal_planner import PlannerAuthorizationError, PersonalPlannerService
 
 
 @pytest.mark.asyncio
@@ -50,7 +50,7 @@ async def test_planner_presentation_reuses_scoped_read_and_strips_private_detail
         id=uuid4(), title="Review design", status=CommitmentStatus.TODO,
         description="secret notes", owner_id="hidden-owner",
     )
-    class Service:
+    class Service(PersonalPlannerService):
         async def list_owned(self, *, user, limit):
             assert user is principal
             assert limit == 5
@@ -73,7 +73,7 @@ async def test_planner_presentation_reuses_scoped_read_and_strips_private_detail
 
 @pytest.mark.asyncio
 async def test_planner_presentation_does_not_invent_empty_tasks(monkeypatch):
-    class Service:
+    class Service(PersonalPlannerService):
         async def list_owned(self, *, user, limit):
             return []
     monkeypatch.setattr(planner, "PersonalPlannerService", Service)
