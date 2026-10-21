@@ -462,3 +462,108 @@ Test denial of cross-tenant/persona access and of unapproved skill execution; re
 ## Persona Skills & Learning Data companion
 
 See [Persona Skills & Learning Data Guide](PERSONA_SKILLS_LEARNING_DATA_GUIDE.md) for user/admin/developer flows, the Data Needs Advisor, industry-neutral evidence categories, ingestion governance, consent, dataset sufficiency, and skill evaluation. The companion guide is design-only and does not imply a deployed training capability.
+
+
+---
+
+# Persona 5.0: Full Adversarial Implementation Plan
+
+Status: design and implementation contract, not production code or test verification. This section governs conflicting earlier plans. Remain on PR #501.
+
+## Mission, exit test and non-goals
+
+A person creates Troy (Graphic Designer) from one sentence, explicitly connects an authorized brand project, activates him in Karen's persistent chat, receives a real local-model result using only permitted context, approves a design preference, sees it applied on the next turn, and safely switches to Family without leakage. Personal Facts, Turn Intelligence, and Persona Studio must project the same authoritative events.
+
+No separate persona agent, memory engine, per-industry runtime, second Facts writer, skill registry, telemetry database, model training or required dataset. CORTEX decides, ChatRuntime executes, PromptRuntime compiles presentation, NeuroVault governs persistence, UserModel proposes, PersonaService persists personas, and assistant-ui displays backend truth.
+
+## Adversarial owner matrix
+
+| Responsibility | Canonical owner | Prohibited competing owner |
+|---|---|---|
+| Auth/session/tenant/request identifiers | Thin ingress and established auth | Persona prompts / React |
+| Per-turn orchestration and frozen execution context | ChatRuntime | Advisor / AG-UI / route |
+| Intent and RBAC policy | CORTEX + runtime authorization | Role or skill labels |
+| Persona CRUD, revisions, activation, approval | Existing PersonaService | Another persona database |
+| Formation/admission | MemoryRuntimeManager / Formation evaluator | Facts UI or persona |
+| Durable write and deletion | NeuroVault governed write path | Persona knowledge copy |
+| Derived Facts | Existing profile_fact projection | New fact writer |
+| Preference suggestions | UserModel | Silent persona mutation |
+| ACL-filtered context, ranking and dedupe | NeuroRecall + runtime access checks | UI or persona prompt |
+| Skill/tool execution | Existing plugin/skill manifest and runtime | Persona descriptor |
+| Presentation instruction compilation | PromptRuntime | Route / UI |
+| Conversation, composer and actions | Shared assistant-ui | Persona-specific chat runtime |
+| Optional observed streaming | Existing AG-UI bridge | Authoritative state owner |
+
+KP-01 must confirm exact live code owners, imports, database migrations, call paths and compatibility shims before edits. Classify every duplicate as active, misplaced, legacy, replaced, or security-critical. Do not delete migrations, access controls, audit, or recovery logic without proof.
+
+## Data contracts and precedence
+
+PersonaDefinition: owner/tenant, name, title, purpose, industries, tags, privacy/visibility. A professional title is a user-provided role, never certification.
+
+PersonaRevision: immutable schema version, communication DNA, collaboration preferences, declared specialties, safe references, audit provenance and fingerprint.
+
+PersonaScope: authorized source identifiers and purpose limitations, never permissions by themselves. Every read intersects actor, tenant, source ACL, consent, purpose, persona and thread scope.
+
+SkillAssociation: declared specialty or canonical registered executable capability. The UI must distinguish declared skill, available tool and evidenced task proficiency. No persona-issued privileges, credentials, provider routing or self-installation.
+
+LearningProposal: scoped evidence, proposal status, user approval/rejection, expiration, supersession and revocation. Only approved changes produce a persisted revision or governed preference record.
+
+ExecutionSnapshot: frozen per-turn persona revision, allowed context references, eligibility decisions, applied/suppressed presentation constraints, runtime model metadata and correlation ID. Never expose hidden prompts or private raw evidence in UI receipts.
+
+Precedence: platform/safety/RBAC/tenant policy > explicit authorized turn intent > selected approved persona contract > approved persona-scoped preferences > approved global defaults > non-operative suggestions. Imported content can never change this ordering.
+
+## Canonical memory truth and state transitions
+
+For a sampled turn, correlate selected intent, retrieval adapter health, raw candidate count, unique fact identity, eligible candidates, actually injected context, formation candidates, evaluator decisions, durable commit receipts and projection watermark. Distinguish observed, recalled, injected, saved and projected.
+
+The repeated-name weather example is evidence for investigating *effective retrieval deduplication and task relevance*, not proof of duplicate database rows. Preserve contradictory evidence, provenance and temporal validity. A recalled identity statement is not automatically useful for a weather task. Memory outages are degraded results, not zero memories. When durable save precedes Facts projection, report saved/syncing only if a real durable receipt exists. Revoked sources fail closed even with stale cached/vector hits.
+
+## Threats that block shipment
+
+1. Cross-tenant fact/persona lookup via guessed identifiers.
+2. Business-to-Family history, summary, attachment, cache or AG-UI event leakage.
+3. Permission escalation using imported CEO/Admin persona, user-provided skills or malicious documents.
+4. Incorrect success toast without persisted persona, preference or fact receipt.
+5. Tool execution during default Persona Lab preview.
+6. Stale revoked information in any future effective context.
+7. Provider fallback escaping original context restrictions or local-first policy.
+8. Multi-tab activation race silently replacing another choice.
+9. Learning candidates becoming durable without explicit policy/consent.
+10. Personal Facts showing a projected record as a new independent source of truth.
+
+A turn freezes normal persona edits; subsequent turns use new revisions. Security revocation triggers reauthorization or abort where feasible. If switching scopes cannot safely filter previous chat context, create a new scoped thread with clear explanation.
+
+## UX and assistant-ui/AG-UI boundaries
+
+First-use interaction: Describe a specialist -> edit proposed name/title/skills -> Create -> optionally Activate. No mandatory sliders, datasets, taxonomy selection or technical configuration.
+
+Everyday interaction: one shared assistant-ui composer with active named persona; project scope indicator; quick switch; What Troy knows; Teach Troy; inspect and undo approved preferences. Backend receipt is required before marking the choice saved. Accessible keyboard/mobile/screen reader support and honest offline/degraded/error states are release requirements.
+
+Advanced controls: revision compare, approved knowledge references and provenance, deterministic workspace rules, Lab, exported templates and skill evidence, revealed progressively. assistant-ui is presentation, never routing or data authority. AG-UI projects authenticated observed long-running progress, not CRUD, state writes or animated invented status. Prove package installation and bundle imports before integrating assistant-ui widely.
+
+## Data Needs Advisor: smaller, task-specific
+
+Given task goal, authorized existing knowledge, live tool eligibility and active persona revision, return either enough-to-proceed, up to three high-value missing information requests with clear necessity/rationale, or a genuine capability/authorization blocker. Do not require giant role-specific datasets. The Advisor never writes memory or silently trains a model. Existing resource selection and governed fact/preference correction handle user actions.
+
+## Dependency-ordered delivery
+
+| Gate | Work | Acceptance proof |
+|---|---|---|
+| KP-01 | Active code/migration owner and duplicate audit | Call graph, import audit, classification |
+| KP-02 | Typed persona contract/compatibility | Validation, old payload, authority-denial tests |
+| KP-03 | Facts-memory convergence and relevance | Weather-turn replay, dedupe, formation receipts, contradiction checks |
+| KP-04 | Durable persona revisions, scopes and approval | PostgreSQL RLS, restart, concurrency, revocation |
+| KP-05 | Runtime persona resolution and scoped context | Real local model, ACL, fallback, streaming/snapshot tests |
+| KP-06 | Minimal Studio + shared assistant-ui flow | Create/use/teach/switch Playwright, keyboard/mobile |
+| KP-07 | Task-aware Advisor | Fewer questions, demonstrable task success against baseline |
+| KP-08 | Safe real-model Persona Lab | Controlled paired trials; no default tools or side effects |
+| KP-09 | Optional wardrobe, Lens, drift and sharing | Feature-flagged privacy, factual fidelity, import fuzzing |
+| KP-10 | Docs, accessibility, telemetry, rollout | Human acceptance, rollback readiness and evidence matrix |
+
+First release includes Troy's name/title/specialties, authorized context, real responses, consent-based scoped learning, safe persona switch, coherent Facts/Turn Intelligence and shared composer. Defer fancy DNA dashboards, automatic wardrobe, proficiency grading, drift watchers, team marketplace, Passport distribution and model fine-tuning.
+
+## Verification and merge policy
+
+Run relevant Python compilation, unit/integration tests, Ruff, mypy, frontend lint/typecheck/test/build, Docker config, real PostgreSQL tenant RLS/restart/race checks, local-model smoke tests and Playwright accessibility/navigation acceptance. Record exact commands, tested commits, failures, skips, and verified receipts. Do not confuse waived exact-head CI with a passed test. Inspect screenshots before putting them in docs. Keep PR #501 draft until implementation gates pass. Avoid stacked PRs, unnecessary schema churn and false completion claims.
+
+Roll back or stop on cross-tenant leakage, revoked-memory reuse, unapproved tool execution, unauthorized provider fallback, incorrect saved-state acknowledgment or unsafe persona context switching.
