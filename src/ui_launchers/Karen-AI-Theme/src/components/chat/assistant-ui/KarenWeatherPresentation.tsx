@@ -82,7 +82,7 @@ function unwrap(value: unknown, depth = 0): WeatherFields | null {
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const obj = value as WeatherFields;
-  for (const key of ["extractedData", "extracted_data", "observation", "result", "data"]) {
+  for (const key of ["extractedData", "extracted_data", "structuredContent", "structured_content", "observation", "result", "data"]) {
     if (obj[key] && obj[key] !== value) {
       const nested = unwrap(obj[key], depth + 1);
       if (nested && (nested.temperature_f !== undefined || nested.temperature !== undefined)) return nested;
