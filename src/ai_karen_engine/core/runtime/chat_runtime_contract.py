@@ -141,6 +141,14 @@ class ChatRuntimeMetadata:
     requested_target: Optional[str] = None
     actual_provider: Optional[str] = None
     actual_model: Optional[str] = None
+    # Scalar, bounded, Runtime-authorized learning lineage. Does not expose
+    # raw personal memories, task prompts, model scores or checkpoint bytes.
+    model_calls_observed: Optional[int] = None
+    model_selection_source: Optional[str] = None
+    learning_signal_status: Optional[str] = None
+    learning_signal_version: Optional[str] = None
+    learned_context_status: Optional[str] = None
+    learned_memory_refs_included: Optional[int] = None
     actual_target: Optional[str] = None
     runtime_engine: Optional[str] = None
     protocol: Optional[str] = None
@@ -190,6 +198,17 @@ class ChatRuntimeMetadata:
             "assistant_message_id": self.assistant_message_id,
         }
         base.update(self.extra)
+        # Backwards compatible: ordinary direct chat responses do not sprout
+        # six additional null properties merely because Deep Agents learning
+        # metadata exists as a typed extension.
+        for key in (
+            "model_calls_observed", "model_selection_source",
+            "learning_signal_status", "learning_signal_version",
+            "learned_context_status", "learned_memory_refs_included",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                base[key] = value
         return base
 
 

@@ -43,6 +43,49 @@ class ResponseAssembler:
                 metadata=metadata or {},
             )
 
+        # Deep Agents has already synthesized a complete answer. If and only
+        # if this is the sole verified specialist contribution, preserve it
+        # without another provider call. Multi-specialist evidence still uses
+        # the canonical synthesizer below.
+        if len(step_outputs) == 1 and step_outputs[0].get("harness") == "deepagents":
+            output = step_outputs[0]
+            content = output.get("context_found")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Deep Agents completed without valid response content")
+            if status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
+                              ResponseStatus.DEGRADED}:
+                return RuntimeResponse(
+                    request_id=request_id,
+                    status=status,
+                    content="The agent run did not complete successfully.",
+                    intermediate_steps=step_outputs,
+                    agent_trace=agent_trace,
+                    metadata=metadata or {},
+                )
+            return RuntimeResponse(
+                request_id=request_id,
+                status=status,
+                content=content,
+                intermediate_steps=step_outputs,
+                agent_trace=agent_trace,
+                metadata={
+                    **(metadata or {}),
+                    "response_source": "deepagents_verified_output",
+                    "model_calls_observed": output.get("model_calls_observed"),
+                    "actual_provider": output.get("actual_provider"),
+                    "actual_model": output.get("actual_model"),
+                    "model_selection_source": output.get("model_selection_source"),
+                    "learning_signal_status": output.get("learning_signal_status"),
+                    "learning_signal_version": output.get("learning_signal_version"),
+                    "learned_context_status": output.get("learned_context_status"),
+                    "learned_memory_refs_included": output.get(
+                        "learned_memory_refs_included", 0
+                    ),
+                    "runtime_engine": output.get("runtime_engine"),
+                    "synthesis": {"source": "agent_harness", "additional_model_calls": 0},
+                },
+            )
+
         from ai_karen_engine.services.response.response_contracts import ResponseContract
         from ai_karen_engine.services.response.response_synthesizer import ResponseSynthesizer
         from ai_karen_engine.core.model_runtime.routing.llm_router_service import get_llm_router

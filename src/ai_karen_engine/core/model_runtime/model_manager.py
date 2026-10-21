@@ -119,6 +119,56 @@ class ModelManager:
             metadata=dict(endpoint.metadata),
         )
 
+    def choose_tool_model_from_learning(
+        self, *, provider_id: str, baseline_model: str,
+        eligible_models: list[str], tenant_id: str, user_id: str,
+        task_type: str, signals: Any | None,
+    ) -> tuple[str, str]:
+        """ModelManager remains the ONLY model selection authority.
+
+        Signals are Intelligence advice. Neither a learning record nor an
+        agent can add a provider/model to the allowed healthy registry set.
+        """
+        from ai_karen_engine.config.learning import get_learning_settings
+        from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+            choose_operationally_learned_model,
+        )
+
+        settings = get_learning_settings()
+        if not settings.model_routing_signals_enabled:
+            return baseline_model, "baseline_learning_disabled"
+        selected, source = choose_operationally_learned_model(
+            signals, tenant_id=tenant_id, user_id=user_id,
+            task_type=task_type, provider_id=provider_id,
+            baseline_model=baseline_model,
+            eligible_models=eligible_models,
+            min_samples=settings.model_routing_min_samples,
+            max_failure_rate=settings.model_routing_max_failure_rate,
+            min_reliability_gain=settings.model_routing_min_reliability_gain,
+        )
+        if selected not in eligible_models:
+            raise ProviderNotAvailable(
+                "Learned recommendation outside registered model inventory"
+            )
+        if selected != baseline_model and not settings.model_routing_adaptive_enabled:
+            # A completion-rate observation is not a verified measure of
+            # task correctness. Keep learning active as shadow evidence until
+            # the policy has passed real held-out/shadow promotion gates.
+            logger.info(
+                "learning.model_routing.shadow_candidate",
+                extra={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "task_type": task_type,
+                    "provider_id": provider_id,
+                    "baseline_model": baseline_model,
+                    "recommended_model": selected,
+                    "signal_version": getattr(signals, "version", ""),
+                },
+            )
+            return baseline_model, "shadow_operational_recommendation"
+        return selected, source
+
     def resolve_runtime(self, selection: RuntimeSelection) -> Any:
         """Return the canonical cached runtime for an authorized selection.
 

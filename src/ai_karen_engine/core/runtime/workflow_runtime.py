@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import asdict, is_dataclass
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -45,6 +46,10 @@ class WorkflowRuntime:
         conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
 
+        if self._use_deepagents(request, decision, plan):
+            result = await self._run_deepagents(request, decision, plan, config)
+            return result
+
         orchestrator = await self._get_orchestrator()
         final_state = await orchestrator.process(
             messages=self._to_langchain(request.messages),
@@ -63,6 +68,91 @@ class WorkflowRuntime:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
+
+        if self._use_deepagents(request, decision, plan):
+            # Subscribe to the existing per-request Medusa event emitter. This
+            # is a transport projection, not another execution scheduler.
+            events: asyncio.Queue[Any] = asyncio.Queue(maxsize=256)
+            dropped_event = False
+
+            def receive_event(event: Any) -> None:
+                nonlocal dropped_event
+                try:
+                    events.put_nowait(event)
+                except asyncio.QueueFull:
+                    dropped_event = True
+
+            run_task = asyncio.create_task(
+                self._run_deepagents(
+                    request, decision, plan, config, event_sink=receive_event
+                )
+            )
+            try:
+                yield _SharedChatStreamChunk(
+                    type="status",
+                    content="Preparing authorized agent execution.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"execution_engine": "deepagents", "status": "running"},
+                )
+                while True:
+                    if run_task.done():
+                        # Do not race a permanently completed task against a
+                        # newly scheduled queue-get. Drain observed events
+                        # before reporting the terminal response.
+                        while not events.empty():
+                            chunk = self._project_medusa_event(
+                                events.get_nowait(),
+                                correlation_id=ctx.correlation_id,
+                            )
+                            if chunk is not None:
+                                yield chunk
+                        break
+                    next_event = asyncio.create_task(events.get())
+                    try:
+                        ready, _ = await asyncio.wait(
+                            {next_event, run_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if next_event in ready:
+                            chunk = self._project_medusa_event(
+                                next_event.result(),
+                                correlation_id=ctx.correlation_id,
+                            )
+                            if chunk is not None:
+                                yield chunk
+                    finally:
+                        if not next_event.done():
+                            next_event.cancel()
+                            await asyncio.gather(next_event, return_exceptions=True)
+
+                if dropped_event:
+                    raise RuntimeError("Medusa agent progress event stream overflow")
+                content, metadata = await run_task
+                yield _SharedChatStreamChunk(
+                    type="content",
+                    content=content,
+                    correlation_id=ctx.correlation_id,
+                    metadata=metadata,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "deepagents_primary_execution_failed",
+                    extra={"correlation_id": ctx.correlation_id,
+                           "tenant_id": ctx.tenant_id},
+                )
+                yield _SharedChatStreamChunk(
+                    type="error",
+                    content="The authorized agent run could not be completed.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"error_code": "AGENT_EXECUTION_FAILED"},
+                )
+            finally:
+                if not run_task.done():
+                    run_task.cancel()
+                    await asyncio.gather(run_task, return_exceptions=True)
+            return
 
         orchestrator = await self._get_orchestrator()
         async for chunk in orchestrator.stream_process(
@@ -89,6 +179,405 @@ class WorkflowRuntime:
                     correlation_id=ctx.correlation_id,
                     metadata=meta,
                 )
+
+    @staticmethod
+    def _project_medusa_event(
+        event: Any, *, correlation_id: str
+    ) -> Optional[_SharedChatStreamChunk]:
+        """Allowlist actual Medusa events for the existing Karen UI contract.
+
+        The emitter may carry internal data, including tool inputs, which must
+        not cross this transport boundary. Identity mismatches are dropped.
+        """
+        if getattr(event, "correlation_id", None) != correlation_id:
+            return None
+        event_type = getattr(event, "type", "")
+        kind = str(getattr(event_type, "value", event_type))
+        raw = getattr(event, "metadata", None)
+        metadata = raw if isinstance(raw, dict) else {}
+        step_id = metadata.get("step_id")
+        agent_id = getattr(event, "agent_id", None)
+        if not isinstance(step_id, str) or not 1 <= len(step_id) <= 128:
+            return None
+        if not isinstance(agent_id, str) or not 1 <= len(agent_id) <= 128:
+            return None
+        if kind == "checkpoint_persisted":
+            # Persistence is a *read-back acknowledgement*, not a claim that
+            # the interrupted worker can automatically resume.
+            if (
+                metadata.get("source") != "deepagents"
+                or metadata.get("checkpoint_verified") is not True
+                or metadata.get("resumable") is not False
+            ):
+                return None
+            return _SharedChatStreamChunk(
+                type="status",
+                content="Agent state checkpoint persisted. Automatic resume is not enabled.",
+                correlation_id=correlation_id,
+                metadata={
+                    "execution_engine": "deepagents",
+                    "source": "deepagents",
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                    "checkpoint_verified": True,
+                    "resumable": False,
+                },
+            )
+        if kind in {"plan_updated", "reasoning_step"}:
+            # These SDK lifecycle events exist only when Deep Agents really
+            # executed its opt-in planner or a delegated task. No graph
+            # inference or model-prose inspection is used.
+            if metadata.get("source") != "deepagents":
+                return None
+            activity_kind = metadata.get("activity_kind")
+            stage_status = metadata.get("status")
+            if activity_kind not in {"plan", "subagent"} or stage_status not in {
+                "running", "completed", "failed",
+            }:
+                return None
+            subagent_run_id = metadata.get("subagent_run_id")
+            if activity_kind == "subagent" and (
+                not isinstance(subagent_run_id, str)
+                or not 1 <= len(subagent_run_id) <= 128
+            ):
+                return None
+            return _SharedChatStreamChunk(
+                type="agent_step",
+                content=f"Deep Agents {activity_kind} {stage_status}.",
+                correlation_id=correlation_id,
+                metadata={
+                    "event_type": f"deepagents_{activity_kind}_{stage_status}",
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                    "status": stage_status,
+                    "source": "deepagents",
+                    "activity_kind": activity_kind,
+                    "subagent_run_id": subagent_run_id
+                    if activity_kind == "subagent" else "",
+                    "execution_engine": "deepagents",
+                },
+            )
+        status_by_type = {
+            "agent_started": ("agent_step_started", "running"),
+            "agent_completed": ("agent_step_completed", "completed"),
+            "agent_failed": ("agent_step_failed", "failed"),
+        }
+        if kind in status_by_type:
+            event_name, status = status_by_type[kind]
+            return _SharedChatStreamChunk(
+                type="agent_step",
+                content=f"Agent step {status}.",
+                correlation_id=correlation_id,
+                metadata={
+                    "event_type": event_name,
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                    "status": status,
+                    "execution_topology": "multi_agent",
+                    "execution_engine": "deepagents",
+                },
+            )
+        tool_phase = {
+            "tool_call_started": "started",
+            "tool_call_completed": "completed",
+            "tool_call_failed": "failed",
+        }.get(kind)
+        if tool_phase is None:
+            return None
+        tool_name = metadata.get("tool")
+        tool_id = metadata.get("tool_call_id")
+        if not isinstance(tool_name, str) or not 1 <= len(tool_name) <= 128:
+            return None
+        if not isinstance(tool_id, str) or not 1 <= len(tool_id) <= 128:
+            return None
+        return _SharedChatStreamChunk(
+            type="tool",
+            content="",
+            correlation_id=correlation_id,
+            metadata={
+                "tool_name": tool_name,
+                "tool_call_id": tool_id,
+                "phase": tool_phase,
+                "step_id": step_id,
+                "agent_id": agent_id,
+                "execution_topology": "multi_agent",
+                "execution_engine": "deepagents",
+            },
+        )
+
+    @staticmethod
+    def _use_deepagents(
+        request: ChatExecutionRequest,
+        decision: Optional[ExecutionDecision],
+        plan: Optional[AuthorizedExecutionPlan],
+    ) -> bool:
+        """Agent-first execution: custom LangGraph only for explicit workflows.
+
+        The runtime, never the frontend, chooses the execution engine.
+        While the tool-call-capable provider integration is being validated,
+        the Deep Agents path is opt-in and fails closed when not ready.
+        """
+        from ai_karen_engine.config.agent_medusa import (
+            get_agent_medusa_runtime_settings,
+        )
+        if not get_agent_medusa_runtime_settings().deepagents_research_enabled:
+            return False
+        if decision is None or plan is None:
+            return False
+        if getattr(plan.topology, "value", plan.topology) != "multi_agent":
+            return False
+        if not decision.requires_agent_delegation:
+            return False
+        if decision.workflow_id or plan.workflow_id:
+            return False  # Explicit custom graph stays in LangGraph.
+        return bool(request.messages and request.context.user_id and
+                    request.context.tenant_id and request.context.session_id)
+
+    async def _assemble_deepagents_learned_context(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+    ) -> tuple[list[dict[str, str]] | None, dict[str, Any]]:
+        """Reuse PromptRuntime + CORTEX-resolved NeuroRecall, never re-retrieve.
+
+        Retrieval, RBAC, contradiction handling and profile decisions belong
+        upstream. This boundary checks the exact authorized evidence identity
+        before passing a bounded, already-assembled prompt to Deep Agents.
+        """
+        if not decision.memory_recall_required:
+            return None, {"status": "not_requested", "included_memory_count": 0}
+        cognitive = decision.cognitive_context
+        if cognitive is None:
+            return None, {"status": "unavailable", "included_memory_count": 0}
+        ctx = request.context
+        if (
+            cognitive.tenant_id != ctx.tenant_id
+            or cognitive.user_id != ctx.user_id
+            or cognitive.correlation_id != ctx.correlation_id
+            or cognitive.request_id != ctx.request_id
+            or cognitive.policy_decision_id not in (None, plan.policy_decision_id)
+        ):
+            raise PermissionError("Deep Agents resolved learning context scope mismatch")
+
+        from datetime import datetime, timezone
+        from ai_karen_engine.core.context.contracts import (
+            EvidenceContradictionStatus, EvidenceSource,
+        )
+        from ai_karen_engine.core.runtime.prompt import (
+            PromptAssemblyRequest, get_prompt_runtime_service,
+        )
+
+        authorized = set(cognitive.authorized_sources)
+        memory_items: list[dict[str, Any]] = []
+        continuity_items: list[dict[str, Any]] = []
+        for item in cognitive.evidence:
+            scope = item.scope
+            if scope is not None and (
+                scope.tenant_id != ctx.tenant_id
+                or scope.user_id not in (None, ctx.user_id)
+                or scope.session_id not in (None, ctx.session_id)
+            ):
+                # A mixed-scope evidence payload is a security violation,
+                # never a reason to broaden recall or silently use it.
+                raise PermissionError("Deep Agents evidence crosses authorized scope")
+            # Exclude unresolved contradictions and expired evidence, even
+            # when a previously authorized context included those candidates.
+            # The memory/NeuroRecall owner remains the evidence authority.
+            if item.contradiction.status in {
+                EvidenceContradictionStatus.POSSIBLE,
+                EvidenceContradictionStatus.CONFIRMED,
+            }:
+                continue
+            expires_at = item.temporal.expires_at
+            if expires_at is not None:
+                if expires_at.tzinfo is None or expires_at.astimezone(
+                    timezone.utc
+                ) <= datetime.now(timezone.utc):
+                    continue
+            if not isinstance(item.content, str) or not item.content.strip():
+                continue
+            if (
+                item.source is EvidenceSource.MEMORY
+                and EvidenceSource.MEMORY.value in authorized
+                and len(memory_items) < max(0, decision.memory_top_k)
+            ):
+                memory_items.append({
+                    "id": item.evidence_id,
+                    "content": item.content,
+                    "relevance": item.relevance,
+                    "confidence": item.confidence,
+                    "source_ref": item.source_ref,
+                })
+            elif (
+                item.source is EvidenceSource.USER_MODEL
+                and EvidenceSource.USER_MODEL.value in authorized
+                and len(continuity_items) < 5
+            ):
+                continuity_items.append({
+                    "id": item.evidence_id,
+                    "subject": item.content,
+                    "confidence": item.confidence,
+                    "source_type": "authorized_user_model",
+                    "execution_authorized": False,
+                })
+        assembled = await get_prompt_runtime_service().assemble_prompt(
+            PromptAssemblyRequest(
+                prompt_id="karen.chat.default",
+                prompt_version="v1.0.0",
+                memory_items=memory_items,
+                continuity_items=continuity_items,
+                messages=list(request.messages),
+                # Never raise a policy-issued input limit to an invented
+                # 512-token floor. PromptRuntime must obey the actual budget.
+                token_budget=min(
+                    max(1, decision.token_budget),
+                    max(1, plan.budget.max_input_tokens),
+                ),
+            )
+        )
+        permitted_tokens = min(
+            max(1, decision.token_budget),
+            max(1, plan.budget.max_input_tokens),
+        )
+        if (
+            assembled.token_estimate
+            and assembled.token_estimate > permitted_tokens
+        ):
+            raise RuntimeError(
+                "Deep Agents PromptRuntime output exceeds authorized input budget"
+            )
+        # Runtime-owned prompt is trusted, but the LangChain message adapter
+        # accepts only canonical role/content fields, not embedded metadata.
+        messages = [
+            {"role": message["role"], "content": message["content"]}
+            for message in assembled.messages
+            if message.get("role") in {"system", "user", "assistant"}
+            and isinstance(message.get("content"), str)
+        ]
+        if not any(message["role"] == "user" for message in messages):
+            raise RuntimeError("Deep Agents PromptRuntime omitted user task")
+        return messages, {
+            "status": "resolved",
+            "included_memory_count": len(assembled.included_memory_refs),
+            "prompt_id": assembled.prompt_id,
+            "prompt_version": assembled.prompt_version,
+        }
+
+    async def _run_deepagents(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        config: Dict[str, Any],
+        *,
+        event_sink: Optional[Callable[[Any], None]] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Use Medusa's existing run manager directly, not a second graph owner."""
+        from ai_karen_engine.agent_medusa.contracts.runtime_request import RuntimeRequest
+        from ai_karen_engine.agent_medusa.contracts.runtime_response import ResponseStatus
+        from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import (
+            MedusaCoordinator,
+        )
+
+        ctx = request.context
+        if not plan.matches_execution_scope(
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            policy_decision_id=plan.policy_decision_id,
+        ):
+            raise PermissionError("Deep Agents execution scope mismatch")
+        req_config = config["request_config"]
+        requirements = config.get("execution_requirements")
+        if not isinstance(requirements, dict) or not requirements.get("requires_agent_delegation"):
+            raise PermissionError("Deep Agents requires CORTEX delegation")
+        query = next(
+            (str(item.get("content") or "") for item in reversed(request.messages)
+             if item.get("role") == "user"),
+            "",
+        )
+        if not query.strip():
+            raise ValueError("Deep Agents requires a user task")
+
+        from ai_karen_engine.agent_medusa.registry_factory import (
+            get_implementation_factory,
+        )
+        from ai_karen_engine.core.model_runtime.structured_tool_chat_model import (
+            build_medusa_deepagents_model,
+        )
+        # The canonical runtime registers the only trusted model constructor.
+        # The factory resolves provider/model through ModelManager on each run.
+        get_implementation_factory().register_deepagents_model_factory(
+            build_medusa_deepagents_model
+        )
+        # Resolve learning once, at the authenticated runtime boundary.
+        # Medusa/Deep Agents receive only a typed, scoped advisory snapshot.
+        # Memory/provider registries retain their own single authorities.
+        approved_prompt_messages, learning_context_status = (
+            await self._assemble_deepagents_learned_context(request, decision, plan)
+        )
+        learned_model_signals = None
+        if (
+            not request.preferred_model
+            and not plan.provider_constraints.get("model")
+        ):
+            from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+                get_model_outcome_signal_service,
+            )
+            learned_model_signals = await (
+                get_model_outcome_signal_service().for_execution(
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    task_type=decision.intent,
+                )
+            )
+        agent_request = RuntimeRequest(
+            query=query,
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            request_id=req_config["request_id"],
+            context={
+                "execution_context": ctx,
+                "preferred_provider": request.preferred_provider,
+                "preferred_model": request.preferred_model,
+                "learning_task_type": decision.intent,
+                "learned_model_signals": learned_model_signals,
+                "approved_prompt_messages": approved_prompt_messages,
+                "learning_context_status": learning_context_status,
+            },
+            authorized_plan=_serialize_plan(plan),
+            execution_requirements=requirements,
+        )
+        coordinator = MedusaCoordinator()
+        if event_sink is not None:
+            coordinator.attach_sink(event_sink)
+        result = await coordinator.handle_request(agent_request)
+        if result.status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
+                                 ResponseStatus.DEGRADED}:
+            raise RuntimeError("Authorized Medusa agent execution failed")
+        if not isinstance(result.content, str) or not result.content.strip():
+            raise RuntimeError("Authorized Medusa agent returned no content")
+        return result.content, {
+            "execution_engine": "deepagents",
+            "response_source": result.metadata.get("response_source", "agent"),
+            "model_calls_observed": result.metadata.get("model_calls_observed"),
+            "actual_provider": result.metadata.get("actual_provider"),
+            "actual_model": result.metadata.get("actual_model"),
+            "model_selection_source": result.metadata.get("model_selection_source"),
+            "learning_signal_status": result.metadata.get("learning_signal_status"),
+            "learning_signal_version": result.metadata.get("learning_signal_version"),
+            "learned_context_status": result.metadata.get("learned_context_status"),
+            "learned_memory_refs_included": result.metadata.get(
+                "learned_memory_refs_included", 0
+            ),
+            "runtime_engine": result.metadata.get("runtime_engine"),
+            "execution_topology": "multi_agent",
+            "agent_status": result.status.value,
+            "degraded_mode": result.status == ResponseStatus.DEGRADED,
+            "correlation_id": ctx.correlation_id,
+        }
 
     async def _get_orchestrator(self):
         from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator

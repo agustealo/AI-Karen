@@ -489,6 +489,67 @@ class MedusaCoordinator:
             allowed_plugins=list(step.required_plugins),
             allowed_agents=[step.agent_specialist],
         )
+        # Preserve the typed advisory only when it came through the
+        # authenticated Runtime and matches the exact Medusa scope. A
+        # standalone Medusa caller cannot inject arbitrary learning ranks.
+        from ai_karen_engine.core.intelligence.ml.model_outcome_signals import (
+            ScopedModelSignals,
+        )
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
+
+        signal = request.context.get("learned_model_signals")
+        current_requirements = ExecutionRequirements(**request.execution_requirements)
+        canonical_execution_context = request.context.get("execution_context")
+        trusted_signal = (
+            signal
+            if (
+                isinstance(signal, ScopedModelSignals)
+                and isinstance(canonical_execution_context, ChatExecutionContext)
+                and getattr(canonical_execution_context, "tenant_id", None)
+                == request.tenant_id
+                and getattr(canonical_execution_context, "user_id", None)
+                == request.user_id
+                and getattr(canonical_execution_context, "request_id", None)
+                == request.request_id
+                and getattr(canonical_execution_context, "correlation_id", None)
+                == current_requirements.correlation_id
+                and signal.tenant_id == request.tenant_id
+                and signal.user_id == request.user_id
+                and signal.task_type == current_requirements.intent
+            )
+            else None
+        )
+        prompt_candidate = request.context.get("approved_prompt_messages")
+        prompt_status = request.context.get("learning_context_status")
+        # PromptRuntime's canonical context is forwarded only when the
+        # actual RuntimeExecutionContext belongs to this exact request.
+        trusted_prompt = (
+            prompt_candidate
+            if (
+                isinstance(canonical_execution_context, ChatExecutionContext)
+                and getattr(canonical_execution_context, "tenant_id", None)
+                == request.tenant_id
+                and getattr(canonical_execution_context, "user_id", None)
+                == request.user_id
+                and getattr(canonical_execution_context, "request_id", None)
+                == request.request_id
+                and getattr(canonical_execution_context, "correlation_id", None)
+                == current_requirements.correlation_id
+                and isinstance(prompt_candidate, list)
+                and bool(prompt_candidate)
+                and len(prompt_candidate) <= 100
+                and all(
+                    isinstance(message, dict)
+                    and message.get("role") in {"system", "assistant", "user"}
+                    and isinstance(message.get("content"), str)
+                    and len(message["content"]) <= 100_000
+                    for message in prompt_candidate
+                )
+            )
+            else None
+        )
         execution = SpecialistExecutionContext(
             authorized_plan=specialist_plan,
             tenant_id=str(request.tenant_id or "").strip(),
@@ -498,6 +559,21 @@ class MedusaCoordinator:
             session_id=request.session_id,
             correlation_id=self._correlation_id(request),
             step_id=step.id,
+            preferred_provider=request.context.get("preferred_provider"),
+            preferred_model=request.context.get("preferred_model"),
+            learning_task_type=current_requirements.intent,
+            learned_model_signals=trusted_signal,
+            approved_prompt_messages=trusted_prompt,
+            learning_context_status=(
+                {
+                    "status": str(prompt_status.get("status") or "unavailable"),
+                    "included_memory_count": int(
+                        prompt_status.get("included_memory_count") or 0
+                    ),
+                }
+                if trusted_prompt is not None and isinstance(prompt_status, dict)
+                else {"status": "not_supplied", "included_memory_count": 0}
+            ),
             budget_meter=meter,
             event_emitter=emitter,
         )

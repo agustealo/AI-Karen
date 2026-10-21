@@ -90,6 +90,7 @@ class PromptRegistry:
         self._load_registry()
         self._ensure_builtin_prompts()
         self._ensure_builtin_memory_candidate_prompt()
+        self._ensure_builtin_deepagents_research_prompt()
     
     @staticmethod
     def _storage_key(prompt_id: str, version: PromptVersion) -> str:
@@ -297,6 +298,40 @@ class PromptRegistry:
         self._version_index.setdefault(prompt.prompt_id, {})[version] = storage_key
         self._active_versions[prompt.prompt_id] = version
         self._sync_default_flags(prompt.prompt_id)
+
+    def _ensure_builtin_deepagents_research_prompt(self) -> None:
+        """Versioned instructions for the governed Deep Agents researcher."""
+        prompt_id = "karen.agent.researcher.deepagents"
+        if prompt_id in self._version_index:
+            return
+        prompt = PromptDefinition(
+            prompt_id=prompt_id,
+            version="v1.0.0",
+            name="Medusa Deep Agents Research",
+            description="Research specialist harness under Karen runtime authorization.",
+            system_instructions=(
+                "Research the authorized task using only the available governed tools. "
+                "Use the task planner and your isolated file workspace to organize work. "
+                "Distinguish confirmed evidence from inference, preserve source references, "
+                "and explicitly report missing or unsuccessful tool results. "
+                "Do not claim to have saved memories, edited external files, or completed "
+                "external actions without an acknowledged result. "
+                "The current task and permitted tools are bounded by Karen RuntimePolicy."
+            ),
+            token_budget=4096,
+            status=PromptLifecycleStatus.ACTIVE,
+            is_default=True,
+            metadata={
+                "source": "builtin",
+                "owner": "prompt_runtime",
+                "purpose": "medusa_deepagents_research",
+            },
+        )
+        version = prompt.parsed_version
+        key = self._storage_key(prompt_id, version)
+        self._prompts[key] = prompt
+        self._version_index[prompt_id] = {version: key}
+        self._active_versions[prompt_id] = version
 
     def _ensure_builtin_memory_candidate_prompt(self) -> None:
         """Register a non-authoritative, versioned semantic extraction contract.

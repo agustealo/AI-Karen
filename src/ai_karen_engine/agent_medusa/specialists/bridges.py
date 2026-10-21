@@ -199,7 +199,7 @@ class ToolBridge:
                 agent_id=agent_id,
                 message=f"tool {tool_name} started",
                 correlation_id=correlation_id,
-                metadata={"tool": tool_name, "step_id": step_id},
+                metadata={"tool": tool_name, "step_id": step_id, "tool_call_id": tool_call_id},
             ))
 
         result = None
@@ -301,8 +301,8 @@ class ToolBridge:
                 type=AgentEventType.TOOL_CALL_COMPLETED if success else AgentEventType.TOOL_CALL_FAILED,
                 agent_id=agent_id,
                 message=f"tool {tool_name} {'completed' if success else 'failed'}",
-                correlation_id=trajectory_id,
-                metadata={"tool": tool_name, "step_id": step_id, "success": success},
+                correlation_id=correlation_id,
+                metadata={"tool": tool_name, "step_id": step_id, "tool_call_id": tool_call_id, "success": success},
             ))
         return {
             "tool": tool_name,

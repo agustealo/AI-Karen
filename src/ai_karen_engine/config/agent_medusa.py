@@ -46,6 +46,13 @@ class AgentMedusaRuntimeSettings:
     ledger by default for production execution.
     """
 
+    # Opt-in replacement harness for Medusa's existing researcher specialist.
+    # Never infer readiness from this flag alone: a trusted model factory and
+    # the installed Deep Agents library are also required.
+    deepagents_research_enabled: bool = False
+    # Persistent graph checkpoints are separate from the durable run ledger.
+    # No automatic schema DDL, UI resume claim or implicit fallback.
+    deepagents_checkpoint_enabled: bool = False
     distributed_run_control_enabled: bool = True
     durable_run_ledger_enabled: bool = False
     durable_run_ledger_required: bool = False
@@ -80,6 +87,14 @@ class AgentMedusaRuntimeSettings:
             raise AgentMedusaConfigError(
                 "run_reconciliation_batch_size must be between 1 and 1000"
             )
+        if self.deepagents_checkpoint_enabled and not (
+            self.deepagents_research_enabled
+            and self.durable_run_ledger_enabled
+            and self.durable_run_ledger_required
+        ):
+            raise AgentMedusaConfigError(
+                "Deep Agents checkpoints require enabled research and a required durable run ledger"
+            )
         if self.durable_run_ledger_enabled != self.durable_run_ledger_required:
             raise AgentMedusaConfigError(
                 "durable run ledger must be either disabled or enabled in fail-closed mode"
@@ -99,6 +114,12 @@ def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
     global _SETTINGS
     if _SETTINGS is None:
         _SETTINGS = AgentMedusaRuntimeSettings(
+            deepagents_research_enabled=_env_bool(
+                "KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED", False
+            ),
+            deepagents_checkpoint_enabled=_env_bool(
+                "KAREN_MEDUSA_DEEPAGENTS_CHECKPOINT_ENABLED", False
+            ),
             distributed_run_control_enabled=_env_bool(
                 "KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", True
             ),

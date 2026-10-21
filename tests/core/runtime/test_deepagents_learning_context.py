@@ -1,0 +1,425 @@
+"""Deep Agents consumes only CORTEX-authorized NeuroRecall via PromptRuntime."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from ai_karen_engine.core.context.contracts import (
+    CognitiveContext, ContextEvidence, ContextRequirements,
+    EvidenceScope, EvidenceSource,
+)
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext, ChatExecutionRequest,
+)
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan, ExecutionTopology,
+)
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.prompt.prompt_contract import PromptAssemblyResult
+from ai_karen_engine.core.runtime.workflow_runtime import WorkflowRuntime
+
+
+def request():
+    return ChatExecutionRequest(
+        messages=[{"role": "user", "content": "Finish my research"}],
+        context=ChatExecutionContext(
+            user_id="user-1", tenant_id="tenant-1", session_id="session-1",
+            conversation_id="conv-1", request_id="req-1",
+            correlation_id="corr-1",
+        ),
+    )
+
+
+def plan():
+    return AuthorizedExecutionPlan(
+        execution_id="req-1", policy_decision_id="policy-1",
+        authorized_tenant_id="tenant-1", authorized_user_id="user-1",
+        authorized_session_id="session-1", topology=ExecutionTopology.MULTI_AGENT,
+        allowed_agents=["researcher"],
+    )
+
+
+def decision(*, source_allowed=True, other_tenant=False):
+    requirements = ContextRequirements(
+        request_id="req-1", correlation_id="corr-1",
+        tenant_id="tenant-1", user_id="user-1",
+        session_id="session-1", conversation_id="conv-1",
+    )
+    context = CognitiveContext(
+        context_id="ctx-1", request_id="req-1", correlation_id="corr-1",
+        tenant_id="tenant-1", user_id="user-1", requirements=requirements,
+        policy_decision_id="policy-1",
+        authorized_sources=["memory", "user_model"] if source_allowed else [],
+        evidence=[
+            ContextEvidence(
+                evidence_id="memory-1", source=EvidenceSource.MEMORY,
+                content="User prefers concise evidence-grounded reports.",
+                scope=EvidenceScope(
+                    tenant_id="other-tenant" if other_tenant else "tenant-1",
+                    user_id="user-1", session_id="session-1",
+                ),
+            ),
+            ContextEvidence(
+                evidence_id="goal-1", source=EvidenceSource.USER_MODEL,
+                content="Finish the current research before starting a new one.",
+                scope=EvidenceScope(
+                    tenant_id="tenant-1", user_id="user-1",
+                    session_id="session-1",
+                ),
+            ),
+        ],
+    )
+    return ExecutionDecision(
+        topology=ExecutionTopology.MULTI_AGENT,
+        requires_agent_delegation=True, memory_recall_required=True,
+        intent="research", cognitive_context=context,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolved_memory_is_assembled_by_existing_prompt_runtime_only(monkeypatch):
+    from ai_karen_engine.core.runtime import prompt as prompt_module
+
+    calls = []
+    class PromptRuntime:
+        async def assemble_prompt(self, assembly_request):
+            calls.append(assembly_request)
+            return PromptAssemblyResult(
+                messages=[
+                    {"role": "system", "content": "Authorized recalled context",
+                     "source": "prompt-runtime"},
+                    {"role": "user", "content": "Finish my research"},
+                ],
+                prompt_id=assembly_request.prompt_id,
+                prompt_version=assembly_request.prompt_version,
+                prompt_hash="approved-hash",
+                included_memory_refs=["memory-1"],
+            )
+    monkeypatch.setattr(
+        prompt_module, "get_prompt_runtime_service", lambda: PromptRuntime(),
+    )
+    messages, evidence = await WorkflowRuntime()._assemble_deepagents_learned_context(
+        request(), decision(), plan(),
+    )
+    assert len(calls) == 1
+    assert calls[0].prompt_id == "karen.chat.default"
+    assert calls[0].memory_items[0]["id"] == "memory-1"
+    assert calls[0].continuity_items[0]["id"] == "goal-1"
+    assert messages == [
+        {"role": "system", "content": "Authorized recalled context"},
+        {"role": "user", "content": "Finish my research"},
+    ]
+    assert evidence["included_memory_count"] == 1
+    assert "User prefers" not in str(evidence)
+
+
+@pytest.mark.asyncio
+async def test_denied_evidence_is_not_injected_into_prompt(monkeypatch):
+    from ai_karen_engine.core.runtime import prompt as prompt_module
+    captures = []
+
+    async def assemble(req):
+        captures.append(req)
+        return PromptAssemblyResult(
+            messages=req.messages, prompt_id=req.prompt_id,
+            prompt_version=req.prompt_version, prompt_hash="hash",
+        )
+    monkeypatch.setattr(
+        prompt_module, "get_prompt_runtime_service",
+        lambda: SimpleNamespace(assemble_prompt=assemble),
+    )
+    _, status = await WorkflowRuntime()._assemble_deepagents_learned_context(
+        request(), decision(source_allowed=False), plan(),
+    )
+    assert captures[0].memory_items == []
+    assert captures[0].continuity_items == []
+    assert status["included_memory_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_resolved_memory_is_rejected_before_prompt(monkeypatch):
+    from ai_karen_engine.core.runtime import prompt as prompt_module
+    async def must_not_assemble(_request):
+        raise AssertionError("cross-tenant memory crossed PromptRuntime")
+    monkeypatch.setattr(
+        prompt_module, "get_prompt_runtime_service",
+        lambda: SimpleNamespace(assemble_prompt=must_not_assemble),
+    )
+    with pytest.raises(PermissionError, match="crosses authorized scope"):
+        await WorkflowRuntime()._assemble_deepagents_learned_context(
+            request(), decision(other_tenant=True), plan(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_wrong_cortex_or_policy_context_fails_closed():
+    decision_instance = decision()
+    decision_instance.cognitive_context.correlation_id = "other-run"
+    with pytest.raises(PermissionError, match="scope mismatch"):
+        await WorkflowRuntime()._assemble_deepagents_learned_context(
+            request(), decision_instance, plan(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_cold_start_does_not_fabricate_recalled_user_facts():
+    execution = ExecutionDecision(
+        topology=ExecutionTopology.MULTI_AGENT,
+        memory_recall_required=True, cognitive_context=None,
+    )
+    messages, status = await WorkflowRuntime()._assemble_deepagents_learned_context(
+        request(), execution, plan(),
+    )
+    assert messages is None
+    assert status == {"status": "unavailable", "included_memory_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_canonical_outcome_records_actual_medusa_model_calls_not_parent_meter():
+    import time
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    received = []
+    class Recorder:
+        async def record_execution_outcome_async(self, **kwargs):
+            received.append(kwargs)
+
+    runtime = object.__new__(ChatRuntime)
+    runtime._outcome_recorder = Recorder()
+    decision_instance = ExecutionDecision(
+        topology=ExecutionTopology.MULTI_AGENT,
+        intent="research", max_model_calls=10,
+    )
+    # ChatRuntime's parent meter may not perform the model calls itself:
+    # the governed Medusa worker reports its real consumption separately.
+    parent_meter = SimpleNamespace(
+        model_calls=0, tool_calls=0, reasoning_steps=0,
+    )
+    await runtime._record_execution_outcome(
+        "traj-1", decision_instance, None, "",
+        time.time(), parent_meter, {}, success=False,
+        provider_meta={
+            "actual_provider": "ollama-local",
+            "actual_model": "registered-research-model",
+            "runtime_engine": "ollama",
+            "model_calls_observed": 3,
+            "model_selection_source": "learning_operational_reliability_v1",
+            "learning_signal_status": "ready",
+            "learning_signal_version": "model_operational_outcome_v1",
+            "fallback_level": 0,
+        },
+    )
+    saved = received[0]
+    assert saved["metadata"]["model_calls"] == 3
+    assert saved["metadata"]["model_attribution"] == "single_provider_model"
+    assert saved["metadata"]["task_type"] == "research"
+    assert saved["metadata"]["actual_model"] == "registered-research-model"
+    assert saved["metadata"]["learning_signal_version"] == "model_operational_outcome_v1"
+    assert saved["status"].value == "failure"
+    assert saved["response_completed"] is False
+
+
+@pytest.mark.asyncio
+async def test_no_unsupported_or_unverified_model_provenance_can_be_learned():
+    import time
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    received = []
+    class Recorder:
+        async def record_execution_outcome_async(self, **kwargs):
+            received.append(kwargs)
+
+    runtime = object.__new__(ChatRuntime)
+    runtime._outcome_recorder = Recorder()
+    await runtime._record_execution_outcome(
+        "traj-1", ExecutionDecision(
+            topology=ExecutionTopology.MULTI_AGENT,
+            intent="research",
+        ), None, "Unverified answer", time.time(),
+        SimpleNamespace(model_calls=0, tool_calls=0, reasoning_steps=0),
+        {}, success=True,
+        provider_meta={"model_calls_observed": 0, "fallback_level": 1},
+    )
+    assert received[0]["metadata"]["model_attribution"] == "unverified"
+    assert received[0]["metadata"]["model_calls"] == 0
+
+
+def test_learning_lineage_survives_canonical_chat_stream_metadata_filter():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatStreamChunk, ChatStreamEventType,
+    )
+
+    chunk = ChatStreamChunk(
+        type=ChatStreamEventType.CONTENT,
+        content="Completed task",
+        correlation_id="corr-1",
+        metadata={
+            "execution_engine": "deepagents",
+            "actual_provider": "ollama-local",
+            "actual_model": "model-b",
+            "model_calls_observed": 3,
+            "model_selection_source": "learning_operational_reliability_v1",
+            "learning_signal_status": "ready",
+            "learning_signal_version": "model_operational_outcome_v1",
+            "learned_context_status": "resolved",
+            "learned_memory_refs_included": 2,
+            "raw_memory": {"secret": "must-not-retain"},
+        },
+    )
+    out = {}
+    object.__new__(ChatRuntime)._accumulate_chunk_metadata(chunk, out)
+    assert out["actual_model"] == "model-b"
+    assert out["model_calls_observed"] == 3
+    assert out["model_selection_source"] == "learning_operational_reliability_v1"
+    assert out["learning_signal_status"] == "ready"
+    assert out["learning_signal_version"] == "model_operational_outcome_v1"
+    assert out["learned_memory_refs_included"] == 2
+    assert "raw_memory" not in out
+    assert "must-not-retain" not in str(out)
+
+
+@pytest.mark.asyncio
+async def test_expired_and_contradicted_user_memory_never_enters_deepagents(
+    monkeypatch,
+):
+    from datetime import datetime, timedelta, timezone
+    from ai_karen_engine.core.context.contracts import (
+        EvidenceContradiction, EvidenceContradictionStatus,
+        EvidenceTemporalContext,
+    )
+    from ai_karen_engine.core.runtime import prompt as prompt_module
+
+    selection = decision()
+    contradicted = selection.cognitive_context.evidence[0]
+    contradicted.contradiction = EvidenceContradiction(
+        status=EvidenceContradictionStatus.CONFIRMED,
+    )
+    expired = selection.cognitive_context.evidence[1]
+    expired.temporal = EvidenceTemporalContext(
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    observed = []
+
+    async def assemble(request_payload):
+        observed.append(request_payload)
+        return PromptAssemblyResult(
+            messages=request_payload.messages,
+            prompt_id=request_payload.prompt_id,
+            prompt_version=request_payload.prompt_version,
+            prompt_hash="hash",
+        )
+
+    monkeypatch.setattr(
+        prompt_module, "get_prompt_runtime_service",
+        lambda: SimpleNamespace(assemble_prompt=assemble),
+    )
+    result, status = await WorkflowRuntime()._assemble_deepagents_learned_context(
+        request(), selection, plan(),
+    )
+    assert result is not None
+    assert observed[0].memory_items == []
+    assert observed[0].continuity_items == []
+    assert status["included_memory_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_deepagents_learned_prompt_never_exceeds_policy_input_limit(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import prompt as prompt_module
+    decision_instance = decision()
+    decision_instance.token_budget = 48
+    authorised_plan = plan()
+    authorised_plan.budget.max_input_tokens = 32
+    observed = []
+
+    async def assemble(request_payload):
+        observed.append(request_payload.token_budget)
+        return PromptAssemblyResult(
+            messages=request_payload.messages,
+            prompt_id=request_payload.prompt_id,
+            prompt_version=request_payload.prompt_version,
+            prompt_hash="hash",
+            token_estimate=40,
+        )
+
+    monkeypatch.setattr(
+        prompt_module, "get_prompt_runtime_service",
+        lambda: SimpleNamespace(assemble_prompt=assemble),
+    )
+    with pytest.raises(RuntimeError, match="authorized input budget"):
+        await WorkflowRuntime()._assemble_deepagents_learned_context(
+            request(), decision_instance, authorised_plan,
+        )
+    assert observed == [32]
+
+
+def test_nonstreamed_deepagents_response_serializes_learning_lineage():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    rt = object.__new__(ChatRuntime)
+    normalized = rt._normalize_graph_meta(
+        {
+            "execution_engine": "deepagents",
+            "actual_provider": "ollama-local",
+            "actual_model": "model-b",
+            "model_calls_observed": 2,
+            "model_selection_source": "learning_operational_reliability_v1",
+            "learning_signal_status": "ready",
+            "learning_signal_version": "model_operational_outcome_v1",
+            "learned_context_status": "resolved",
+            "learned_memory_refs_included": 3,
+        },
+        request(),
+    )
+    md = rt._build_metadata(
+        request(),
+        decision(),
+        normalized,
+        latency_ms=42.0,
+        memory_meta={},
+    ).to_dict()
+    assert md["actual_provider"] == "ollama-local"
+    assert md["actual_model"] == "model-b"
+    assert md["model_calls_observed"] == 2
+    assert md["model_selection_source"] == "learning_operational_reliability_v1"
+    assert md["learning_signal_status"] == "ready"
+    assert md["learning_signal_version"] == "model_operational_outcome_v1"
+    assert md["learned_context_status"] == "resolved"
+    assert md["learned_memory_refs_included"] == 3
+    assert "memory_items" not in md
+
+
+def test_stream_metadata_accumulates_only_runtime_learning_lineage():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatStreamChunk,
+    )
+    rt = object.__new__(ChatRuntime)
+    metadata = {}
+    rt._accumulate_chunk_metadata(
+        ChatStreamChunk(
+            type="content", content="Evidence-grounded answer",
+            correlation_id="corr-1",
+            metadata={
+                "execution_engine": "deepagents",
+                "actual_provider": "ollama-local",
+                "actual_model": "model-b",
+                "model_calls_observed": 3,
+                "model_selection_source": "learning_operational_reliability_v1",
+                "learning_signal_status": "ready",
+                "learning_signal_version": "model_operational_outcome_v1",
+                "learned_context_status": "resolved",
+                "learned_memory_refs_included": 2,
+                "raw_memory": {"secret": "not-forwarded"},
+            },
+        ),
+        metadata,
+    )
+    assert metadata["actual_model"] == "model-b"
+    assert metadata["model_calls_observed"] == 3
+    assert metadata["learned_memory_refs_included"] == 2
+    assert "raw_memory" not in metadata

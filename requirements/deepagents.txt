@@ -1,0 +1,5 @@
+# Optional, pinned Deep Agents specialist harness.
+# This does not replace Karen's canonical LangGraph/Medusa runtime.
+# Enable KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED only after registering
+# a trusted tool-call-capable model factory with Medusa's implementation factory.
+deepagents==0.7.28

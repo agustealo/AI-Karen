@@ -172,7 +172,114 @@ class BenchmarkRunner:
         receipt = EvaluationEvidenceStore(registry.registry_dir)._record(
             manifest, result, active_result=active_result
         )
+        # This adds no second benchmark engine. The canonical benchmark
+        # runner is the sole source of verified labels; Intelligence writes
+        # only a scoped numeric projection using the existing OutcomeStore.
+        from ai_karen_engine.config.learning import get_learning_settings
+        if get_learning_settings().verified_evaluation_outcomes_enabled:
+            await self._project_verified_ml_evidence(
+                result=result, receipt=receipt,
+                tenant_id=tenant, user_id=user,
+            )
         return result, receipt
+
+    @staticmethod
+    async def _project_verified_ml_evidence(
+        *, result: BenchmarkResult, receipt: str,
+        tenant_id: str, user_id: str,
+    ) -> int:
+        """Emit governed verified predictor records, never raw examples.
+
+        Called only after benchmark RBAC, candidate artifact verification,
+        canonical corpus evaluation, and an issued benchmark receipt.
+        This is a strict all-records-required gate: any failed durable
+        append is propagated and cannot be reported as a successful
+        learning projection.
+        """
+        from ai_karen_engine.core.intelligence.ml.durable_outcomes import (
+            GovernedMLLearningEvidence,
+        )
+        from ai_karen_engine.core.intelligence.ml.online_learning import (
+            MLOutcomeRecord,
+        )
+
+        if not all(isinstance(v, str) and v for v in (
+            receipt, tenant_id, user_id, result.model_id, result.model_version,
+            result.dataset_version,
+        )):
+            raise ValueError("Benchmark evidence requires verified identity")
+        if result.sample_count != len(result.outcomes):
+            raise ValueError("Benchmark outcome set is incomplete")
+        records: list[MLOutcomeRecord] = []
+        references: list[str] = []
+        for item in result.outcomes:
+            # Only observed, correctly attributed predictions can enter ML
+            # learning. Failed inference and fallback identities are not
+            # ground-truth predictor evaluations.
+            prediction = item.prediction
+            if prediction is None or item.error or item.fallback_used:
+                continue
+            if (
+                prediction.task != result.task
+                or item.task != result.task
+                or prediction.model_id != result.model_id
+                or prediction.model_version != result.model_version
+                or not prediction.feature_version
+                or not isinstance(item.correct, bool)
+            ):
+                raise ValueError("Benchmark evaluation model identity mismatch")
+            case_hash = hashlib.sha256(item.case_id.encode("utf-8")).hexdigest()
+            outcome_hash = hashlib.sha256(
+                f"{tenant_id}:{receipt}:{case_hash}".encode("utf-8")
+            ).hexdigest()
+            records.append(MLOutcomeRecord(
+                outcome_id=f"ml_benchmark_{outcome_hash}",
+                task=result.task,
+                model_id=result.model_id,
+                model_version=result.model_version,
+                feature_version=prediction.feature_version,
+                predicted_label="",  # Never persist raw labels.
+                expected_label="",
+                correct=item.correct,
+                raw_probability=item.raw_probability,
+                calibrated_probability=item.calibrated_probability,
+                confidence=prediction.confidence,
+                latency_ms=item.latency_ms,
+                fallback_used=False,
+                calibration_error=abs(
+                    float(item.calibrated_probability) - float(item.correct)
+                ),
+            ))
+            references.append(
+                f"benchmark:{receipt}:{case_hash[:24]}"
+            )
+        if not records:
+            # Do not claim learned quality or create empty database writes
+            # when every benchmark case abstained, errored or fell back.
+            return 0
+        projection = GovernedMLLearningEvidence(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        receipt_result = await projection.record_verified_batch([
+            (record, "heldout_evaluation", reference)
+            for record, reference in zip(records, references)
+        ])
+        stored = receipt_result["stored_count"]
+        if receipt_result.get("stored") is not True or stored != len(records):
+            raise RuntimeError(
+                "Governed benchmark learning batch was not fully acknowledged"
+            )
+        logger.info(
+            "intelligence.evaluation.durable_ml_projection_verified",
+            extra={
+                "tenant_id": tenant_id,
+                "model_id": result.model_id,
+                "model_version": result.model_version,
+                "stored_count": stored,
+                "evaluated_count": result.sample_count,
+            },
+        )
+        return stored
 
     async def _run_case(self, predictor: Any, case: EvaluationCase) -> PredictionOutcome:
         features = IntelligenceFeatures(

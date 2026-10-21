@@ -43,14 +43,27 @@ class MedusaRegistry:
         )
         await self.register_agent(analyst)
 
+        # One registered Researcher ID: Deep Agents replaces its harness, not
+        # Medusa's planner or authorization owner. Disabled by default.
+        from ai_karen_engine.config.agent_medusa import (
+            get_agent_medusa_runtime_settings,
+        )
+
+        deep_research = get_agent_medusa_runtime_settings().deepagents_research_enabled
         # Researcher Specialist
         researcher = AgentRegistration(
             agent_id="researcher",
             name="Researcher Specialist",
             description="Performs deep research using available tools and memory.",
-            implementation_id="karen.agent.researcher.native",
-            prompt_contract_id="karen.agent.researcher.synthesis",
-            prompt_version="v1",
+            implementation_id=(
+                "karen.agent.researcher.deepagents"
+                if deep_research else "karen.agent.researcher.native"
+            ),
+            prompt_contract_id=(
+                "karen.agent.researcher.deepagents"
+                if deep_research else "karen.agent.researcher.synthesis"
+            ),
+            prompt_version="v1.0.0" if deep_research else "v1",
             capabilities=[
                 AgentCapability(type=AgentCapabilityType.RESEARCH, name="Deep Research", description="Web and memory research"),
                 AgentCapability(type=AgentCapabilityType.WEB_BROWSING, name="Web Browsing", description="Accessing web information")

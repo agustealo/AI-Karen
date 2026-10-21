@@ -35,9 +35,20 @@ class TrustedImplementationFactory:
     def __init__(self) -> None:
         # Built-in native implementations.
         self._implementations: Dict[str, ImplementationFactory] = {}
+        self._deepagents_model_factory: Callable[..., Any] | None = None
 
     def register_implementation(self, implementation_id: str, factory: ImplementationFactory) -> None:
         self._implementations[implementation_id] = factory
+
+    def register_deepagents_model_factory(self, factory: Callable[..., Any]) -> None:
+        """Install the model chosen by trusted Runtime/ProviderRegistry code.
+
+        This is deliberately not read from user task data, a model string, or
+        a Deep Agents default. A factory is required before deep research runs.
+        """
+        if not callable(factory):
+            raise TypeError("Deep Agents model factory must be callable")
+        self._deepagents_model_factory = factory
 
     def resolve(self, registration: AgentRegistration) -> Any:
         """Resolve a registration to an executable specialist instance."""
@@ -77,4 +88,14 @@ def _register_builtins(factory: TrustedImplementationFactory) -> None:
     factory.register_implementation(
         "karen.agent.researcher.native",
         lambda reg: ResearcherSpecialist(),
+    )
+    from .specialists.deepagents_research_specialist import DeepAgentsResearchSpecialist
+
+    # This implementation replaces the research specialist's harness when
+    # centrally enabled. It is never an additional independent agent owner.
+    factory.register_implementation(
+        "karen.agent.researcher.deepagents",
+        lambda reg: DeepAgentsResearchSpecialist(
+            reg, model_factory=factory._deepagents_model_factory
+        ),
     )

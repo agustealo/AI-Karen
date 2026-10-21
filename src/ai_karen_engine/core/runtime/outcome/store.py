@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
@@ -39,6 +40,19 @@ class OutcomeStore(ABC):
         """Strict append required for governed action receipts."""
         raise OutcomeStoreError("Strict append-only outcome persistence unavailable")
 
+    async def save_unique_outcomes_async(
+        self, payloads: list[dict[str, Any]]
+    ) -> None:
+        """Atomic, tenant-scoped strict batch for verified evaluation evidence.
+
+        Reject adapters without native atomicity. Never implement as a loop
+        of separately committed single-outcome writes.
+        """
+        if payloads:
+            raise OutcomeStoreError(
+                "Atomic governed outcome batch persistence unavailable"
+            )
+
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
@@ -72,6 +86,7 @@ class OutcomeStore(ABC):
         *,
         limit: int = 100,
         user_id: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         """List recent tenant-scoped outcome evidence."""
 
@@ -101,6 +116,33 @@ class InMemoryOutcomeStore(OutcomeStore):
         ):
             raise OutcomeStoreError("Duplicate or missing governed outcome identifier")
         self.save_outcome(payload)
+
+    async def save_unique_outcomes_async(
+        self, payloads: list[dict[str, Any]]
+    ) -> None:
+        if not payloads:
+            return
+        identities = [str(p.get("outcome_id") or "").strip() for p in payloads]
+        tenants = {p.get("tenant_id") for p in payloads}
+        if (
+            any(not key for key in identities)
+            or len(set(identities)) != len(identities)
+            or len(tenants) != 1
+            or not next(iter(tenants))
+            or any(item.get("outcome_id") in identities for item in self._records)
+        ):
+            raise OutcomeStoreError(
+                "Atomic in-memory evaluation batch contains duplicate or cross-tenant identity"
+            )
+        # Validate the entire set before allowing any mutation.
+        for payload in payloads:
+            if payload.get("source") != "intelligence.ml":
+                raise OutcomeStoreError(
+                    "Atomic evaluation batches must contain governed ML evidence"
+                )
+            PostgresOutcomeStore._validated_identity(payload)
+        for payload in payloads:
+            self.save_outcome(payload)
 
     def get_for_trajectory(
         self,
@@ -173,11 +215,16 @@ class InMemoryOutcomeStore(OutcomeStore):
         *,
         limit: int = 100,
         user_id: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         indices = self._tenant_index.get(tenant_id or "_unknown", [])
         records = [self._records[i] for i in indices if i < len(self._records)]
         if user_id is not None:
             records = [record for record in records if str(record.get("user_id") or "") == user_id]
+        if source is not None:
+            if source not in {"runtime.execution", "user.feedback", "intelligence.ml"}:
+                raise ValueError("Unsupported governed outcome evidence source")
+            records = [record for record in records if record.get("source") == source]
         return [dict(record) for record in records[-limit:]]
 
 
@@ -288,8 +335,62 @@ class PostgresOutcomeStore(OutcomeStore):
     def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
         tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
-        if source not in {"runtime.execution", "user.feedback"}:
+        if source not in {
+            "runtime.execution", "user.feedback", "intelligence.ml",
+        }:
             raise OutcomeStoreError(f"Unsupported outcome source: {source or 'missing'}")
+        if source == "intelligence.ml":
+            metadata = payload.get("metadata")
+            if (
+                not payload.get("user_id")
+                or not payload.get("outcome_id")
+                or not isinstance(metadata, dict)
+                or metadata.get("schema_version") != "ml_predictor_evidence_v1"
+                or metadata.get("label_source") not in {
+                    "human_review", "heldout_evaluation",
+                }
+                or not isinstance(metadata.get("label_evidence_ref"), str)
+                or not metadata["label_evidence_ref"]
+                or not isinstance(metadata.get("correct"), bool)
+                or not isinstance(metadata.get("task"), str)
+                or not isinstance(metadata.get("model_id"), str)
+                or not isinstance(metadata.get("model_version"), str)
+                or not isinstance(metadata.get("feature_version"), str)
+                or not all(metadata.get(k) for k in (
+                    "task", "model_id", "model_version", "feature_version",
+                ))
+                or set(metadata) != {
+                    "schema_version", "label_source", "label_evidence_ref",
+                    "task", "model_id", "model_version", "feature_version",
+                    "correct", "raw_probability", "calibrated_probability",
+                    "confidence", "calibration_error", "latency_ms",
+                    "fallback_used",
+                }
+                or any(
+                    isinstance(metadata.get(k), bool)
+                    or not isinstance(metadata.get(k), (int, float))
+                    or not math.isfinite(metadata[k])
+                    or not 0 <= metadata[k] <= 1
+                    for k in (
+                        "raw_probability", "calibrated_probability",
+                        "confidence", "calibration_error",
+                    )
+                )
+                or isinstance(metadata.get("latency_ms"), bool)
+                or not isinstance(metadata.get("latency_ms"), (int, float))
+                or not math.isfinite(metadata["latency_ms"])
+                or not 0 <= metadata["latency_ms"] <= 600000
+                or not isinstance(metadata.get("fallback_used"), bool)
+                or len(metadata["label_evidence_ref"]) > 256
+                or not metadata["label_evidence_ref"].isascii()
+                or not all(
+                    ch.isalnum() or ch in "-._:/"
+                    for ch in metadata["label_evidence_ref"]
+                )
+            ):
+                raise OutcomeStoreError(
+                    "ML evidence requires trusted scoped evaluation provenance without raw labels"
+                )
         return tenant_id, source
 
     def save_outcome(self, payload: dict[str, Any]) -> None:
@@ -332,6 +433,42 @@ class PostgresOutcomeStore(OutcomeStore):
                 },
             )
             raise OutcomeStoreError("Governed outcome was not durably appended") from exc
+
+    async def save_unique_outcomes_async(
+        self, payloads: list[dict[str, Any]]
+    ) -> None:
+        """One transaction or no evidence: batch is never partially learned."""
+        if not payloads:
+            return
+        if len(payloads) > 5000:
+            raise OutcomeStoreError("Governed evaluation batch exceeds safety limit")
+        identities = [str(p.get("outcome_id") or "").strip() for p in payloads]
+        if any(not v for v in identities) or len(set(identities)) != len(identities):
+            raise OutcomeStoreError("Evaluation batch IDs must be unique")
+        tenants = set()
+        for payload in payloads:
+            tenant, source = self._validated_identity(payload)
+            if source != "intelligence.ml":
+                raise OutcomeStoreError("Only evaluated ML evidence may be batch appended")
+            tenants.add(tenant)
+        if len(tenants) != 1:
+            raise OutcomeStoreError("Cross-tenant evidence batch is forbidden")
+        tenant = next(iter(tenants))
+        try:
+            async with async_transaction_scope(tenant) as session:
+                for payload in payloads:
+                    await self.append_in_transaction(session, payload)
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.atomic_evaluation_batch_failed",
+                extra={"tenant_id": tenant, "evidence_count": len(payloads),
+                       "error_type": type(exc).__name__},
+            )
+            raise OutcomeStoreError(
+                "Governed evaluation batch did not commit atomically"
+            ) from exc
 
     @staticmethod
     async def append_in_transaction(session: Any, payload: dict[str, Any]) -> None:
@@ -515,10 +652,16 @@ class PostgresOutcomeStore(OutcomeStore):
         *,
         limit: int = 100,
         user_id: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         tenant = self._require_tenant(tenant_id)
         bounded_limit = max(1, min(int(limit), 1000))
         user = str(user_id or "").strip()
+        if source is not None and source not in {
+            "runtime.execution", "user.feedback", "intelligence.ml",
+        }:
+            raise ValueError("Unsupported governed outcome evidence source")
+        scoped_source = source or ""
         try:
             with transaction_scope(tenant) as session:
                 rows = session.execute(
@@ -528,11 +671,13 @@ class PostgresOutcomeStore(OutcomeStore):
                         FROM public.outcome_records
                         WHERE tenant_id = CAST(:tenant_id AS uuid)
                           AND (:user_id = '' OR user_id = CAST(:user_id AS uuid))
+                          AND (:source = '' OR source = :source)
                         ORDER BY recorded_at DESC
                         LIMIT :limit
                         """
                     ),
-                    {"tenant_id": tenant, "user_id": user, "limit": bounded_limit},
+                    {"tenant_id": tenant, "user_id": user,
+                     "source": scoped_source, "limit": bounded_limit},
                 ).mappings().all()
             return [self._payload_from_row(row["payload"]) for row in rows]
         except OutcomeStoreError:

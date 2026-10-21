@@ -103,6 +103,13 @@ _CANONICAL_META_KEYS = (
     "requested_target",
     "actual_provider",
     "actual_model",
+    # Versioned, scalar-only operational learning lineage from Runtime/Medusa.
+    "model_calls_observed",
+    "model_selection_source",
+    "learning_signal_status",
+    "learning_signal_version",
+    "learned_context_status",
+    "learned_memory_refs_included",
     "actual_target",
     "runtime_engine",
     "protocol",
@@ -1069,7 +1076,13 @@ class ChatRuntime:
         }
 
         latency_ms = (time.time() - stream_start) * 1000.0
-        success = bool(streamed_text) and generation_error is None
+        # A provider may emit text and subsequently emit a stream error.
+        # A partial answer is not a successful outcome for adaptive learning.
+        success = (
+            bool(streamed_text)
+            and generation_error is None
+            and not stream_error_emitted
+        )
         await self._record_trajectory_completion(
             trajectory,
             decision,
@@ -3024,6 +3037,21 @@ class ChatRuntime:
             "fallback_reason": observed("fallback_reason"),
             "llm": raw.get("llm"),
         }
+        # Keep versioned, scalar learning lineage for nonstreamed graph
+        # responses too. The same allowlist is used for live stream chunks;
+        # otherwise identical Deep Agents runs report different provenance.
+        for key in (
+            "execution_engine",
+            "model_calls_observed",
+            "model_selection_source",
+            "learning_signal_status",
+            "learning_signal_version",
+            "learned_context_status",
+            "learned_memory_refs_included",
+        ):
+            value = observed(key)
+            if value is not None:
+                normalized[key] = value
         for key in _RICH_RESULT_KEYS:
             value = raw.get(key)
             if value is not None:
@@ -3324,6 +3352,13 @@ class ChatRuntime:
             "requested_model": request.preferred_model,
             "actual_provider": provider_meta.get("actual_provider"),
             "actual_model": provider_meta.get("actual_model"),
+            "model_selection_source": provider_meta.get("model_selection_source"),
+            "learning_signal_status": provider_meta.get("learning_signal_status"),
+            "learning_signal_version": provider_meta.get("learning_signal_version"),
+            "learned_context_status": provider_meta.get("learned_context_status"),
+            "learned_memory_refs_included": provider_meta.get(
+                "learned_memory_refs_included", 0
+            ),
             "runtime_engine": provider_meta.get("runtime_engine"),
             "protocol": provider_meta.get("protocol"),
             "locality": provider_meta.get("locality"),
@@ -3797,6 +3832,17 @@ class ChatRuntime:
             persistence_success = True
         else:
             persistence_success = None
+        medusa_calls = (provider_meta or {}).get("model_calls_observed")
+        # The Medusa coordinator enforces a different *shared* execution
+        # meter than the chat topology meter. Attribute only the actual
+        # observed integer from that governed runtime, never an inferred call.
+        observed_model_calls = (
+            medusa_calls
+            if isinstance(medusa_calls, int)
+            and not isinstance(medusa_calls, bool)
+            and 0 < medusa_calls <= decision.max_model_calls
+            else meter.model_calls
+        )
         await self._outcome_recorder.record_execution_outcome_async(
             trajectory_id=trajectory_id,
             decision_observation_id=decision_observation_id,
@@ -3809,7 +3855,39 @@ class ChatRuntime:
             persistence_success=persistence_success,
             metadata={
                 "topology": decision.topology.value,
-                "model_calls": meter.model_calls,
+                # Operational learning derives from this append-only outcome
+                # evidence, not transient process-local counters. Attribution
+                # is withheld for fallback/mixed/unknown model executions.
+                "task_type": decision.intent,
+                "actual_provider": (provider_meta or {}).get("actual_provider"),
+                "actual_model": (provider_meta or {}).get("actual_model"),
+                "runtime_engine": (provider_meta or {}).get("runtime_engine"),
+                "model_selection_source": (provider_meta or {}).get(
+                    "model_selection_source"
+                ),
+                "learning_signal_status": (provider_meta or {}).get(
+                    "learning_signal_status"
+                ),
+                "learning_signal_version": (provider_meta or {}).get(
+                    "learning_signal_version"
+                ),
+                "learned_context_status": (provider_meta or {}).get(
+                    "learned_context_status"
+                ),
+                "learned_memory_refs_included": (provider_meta or {}).get(
+                    "learned_memory_refs_included"
+                ),
+                "model_attribution": (
+                    "single_provider_model"
+                    if (
+                        (provider_meta or {}).get("actual_provider")
+                        and (provider_meta or {}).get("actual_model")
+                        and not (provider_meta or {}).get("fallback_level")
+                        and observed_model_calls > 0
+                    )
+                    else "unverified"
+                ),
+                "model_calls": observed_model_calls,
                 "tool_calls": meter.tool_calls,
                 "reasoning_steps": meter.reasoning_steps,
                 "memory_persistence_status": memory_status,

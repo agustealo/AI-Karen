@@ -13,6 +13,7 @@ on:
       - main
     paths:
       - "scripts/beta_live_model_smoke.py"
+      - "scripts/deepagents_live_tool_smoke.py"
       - "scripts/ci/production-first-boot-smoke.sh"
       - "scripts/ci/ollama_settings_live_proof.py"
       - "src/ai_karen_engine/api_routes/models/settings.py"
@@ -25,6 +26,7 @@ on:
       - main
     paths:
       - "scripts/beta_live_model_smoke.py"
+      - "scripts/deepagents_live_tool_smoke.py"
       - "scripts/setup_beta_actions_runner.ps1"
       - "src/ai_karen_engine/core/expression/**"
       - "src/ai_karen_engine/core/model_runtime/**"
@@ -64,10 +66,20 @@ jobs:
           Write-Host "beta_live_model_sha=$actual"
 
       - name: Compile live-model smoke harness
-        run: python -m py_compile scripts/beta_live_model_smoke.py scripts/ci/ollama_settings_live_proof.py
+        run: python -m py_compile scripts/beta_live_model_smoke.py scripts/deepagents_live_tool_smoke.py scripts/ci/ollama_settings_live_proof.py
 
       - name: Prove real local model inference
         run: python scripts/beta_live_model_smoke.py
+
+      # This is intentionally opt-in: the default beta model smoke cannot
+      # certify that a model supports Deep Agents structured tool calls.
+      # An operator must explicitly attest a beta-local target and enable
+      # this gate on the real self-hosted model runner.
+      - name: Prove real Deep Agents structured tool calls
+        if: ${{ vars.BETA_DEEPAGENTS_TOOL_CALL_PROOF_ENABLED == 'true' }}
+        env:
+          BETA_DEEPAGENTS_TRUST_PRIVATE_HOST: ${{ vars.BETA_DEEPAGENTS_TRUST_PRIVATE_HOST || 'false' }}
+        run: python scripts/deepagents_live_tool_smoke.py
 
       - name: Verify production proof prerequisites
         shell: bash
