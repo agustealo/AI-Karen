@@ -98,3 +98,12 @@ Source: https://www.assistant-ui.com/docs/runtimes/ag-ui/runtime-options
 ## Weather comparison presentation
 
 The versioned UI registry now supports `weather.observation` and `weather.comparison`. A comparison contains 2–5 independently validated weather records and renders one accessible card per record. No interpolated measurements or client-made lookups are permitted. Comparison results require the same server-validated evidence references as single observations; the frontend validates envelope shape but is not an evidence authorization authority. This scope is a read-only renderer, not proof that backend emission or replay is complete.
+
+
+## Execution activity and chain-of-thought UI
+
+assistant-ui documentation (https://www.assistant-ui.com/docs/primitives/chain-of-thought) recommends `MessagePrimitive.GroupedParts` for new grouped reasoning/tool-call interfaces. The existing Karen chat uses `MessagePrimitive.Parts`, so this PR adds a compatibility `ChainOfThoughtPrimitive` accordion registered as `components.ChainOfThought`. It starts collapsed, is keyboard accessible, and only shows runtime-observed tool lifecycle information, not private chain-of-thought tokens. The `useAgUiRuntime` configuration retains `showThinking: false`.
+
+Migrate to `MessagePrimitive.GroupedParts` once verified against the pinned `@assistant-ui/react` version and existing data renderers; preserve activity components and text ordering. A separate public reasoning-summary feature would require an explicit backend-owned, audited summary contract rather than raw model thinking.
+
+Acceptance: no trace on messages without grouped tool activity; only observed status labels; no synthetic successful tool execution; collapsed/expanded keyboard behavior; historical restoration using persisted AG-UI activity; no leakage of private reasoning across tenants.
