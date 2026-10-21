@@ -361,3 +361,93 @@ The advisor should be *useful from the first task*. If no external resource is n
 **Deletion rule:** if a new persona capability duplicates Facts/UserModel/memory, replace it with an authorization-scoped projection and delete the duplicate only after reference and migration audits. Never delete memory events, RLS, auth or audit implementations merely because a simpler design exists.
 
 **Final decision:** Ship one trustworthy, task-aware "What would help?" interaction. No new training platform, no new memory system and no independent Advisor agent. One runtime, governed Facts, scoped persona revisions, truthful receipts and measured usefulness.
+
+
+---
+
+# Turn Intelligence → Governed Facts → Persona Context: Convergence Contract
+
+**Status:** architecture correction; no runtime behavior or successful tests claimed. User-observed example: weather intent at 64% confidence, memory degraded, 15 recalled context items including repeated "My name is Zeus" at 44% relevance, one learning candidate and zero admitted/persisted.
+
+## Architectural correction
+
+Turn Intelligence is **observability**, not a second memory admission service. The canonical MemoryRuntimeManager composes NeuroRecall and MemoryFormationService; MemoryFormationEvaluator owns admission semantics; NeuroVault owns durable mutation; governed projections expose facts and UserModel preferences. PersonaService owns personas and their scope/revision policy, never raw fact duplication. A persona receives a strictly authorized projection of canonical facts, user preferences, referenced resources and thread history at each runtime turn.
+
+The UI must present the same underlying truth through three views:
+- **Turn Intelligence:** why an intent was selected, which canonical memories were used and why candidates were admitted, rejected, deferred, deduplicated or failed; show degraded coverage accurately.
+- **Personal › Facts:** user-understandable inspect/correct/revoke surface for canonical user facts, with source, scope, validity, status and read/use policy. Facts are governed views, not a separate writable source of truth.
+- **Persona Studio:** what each persona is permitted to use, context-specific learning proposals, scopes, revisions and source citations, referencing canonical facts, not copying them.
+
+**Do not auto-save every Turn Intelligence observation.** Intent classifications, internal behavior signals, candidate memories and low-confidence inferences are not all user facts. Admission must pass the existing governance. A candidate with zero persisted is not a successful learn event.
+
+## Real-code evidence and unresolved questions
+
+Inspected source:
+- \`core/memory/memory_runtime_manager.py\`: composes NeuroRecall, MemoryFormationService, MemoryControlService and Redis STM.
+- \`core/memory/formation/service.py\`: evaluated memory candidates cross the NeuroVault durable mutation boundary; projections are downstream of governed commit.
+- \`core/memory/signals/general_fact_classifier.py\`: explicit fact classification, does not persist itself.
+- \`core/runtime/prompt/persona_contract.py\`: presentation-only persona sanitizer currently blocks \`memory\`, \`memory_scope\`, \`user_model\`, \`tools\` and other authority-bearing fields.
+- \`ui/.../PersonalFactsSettings.tsx\`: uses \`/api/memory/facts\` and \`/api/memory/facts/suggestions\`; actual endpoint-to-persistence and projection coverage still require verification.
+- \`supabase/migrations/20261015020000_25_profile_fact_tenant_rls.sql\`: describes \`profile_fact\` as rebuildable memory-event projection, tenant RLS enforced by migration definition. Deployment and end-to-end tenant proof not yet checked.
+
+**Important:** do NOT loosen PersonaAssemblyPolicy to admit raw \`memory\`, \`user_model\` or \`memory_scope\` fields. ChatRuntime should supply authorized facts as a separately typed runtime-owned context bundle at the correct PromptRuntime assembly stage. Persona presentation fields remain presentation-only. Scope/retrieval authority stays outside the persona prompt.
+
+Trace all currently active memory recall and fact API paths. Map any legacy alternate storage/writes. Determine if the UI's "context recalled" is an unfiltered retrieval-candidate count, an authorized candidate count, or actually injected prompt context, and label it accurately. Do not assume a display proves a memory persisted, or that 15 displayed items were included in the model prompt.
+
+## Adversarial findings from observed turn
+
+1. **Repeated equivalent name facts**: investigate canonical memory identifiers, normalized claim keys, event_id/source_id, search hits, duplicate vectors, scoring and client-side mapping. Deduplicate before *effective context* selection using governed canonical fact identity and source/provenance merging, not blind text equality across different users/purposes. Log candidate count, unique fact count, authorized count, selected count; preserve conflicting evidence for contradiction resolution.
+2. **Weak relevance for weather**: name memory might be valid but unnecessary. Enforce intent/task-conditioned information selection and minimum utility thresholds with conservative fallback. Do not promise a particular relevance score is objectively wrong without task evaluation.
+3. **Memory degraded**: expose which adapter or operation failed, scoped to safe reason codes, and distinguish retrieval degraded from formation/persistence degraded. An unavailable dependency must not be shown as "zero facts." Keep responding if safe with truthful degraded metadata.
+4. **One candidate, zero admitted/persisted**: display admission decision distribution (duplicate, already known, unsupported, insufficient evidence, unauthorized, policy denied, transient failure, etc.) only if backed by evaluator/ledger reasons; otherwise "not saved, reason unavailable". Zero admission is not necessarily a defect.
+5. **100% behavior signal confidence**: verify calibration, whether these are deterministic rules, defaulted constants or real confidence; label rule matches as rule matches when not calibrated. Never equate with successful tool execution or user knowledge.
+6. **Persona/Facts disconnect**: prove that persona scope grants are filters atop underlying ACL, that revocation denies future retrieval even with stale cached hits, and that a Business→Family switch cannot reuse unauthorized summaries or model context.
+7. **Race/consistency**: a fact admitted mid-stream becomes available only to the next resolved turn; the active snapshot stays frozen. A revoked source cannot be newly fetched even when a prior snapshot referenced it; honor output cancellation/deletion policy for already running work where supported.
+8. **Prompt injection**: user memory and attached documents are evidence, not authoritative system instructions; hostile content cannot modify role, tool eligibility, provider routing or consent.
+
+## Canonical fact flow and read model
+
+\`User message → runtime observation → canonical evaluator → governed admission / NeuroVault event → derived profile_fact and UserModel projections → ACL-scoped NeuroRecall → runtime-owned prompt context → response receipt → shared UI projections\`.
+
+Facts must support explicit semantic type (identity, asserted fact, preference, project fact, temporal condition), subject/owner, relevant resource/project/persona scope where appropriate, source and evidence IDs, value normalization, confidence/verification semantics, consent/visibility, valid_from/to, supersession and tombstone/revocation, with no mandatory new table. Prefer additive metadata and safe projection adapters to duplicating records. Distinguish learned **user facts** from **personality** and **operational directives**.
+
+A canonical user fact may be relevant to multiple personas, but **visibility is never authorization**; every recall intersects tenant, actor, original source ACL, explicit consent, purpose, persona context and conversation history. Avoid over-broad global facts, which could leak when switching personas.
+
+## UX requirement: "What Karen knows" must reconcile all three surfaces
+
+A compact turn inspector should show:
+- **Understood**: selected intent/task and uncertainty (with explanation of confidence provenance).
+- **Used from memory**: unique, authorized canonical facts actually included in execution, and why; hide unauthorized sources.
+- **Learning result**: candidate count and durable receipt-backed admitted/persisted count; existing/duplicate and rejected decisions where known.
+- **Health**: "some memory sources unavailable" with retry/control guidance instead of contradictory technical labels.
+
+The full developer inspector may show raw candidate counts, deduplication ratio, thresholds, stage-specific latency, fallbacks, memory candidates and decision reasons. Personal Facts should link to the canonical record without forcing a new facts schema. Persona Studio's **What Troy can use** is a scoped reference projection with allow/deny reason labels, not a second facts CRUD experience.
+
+Use the shared assistant-ui thread and message actions for "Why this memory?", "Correct fact", "Stop using", "Save preference to persona" and confirmed receipt; reuse the existing shared composer, not a standalone persona chat. AG-UI is suitable for authenticated, versioned, redacted progress of long-lived memory projections/evaluations and observed runtime events. Routine fact list, approvals and simple changes use existing API state, with no streaming machinery added just to animate them.
+
+## Prioritized proof, beyond the earlier Persona vertical slice
+
+**M0: truth tracing before new features**
+1. From a real weather turn, capture correlation_id, selected intent, retrieval request, raw hits, authorized unique hits, injected context, formation admission decisions, NeuroVault commits and derived projection outcomes. Redact secrets/PII in general logs.
+2. Trace \`PersonalFactsSettings\` API → actual storage; verify a canonical persisted fact appears in Facts after restart and can be recalled, with its provenance and current consent.
+3. Trace existing PersonaService → ChatRuntime persona selection → PromptRuntime assembly to locate the real integration gap.
+
+**M1: canonical relevance and fact integrity**
+4. Same asserted user name recorded via repeated conversational events: no threefold identical effective context; keep raw historical evidence if necessary.
+5. A weather intent selects location if permitted/relevant; unrelated name assertion is not included merely due to raw retrieval rank.
+6. Learning candidate already known: evaluator reason visible, persisted count remains 0 and no false "learned" toast.
+7. Intent-confidence and behavior-confidence UI distinguishes calibrated statistics from rule outputs.
+8. Degraded retrieval is shown as degraded/partial, not absence of memory.
+
+**M2: persona consumption**
+9. Troy reads an approved brand fact via canonical retrieval and not a cloned persona fact.
+10. Family persona without corresponding scope cannot retrieve Troy-only fact, even after same-tab navigation, stream retry, cached recall or model fallback.
+11. Approved feedback to Troy becomes a governed scoped preference and is explainably applied on a subsequent turn; Personal Facts should not misclassify it as universal identity.
+12. Fact correction and revocation propagate to Persona read models without new duplicate persistence.
+
+**M3: UI/AG-UI acceptance**
+13. assistant-ui displays active persona, actual used facts and backend learning receipt without exposing hidden prompt or raw restricted evidence.
+14. AG-UI (when warranted) emits authenticated redacted observed state, not a parallel persona/memory store.
+15. Verify browser continuity, semantic accessibility, degraded states, task completion, cost and latency.
+
+**Scope constraint:** Finish M0/M1 before new Dataset Advisor catalogs. Deduplicate retrieval at the canonical selection layer, never by hiding repeated rows solely in React. Repair existing paths before introducing schema churn. Do not add a persona memory engine, second Facts write service, tool router or telemetry system.
