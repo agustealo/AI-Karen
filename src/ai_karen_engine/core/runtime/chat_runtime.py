@@ -372,6 +372,14 @@ class ChatRuntime:
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
+                presentation = self._verified_weather_presentation(
+                    request, decision, plan, direct_result,
+                )
+                if presentation is not None:
+                    structured = provider_meta.get("structured_content")
+                    structured = dict(structured) if isinstance(structured, dict) else {}
+                    structured["presentation"] = presentation
+                    provider_meta["structured_content"] = structured
                 if decision.intent == "search.general" and direct_result.success:
                     synthesized = await self._synthesize_search_evidence(request, decision, plan, meter, direct_result)
                     if synthesized is not None:
@@ -2294,6 +2302,44 @@ class ChatRuntime:
             },
         )
 
+    @staticmethod
+    def _verified_weather_presentation(request, decision, plan, result):
+        """Reuse one evidence contract for streaming and standard chat."""
+        # Projection is permitted only for a successful authorized tool receipt.
+        # This is not a model-authored layout or a substitute for evidence RBAC.
+        presentation = None
+        attempts = result.attempts if isinstance(result.attempts, list) else []
+        observed = isinstance(result.payload, dict) and result.payload.get("extractedData")
+        verified_tool = (
+            result.success and not result.degraded
+            and result.source == "tool"
+            and isinstance(result.source_id, str)
+            and result.source_id in plan.allowed_tools
+            and any(
+                isinstance(attempt, dict)
+                and attempt.get("type") == "tool"
+                and attempt.get("id") == result.source_id
+                and attempt.get("status") == "success"
+                for attempt in attempts
+            )
+        )
+        if decision.intent == "search.weather" and verified_tool and isinstance(observed, dict):
+            evidence_id = f"{request.context.request_id}:{result.source_id}"
+            candidate = {
+                "schema_version": 1,
+                "presentation_id": f"weather-{request.context.request_id}",
+                "component_type": "weather.observation",
+                "data": dict(observed),
+                "evidence_ref": evidence_id,
+                "correlation_id": request.context.correlation_id,
+            }
+            from ai_karen_engine.core.runtime.ag_ui_event_projection import (
+                _validated_presentation,
+            )
+            presentation = _validated_presentation(candidate)
+
+        return presentation
+
     async def _run_direct_capability_stream(
         self,
         request: ChatExecutionRequest,
@@ -2329,38 +2375,9 @@ class ChatRuntime:
         if _meta is not None:
             _meta.update(normalized)
 
-        # Projection is permitted only for a successful authorized tool receipt.
-        # This is not a model-authored layout or a substitute for evidence RBAC.
-        presentation = None
-        attempts = result.attempts if isinstance(result.attempts, list) else []
-        observed = isinstance(result.payload, dict) and result.payload.get("extractedData")
-        verified_tool = (
-            result.success and not result.degraded
-            and result.source == "tool"
-            and isinstance(result.source_id, str)
-            and result.source_id in plan.allowed_tools
-            and any(
-                isinstance(attempt, dict)
-                and attempt.get("type") == "tool"
-                and attempt.get("id") == result.source_id
-                and attempt.get("status") == "success"
-                for attempt in attempts
-            )
+        presentation = self._verified_weather_presentation(
+            request, decision, plan, result,
         )
-        if decision.intent == "search.weather" and verified_tool and isinstance(observed, dict):
-            evidence_id = f"{request.context.request_id}:{result.source_id}"
-            candidate = {
-                "schema_version": 1,
-                "presentation_id": f"weather-{request.context.request_id}",
-                "component_type": "weather.observation",
-                "data": dict(observed),
-                "evidence_ref": evidence_id,
-                "correlation_id": request.context.correlation_id,
-            }
-            from ai_karen_engine.core.runtime.ag_ui_event_projection import (
-                _validated_presentation,
-            )
-            presentation = _validated_presentation(candidate)
         if presentation is not None and _meta is not None:
             structured = _meta.get("structured_content")
             structured = dict(structured) if isinstance(structured, dict) else {}
