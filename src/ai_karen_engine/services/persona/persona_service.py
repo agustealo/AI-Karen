@@ -448,9 +448,22 @@ class PersonaService:
         preferences = await self.get_user_preferences(user_id, tenant_id)
         previous_active_persona_id = preferences.active_persona_id
 
+        allowed_fields = {
+            "active_persona_id", "default_tone", "default_verbosity",
+            "default_language", "enable_style_adaptation",
+            "adaptation_sensitivity", "enable_persona_memory_filtering",
+            "cross_persona_memory_sharing", "show_persona_selector",
+            "show_style_controls", "enable_quick_style_adjustments",
+        }
+        unknown = set(updates).difference(allowed_fields)
+        if unknown:
+            raise ValueError("Unsupported persona preference fields")
+
+        # Work on a detached copy so failed persistence cannot mutate the
+        # cached authoritative state.
+        preferences = UserPersonaPreferences(**preferences.dict())
         for key, value in updates.items():
-            if hasattr(preferences, key):
-                setattr(preferences, key, value)
+            setattr(preferences, key, value)
 
         if preferences.active_persona_id:
             active_persona = await self.get_persona(preferences.active_persona_id, user_id, tenant_id)
@@ -458,7 +471,8 @@ class PersonaService:
                 raise ValueError(f"Persona {preferences.active_persona_id} not found")
 
         preferences.updated_at = datetime.utcnow()
-        await self._save_user_preferences(user_id, tenant_id, preferences)
+        if not await self._save_user_preferences(user_id, tenant_id, preferences):
+            raise RuntimeError("Persona preferences were not persisted")
         self._user_preferences_cache[self._cache_key(user_id, tenant_id)] = preferences
         logger.info("Updated preferences for user %s", user_id)
         return preferences
