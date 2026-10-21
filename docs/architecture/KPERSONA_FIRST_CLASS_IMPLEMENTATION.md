@@ -567,3 +567,108 @@ First release includes Troy's name/title/specialties, authorized context, real r
 Run relevant Python compilation, unit/integration tests, Ruff, mypy, frontend lint/typecheck/test/build, Docker config, real PostgreSQL tenant RLS/restart/race checks, local-model smoke tests and Playwright accessibility/navigation acceptance. Record exact commands, tested commits, failures, skips, and verified receipts. Do not confuse waived exact-head CI with a passed test. Inspect screenshots before putting them in docs. Keep PR #501 draft until implementation gates pass. Avoid stacked PRs, unnecessary schema churn and false completion claims.
 
 Roll back or stop on cross-tenant leakage, revoked-memory reuse, unapproved tool execution, unauthorized provider fallback, incorrect saved-state acknowledgment or unsafe persona context switching.
+
+
+---
+
+# Persona 6.0: Full Adversarial Persona–Agent Collaboration Contract
+
+**Status:** Architecture and executable acceptance specification only. Supersedes conflicting Persona 5.0 assumptions about collaboration. PR #501 remains draft; no code/tests are claimed. **KP-01–KP-05 remain ahead of KP-11.**
+
+## Product decision and boundaries
+
+Support named personas as specialized collaborators and reusable Persona Teams as *configurations of approved persona references and responsibilities*. Retain ChatRuntime as sole request/execution authority, CORTEX as intent/policy decision-maker, Deep Agents as existing actual multi-step execution orchestrator, PromptRuntime as compiler, and registered provider/tools as execution mechanisms. Do not implement a persona-specific agent runtime, planner, model router, queue, memory store, provider fallback, independent skills registry, workflow engine or team controller.
+
+**Persona** answers *which approved knowledge, communication preferences and domain collaboration stance are useful*.
+**Agent** answers *which governed tasks are executed and how*.
+**Team** answers *which roles participate on this user-authorized assignment, with which minimal task-scoped context and exchange rules*.
+**Runtime** answers *who is authorized, what was executed, with which provider, model, receipt and outcome*.
+
+A named role, professional title or skill is metadata, not a credential, privilege, ability guarantee or prompt-authority escalation. Workflow selection remains with CORTEX/runtime. Deep Agents is not mandatory for simple multi-perspective responses; LangGraph is used only if the existing graph execution requires branching/conditional durable coordination.
+
+## New adversarial findings
+
+| Threat / failure | Severity | Mandatory correction |
+|---|---|---|
+| Team becomes a second orchestration implementation | Critical | Team definition stores only references/policy; Deep Agents executes |
+| Agent-to-agent sharing launders private Facts across scopes | Critical | Explicit output exchange grants with ACL, purpose, tenant, origin and revocation checks |
+| Multi-persona combination merges raw persona prompts | Critical | Structured role contracts, scoped resources and compilation; no concatenated authority-bearing raw instructions |
+| Role labels grant tools/models/provider policy | Critical | Recompute manifest eligibility/RBAC per delegated action and fallback |
+| One persona's approved preference mutates others | Critical | Evidence isolated by persona; cross-persona promotion requires explicit review |
+| Mid-run participant revision or revocation is ambiguous | Critical | Frozen normal snapshot; security revocation recheck/abort, durable workflow resume invariants |
+| Subagent observations attributed to the wrong identity | High | Distinct actor / persona / execution-agent / tool / model IDs and provenance |
+| Cross-persona contributions degrade factual validity | High | Task invariant contract, attributed artifacts and verifier/review gate |
+| All teams spawn several expensive model calls | High | Deterministic one-call vs serial vs parallel topology policy, budgets |
+| Side effects occur in rehearsal or preview | Critical | Tool-disabled preview; separate authorized sandbox tests |
+| Shared or imported team copies ACL grants | Critical | Portable definitions never contain credentials, memory grants or private references |
+| A stalled delegated task hides partial failure | High | Per-task terminal status and explicit partial deliverables; no successful team receipt until criteria met |
+| Agent requests unlimited specialist additions | High | Bound fan-out, task depth, token/time cost and replan count from central config |
+| UI fabricates concurrent specialists or approvals | High | Render only runtime-confirmed participants, actual events and receipts |
+| Partial/degraded retrieval silently pollutes final response | High | Fail closed on unauthorized data, mark missing/partial evidence explicitly |
+| Team member gains access through previous chat summaries | Critical | Restrict prior thread and summaries, otherwise create a new scoped conversation |
+
+## Data model: minimal logical schema, reuse existing owners
+
+- **PersonaTeamDefinition**: team_id, tenant_id, owner_user_id, name, description, lifecycle, visibility, created_at. This is configuration, not execution authority.
+- **PersonaTeamRevision** (immutable): version, participating persona_id/revision policy, declared responsibility, user-defined objective template, conflict/handoff policy, artifact exchange policy, source fingerprint, approvals and updated_by. No provider IDs, credentials or implied resource grants.
+- **CollaborationRequest**: user instruction, selected or recommended team revision, immutable current actor/tenant/session/conversation, task requirements, explicit approvals, correlation_id/idempotency_key.
+- **ParticipantExecutionSnapshot**: persona_id, resolved immutable revision, participant_task_id, effective ACL/purpose scope, facts/references actually injected, model/tool eligibility decision provenance, budget and authorization watermark. Do not make agent identity an alternate security principal.
+- **SharedArtifactReceipt**: producer_task_id, resource_id, redacted metadata/type, user/tenant owner, source provenance, permitted recipient task IDs and purposes, eligibility/version, revocation marker, approved transfer decision. Transfer only task-relevant output, never entire hidden context or raw memory.
+- **TeamExecutionReceipt**: parent execution_id, child task IDs, selected topology, decisions, participant-attributed outputs, approvals, provider/model/fallback metadata, elapsed/cost/failure summaries, status and delivery receipts. Extend canonical runtime telemetry; no new telemetry silo.
+
+Before adding SQL, map these to existing Deep Agents task/checkpoint storage, persona revisions, conversations, artifact repository and audit rows. Add only relations that cannot be represented reliably with existing schema. Immutable revisions and idempotency are required. Team templates are organizational assets but cannot inherit members' private data.
+
+## Collaboration policy and delegation algorithm
+
+1. **Intent**: Authenticated user requests a task or selects a saved Team. CORTEX classifies intent and whether specialized perspectives add value. Team suggestion does not activate automatically when unauthorized or unconfirmed.
+2. **Normalize**: ChatRuntime resolves actor/tenant/permissions, requested personas, currently authorized team revision, tool and model policies, deadlines and bounded budget. Only the authenticated runtime may establish the root execution context.
+3. **Sufficiency**: For a simple informational comparison, compile a single response using the authorized limited perspectives; do not create multiple agents or run one model call per persona.
+4. **Decompose when justified**: Existing Deep Agents turns the goal into distinct deliverables only where dependencies, parallel work, tool operations or independent review justify it. CORTEX keeps governing task/policy decisions. Each participant receives a distinct scoped task context.
+5. **Select context**: For every participant, intersect current user/tenant authorization, source ACL, purpose and persona-specific grants with task need. Each retrieval uses NeuroRecall's canonical selection/deduplication. Persona knowledge references do not grant access.
+6. **Execute**: Runtime applies PromptRuntime's safe role/presentation contract, selects model using canonical provider router/learned policy and evaluates registered tool manifests and approval needs. A persona cannot route providers or self-grant tools.
+7. **Exchange**: Child output is not implicitly visible to other participants. Register task artifact and purpose-bound transfer permit. Revalidate authorization at consumer context-selection time; sanitize untrusted output as data and redact unrelated sources. On revocation, deny future read and abort/re-authorize affected active work.
+8. **Verify**: For every deliverable preserve user requirements, source traceability, factual stability and specialized task checks. Contradictions between personas are surfaced as disagreements with evidence, not averaged into fabricated consensus.
+9. **Assemble**: Canonical runtime composes reviewed results, attributed contributions, outstanding approvals and clear partial-failure states. Keep parent and child receipts, cancellation and retry semantics consistent.
+10. **Learn**: Completed work can supply bounded evidence to UserModel. The user approves a revision for one explicitly scoped persona; no team-wide silent learning, hidden memory replication or model retraining.
+
+Topology choice requires observable policy inputs and configuration: task decomposition benefit, tool requirements, independent cross-check value, model capability, resource cost, latency and confidence in completeness. Rule: single execution by default; serial/parallel workflows only after actual need. Cap participants, recursion depth, timeouts, retries, total tokens/cost, ongoing artifact retention and proposal volume centrally.
+
+## Authority and isolation rules
+
+The context that Troy sees is **not** the context that Morgan sees. Shared task briefs require explicit source ACL, consent and purpose intersection. An artifact that Troy produces may be sharable only if approved for the recipient and task; this does not imply that Morgan may read Troy's source brand documents, prior chats or private preferences. Untrusted artifacts cannot insert executable system instructions, alter policy or grant resources. Derived outputs may themselves be sensitive and inherit applicable provenance/restrictions; do not assume generated text is public.
+
+An active workflow freezes normal persona/team revisions on creation, and resumptions must restore the same authorized snapshot *subject to current security rechecks*. Cancellation and revocation supersede frozen snapshot eligibility. Retry must reuse idempotency keys and must never repeat already acknowledged external side effects. Reassigning a participant must be user-approved if it broadens knowledge purpose or materially changes external actions.
+
+Team role conflicts: explicit user task intent and system policy outrank team suggestions; conflicting user-approved persona presentation conventions are isolated within child tasks and reconciled through deliverable requirements. Professional labels never establish licensure. No team member can operate as an administrator merely due to title.
+
+## UX: sophisticated capability, simple presentation
+
+Persona Studio's main surface remains one-sentence creation and an intuitive personal persona library. **Persona Teams** appears as a secondary collaboration affordance, not a required setup step. A user can say, "Have Troy design and Morgan review the campaign." Karen previews proposed roles and key context boundaries, then starts approved execution. Saved teams are optional reusable shortcuts.
+
+Use the single persistent assistant-ui thread/composer with a clearly attributable participant switch and concise task cards. Provide actual status states: proposed, awaiting permission, queued, running, partial, failed, completed, canceled. A task card links to artifacts, source evidence, cost/latency where available, approvals, retry and cancel. Do not show fake typing indicators that imply model execution.
+
+AG-UI is valuable for streaming *runtime-observed* start/progress/waiting-on-user/tool-completed/artifact-ready/failed/completed events from long-running Deep Agents workflows. Use existing AG-UI event bridge with tenant-scoped auth, safe structured schema, correlation_id, stable sequence numbers and reconnect/replay semantics. It is never a second workflow state owner. Routine team CRUD/selection and feedback approval use existing APIs.
+
+Use assistant-ui for shared thread, composer, tool-result cards, approvals and accessible controls, but only after dependency/import and integration checks. Preserve Karen visual identity; do not reproduce the same chat state in every participant panel. Mobile and keyboard/screen-reader navigation must be tested.
+
+## KP-11: Persona Teams (post-foundation; feature-flagged)
+
+**Prerequisite:** KP-01–KP-05 release-blocking proofs and the single-persona Troy vertical slice have passed. KP-06 shared composer and approvals required before broad usability. Never block the initial usable persona release on teams.
+
+**KP-11A — Reuse and topology audit**: Identify actual Deep Agents task/delegation/checkpoint APIs, CORTEX routing, skill manifest ownership and artifact ACL. Document what survives, remove proposed duplicate engines from scope. Prove simple multi-perspective tasks can run without spawning agents.
+
+**KP-11B — Scoped team revisions**: Implement only necessary persistent team references, roles, revisions and opt-in activation. Tests: tenant ACL, no inherited grants, import/clone safety, version concurrency, revocation.
+
+**KP-11C — Delegated collaboration**: Wire runtime-owned participant snapshots into existing Deep Agents execution. Enforce bounded topology, per-action RBAC, model router ownership, safe share/consume of artifacts, retry and cancellation. Tests: denied tool, tenant, revoked cached context, wrong purpose, fallback, side-effect idempotency and partial failures.
+
+**KP-11D — Shared UX and AG-UI projection**: Only verified team progress appears in assistant-ui cards. AG-UI events carry real redacted task state and can resume in-progress work. Tests: navigation, reconnect, multi-tab, mobile, keyboard, misleading-success prevention.
+
+**KP-11E — Real campaign acceptance**: Troy prepares a sourced design direction; Morgan reviews marketing consistency; a parent workflow returns attributed deliverables. Use actual authorized local-model calls, real PostgreSQL persistence, optional governed design tools, RLS, task-scoped artifacts and browser E2E. Include negative tests: Family cannot read campaign, user rejects sharing, tool denied, model fallback, cancellation/resume and stale revoked context.
+
+## Verification and rollout
+
+For KP-11 capture audit evidence per task: source commit, command, environment, actual model/provider, execution topology, number of model calls, latency, tokens/cost, tool receipts, memory access counts, rejected ACL events and screenshot evidence. Baseline against a one-persona or one-call task; promotion requires meaningful user benefit without factual, privacy or reliability regressions. Never claim "three models worked together" when a single prompted answer was used. Failing authorization, unapproved actions, cross-tenant leakage or fabricated completion is an immediate rollback condition.
+
+**Build order:** KP-01/02/03 canonical foundations -> KP-04/05 single-persona real runtime -> KP-06 basic UX -> KP-07 task-aware advisor -> KP-10 security/rollout. KP-08/09 advanced additions remain deferred; KP-11 teams follows proven collaboration dependencies and may ship separately, on the *same evolving PR only if small and nonblocking*, otherwise after merging the verified foundation to main. Avoid PR stacking and stale conflicting branches.
+
+**Single source of truth:** persona identity/revision in existing PersonaService; memory/Facts in governed NeuroVault projection; preference proposals in UserModel; authority in ChatRuntime/CORTEX; execution in Deep Agents and registered tools; presentation in assistant-ui; streamed observed events in AG-UI. No new persona brain.
