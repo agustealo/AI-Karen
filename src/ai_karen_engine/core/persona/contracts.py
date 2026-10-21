@@ -129,6 +129,7 @@ class PersonaMemoryEntry(BaseModel):
 
 
 class UserPersonaPreferences(BaseModel):
+    revision: int = Field(default=0, ge=0)
     user_id: str
     tenant_id: str
     active_persona_id: Optional[str] = None
