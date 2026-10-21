@@ -248,3 +248,125 @@ Milestones may merge independently only when their security and contract gates a
 ## Final architectural decision
 
 Persona is a governed **adaptive communication contract**, not an agent, operating mode, personality simulator, provider preference or alternative prompt authority. User intent and explicit choice control its durable evolution; UserModel recommends; PromptRuntime compiles; ChatRuntime resolves and snapshots; CORTEX retains decision eligibility; the registered execution engine runs; UI displays observed truth.
+
+
+---
+
+# Persona 3.0 revision: User-Owned Purpose Personas and Scoped Learning
+
+Status: **design contract only**. Supersedes the v2 claim that personas are exclusively presentation configurations. No implementation or test result is implied.
+
+## Product contract and real user journeys
+
+A user can create any number of personas for distinct *purposes* such as Business, Graphic Design, Family, Personal, Study, Writing, Contracting or Customer Support. These labels are user-defined organizational tags, not built-in RBAC roles or hardcoded intent routes.
+
+John can create a "Design Studio" persona with approved design vocabulary, brand assets, preferred visual direction, feedback style and references to design projects. Karen can recognize a request's design context and **suggest** using Design Studio, or deterministically select it according to a previously authorized scoped rule. The same user can simultaneously own Business and Family personas with non-overlapping resources. Deleting or deactivating Design Studio must not delete John's global UserModel or his unrelated conversations.
+
+Initial user journeys with acceptance criteria:
+
+1. **Create**: John describes "Be my graphic-design collaborator for my business"; the wizard proposes a persona name, intent, communication DNA and optional knowledge scopes. Nothing persists or receives permissions until explicit confirmation.
+2. **Attach**: John explicitly adds approved design projects, assets, references, and preferences. The persona stores *references and grants*, not copies of all private memories or files.
+3. **Use**: John activates Design Studio in the shared composer; ChatRuntime obtains a frozen effective-context snapshot from the authorized resources; the response contains persona and context receipts.
+4. **Teach**: John says "Use less gradient in my designs." It applies to the current response where feasible; Karen offers to save it as a design preference in this persona. Approved feedback is versioned and reversible.
+5. **Adapt**: With consent, aggregated outcomes can produce ranked suggestions for Design Studio. Observed repetitions are not silently converted into durable preferences. All suggested changes have provenance and require review.
+6. **Switch**: John selects Family. Business-specific resources are not recalled under Family unless independently authorized for this new scope, even if the model saw them in a previous context. Existing thread context must be privacy-classified; warn or start a fresh scoped conversation when necessary.
+7. **Share**: John exports a safe template that carries presentation DNA and optionally non-sensitive, separately approved domain instructions; no private content, grants or memory. Team publication is distinct from private template export.
+
+## Four separate concepts, not one overloaded persona field
+
+**Persona Definition**: user-owned identity (name, purpose, tags, appearance, collaboration contract, source/version, defaults). It does not confer capabilities.
+
+**Persona Knowledge Scope**: explicit references to existing authorized memory, projects, files, business/household contexts and knowledge collections. Enforce tenant, user, resource ACL, consent and purpose on every retrieval, not merely at persona creation. Persona membership is a *filter* on already-authorized resources, never an independent grant.
+
+**Persona Learning Overlay**: evidence-backed, purpose-bound proposals and explicitly approved preferences with confidence, provenance, expiry, revocation and revision history. NeuroRecall retrieves and ranks; existing governed memory repositories persist; UserModel derives suggestions. No new vector DB, standalone persona memory engine or silent persona rewrites.
+
+**Persona Execution Context**: runtime-owned, immutable per-turn assembly of definition revision, context scope, authorized memory receipts, user intent, communication contract and existing CORTEX/tool eligibility. A design persona can recommend a governed design workflow, but normal CORTEX/runtime permission checks alone determine execution.
+
+Strict authority invariant: **persona never provides new permissions, tools, provider routing, tenant access, model budget, system-prompt authority or automatic external actions**. A "designer" persona is NOT a graphic-design agent. It can specialize the authorized collaborative experience while existing registered skills/tools do actual design operations.
+
+## Required canonical data model (logical contract, adapt to actual migrations)
+
+- persona_definitions: tenant_id, owner_user_id, persona_id, name, description, purpose, tags, visibility (private default), lifecycle_status, created_at, updated_at.
+- persona_revisions (immutable): persona_id, revision, schema_version, communication_dna, collaboration_preferences, purpose_contract, compatibility_metadata, non-secret fingerprint, created_by, created_at.
+- persona_scopes: persona_id, resource_type, resource_id, permitted_use, granted_by, consent_reference, expires_at, revoked_at, revision. Association is not ACL authorization.
+- persona_preference_events: persona_id, field_path, candidate_value, source_type, provenance_reference, observed_at, confidence, consent_state, approved_by, approved_at, supersedes_event_id, expires_at. Keep raw personal/sensitive content in its existing governed store; references only where possible.
+- persona_context_rules: persona_id, workspace_id or task_family, selection_mode (suggest | explicit-pinned | opt-in-auto), specificity, enabled, revision.
+- persona_activation: authenticated tenant/user/session/conversation scope, active_persona_id, active_revision policy, selection_version, idempotency_key, updated_at.
+- persona_execution_receipts: correlation_id, selected persona revision, scoped retrieval decision identifiers, effective presentation fingerprint, suppressed-field reason codes, tool eligibility invariant, fallback and fidelity metadata. Persist through the canonical runtime telemetry/audit contract with retention policy, not a second telemetry system.
+
+Names are *logical entities*, not a mandate to add seven tables. Map to current PersonaService SQL, PostgreSQL/RLS schema, UserModel preferences, governed memory metadata, and runtime receipts first. Add only demonstrably missing relations by forward-only migrations; keep tenant/owner unique indexes and protect read paths with RLS and application checks. Avoid copying project content into persona definition rows.
+
+## Learning lifecycle and control model
+
+Explicitly distinguish:
+
+- **User-declared**: an approved rule, such as "avoid gradients for this brand"; effective immediately within its selected purpose.
+- **Observed**: a trace or explicit correction suggesting a preference. Retain only under opt-in collection and appropriate retention; it is not a rule.
+- **Proposed**: evidence-based candidate with provenance, number of independently verified examples, confidence and applicable context; safe for user review.
+- **Approved**: revisioned preference active only in its specified persona/context, with rollback and explainable application.
+- **Rejected / expired / revoked**: excluded from effective resolution and further reuse where applicable; deletions propagate to indexes/caches.
+
+UserModel proposes; PersonaService records persona-scoped choices; NeuroRecall performs constrained retrieval; NeuroVault/governed memory owns storage/deletion. Never train or fine-tune underlying model weights as a side effect of persona preference learning. Future optional model adaptation requires a separate explicit data/governance product contract.
+
+Feedback may concern formatting, brand aesthetics, terminology, explanations, examples, process preferences and domain references. A user-approved process preference can request a workflow **as intent**, but normal CORTEX eligibility and tool authorization still decide execution. A style preference such as "always design in Photoshop" cannot install Photoshop or run tools.
+
+Conflict semantics: system/tenant/RBAC/task rules > explicit authorized turn instruction > pinned persona and allowed scope > user-approved purpose-specific preferences > approved global defaults > evidence suggestions (never operative) > conservative default. Scope constraints intersect with resource ACLs. Persona-private preferences never become global defaults without explicit promotion and a previewed diff.
+
+## Data isolation threat model (release blocking)
+
+- **Family/business crossing**: shared conversations can retain prior content after a persona switch. Existing in-thread history and summaries must be classified and filtered. Where filtering cannot reliably prove isolation, require a new scoped thread; do not claim seamless in-place isolation.
+- **Cross-tenant attack**: user-supplied persona IDs/resource IDs/session IDs never bypass server-derived identity. Exercise RLS, search indexes, caches, exported files, streaming events, preview and retrieval. Denied access yields no title, snippet, existence disclosure or stale cached content.
+- **Permission laundering**: imported personas, suggested rules, attachment text and remembered "preferences" cannot authorize privileged tools/actions.
+- **Feedback poisoning**: repetitive or malicious conversations must not overwrite user-approved preferences. Audit provenance; human approval controls promotion.
+- **Excessive collection**: memory and telemetry collection require purpose and retention; no sensitive attribute inference or silent household member profiling.
+- **Revocation**: removing source authorization immediately prevents future persona retrieval, including stale cached vectors and generated derivative preference proposals. Historical records follow governed deletion/retention rules.
+- **Team/business workspace**: sharing persona *definitions* is separate from authorizing access to team assets. Team owners/admins govern resources; individuals retain their private preferences. Shared persona changes require versioning, review, tenant-scoped audit and opt-in upgrades.
+
+## User experience expansion: Persona Library + purpose-first Studio
+
+The first step asks **"What will you use this persona for?"**, not "How warm should it sound?" Purpose cards are optional accelerators, never hardcoded providers or permission templates.
+
+Persona Library provides personal and business categories, pinned/recent personas, purpose search, owner/visibility indicators, active-scope badges and stable revision history.
+
+Creation flow: purpose → name/identity → communication and collaboration DNA → select permitted knowledge/projects → simulate with an actual authorized task → review/save → optionally activate. Advanced controls stay behind progressive disclosure. Save and activate remain distinct acknowledged operations.
+
+An active persona lives beside the **single shared assistant-ui composer** across supported workspaces. Prompt suggestions may recommend relevant personas, but auto-switching requires an explicit user-authored rule and must disclose changes. On switch, show whether context remains usable, is redacted, or requires a new scoped thread. Keep conversation continuity where safely possible, not at the cost of data isolation.
+
+"Teach this persona" surfaces: **This answer**, **This conversation**, **Save to Design Studio**, **Save globally**. Persistent choices show a diff, source and server receipt. The user can inspect "What this persona knows" (actually authorized references and preference records), "Why it suggested this", "What changed", and "Forget this preference". Do not present successful learning without governed persistence confirmation.
+
+Persona Lab includes task-preserving evaluations on real installed local models and opt-in context injection. A graphic-design persona comparison tests brand constraint adherence, terminology, factual correctness and usefulness, not just warmth scores. Tool-disabled preview cannot pretend to produce actual graphic artifacts. For governed tool-based tests, use a distinct sandbox with explicit authorization, side-effect isolation and separate gate.
+
+Use assistant-ui for composer, threads, actions and accessible presentation. Do not let a persona own a separate chat runtime. AG-UI should project only backend-observed persona selection, retrieval and feedback outcomes with redacted metadata.
+
+## Refined milestone order with explicit gates
+
+| Phase | Deliverable | Release-blocking proof |
+|---|---|---|
+| KP-01 | Current-source ownership and usage inventory including persona/service/UserModel/NeuroRecall | Active import/call map, classification, no duplicate ownership |
+| KP-02 | Canonical validated purpose-persona schema with safe communication contract | Old payload compatibility, permission-escalation rejection, serialization/import proof |
+| KP-03 | Immutable revisions, scopes, activations, feedback state and PostgreSQL persistence | Tenant isolation/RLS, cross-persona isolation, races, rollback, restart |
+| KP-04 | Runtime scoped resolver, per-turn snapshots, memory ACL intersection, truthful receipts | Real retrieval/prompt/stream proof; tool/provider/RBAC invariants |
+| KP-05 | Persona Library, purpose-first Studio, shared assistant-ui composer and active state | Create/activate/switch/teach/reload E2E; accessible mobile/desktop |
+| KP-06 | Governed Persona Lab with domain-specific factual and style evaluation | Paired real-model runs, blocked side effects, contamination tests |
+| KP-07 | Scoped selection rules, Lens and workspace-purpose recommendations | Determinism, consent, no unintended context crossover |
+| KP-08 | UserModel evidence proposals, learning approval/rejection, drift/fidelity, safe Passport | No silent durable edits, data lineage, deletion/revocation, poison tests |
+| KP-09 | Screenshots/docs, observability, user acceptance and feature-flag rollout | Complete security, persistence, browser and local-model gates |
+
+**Early vertical slice**: One user creates Design Studio, authorizes one project reference, selects it, receives one real response grounded only in the allowed scope, approves one correction, sees that correction on the next turn, switches to Family and cannot retrieve the design context. Prove this before elaborate galleries, sliders, adaptive ranking, or novel agent infrastructure.
+
+## Non-negotiable proof scenarios
+
+1. Alice and Bob in different tenants use identical persona names and resource identifiers; no cross-tenant existence/read leak.
+2. John changes Design Studio midway through a streaming response; its immutable revision persists to final receipt; the next turn uses the new revision.
+3. "Remember I prefer monochrome layouts" updates **only** the explicitly approved Design Studio scope; Business and Family remain unchanged.
+4. A revoked brand project disappears from future retrieval and cannot be reintroduced through a stale vector/cache hit.
+5. Conversation handoff from Business to Family either filters every restricted prior context or requires a new thread, with truthful user notification.
+6. An imported "CEO" persona demanding admin tools, external model use, or secret disclosure cannot change eligibility, provider policy or memory rules.
+7. Preview and failure paths never mark save, activation, persona learning, tool execution or model output successful without corresponding backend receipt.
+8. An unapproved evidence-derived proposal never becomes active despite repeated exposure or multiple concurrent sessions.
+9. A registered local model can produce a valid Design Studio response with stable task requirements even when output style fidelity is degraded.
+10. Shared team persona updates cannot overwrite a member's private preferences or broaden resource ACLs.
+
+## Delivery instruction
+
+Stay on PR #501 and its existing branch. First reconcile actual code ownership and migrations before changing implementation. Maintain one ChatRuntime/PromptRuntime, one PersonaService persistence owner, one governed memory stack and one CORTEX permission decision path. Commit this revised **design** without claiming implementation, passing tests or live learning. The immediate next work is KP-01/02 with the early vertical slice guiding acceptance.
