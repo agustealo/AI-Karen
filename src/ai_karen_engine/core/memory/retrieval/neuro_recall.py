@@ -244,6 +244,22 @@ class NeuroRecall:
                 rejected_count += 1
                 continue
 
+            # Persona filtering is an eligibility restriction applied after
+            # mandatory tenant/user isolation. Unattributed memories remain
+            # visible as shared history; differently attributed memories do not.
+            persona_filter = request.metadata.get("persona_filter")
+            if persona_filter is not None:
+                if not isinstance(persona_filter, str) or not persona_filter.strip():
+                    raise RecallScopeError("persona_filter must be a nonempty string")
+                custom_metadata = getattr(metadata, "custom", {}) if metadata else {}
+                tagged_persona = (
+                    custom_metadata.get("persona_id")
+                    if isinstance(custom_metadata, dict) else None
+                )
+                if tagged_persona is not None and tagged_persona != persona_filter:
+                    rejected_count += 1
+                    continue
+
             candidate = self._to_candidate(memory, request)
             guard = evaluate_guardrails(candidate)
             if guard.outcome.value in {"reject", "quarantine"}:
