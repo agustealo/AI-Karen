@@ -672,3 +672,12 @@ For KP-11 capture audit evidence per task: source commit, command, environment, 
 **Build order:** KP-01/02/03 canonical foundations -> KP-04/05 single-persona real runtime -> KP-06 basic UX -> KP-07 task-aware advisor -> KP-10 security/rollout. KP-08/09 advanced additions remain deferred; KP-11 teams follows proven collaboration dependencies and may ship separately, on the *same evolving PR only if small and nonblocking*, otherwise after merging the verified foundation to main. Avoid PR stacking and stale conflicting branches.
 
 **Single source of truth:** persona identity/revision in existing PersonaService; memory/Facts in governed NeuroVault projection; preference proposals in UserModel; authority in ChatRuntime/CORTEX; execution in Deep Agents and registered tools; presentation in assistant-ui; streamed observed events in AG-UI. No new persona brain.
+
+
+## KP-01 implementation checkpoint: verified defect and first remediation
+
+The active `core/persona/contracts.py` defines a dataclass Persona with `tone`, `verbosity` and `instructions`; PersonaService, the API and SQL expect `system_prompt`, `default_tone`, `default_verbosity`, `default_language`, `domain_knowledge`, `is_active` and `.dict()`. UserPersonaPreferences and ChatStyleContext likewise differ from service usage. This is a confirmed contract mismatch requiring reconciliation, not merely an architectural concern.
+
+A first security remediation has been committed: the service's process-global `_persona_cache` is restricted to built-in system personas, and custom ID lookup now goes through user/tenant-scoped preferences. Prior global caching by persona ID alone risked cross-user and cross-tenant disclosure. A targeted regression test for identical IDs across tenants was committed. **The test has not been run, and no full authorization or runtime guarantee is claimed.**
+
+Next: reconcile existing typed contracts and Pydantic/SQL consumers in place; execute import and unit tests, PostgreSQL RLS and rollback/restart tests, and audit other global caches before adding migrations, Advisor UI, or team execution. Keep KP-01/02 open until proven.
