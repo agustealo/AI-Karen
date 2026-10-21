@@ -236,7 +236,7 @@ jobs:
                                   "('rls-cross-tenant-insert', 'rls-tenant-a', 'rls-user-a', "
                                   "'Denied', 'Denied', 'friendly', 'balanced', 'en_US')"
                               )
-                      except asyncpg.CheckViolationError:
+                      except asyncpg.InsufficientPrivilegeError:
                           pass
                       else:
                           raise AssertionError("Cross-tenant insert bypassed persona RLS")
