@@ -66,7 +66,7 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
         # Either activation precedes deletion, or activation fails after
         # deletion; no committed preference can reference the deleted persona.
         assert outcomes[1] is True
-        assert outcomes[0] is not None
+        assert not isinstance(outcomes[0], Exception) or isinstance(outcomes[0], ValueError)
         async with db.get_async_session() as session:
             row = await session.execute(
                 text(
@@ -79,8 +79,8 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
                 {"tenant": tenant_id, "user": user_id},
             )
             active, existing = row.one()
-        assert active is None or existing is not None
-        assert active != persona_id
+        assert active is None
+        assert existing is None
 
         with pytest.raises(ValueError, match="unavailable"):
             await service.switch_persona(user_id, tenant_id, persona_id)
