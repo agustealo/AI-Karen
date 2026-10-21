@@ -23,3 +23,6 @@ Execute `python scripts/audit/persona_legacy_memory_inventory.py --tenant-id <au
 Persona lifecycle CI tests have been committed but latest-head passage is unverified. An inventory count is not migration completion.
 
 The source scanner reports file, line and symbol, including declarations and tests. Every result must be classified as active, compatibility, migration, test or dead before deletion. A scanner commit alone is **not** a completed repository-wide audit; run it on a full checkout and review the results.
+
+## Strict reference triage
+Run `python scripts/audit/persona_memory_references.py --root . --output persona-memory-references.json --fail-on-review` on a full checkout. A nonzero exit signals an unresolved production reference; it does not delete or modify code. Classifications are `historical_schema`, `audit_tool`, `test_reference`, `compatibility_declaration`, or `requires_review`. Review each unresolved result manually and record its active owner before removing or redirecting it. This is a conservative triage, not proof that all historical data can be migrated.
