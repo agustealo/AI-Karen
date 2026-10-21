@@ -433,7 +433,8 @@ class PersonaService:
             preferences = UserPersonaPreferences(**preferences_data)
         else:
             preferences = UserPersonaPreferences(user_id=user_id, tenant_id=tenant_id)
-            await self._save_user_preferences(user_id, tenant_id, preferences)
+            if not await self._save_user_preferences(user_id, tenant_id, preferences):
+                raise RuntimeError("Initial persona preferences were not persisted")
 
         preferences.custom_personas = await self._load_custom_personas(user_id, tenant_id)
         self._user_preferences_cache[cache_key] = preferences
@@ -448,8 +449,6 @@ class PersonaService:
         """Update user's persona preferences."""
         tenant_id = self._normalize_tenant_id(tenant_id)
         preferences = await self.get_user_preferences(user_id, tenant_id)
-        previous_active_persona_id = preferences.active_persona_id
-
         allowed_fields = {
             "active_persona_id", "default_tone", "default_verbosity",
             "default_language", "enable_style_adaptation",
@@ -469,8 +468,8 @@ class PersonaService:
 
         if preferences.active_persona_id:
             active_persona = await self.get_persona(preferences.active_persona_id, user_id, tenant_id)
-            if active_persona is None:
-                raise ValueError(f"Persona {preferences.active_persona_id} not found")
+            if active_persona is None or not active_persona.is_active:
+                raise ValueError("Selected persona is unavailable")
 
         preferences.updated_at = datetime.utcnow()
         if not await self._save_user_preferences(user_id, tenant_id, preferences):
@@ -489,8 +488,8 @@ class PersonaService:
         persona = None
         if persona_id:
             persona = await self.get_persona(persona_id, user_id, tenant_id)
-            if not persona:
-                raise ValueError(f"Persona {persona_id} not found")
+            if not persona or not persona.is_active:
+                raise ValueError("Selected persona is unavailable")
         return await self.update_user_preferences(
             user_id,
             tenant_id,
