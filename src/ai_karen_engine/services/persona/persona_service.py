@@ -200,7 +200,6 @@ class PersonaService:
             )
             rows = result.fetchall()
         personas = [self._persona_from_row(row) for row in rows]
-        for persona in personas:
         return personas
 
     async def _insert_persona(self, user_id: str, tenant_id: str, persona: Persona) -> None:
