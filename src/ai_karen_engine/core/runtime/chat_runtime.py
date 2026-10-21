@@ -372,9 +372,8 @@ class ChatRuntime:
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
-                presentation = self._verified_weather_presentation(
-                    request, decision, plan, direct_result,
-                )
+                presentation = (self._verified_planner_presentation(decision, plan, direct_result)
+                                or self._verified_weather_presentation(request, decision, plan, direct_result))
                 if presentation is not None:
                     structured = provider_meta.get("structured_content")
                     structured = dict(structured) if isinstance(structured, dict) else {}
@@ -2303,6 +2302,17 @@ class ChatRuntime:
         )
 
     @staticmethod
+    def _verified_planner_presentation(decision, plan, result):
+        """Only previously authorized planner-service output may become a UI part."""
+        if (decision.intent != "planner.read" or not result.success or result.degraded
+                or result.source != "planner" or result.source_id != "planner.read"
+                or "planner.read" not in set(plan.allowed_capabilities)):
+            return None
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+        candidate = result.payload.get("presentation") if isinstance(result.payload, dict) else None
+        return validate_presentation(candidate) if candidate is not None else None
+
+    @staticmethod
     def _verified_weather_presentation(request, decision, plan, result):
         """Reuse one evidence contract for streaming and standard chat."""
         # Projection is permitted only for a successful authorized tool receipt.
@@ -2375,9 +2385,8 @@ class ChatRuntime:
         if _meta is not None:
             _meta.update(normalized)
 
-        presentation = self._verified_weather_presentation(
-            request, decision, plan, result,
-        )
+        presentation = (self._verified_planner_presentation(decision, plan, result)
+                        or self._verified_weather_presentation(request, decision, plan, result))
         if presentation is not None and _meta is not None:
             structured = _meta.get("structured_content")
             structured = dict(structured) if isinstance(structured, dict) else {}
