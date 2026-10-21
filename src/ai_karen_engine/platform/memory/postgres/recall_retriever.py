@@ -115,6 +115,24 @@ class PostgresRecallRetriever:
         content = str(row.content or "")
         relevance = PostgresRecallRetriever._lexical_relevance(query_text, content)
         created_at = row.created_at or datetime.now(timezone.utc).replace(tzinfo=None)
+        # The governed ledger event owns the original entry provenance.
+        # Recover only persona attribution; never reuse stored identity,
+        # consent or authorization metadata in place of assertion checks.
+        event_payload = getattr(getattr(row, "event", None), "payload", None)
+        if not isinstance(event_payload, dict):
+            event_payload = {}
+        saved_metadata = event_payload.get("metadata")
+        if not isinstance(saved_metadata, dict):
+            saved_metadata = {}
+        saved_custom = saved_metadata.get("custom")
+        if not isinstance(saved_custom, dict):
+            saved_custom = {}
+        persona_id = saved_custom.get("persona_id")
+        persona_provenance = (
+            {"persona_id": persona_id}
+            if isinstance(persona_id, str) and persona_id.strip()
+            else {}
+        )
         metadata = MemoryMetadata(
             tenant_id=str(row.tenant_id),
             user_id=str(row.user_id),
@@ -122,6 +140,7 @@ class PostgresRecallRetriever:
             source="postgres_memory_ledger",
             custom={
                 "source_store": "postgres",
+                **persona_provenance,
                 "assertion_id": str(row.assertion_id),
                 "event_id": str(row.event_id),
                 "scope": row.scope,
