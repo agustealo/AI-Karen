@@ -19,6 +19,21 @@ describe("versioned presentation registry", () => {
     expect(html).toContain("mph");
   });
 
+  it("renders verified weather comparisons without synthesizing any measurements", () => {
+    const comparison = { ...valid, component_type: "weather.comparison", data: [
+      valid.data,
+      { location: "New York, NY", temperature_f: 62, wind_speed_mph: 2 },
+    ] };
+    expect(parseKarenPresentation(comparison)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={comparison} />);
+    expect(html).toContain("Detroit");
+    expect(html).toContain("New York");
+    expect(html).toContain("0.3 mph");
+    expect(html).toContain("2 mph");
+    expect(parseKarenPresentation({ ...comparison, data: [valid.data] })).toBeNull();
+    expect(parseKarenPresentation({ ...comparison, data: [valid.data, { location: "Bad", temperature_f: 500 }] })).toBeNull();
+  });
+
   it("fails closed for unknown versions and components", () => {
     expect(parseKarenPresentation({ ...valid, schema_version: 2 })).toBeNull();
     expect(parseKarenPresentation({ ...valid, component_type: "unsafe.html" })).toBeNull();
