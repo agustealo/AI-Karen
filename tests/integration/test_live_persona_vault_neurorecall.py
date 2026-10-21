@@ -5,7 +5,7 @@ import os
 import uuid
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from ai_karen_engine.core.memory.protocols import VaultContext
 from ai_karen_engine.core.memory.retrieval.neuro_recall import NeuroRecall, RecallRequest
@@ -83,7 +83,6 @@ async def test_vault_to_recall_persona_filter_and_revocation():
         assert not other_tenant.memories
 
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
-            from sqlalchemy import select
             scope = (await session.execute(
                 select(ConsentScope).where(ConsentScope.scope_id == consent_id)
             )).scalar_one()
@@ -93,7 +92,7 @@ async def test_vault_to_recall_persona_filter_and_revocation():
     finally:
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             event_ids = (await session.execute(
-                __import__("sqlalchemy").select(MemoryAssertion.event_id).where(
+                select(MemoryAssertion.event_id).where(
                     MemoryAssertion.assertion_id.in_(ids)
                 )
             )).scalars().all()
