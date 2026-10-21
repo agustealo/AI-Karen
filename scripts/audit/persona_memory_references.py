@@ -17,6 +17,23 @@ PATTERNS = (
     "_retrieve_memories",
 )
 SUFFIXES = {".py", ".sql", ".ts", ".tsx", ".js", ".jsx", ".yml", ".yaml"}
+
+
+def classify(path: str, symbol: str, line: str) -> str:
+    """Conservative triage: only proven declarations/docs are non-runtime."""
+    normalized = path.replace("\\\\", "/")
+    if normalized.startswith(("tests/", "test/")) or "/tests/" in normalized:
+        return "test_reference"
+    if normalized.startswith(("supabase/migrations/", "docker/migrations/", "docker/database/migrations/")):
+        return "historical_schema"
+    if normalized.startswith(("scripts/audit/",)):
+        return "audit_tool"
+    if symbol in ("store_persona_memory", "recall_persona_memories") and (
+        line.lstrip().startswith(("async def " + symbol, "def " + symbol))
+    ):
+        return "compatibility_declaration"
+    return "requires_review"
+
 EXCLUDED = {".git", "node_modules", ".venv", "venv", "dist", "build", ".next"}
 
 
@@ -38,6 +55,7 @@ def audit(root: Path) -> list[dict[str, object]]:
                         "path": str(path.relative_to(root)),
                         "line": index,
                         "symbol": pattern,
+                        "classification": classify(str(path.relative_to(root)), pattern, line),
                     })
     return matches
 
@@ -46,6 +64,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--fail-on-review", action="store_true", help="Exit nonzero when a production reference needs manual review")
     args = parser.parse_args()
     result = {"schema_version": 1, "matches": audit(args.root.resolve())}
     serialized = json.dumps(result, indent=2, sort_keys=True) + "\n"
@@ -53,6 +72,8 @@ def main() -> None:
         args.output.write_text(serialized, encoding="utf-8")
     else:
         print(serialized)
+    if args.fail_on_review and any(item["classification"] == "requires_review" for item in result["matches"]):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
