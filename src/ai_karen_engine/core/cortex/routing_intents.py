@@ -6,8 +6,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "planner.read": {
         "triggers": ["show my planner", "list my tasks", "show my tasks"],
         "patterns": [
-            r"^(?:please\\s+)?(?:show|list|display)\\s+(?:me\\s+)?my\\s+(?:planner|tasks|commitments)(?:\\s+for\\s+today)?[?!.]*$",
-            r"^what(?:\\x27s|\\s+is)\\s+on\\s+my\\s+planner[?!.]*$",
+            r"^(?:please\s+)?(?:show|list|display)\s+(?:me\s+)?my\s+(?:planner|tasks|commitments)(?:\s+for\s+today)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+on\s+my\s+planner[?!.]*$",
         ],
         "required_capability": "planner.read",
         "requires_live_data": True,
