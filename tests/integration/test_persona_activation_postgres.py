@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 from ai_karen_engine.services.persona.persona_service import PersonaService
@@ -66,6 +67,19 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
             )
         assert selected == persona_id
 
+        # The database must reject a bypass of PersonaService's authorization
+        # checks, not merely rely on the application-side guard.
+        with pytest.raises(IntegrityError):
+            async with db.get_async_session() as session:
+                await session.execute(
+                    text(
+                        "UPDATE user_persona_preferences "
+                        "SET active_persona_id=:candidate "
+                        "WHERE tenant_id=:tenant AND user_id=:user"
+                    ),
+                    {"candidate": str(uuid4()), "tenant": tenant_id, "user": user_id},
+                )
+
         outcomes = await asyncio.gather(
             service.switch_persona(user_id, tenant_id, persona_id),
             service.delete_persona(user_id, tenant_id, persona_id),
@@ -116,6 +130,12 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
                 {"tenant": tenant_id, "user": user_id},
             )
         assert persisted == "assistant"
+
+        # A fresh service instance must observe the committed database value,
+        # rather than a process-local cache entry.
+        reopened = PersonaService(db_client=MultiTenantPostgresClient())
+        fresh = await reopened.get_user_preferences(user_id, tenant_id)
+        assert fresh.active_persona_id == "assistant"
 
     finally:
         await service._delete_persona_record(user_id, tenant_id, persona_id)
