@@ -94,6 +94,29 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
             await service.switch_persona(user_id, tenant_id, persona_id)
 
 
+        # A failed transaction must roll back the preference mutation.
+        await service.switch_persona(user_id, tenant_id, "assistant")
+        with pytest.raises(RuntimeError, match="force rollback"):
+            async with db.get_async_session() as session:
+                await session.execute(
+                    text(
+                        "UPDATE user_persona_preferences "
+                        "SET active_persona_id = NULL "
+                        "WHERE tenant_id = :tenant AND user_id = :user"
+                    ),
+                    {"tenant": tenant_id, "user": user_id},
+                )
+                raise RuntimeError("force rollback")
+        async with db.get_async_session() as session:
+            persisted = await session.scalar(
+                text(
+                    "SELECT active_persona_id FROM user_persona_preferences "
+                    "WHERE tenant_id = :tenant AND user_id = :user"
+                ),
+                {"tenant": tenant_id, "user": user_id},
+            )
+        assert persisted == "assistant"
+
     finally:
         await service._delete_persona_record(user_id, tenant_id, persona_id)
         service._user_preferences_cache.pop(service._cache_key(user_id, tenant_id), None)
