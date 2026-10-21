@@ -44,7 +44,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         items = data.get("tasks")
         if not isinstance(items, list) or not 1 <= len(items) <= 20:
             return None
-        statuses = {"todo", "in_progress", "completed", "blocked"}
+        statuses = {"todo", "in_progress", "completed", "cancelled"}
         safe_tasks = []
         for item in items:
             if not isinstance(item, dict):
