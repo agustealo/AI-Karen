@@ -681,8 +681,12 @@ class PersonaService:
             memory_entry.persona_name = context.persona.name
             memory_entry.tone_used = context.get_effective_tone()
             memory_entry.verbosity_used = context.get_effective_verbosity()
-        await self._store_memory_entry(memory_entry)
-        logger.debug("Stored persona memory for user %s", user_id)
+        # Legacy persona_memory_entries is NOT NeuroVault. Never claim this
+        # operation succeeded when its write failed, and never silently fall
+        # back to an ungoverned memory path.
+        if not await self._store_memory_entry(memory_entry):
+            raise RuntimeError("Persona memory was not persisted")
+        logger.debug("Stored legacy persona memory for user %s", user_id)
         return memory_entry
 
     async def recall_persona_memories(
@@ -913,8 +917,7 @@ class PersonaService:
     ) -> List[PersonaMemoryEntry]:
         """Retrieve memories from database with filtering."""
         if not self.db_client:
-            logger.warning("No database client available for retrieving memories")
-            return []
+            raise RuntimeError("Persona memory storage is unavailable")
         try:
             clauses = [
                 "user_id = :user_id",
@@ -985,7 +988,7 @@ class PersonaService:
             return memories
         except Exception as exc:
             logger.error("Failed to retrieve memories: %s", exc)
-            return []
+            raise RuntimeError("Persona memory retrieval failed") from exc
 
 
 class MockNLPAnalyzer:
