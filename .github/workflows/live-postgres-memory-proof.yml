@@ -24,6 +24,7 @@ on:
       - "tests/integration/test_live_automation_task_claims.py"
       - "tests/integration/test_persona_activation_postgres.py"
       - "tests/integration/test_live_persona_memory_provenance.py"
+      - "tests/integration/test_live_persona_vault_neurorecall.py"
       - "src/ai_karen_engine/services/persona/**"
       - "src/ai_karen_engine/core/persona/**"
       - "src/ai_karen_engine/services/automation/**"
@@ -253,3 +254,4 @@ jobs:
           PY
           pytest tests/integration/test_persona_activation_postgres.py -q -rs
           pytest tests/integration/test_live_persona_memory_provenance.py -q -rs
+          pytest tests/integration/test_live_persona_vault_neurorecall.py -q -rs
