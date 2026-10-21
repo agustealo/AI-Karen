@@ -347,7 +347,7 @@ function AssistantMessage() {
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Bot className="h-4 w-4" aria-hidden="true" /> Karen
         </div>
-        <MessagePrimitive.Parts components={{ ...agentParts, Text: KarenMarkdownText, ChainOfThought: KarenExecutionTrace }} />
+        <MessagePrimitive.Parts components={{ data: agentParts.data, Text: KarenMarkdownText, ChainOfThought: KarenExecutionTrace }} />
       </div>
       <KarenCopyAction />
     </MessagePrimitive.Root>
