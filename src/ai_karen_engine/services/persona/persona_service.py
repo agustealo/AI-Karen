@@ -489,6 +489,14 @@ class PersonaService:
         unknown = set(updates).difference(allowed_fields)
         if unknown:
             raise ValueError("Unsupported persona preference fields")
+        # Active selection is a transactional operation, never a whole-row
+        # preference upsert that can race deletion or overwrite a newer choice.
+        if "active_persona_id" in updates:
+            if len(updates) != 1:
+                raise ValueError("Update active_persona_id separately from style settings")
+            return await self._switch_persona_atomically(
+                user_id, tenant_id, updates["active_persona_id"]
+            )
 
         # Work on a detached copy so failed persistence cannot mutate the
         # cached authoritative state.
