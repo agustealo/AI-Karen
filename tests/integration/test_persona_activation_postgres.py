@@ -160,6 +160,32 @@ async def test_concurrent_switch_delete_and_scoped_denial() -> None:
         assert language == "french"
         assert controls is False
 
+        # Same-setting edits with a shared expected revision cannot both win.
+        async with db.get_async_session() as session:
+            revision = await session.scalar(
+                text(
+                    "SELECT revision FROM user_persona_preferences "
+                    "WHERE tenant_id=:tenant AND user_id=:user"
+                ),
+                {"tenant": tenant_id, "user": user_id},
+            )
+        competing = await asyncio.gather(
+            service.update_user_preferences(
+                user_id, tenant_id, {"default_language": "english"},
+                expected_revision=revision,
+            ),
+            reopened.update_user_preferences(
+                user_id, tenant_id, {"default_language": "german"},
+                expected_revision=revision,
+            ),
+            return_exceptions=True,
+        )
+        assert sum(not isinstance(item, Exception) for item in competing) == 1
+        assert sum(
+            isinstance(item, ValueError) and "revision conflict" in str(item)
+            for item in competing
+        ) == 1
+
     finally:
         await service._delete_persona_record(user_id, tenant_id, persona_id)
         service._user_preferences_cache.pop(service._cache_key(user_id, tenant_id), None)
