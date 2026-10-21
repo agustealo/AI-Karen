@@ -121,3 +121,9 @@ The backend owner has now been located through `src/ai_karen_engine/server/route
 **Critical mismatch:** the frontend's `MessageResponse` TypeScript interface includes `structured_content`, but the backend's actual `MessageResponse` Pydantic schema does not declare that field. Do not rely on it for replay until the backend explicitly supports it. Persisted presentation data must be committed through the existing conversation owner, not the event projector or thin API route.
 
 The next implementation must trace the canonical completion/persistence transaction first, identify which runtime-origin data represents a verified weather tool result, and add an evidence-bound, bounded presentation field there. After that, extend the existing response schema and AG-UI projection with the same versioned envelope and add restart-replay, tenant/RBAC and idempotence proofs. Do not create a dormant presentation event or a second store without an actual runtime producer.
+
+## Implemented canonical history exposure
+
+`MessageResponse.structured_content` now projects a dictionary already stored as `message.metadata['structured_content']` by the existing runtime transcript path. This closes the backend serializer omission without adding a new persistence owner. The serializer does not synthesize presentation records when data is absent or malformed. Its tests are at `tests/api_routes/chat/test_conversation_structured_content_response.py`.
+
+**Not yet replay-complete:** structured content is not necessarily a validated `karen.presentation.v1` envelope, and `readOwnedHistory` still imports text-only assistant-ui messages. Before feeding stored data into assistant-ui, bind the presentation to a verified capability receipt, validate it server-side, and convert it using a supported AG-UI activity/message restoration contract. Neither schema exposure nor these tests proves durable generative UI replay.
