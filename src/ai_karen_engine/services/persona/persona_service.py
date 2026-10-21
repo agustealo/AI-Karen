@@ -503,9 +503,15 @@ class PersonaService:
 
         # Only update requested fields. A prior whole-row upsert could
         # overwrite concurrent persona selection and unrelated style changes.
-        await self.get_user_preferences(user_id, tenant_id)
+        current = await self.get_user_preferences(user_id, tenant_id)
+        # Validate the complete typed contract before persisting any column.
+        # In particular, invalid enum values must not poison future reads.
+        validated = UserPersonaPreferences(
+            **{**current.model_dump(), **updates}
+        )
         field_values = {}
-        for key, value in updates.items():
+        for key in updates:
+            value = getattr(validated, key)
             if hasattr(value, "value"):
                 value = value.value
             field_values[key] = value
