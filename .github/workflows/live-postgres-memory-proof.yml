@@ -190,6 +190,7 @@ jobs:
               conn = await asyncpg.connect(os.environ["DATABASE_URL"])
               try:
                   await conn.execute(Path("supabase/migrations/20261021020000_40_persona_tenant_rls.sql").read_text())
+                  await conn.execute(Path("supabase/migrations/20261021030000_41_persona_preference_revision.sql").read_text())
                   for table in ("custom_personas", "user_persona_preferences", "persona_memory_entries"):
                       enabled = await conn.fetchrow(
                           "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid=$1::regclass",
