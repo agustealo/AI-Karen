@@ -189,7 +189,8 @@ const agentParts = {
   tools: {
     // Render-only. No client execution, fake tool result, or permission path.
     Fallback: ({ toolName, status, result }: { toolName?: string; status?: { type?: string }; result?: unknown }) => {
-      if (status?.type === "complete" && normalizeWeatherObservation(result)) {
+      const weatherTool = typeof toolName === "string" && /(?:^|[._/-])(?:weather|forecast|conditions)(?:$|[._/-])/i.test(toolName);
+      if (weatherTool && status?.type === "complete" && normalizeWeatherObservation(result)) {
         return <KarenWeatherPresentation data={result} />;
       }
       const observedState = status?.type || "unknown";
