@@ -5,6 +5,7 @@ import { KarenPresentationRegistry, parseKarenPresentation } from "./KarenPresen
 const valid = {
   schema_version: 1,
   presentation_id: "weather-detroit-1",
+  evidence_ref: "tool-weather-result-1",
   component_type: "weather.observation",
   data: { location: "Detroit, Michigan", temperature_f: 60.3, wind_speed_mph: 0.3 },
 } as const;
@@ -22,6 +23,12 @@ describe("versioned presentation registry", () => {
     expect(parseKarenPresentation({ ...valid, schema_version: 2 })).toBeNull();
     expect(parseKarenPresentation({ ...valid, component_type: "unsafe.html" })).toBeNull();
     expect(parseKarenPresentation({ ...valid, inject: "<script/>" })).toBeNull();
+  });
+
+  it("requires provenance and bounds oversized payloads", () => {
+    const { evidence_ref: _discard, ...withoutEvidence } = valid;
+    expect(parseKarenPresentation(withoutEvidence)).toBeNull();
+    expect(parseKarenPresentation({ ...valid, data: { ...valid.data, notes: "x".repeat(40_000) } })).toBeNull();
   });
 
   it("rejects mismatched or malformed data", () => {
