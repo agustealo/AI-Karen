@@ -22,6 +22,9 @@ on:
       - "tests/integration/test_live_profile_*.py"
       - "tests/integration/test_live_name_formation_path.py"
       - "tests/integration/test_live_automation_task_claims.py"
+      - "tests/integration/test_persona_activation_postgres.py"
+      - "src/ai_karen_engine/services/persona/**"
+      - "src/ai_karen_engine/core/persona/**"
       - "src/ai_karen_engine/services/automation/**"
       - "tests/services/automation/**"
       - "requirements/ci/chat.txt"
@@ -124,3 +127,40 @@ jobs:
           pytest tests/integration/test_live_profile_reconciliation.py -q -rs
           pytest tests/integration/test_live_memory_consent_revocation.py -q -rs
           pytest tests/integration/test_live_automation_task_claims.py -q -rs
+
+      - name: Prove persona activation/delete race against disposable PostgreSQL
+        env:
+          KAREN_TEST_DISPOSABLE_DATABASE: "1"
+          KAREN_TEST_PERSONA_POSTGRES: "1"
+          KAREN_TEST_PERSONA_USER_ID: "persona-ci-user"
+          KAREN_TEST_PERSONA_TENANT_ID: "persona-ci-tenant"
+        run: |
+          python - <<'PY'
+          import asyncio
+          from pathlib import Path
+          from sqlalchemy import text
+          from ai_karen_engine.persistence.postgres import get_postgres_engine
+
+          source = Path("supabase/migrations/20260827010000_01_core_persona_runtime.sql").read_text()
+          start = source.index("CREATE TABLE IF NOT EXISTS custom_personas (")
+          finish = source.index("-- BASELINE SOURCE: 20260823030000_chat_runtime_control_plane.sql")
+          chunk = source[start:finish]
+          # Execute the actual canonical baseline persona DDL segment.
+          async def prepare():
+              engine = get_postgres_engine().async_engine
+              async with engine.begin() as conn:
+                  for statement in chunk.split("DO $$"):
+                      if statement == chunk.split("DO $$")[0]:
+                          # Split normal SQL at statement delimiters.
+                          for sql in statement.split(";"):
+                              if sql.strip():
+                                  await conn.execute(text(sql))
+                          continue
+                      # The remaining block is a PostgreSQL DO body followed
+                      # by a baseline section header; run it as a single block.
+                      body = "DO $$" + statement
+                      body = body[:body.index("$$;") + 3]
+                      await conn.execute(text(body))
+          asyncio.run(prepare())
+          PY
+          pytest tests/integration/test_persona_activation_postgres.py -q -rs
