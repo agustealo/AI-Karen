@@ -136,7 +136,7 @@ function formatObserved(observation: WeatherObservation): string | null {
   const local = observation.observedAt.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
   if (!local) return observation.observedAt;
   const [, date, time] = local;
-  return `${date} ${time} local${observation.timezone ? ` (\${observation.timezone})` : ""}`;
+  return `${date} ${time} local${observation.timezone ? ` (${observation.timezone})` : ""}`;
 }
 
 function Metric({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
