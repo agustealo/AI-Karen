@@ -540,3 +540,70 @@ async def test_conversation_delete_requires_same_user() -> None:
     assert await gateway.delete_conversation(context) is True
     assert (context.tenant_id, conversation_id) not in repository.conversations
 
+
+
+@pytest.mark.asyncio
+async def test_presentation_survives_canonical_history_and_retry_without_duplicate() -> None:
+    """The assistant's structured evidence stays in its owned durable message."""
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "weather-request-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "request-1:weather-tool",
+        "data": {"location": "Detroit", "temperature_f": 60.3},
+    }
+    metadata = {"structured_content": {"presentation": envelope}}
+    initial = await gateway.persist_completed_turn(
+        _context(request_id="weather-request"),
+        user_text="What's the weather in Detroit?",
+        assistant_text="The observed temperature is 60.3°F.",
+        response_metadata=metadata,
+    )
+    assert initial.status == "persisted"
+    assert len(repository.messages) == 2
+    assistant = repository.messages[1]
+    assert assistant.role == "assistant"
+    assert assistant.metadata["structured_content"]["presentation"] == envelope
+
+    replay = await gateway.persist_completed_turn(
+        _context(request_id="weather-request"),
+        user_text="What's the weather in Detroit?",
+        assistant_text="The observed temperature is 60.3°F.",
+        response_metadata=metadata,
+    )
+    assert replay.status == "already_persisted"
+    assert len(repository.messages) == 2
+
+    history = await gateway.load_history(_context(request_id="next-request"), limit=10)
+    assert history.status == "loaded"
+    assert history.messages[-1].metadata["structured_content"]["presentation"] == envelope
+
+
+@pytest.mark.asyncio
+async def test_foreign_tenant_cannot_read_persisted_presentation_evidence() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    persisted = await gateway.persist_completed_turn(
+        _context(request_id="weather-request"),
+        user_text="What's the weather in Detroit?",
+        assistant_text="Observed temperature: 60.3°F.",
+        response_metadata={
+            "structured_content": {
+                "presentation": {
+                    "schema_version": 1,
+                    "presentation_id": "weather-request",
+                    "component_type": "weather.observation",
+                    "evidence_ref": "weather-request:weather-tool",
+                    "data": {"location": "Detroit", "temperature_f": 60.3},
+                }
+            }
+        },
+    )
+    assert persisted.status == "persisted"
+    with pytest.raises((PermissionError, RuntimeError, ValueError)):
+        await gateway.get_owned_snapshot(
+            _context(tenant_id="tenant-other", request_id="foreign-read"),
+            message_limit=10,
+        )
