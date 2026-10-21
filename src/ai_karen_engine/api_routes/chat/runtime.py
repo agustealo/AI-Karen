@@ -279,6 +279,7 @@ def _execution_context(
         correlation_id=correlation_id,
         roles=list(user.get("roles") or []),
         permissions=list(user.get("permissions") or []),
+        authenticated_user=UserData.ensure(user),
     )
 
 
