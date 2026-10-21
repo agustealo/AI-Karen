@@ -5,7 +5,7 @@ Business logic for managing personas, style controls, and NLP-driven adaptation.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
@@ -58,6 +58,13 @@ class PersonaService:
         return normalized or "default"
 
     @staticmethod
+    def _db_timestamp(value: datetime) -> datetime:
+        """Store UTC wall time in legacy TIMESTAMP WITHOUT TIME ZONE columns."""
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    @staticmethod
     def _persona_payload(persona: Persona) -> Dict[str, Any]:
         return {
             "id": persona.id,
@@ -75,8 +82,8 @@ class PersonaService:
             "formality_level": persona.formality_level,
             "creativity_level": persona.creativity_level,
             "is_active": persona.is_active,
-            "created_at": persona.created_at,
-            "updated_at": persona.updated_at,
+            "created_at": PersonaService._db_timestamp(persona.created_at),
+            "updated_at": PersonaService._db_timestamp(persona.updated_at),
         }
 
     @staticmethod
@@ -760,8 +767,8 @@ class PersonaService:
                 "show_persona_selector": preferences.show_persona_selector,
                 "show_style_controls": preferences.show_style_controls,
                 "enable_quick_style_adjustments": preferences.enable_quick_style_adjustments,
-                "created_at": preferences.updated_at,
-                "updated_at": preferences.updated_at,
+                "created_at": self._db_timestamp(preferences.updated_at),
+                "updated_at": self._db_timestamp(preferences.updated_at),
             }
             async with self.db_client.get_async_session() as session:
                 await session.execute(query, payload)
