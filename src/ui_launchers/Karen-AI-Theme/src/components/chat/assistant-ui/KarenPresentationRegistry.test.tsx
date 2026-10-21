@@ -11,6 +11,23 @@ const valid = {
 } as const;
 
 describe("versioned presentation registry", () => {
+  it("renders only validated read-only planner tasks", () => {
+    const envelope = {
+      ...valid,
+      component_type: "planner.task_list",
+      data: { tasks: [
+        { id: "task-1", title: "Review project", status: "todo" },
+        { id: "task-2", title: "Approve draft", status: "blocked" },
+      ] },
+    };
+    expect(parseKarenPresentation(envelope)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={envelope} />);
+    expect(html).toContain("Review project");
+    expect(html).toContain("Approve draft");
+    expect(html).not.toContain("<button");
+    expect(parseKarenPresentation({ ...envelope, data: { tasks: [{ id: "x", title: "Unsafe", status: "executed" }] } })).toBeNull();
+  });
+
   it("restores only allowlisted envelopes nested in canonical metadata", () => {
     expect(presentationFromStructuredContent({ presentation: valid })?.presentation_id).toBe(valid.presentation_id);
     expect(presentationFromStructuredContent(valid)).toBeNull();
