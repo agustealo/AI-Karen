@@ -1048,3 +1048,19 @@ async def test_historical_source_cannot_bypass_disabled_writer_by_relabeling(
         await PostgresNeuroVault(session_factory=forbidden_session).persist(
             entry, context=context,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_id", [None, 123, object(), "", "   ", "x" * 65])
+async def test_source_provenance_rejects_invalid_keys_before_sql(monkeypatch, source_id):
+    from uuid import uuid4
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source as source
+
+    def forbidden_transaction(*args, **kwargs):
+        raise AssertionError("invalid source reached historical SQL")
+
+    monkeypatch.setattr(source, "async_transaction_scope", forbidden_transaction)
+    scope = {"tenant_id": str(uuid4()), "user_id": str(uuid4()),
+             "source_record_id": source_id}
+    assert not await source.verify_legacy_persona_source(**scope)
+    assert await source.read_legacy_persona_source_retention_metadata(**scope) is None
