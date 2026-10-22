@@ -1,3 +1,4 @@
+import pytest
 """Legacy memory reference scanner finds production callers without DB access."""
 from pathlib import Path
 
@@ -28,3 +29,15 @@ def test_declaration_is_not_mistaken_for_live_invocation():
                     "store_persona_memory", "await service.store_persona_memory(") == "requires_review"
     assert classify("supabase/migrations/legacy.sql",
                     "persona_memory_entries", "CREATE TABLE persona_memory_entries (") == "historical_schema"
+
+
+def test_audit_does_not_silently_accept_missing_checkout(tmp_path: Path):
+    with pytest.raises(ValueError, match="existing directory"):
+        audit(tmp_path / "missing")
+
+
+def test_audit_ignores_symlinks_that_escape_repository(tmp_path: Path):
+    outside = tmp_path.parent / "legacy_reference_outside.py"
+    outside.write_text("store_persona_memory()\n", encoding="utf-8")
+    (tmp_path / "outside.py").symlink_to(outside)
+    assert audit(tmp_path) == []
