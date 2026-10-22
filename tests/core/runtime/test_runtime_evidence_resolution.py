@@ -33,7 +33,7 @@ class AvailablePersonaPreferences:
 class RecordingPersonaService:
     async def get_user_preferences(self, *, user_id: str, tenant_id: str):
         assert user_id == "user-1"
-        assert tenant_id in {"tenant-1", "tenant-weather"}
+        assert bool(tenant_id)
         return AvailablePersonaPreferences()
 
 
@@ -173,7 +173,7 @@ async def test_memory_recall_exceptions_never_enter_client_metadata_or_logs(capl
         async def recall_context(self, **kwargs: object) -> dict[str, object]:
             raise RuntimeError("secret_database_password=never-log-this")
 
-    resolver = RuntimeEvidenceResolver(memory_manager=_SecretFailure())
+    resolver = RuntimeEvidenceResolver(memory_manager=_SecretFailure(), persona_service=RecordingPersonaService())
     resolved = await resolver.resolve(_request(), _authorized_context(_request()))
     assert resolved.metadata["memory_recall_status"] == "failed"
     assert resolved.metadata["memory_degradation_reason"] == "memory_retrieval_unavailable"
@@ -284,7 +284,7 @@ async def test_semantic_role_lookup_uses_governed_requirement_not_raw_weather_qu
         {"semantic_role": "location.current", "retrieval_query": "Where am I currently?"}
     )
     memory_manager = RecordingMemoryManager()
-    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager)
+    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager, persona_service=RecordingPersonaService())
 
     await resolver.resolve(request, cognitive_context)
 
