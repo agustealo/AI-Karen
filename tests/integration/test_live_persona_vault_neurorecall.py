@@ -1079,6 +1079,23 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                     ),
                     session=mismatched_user_session,
                 )
+        # Historical staging requires an explicitly bound runtime principal,
+        # independently of tenant RLS and generic memory.write capability.
+        async with async_transaction_scope(tenant_id=str(tenant)) as unbound_session:
+            with pytest.raises(
+                NeuroVaultAuthorizationError,
+                match="historical migration requires authenticated transaction principal",
+            ):
+                await PostgresNeuroVault().persist_in_transaction(
+                    blocked_with_session,
+                    context=VaultContext(
+                        tenant_id=str(tenant), user_id=str(user),
+                        request_id=replay.request_id,
+                        correlation_id=str(uuid.uuid4()), actor_id=str(user),
+                        policy_context={"memory_write_authorized": True},
+                    ),
+                    session=unbound_session,
+                )
         # Caller-owned vault writes stage both ledger rows but never commit.
         # The canonical transaction manager owns rollback on failure.
         staged_id = str(uuid.uuid4())
