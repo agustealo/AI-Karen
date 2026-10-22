@@ -379,11 +379,9 @@ class ChatRuntime:
                     structured = dict(structured) if isinstance(structured, dict) else {}
                     structured["presentation"] = presentation
                     provider_meta["structured_content"] = structured
-                if decision.intent in {"search.general", "search.weather", "time.current"} and direct_result.success:
-                    synthesized = await self._synthesize_search_evidence(request, decision, plan, meter, direct_result)
-                    if synthesized is not None:
-                        text, answer_meta = synthesized
-                        provider_meta.update(answer_meta)
+                text, provider_meta = await self._compose_direct_capability_answer(
+                    request, decision, plan, meter, direct_result, provider_meta
+                )
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
@@ -2393,18 +2391,12 @@ class ChatRuntime:
             structured["presentation"] = presentation
             _meta["structured_content"] = structured
 
-        # Direct tool output is intermediate evidence, not necessarily the final
-        # assistant answer. Keep stream and ordinary search synthesis identical.
-        answer_text = result.text
-        if decision.intent in {"search.general", "search.weather", "time.current"} and result.success:
-            synthesized = await self._synthesize_search_evidence(
-                request, decision, plan, meter, result
-            )
-            if synthesized is not None:
-                answer_text, answer_meta = synthesized
-                normalized.update(answer_meta)
-                if _meta is not None:
-                    _meta.update(answer_meta)
+        # The same answer acceptance policy governs ordinary and streamed chat.
+        answer_text, normalized = await self._compose_direct_capability_answer(
+            request, decision, plan, meter, result, normalized
+        )
+        if _meta is not None:
+            _meta.update(normalized)
 
         yield ChatStreamChunk(
             type=ChatStreamEventType.CONTENT,
@@ -2433,6 +2425,23 @@ class ChatRuntime:
                     "presentation": presentation,
                 },
             )
+
+    async def _compose_direct_capability_answer(
+        self, request, decision, plan, meter, result, metadata
+    ):
+        """Own final direct-capability answer composition for every transport."""
+        accepted = dict(metadata)
+        if result.success and decision.intent in {
+            "search.general", "search.weather", "time.current"
+        }:
+            synthesized = await self._synthesize_search_evidence(
+                request, decision, plan, meter, result
+            )
+            if synthesized is not None:
+                text, attribution = synthesized
+                accepted.update(attribution)
+                return text, accepted
+        return result.text, accepted
 
     async def _synthesize_search_evidence(self, request, decision, plan, meter, retrieved):
         """Compose verified search and direct observations through the model gateway."""
