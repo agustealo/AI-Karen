@@ -46,6 +46,7 @@ export default function CustomizableCardDeck({ children }: { children: ReactNode
     const title = findTitle(element) || `Card ${index + 1}`;
     return { id: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title, element };
   });
+  const isMandatory = (id: string) => id === 'human-attention';
   const ordered = [...cards].sort((a, b) => {
     const index = (id: string) => {
       const position = preferences.order.indexOf(id);
@@ -93,18 +94,18 @@ export default function CustomizableCardDeck({ children }: { children: ReactNode
       {editing && <div className="mb-1 flex items-center gap-2 rounded-lg border px-2 py-1 text-xs">
         <GripVertical className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         <label className="flex min-w-0 flex-1 items-center gap-2">
-          <input type="checkbox" checked={!preferences.hidden.includes(id)}
+          <input type="checkbox" disabled={isMandatory(id)} checked={isMandatory(id) || !preferences.hidden.includes(id)}
             onChange={(event) => persist({ ...preferences, hidden: event.target.checked
               ? preferences.hidden.filter((item) => item !== id)
               : [...preferences.hidden, id] })} />
-          <span className="truncate">{title}</span>
+          <span className="truncate">{title}{isMandatory(id) ? " (always visible)" : ""}</span>
         </label>
         <button type="button" disabled={index === 0} onClick={() => shift(id, -1)}
           aria-label={`Move ${title} up`} className="rounded border px-2 py-1 disabled:opacity-30">↑</button>
         <button type="button" disabled={index === ordered.length - 1} onClick={() => shift(id, 1)}
           aria-label={`Move ${title} down`} className="rounded border px-2 py-1 disabled:opacity-30">↓</button>
       </div>}
-      {!preferences.hidden.includes(id) && element}
+      {(isMandatory(id) || !preferences.hidden.includes(id)) && element}
     </div>)}
   </div>;
 }
