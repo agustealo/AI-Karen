@@ -1033,6 +1033,29 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 ),
                 session=ForbiddenDatabaseSession(),
             )
+        # A duck-typed object cannot impersonate an authenticated SQLAlchemy
+        # AsyncSession even if it claims an active transaction.
+        class SpoofedSession:
+            def in_transaction(self):
+                return True
+
+            async def execute(self, *args, **kwargs):
+                raise AssertionError("spoofed transaction queried")
+
+        with pytest.raises(
+            NeuroVaultAuthorizationError,
+            match="active caller-owned PostgreSQL transaction required",
+        ):
+            await PostgresNeuroVault().persist_in_transaction(
+                blocked_with_session,
+                context=VaultContext(
+                    tenant_id=str(tenant), user_id=str(user),
+                    request_id=replay.request_id,
+                    correlation_id=str(uuid.uuid4()), actor_id=str(user),
+                    policy_context={"memory_write_authorized": True},
+                ),
+                session=SpoofedSession(),
+            )
         # Caller-owned vault writes stage both ledger rows but never commit.
         # The canonical transaction manager owns rollback on failure.
         staged_id = str(uuid.uuid4())
