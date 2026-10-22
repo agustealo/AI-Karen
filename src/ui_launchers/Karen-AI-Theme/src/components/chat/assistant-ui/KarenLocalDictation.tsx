@@ -15,6 +15,7 @@ export function KarenLocalDictation() {
   const aui = useAui();
   const [available, setAvailable] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [requesting, setRequesting] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -61,6 +62,8 @@ export function KarenLocalDictation() {
     generation.current += 1;
     recordingFailed.current = true;
     abort.current?.abort();
+    starting.current = false;
+    setRequesting(false);
     stop();
     if (mounted.current) setProcessing(false);
   };
@@ -68,10 +71,12 @@ export function KarenLocalDictation() {
   const start = async () => {
     if (processing || recording || starting.current) return;
     starting.current = true;
+    setRequesting(true);
     const currentGeneration = ++generation.current;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("Microphone recording is unsupported in this browser.");
       starting.current = false;
+      setRequesting(false);
       return;
     }
     setError(null);
@@ -79,7 +84,6 @@ export function KarenLocalDictation() {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration)) {
         mic.getTracks().forEach((track) => track.stop());
-        starting.current = false;
         return;
       }
       stream.current = mic;
@@ -132,11 +136,13 @@ export function KarenLocalDictation() {
       recordingFailed.current = false;
       media.start();
       starting.current = false;
+      setRequesting(false);
       setRecording(true);
       timer.current = setTimeout(stop, 30_000);
     } catch {
-      starting.current = false;
       if (generation.current === currentGeneration) {
+        starting.current = false;
+        setRequesting(false);
         stream.current?.getTracks().forEach((track) => track.stop());
         stream.current = null;
         if (mounted.current) setError("Microphone access was denied or unavailable.");
@@ -145,15 +151,18 @@ export function KarenLocalDictation() {
   };
 
   return <div className="flex items-center gap-1">
-    <button type="button" disabled={processing} aria-label={recording ? "Stop local dictation" : "Start local dictation"}
+    <button type="button" disabled={processing || requesting} aria-label={recording ? "Stop local dictation" : "Start local dictation"}
       aria-pressed={recording} onClick={recording ? stop : start}
       className="flex h-11 w-11 items-center justify-center rounded-xl border border-input disabled:opacity-40">
       {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
     </button>
+    {requesting && <button type="button" onClick={cancel} aria-label="Cancel microphone permission request"
+      className="rounded-lg border border-input px-2 py-2 text-xs">Cancel</button>}
     {recording && <button type="button" onClick={cancel} aria-label="Discard local recording"
       className="rounded-lg border border-input px-2 py-2 text-xs">Discard</button>}
     {processing && <button type="button" onClick={cancel} aria-label="Cancel local transcription"
       className="rounded-lg border border-input px-2 py-2 text-xs">Cancel</button>}
+    {requesting && <span role="status" className="text-xs">Waiting for microphone permission…</span>}
     {recording && <span role="status" className="text-xs">Recording locally…</span>}
     {processing && <span role="status" className="text-xs">Transcribing locally…</span>}
     {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
