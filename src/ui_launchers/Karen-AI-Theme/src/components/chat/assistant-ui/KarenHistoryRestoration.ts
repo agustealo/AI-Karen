@@ -43,3 +43,15 @@ export function restoreOwnedHistoryMessages(
     };
   });
 }
+
+/** The authenticated API response is the only authority for restored history. */
+export async function readOwnedConversationHistory(
+  conversationId: string,
+  fetchConversation: (id: string) => Promise<{ id: string; messages?: DurableHistoryMessage[] | null }>,
+): Promise<ThreadMessageLike[]> {
+  const conversation = await fetchConversation(conversationId);
+  if (conversation.id !== conversationId) {
+    throw new Error("Conversation history identity mismatch");
+  }
+  return restoreOwnedHistoryMessages(conversationId, conversation.messages || []);
+}
