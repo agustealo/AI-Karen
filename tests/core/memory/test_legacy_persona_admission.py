@@ -210,3 +210,36 @@ async def test_live_runtime_policy_gate_requires_trusted_permission():
             ),
             runtime_policy=policy,
         )
+
+
+@pytest.mark.asyncio
+async def test_source_verified_retry_denies_missing_source_before_policy(monkeypatch):
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_source_verified_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+
+    calls = []
+    async def missing_source(**kwargs):
+        calls.append(kwargs)
+        return False
+
+    monkeypatch.setattr(legacy_persona_source, "verify_legacy_persona_source", missing_source)
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
+        requested_capabilities=["memory.write"], permissions=["memory.write"],
+    )
+    with pytest.raises(ValueError, match="matching nonempty legacy source"):
+        await prepare_source_verified_legacy_migration_retry(
+            authenticated_request=request, runtime_policy=RuntimePolicyEnforcer(),
+            preflight=LegacyMigrationPreflight(True, ()),
+            recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+            source_record_id="legacy-123",
+        )
+    assert calls == [{"tenant_id": "tenant-a", "user_id": "user-a",
+                      "source_record_id": "legacy-123"}]
