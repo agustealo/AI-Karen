@@ -279,3 +279,45 @@ async def prepare_source_verified_legacy_migration_retry(
         recovery=recovery,
         source_record_id=source_record_id,
     )
+
+
+async def prepare_retention_verified_legacy_migration_retry(
+    *,
+    authenticated_request: "PolicyEvaluationRequest",
+    runtime_policy: "RuntimePolicyEnforcer",
+    preflight: "LegacyMigrationPreflight",
+    recovery: "LegacyReplayRecoveryDecision",
+    source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Require source-derived timestamp/class and canonical unexpired TTL.
+
+    This remains read-only preparation, not an identity, consent or write grant.
+    """
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        read_legacy_persona_source_retention_metadata,
+    )
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_retention import (
+        verify_legacy_migration_retention,
+    )
+
+    metadata = await read_legacy_persona_source_retention_metadata(
+        tenant_id=authenticated_request.tenant_id,
+        user_id=authenticated_request.user_id,
+        source_record_id=source_record_id,
+    )
+    if metadata is None:
+        raise ValueError("verified historical retention metadata required")
+    created_at, memory_class = metadata
+    if not await verify_legacy_migration_retention(
+        tenant_id=authenticated_request.tenant_id,
+        created_at=created_at,
+        memory_class=memory_class,
+    ):
+        raise ValueError("historical memory retention not authorized")
+    return await prepare_source_verified_legacy_migration_retry(
+        authenticated_request=authenticated_request,
+        runtime_policy=runtime_policy,
+        preflight=preflight,
+        recovery=recovery,
+        source_record_id=source_record_id,
+    )
