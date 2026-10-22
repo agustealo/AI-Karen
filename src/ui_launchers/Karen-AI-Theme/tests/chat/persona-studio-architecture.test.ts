@@ -36,6 +36,14 @@ describe("Persona Studio canonical integration", () => {
     expect(editor).toContain("isSwitchingPersona || isSavingPersona");
   });
 
+  it("refuses a persona save before its first backend write if revision is unavailable", () => {
+    const guard = editor.indexOf("if (personaRevision === null || isSwitchingPersona)");
+    const write = editor.indexOf("const updatedPersona = await apiClient.put<PersonaRecord>(");
+    expect(guard).toBeGreaterThan(-1);
+    expect(write).toBeGreaterThan(guard);
+    expect(editor).toContain("Reload Persona Studio before saving. Your draft remains unchanged.");
+  });
+
   it("does not elevate persona prose to system, provider, or tool authority", () => {
     expect(editor).toContain("Persona preferences cannot override");
     expect(editor).toContain("system policy, tool permissions, model routing");
