@@ -668,4 +668,18 @@ async def inspect_authenticated_legacy_migration_transaction(
         _, receipt = inspected
         if not requires_fresh_migration_authorization(reconcile_legacy_replay(receipt)):
             raise PermissionError("historical migration replay not eligible")
+        # Refresh RuntimePolicy while source, consent, retention and replay
+        # locks remain held. Initial admission is not a durable write grant.
+        final_authority = await evaluate_migration_write_authority(
+            authenticated_request=policy_request, runtime_policy=runtime_policy,
+        )
+        final_admission = admit_legacy_migration(
+            LegacyMigrationPreflight(True, ()), final_authority,
+        )
+        if (
+            not final_admission.admitted
+            or final_admission.tenant_id != tenant
+            or final_admission.user_id != user
+        ):
+            raise PermissionError("historical migration authorization revoked during inspection")
         return replay, receipt
