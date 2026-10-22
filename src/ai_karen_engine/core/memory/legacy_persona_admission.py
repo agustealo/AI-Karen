@@ -625,6 +625,19 @@ class LegacyMigrationInspectionReceipt:
     user_id: str
     policy_decision_id: str
 
+    def __post_init__(self) -> None:
+        # Read-only evidence still needs canonical provenance: reject empty or
+        # malformed principals/decision IDs before it crosses runtime layers.
+        for name in ("tenant_id", "user_id"):
+            try:
+                parsed = uuid.UUID(getattr(self, name))
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise ValueError(f"inspection {name} must be a UUID") from exc
+            if str(parsed) != getattr(self, name):
+                raise ValueError(f"inspection {name} must be canonical")
+        if not isinstance(self.policy_decision_id, str) or not self.policy_decision_id.strip():
+            raise ValueError("inspection requires a final policy decision identifier")
+
 
 async def inspect_authenticated_legacy_migration_evidence(
     *, request: "Request", request_id: str, correlation_id: str,
