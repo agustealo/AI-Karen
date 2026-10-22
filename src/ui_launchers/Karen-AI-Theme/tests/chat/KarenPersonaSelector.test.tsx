@@ -36,4 +36,15 @@ describe("authenticated persona selector", () => {
     await screen.findByRole("alert");
     expect((select as HTMLSelectElement).value).toBe("");
   });
+  it("rejects an unconfirmed persona switch receipt", async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/personas/" ? personas : preferences);
+    vi.mocked(apiClient.post).mockResolvedValue({ ...preferences, active_persona_id: null });
+    render(<KarenPersonaSelector />);
+    const select = await screen.findByRole("combobox", { name: "Active Karen persona" });
+    fireEvent.change(select, { target: { value: "persona-1" } });
+    expect((await screen.findByRole("alert")).textContent).toContain("Previous selection retained");
+    expect((select as HTMLSelectElement).value).toBe("");
+  });
+
 });
