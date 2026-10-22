@@ -128,3 +128,7 @@ The identity-verified preparation entrypoint now evaluates live RuntimePolicy pe
 ### RuntimePolicy-first on every read-capable preparation entrypoint
 
 The source-verified and retention-verified preparation entrypoints now evaluate RuntimePolicy before performing historical source/metadata lookups. Along with the identity-verified entrypoint, all three externally callable read-capable preparation variants reject denied `memory.write` permissions before database reads. Targeted regression tests replace source and retention readers with deliberately failing stubs, proving no unauthorized read occurs. These helpers still trust the supplied policy request's construction: production usage requires canonical authenticated ingress, not caller-provided claims. No legacy content is imported or written.
+
+### Consent-ledger read isolation
+
+`prepare_consented_legacy_migration_retry` now checks the existing migration admission result before querying canonical consent. This prevents callers supplying denied/mismatched policy evidence from probing historical migration consent for another principal. A negative test fails if consent lookup is reached when authority is denied. This does not turn dataclass evidence into a trusted authorization token; the runtime must still construct the request from authenticated context. Historical writes remain disabled.
