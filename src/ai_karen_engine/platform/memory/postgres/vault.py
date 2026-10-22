@@ -331,8 +331,10 @@ class PostgresNeuroVault(VaultPort):
             raise NeuroVaultAuthorizationError(
                 "caller transaction principal changed during authorization"
             )
-        # Historical source admission never grants execution by itself.
-        # Preserve final denial after database-scoped principal validation.
+        # A historical write must never be staged in a caller-owned
+        # transaction until the runtime-issued, transaction-bound authority
+        # has an independently verifiable final enforcement contract.
+        # Fail before the canonical ledger writer is called.
         self._require_non_historical_write(entry)
         # A typed inspection result or a caller-provided policy decision ID
         # is never a transferable write grant. Runtime-only historical
