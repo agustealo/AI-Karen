@@ -274,6 +274,16 @@ class PostgresNeuroVault(VaultPort):
         principal = (await session.execute(text(
             "SELECT current_setting('app.current_user_id', true)"
         ))).scalar_one()
+        custom = dict(entry.metadata.custom or {}) if entry.metadata else {}
+        historical = (
+            custom.get("consent_scope") == "persona-memory-migration"
+            or custom.get("source_type") == "legacy_persona"
+            or (entry.metadata is not None and entry.metadata.source == "legacy_persona")
+        )
+        if historical and not principal:
+            raise NeuroVaultAuthorizationError(
+                "historical migration requires authenticated transaction principal"
+            )
         if principal and principal != str(self._uuid(context.user_id, field_name="user_id")):
             raise NeuroVaultAuthorizationError(
                 "caller transaction user scope does not match authenticated context"
