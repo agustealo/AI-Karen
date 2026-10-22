@@ -831,6 +831,25 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 expected_memory_id=replay.memory_id,
                 expected_request_id=replay.request_id,
             )
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+            inspect_locked_legacy_migration_preparation,
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            inspected = await inspect_locked_legacy_migration_preparation(
+                session=session, tenant_id=str(tenant), user_id=str(user),
+                source_record_id=str(source),
+                expected_memory_id=replay.memory_id,
+                expected_request_id=replay.request_id,
+            )
+            assert inspected is not None
+            assert inspected[0][1] == "semantic"
+            assert inspected[1].persisted
+            assert await inspect_locked_legacy_migration_preparation(
+                session=session, tenant_id=str(uuid.uuid4()), user_id=str(user),
+                source_record_id=str(source),
+                expected_memory_id=replay.memory_id,
+                expected_request_id=replay.request_id,
+            ) is None
         mismatched = await lookup_legacy_replay_receipt(
             tenant_id=str(tenant), user_id=str(user),
             expected_memory_id=replay.memory_id,
