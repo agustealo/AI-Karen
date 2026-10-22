@@ -56,3 +56,9 @@ def test_audit_ignores_symlinks_that_escape_repository(tmp_path: Path):
 def test_audit_refuses_partial_checkout(tmp_path: Path):
     with pytest.raises(ValueError, match="full AI-Karen checkout"):
         audit(tmp_path)
+
+
+def test_legacy_rls_workflow_reference_is_security_proof():
+    assert classify(".github/workflows/live-postgres-memory-proof.yml",
+                    "persona_memory_entries",
+                    "SELECT * FROM persona_memory_entries") == "security_proof"
