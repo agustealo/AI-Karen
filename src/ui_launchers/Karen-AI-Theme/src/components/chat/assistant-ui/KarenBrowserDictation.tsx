@@ -66,7 +66,7 @@ export function KarenBrowserDictation() {
     }
     const instance = new Recognition();
     recognition.current = instance;
-    draft.current = aui.composer.getState().text;
+    draft.current = aui.composer().getState().text;
     instance.lang = navigator.language || "en-US";
     instance.interimResults = false;
     instance.continuous = false;
@@ -74,7 +74,7 @@ export function KarenBrowserDictation() {
       const words = Array.from(event.results).map((result) => result[0]?.transcript || "").join(" ").trim();
       if (!words || !mounted.current) return;
       const prefix = draft.current.trim();
-      aui.composer.setText(prefix ? `${prefix} ${words}` : words);
+      aui.composer().setText(prefix ? `${prefix} ${words}` : words);
     };
     instance.onerror = () => {
       if (mounted.current) setError("Speech recognition failed. Your draft was not sent.");
