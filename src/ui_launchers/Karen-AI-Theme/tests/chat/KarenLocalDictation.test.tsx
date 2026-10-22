@@ -102,6 +102,33 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(composer.setText).not.toHaveBeenCalled();
   });
 
+  it("a late permission grant from a canceled request cannot interrupt a newer recording", async () => {
+    let grantOld!: (stream: MediaStream) => void;
+    const oldStop = vi.fn();
+    const newStop = vi.fn();
+    vi.mocked(navigator.mediaDevices.getUserMedia)
+      .mockImplementationOnce(() => new Promise<MediaStream>((resolve) => { grantOld = resolve; }))
+      .mockResolvedValueOnce({
+        getTracks: () => [{ stop: newStop }],
+      } as unknown as MediaStream);
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel microphone permission request" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    expect(Recorder.instances).toHaveLength(1);
+
+    grantOld({ getTracks: () => [{ stop: oldStop }] } as unknown as MediaStream);
+    await waitFor(() => expect(oldStop).toHaveBeenCalledOnce());
+    expect(newStop).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Stop local dictation" })).toBeTruthy();
+    expect(Recorder.instances).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Discard local recording" }));
+    await waitFor(() => expect(newStop).toHaveBeenCalled());
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+
   it("discards a recording without an upload or a draft mutation", async () => {
     render(<KarenLocalDictation />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
