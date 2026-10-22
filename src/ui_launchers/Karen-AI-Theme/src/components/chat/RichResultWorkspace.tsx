@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import type { DragEvent } from 'react';
 import {
   GripVertical,
   Settings2,
@@ -158,8 +159,8 @@ export default function RichResultWorkspace({
     draggable: true,
     onDragStart: () => setDragged(card),
     onDragEnd: () => setDragged(null),
-    onDragOver: (event: React.DragEvent<HTMLElement>) => event.preventDefault(),
-    onDrop: (event: React.DragEvent<HTMLElement>) => {
+    onDragOver: (event: DragEvent<HTMLElement>) => event.preventDefault(),
+    onDrop: (event: DragEvent<HTMLElement>) => {
       event.preventDefault();
       if (dragged) move(dragged, card);
       setDragged(null);
