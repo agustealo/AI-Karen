@@ -294,10 +294,22 @@ class RuntimePolicyEnforcer:
 
         # Planner reads expose tenant-private commitments. Requested capability
         # alone never grants access, even for a read-only presentation.
-        if "planner.read" in request.requested_capabilities and (
-            "planner:read" not in request.permissions
-            and "admin" not in request.roles
-        ):
+        if "planner.read" in request.requested_capabilities:
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            planner_read_allowed = get_rbac_manager().has_permission(
+                principal, Permission.PLANNER_READ,
+            )
+        else:
+            planner_read_allowed = True
+        if not planner_read_allowed:
             return PolicyDecision(
                 decision_id=decision_id,
                 policy_version=policy_version,
