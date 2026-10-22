@@ -336,12 +336,26 @@ class PostgresNeuroVault(VaultPort):
                 )
                 result = await session.execute(assertion_stmt)
                 existing_assertion = result.scalar_one_or_none()
+                # A unique-key collision is only an idempotent replay when
+                # the original event and assertion match this exact request.
+                # Never report another principal's write, a partial ledger
+                # event, or changed content as successfully persisted.
+                if (
+                    existing.tenant_id != tenant_uuid
+                    or existing.user_id != user_uuid
+                    or existing.event_type != "memory_persisted"
+                    or existing.payload_hash != self._payload_hash(entry)
+                    or existing_assertion is None
+                    or existing_assertion.assertion_id != assertion_id
+                    or existing_assertion.tenant_id != tenant_uuid
+                    or existing_assertion.user_id != user_uuid
+                    or existing_assertion.valid_to is not None
+                ):
+                    raise NeuroVaultAuthorizationError(
+                        "idempotency collision does not match canonical memory write"
+                    )
                 return VaultWriteReceipt(
-                    memory_id=(
-                        str(existing_assertion.assertion_id)
-                        if existing_assertion is not None
-                        else str(entry.id)
-                    ),
+                    memory_id=str(existing_assertion.assertion_id),
                     persisted=True,
                     version=entry.version,
                     metadata={
