@@ -608,3 +608,57 @@ async def prepare_authenticated_http_legacy_migration_retry(
         request=policy_request, runtime_policy=runtime_policy,
         source_record_id=source_record_id,
     )
+
+
+async def inspect_authenticated_legacy_migration_transaction(
+    *, request: "Request", request_id: str, correlation_id: str,
+    source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
+) -> tuple[LegacyMigrationReplayIdentity, "LegacyReplayReceiptEvidence"]:
+    """Authenticate, authorize, then inspect locked evidence and replay.
+
+    Read-only. Never returns a write grant, and no historical persistence path
+    is enabled. The policy decision must precede historical database reads.
+    """
+    from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        inspect_locked_legacy_migration_preparation,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import (
+        reconcile_legacy_replay, requires_fresh_migration_authorization,
+    )
+
+    policy_request = await migration_policy_request_from_authenticated_http(
+        request=request, request_id=request_id, correlation_id=correlation_id,
+    )
+    authority = await evaluate_migration_write_authority(
+        authenticated_request=policy_request, runtime_policy=runtime_policy,
+    )
+    if not authority.explicitly_granted:
+        raise PermissionError("current historical migration policy authorization required")
+    if (
+        not isinstance(source_record_id, str)
+        or not source_record_id.strip()
+        or len(source_record_id.strip()) > 64
+    ):
+        raise ValueError("valid historical source identifier required")
+    tenant, user = policy_request.tenant_id, policy_request.user_id
+    admission = LegacyMigrationAdmission(
+        admitted=True, reason_codes=(), tenant_id=tenant, user_id=user,
+    )
+    replay = derive_legacy_migration_replay_identity(
+        admission=admission, tenant_id=tenant, user_id=user,
+        source_record_id=source_record_id.strip(),
+    )
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        inspected = await inspect_locked_legacy_migration_preparation(
+            session=session, tenant_id=tenant, user_id=user,
+            source_record_id=source_record_id.strip(),
+            expected_memory_id=replay.memory_id,
+            expected_request_id=replay.request_id,
+        )
+        if inspected is None:
+            raise PermissionError("current canonical migration evidence required")
+        _, receipt = inspected
+        if not requires_fresh_migration_authorization(reconcile_legacy_replay(receipt)):
+            raise PermissionError("historical migration replay not eligible")
+        return replay, receipt
