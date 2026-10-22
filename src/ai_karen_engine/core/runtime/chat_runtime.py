@@ -2546,13 +2546,9 @@ class ChatRuntime:
             answer = str(result.text).strip()
             verdict = ResponseValidator().validate(answer, contract)
             if is_observation and verdict.valid:
-                import re
-                # Every numerical token in the answer must appear in the
-                # authorized observation, preventing invented readings/dates.
-                evidence_numbers = set(re.findall(r"\\d+(?:[.,]\\d+)*", " ".join(map(str, evidence.values()))))
-                answer_numbers = set(re.findall(r"\\d+(?:[.,]\\d+)*", answer))
-                if not answer_numbers.issubset(evidence_numbers):
-                    return None
+                verdict = ResponseValidator().validate_observation(
+                    answer, decision.intent, evidence
+                )
             if not verdict.valid:
                 logger.warning("search_answer_citation_rejected", extra={
                     "correlation_id": request.context.correlation_id,
