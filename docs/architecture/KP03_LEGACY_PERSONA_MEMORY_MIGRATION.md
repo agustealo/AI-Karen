@@ -112,3 +112,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Historical TTL retention evidence
 
 `platform/memory/postgres/legacy_persona_retention.py` adds read-only evaluation against the canonical `RetentionPolicy` table using a verified source timestamp, explicitly requested memory class and scoped tenant/global TTL precedence. Missing or nonpositive TTL policy, future timestamps and expired records are rejected, rather than assuming indefinite historical retention. This is a preliminary predicate, **not** a complete retention authorization: callers must read and verify the historical source timestamp/class from trusted storage and reconcile deletion/legal-hold policy as applicable before import. No write or bulk backfill is enabled.
+
+### Source-derived retention admission
+
+`read_legacy_persona_source_retention_metadata` reads only `created_at` and `memory_type` for a nonblank historical source scoped to tenant/user. `prepare_retention_verified_legacy_migration_retry` requires that source-derived metadata pass the canonical `RetentionPolicy` TTL precheck before other read-only admission gates. Missing, expired or invalid evidence denies preparation. This does not verify legal holds, canonical identity, or permission to persist; import remains disabled, and legacy content is never returned by the metadata lookup.
