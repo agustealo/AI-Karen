@@ -105,6 +105,9 @@ export function KarenLocalDictation() {
       media.onstop = async () => {
         mic.getTracks().forEach((track) => track.stop());
         if (stream.current === mic) stream.current = null;
+        // A recorder can only complete its session once. A duplicate or
+        // delayed stop event must never initiate another transcription.
+        if (recorder.current !== media) return;
         if (recorder.current === media) {
           recorder.current = null;
           if (timer.current) clearTimeout(timer.current);
