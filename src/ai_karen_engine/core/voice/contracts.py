@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 
 
 class VoiceContractError(ValueError):
@@ -62,7 +63,7 @@ class AudioInput:
             raise VoiceContractError("unsupported_audio_type")
         if not 0 < self.byte_count <= MAX_AUDIO_BYTES:
             raise VoiceContractError("audio_size_out_of_bounds")
-        if not 0 < self.duration_seconds <= MAX_AUDIO_SECONDS:
+        if not isfinite(self.duration_seconds) or not 0 < self.duration_seconds <= MAX_AUDIO_SECONDS:
             raise VoiceContractError("audio_duration_out_of_bounds")
 
 
