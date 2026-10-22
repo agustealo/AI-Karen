@@ -135,3 +135,61 @@ async def test_authenticated_http_rejects_bad_mime_before_inference():
             )
     assert response.status_code == 415
     fake_runtime.transcribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tenant_id", ["", "default", "   "])
+async def test_real_session_dependency_rejects_missing_or_default_tenant(tenant_id):
+    """Use the production get_current_user dependency, not an identity override.
+
+    Only the external identity verification call is replaced with a controlled
+    payload. This exercises the actual tenant isolation decision.
+    """
+    app = FastAPI()
+    app.include_router(router)
+    fake_runtime = runtime_stub()
+    identity = {"user_id": "test-user", "tenant_id": tenant_id}
+    with (
+        patch("ai_karen_engine.auth.session._authenticate_request",
+              new_callable=AsyncMock, return_value=identity),
+        patch("ai_karen_engine.api_routes.voice.get_voice_runtime",
+              return_value=fake_runtime),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/voice/transcriptions",
+                content=wav_payload(),
+                headers={"content-type": "audio/wav",
+                         "x-audio-duration-seconds": "0.5"},
+            )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Explicit tenant scope is required"
+    fake_runtime.capabilities.assert_not_awaited()
+    fake_runtime.transcribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_real_session_dependency_accepts_explicit_tenant_scope():
+    app = FastAPI()
+    app.include_router(router)
+    fake_runtime = runtime_stub()
+    with (
+        patch("ai_karen_engine.auth.session._authenticate_request",
+              new_callable=AsyncMock,
+              return_value={"user_id": "test-user", "tenant_id": "tenant-42"}),
+        patch("ai_karen_engine.api_routes.voice.get_voice_runtime",
+              return_value=fake_runtime),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/voice/transcriptions",
+                content=wav_payload(),
+                headers={"content-type": "audio/wav",
+                         "x-audio-duration-seconds": "0.5"},
+            )
+    assert response.status_code == 200
+    fake_runtime.transcribe.assert_awaited_once()
