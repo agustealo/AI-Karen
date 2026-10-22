@@ -495,3 +495,36 @@ async def test_wrong_migration_action_never_reads_historical_principal(
             recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
             source_record_id="source-1",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_id", ["", "  ", "x" * 65, None])
+async def test_invalid_legacy_source_id_rejected_before_identity_read(
+    monkeypatch, source_id,
+):
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_identity_verified_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_identity
+
+    async def forbidden_read(**kwargs):
+        raise AssertionError("invalid source identifier accessed user records")
+
+    monkeypatch.setattr(legacy_persona_identity, "verify_legacy_persona_identity", forbidden_read)
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    with pytest.raises(ValueError, match="valid legacy source identifier"):
+        await prepare_identity_verified_legacy_migration_retry(
+            authenticated_request=request,
+            runtime_policy=RuntimePolicyEnforcer(),
+            preflight=LegacyMigrationPreflight(True, ()),
+            recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+            source_record_id=source_id,
+        )
