@@ -1,3 +1,4 @@
+import pytest
 """Migration preflight does not confer write authority."""
 from ai_karen_engine.core.memory.legacy_persona_admission import (
     LegacyMigrationWriteAuthority, admit_legacy_migration,
@@ -174,6 +175,7 @@ def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scop
     ).explicitly_granted
 
 
+@pytest.mark.asyncio
 async def test_live_runtime_policy_gate_requires_trusted_permission():
     import pytest
     from ai_karen_engine.core.memory.legacy_persona_admission import (
