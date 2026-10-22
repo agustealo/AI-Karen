@@ -25,6 +25,25 @@ async def lookup_legacy_replay_receipt(
     expected = uuid.UUID(expected_memory_id)
     request = uuid.UUID(expected_request_id)
     async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        return await lookup_locked_legacy_replay_receipt(
+            session=session, tenant_id=tenant_id, user_id=user_id,
+            expected_memory_id=expected_memory_id,
+            expected_request_id=expected_request_id,
+        )
+
+
+async def lookup_locked_legacy_replay_receipt(
+    *, session: "AsyncSession", tenant_id: str, user_id: str,
+    expected_memory_id: str, expected_request_id: str,
+) -> LegacyReplayReceiptEvidence:
+    """Inspect the canonical receipt inside an existing transaction.
+
+    Does not commit, authorize migration or import source data.
+    """
+    tenant = uuid.UUID(tenant_id)
+    user = uuid.UUID(user_id)
+    expected = uuid.UUID(expected_memory_id)
+    request = uuid.UUID(expected_request_id)
         result = await session.execute(
             select(MemoryAssertion, MemoryEvent)
             .join(MemoryEvent, MemoryAssertion.event_id == MemoryEvent.event_id)
