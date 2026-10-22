@@ -139,6 +139,24 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(composer.setText).not.toHaveBeenCalled();
   });
 
+  it("clears the old recording timer when the browser ends capture on its own", async () => {
+    const clear = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      render(<KarenLocalDictation />);
+      fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+      await screen.findByRole("button", { name: "Stop local dictation" });
+      const active = Recorder.instances[0];
+      active.state = "inactive";
+      active.ondataavailable?.({ data: new Blob(["captured"]) });
+      active.onstop?.();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Start local dictation" })).toBeTruthy());
+      expect(clear).toHaveBeenCalled();
+      expect(stopTrack).toHaveBeenCalled();
+    } finally {
+      clear.mockRestore();
+    }
+  });
+
   it("releases microphone tracks if the recorder fails after becoming inactive", async () => {
     render(<KarenLocalDictation />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
