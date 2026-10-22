@@ -355,3 +355,35 @@ async def test_identity_gate_blocks_unverified_user_before_retention(monkeypatch
             recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
             source_record_id="source-1",
         )
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_migration_denied_before_identity_database_lookup(monkeypatch):
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_identity_verified_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_identity
+
+    async def unexpected_lookup(**kwargs):
+        raise AssertionError("unauthorized request reached identity database")
+
+    monkeypatch.setattr(
+        legacy_persona_identity, "verify_legacy_persona_identity", unexpected_lookup,
+    )
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
+        permissions=[], requested_capabilities=["memory.write"],
+    )
+    with pytest.raises(ValueError, match="current migration authorization"):
+        await prepare_identity_verified_legacy_migration_retry(
+            authenticated_request=request,
+            runtime_policy=RuntimePolicyEnforcer(),
+            preflight=LegacyMigrationPreflight(True, ()),
+            recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+            source_record_id="source-1",
+        )
