@@ -1016,6 +1016,23 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                     ),
                     session=wrong_tenant_session,
                 )
+        # An unauthorized runtime context must fail before touching the
+        # supplied session, even when its tenant scope would otherwise match.
+        from ai_karen_engine.platform.memory.postgres.vault import NeuroVaultAuthorizationError
+        class ForbiddenDatabaseSession:
+            def in_transaction(self):
+                raise AssertionError("unauthorized write inspected database session")
+        with pytest.raises(NeuroVaultAuthorizationError):
+            await PostgresNeuroVault().persist_in_transaction(
+                blocked_with_session,
+                context=VaultContext(
+                    tenant_id=str(tenant), user_id=str(user),
+                    request_id=replay.request_id,
+                    correlation_id=str(uuid.uuid4()), actor_id=str(user),
+                    policy_context={},
+                ),
+                session=ForbiddenDatabaseSession(),
+            )
         # Caller-owned vault writes stage both ledger rows but never commit.
         # The canonical transaction manager owns rollback on failure.
         staged_id = str(uuid.uuid4())
