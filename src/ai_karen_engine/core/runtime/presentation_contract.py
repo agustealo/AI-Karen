@@ -92,10 +92,10 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             if type(temperature) in (int, float):
                 value = float(temperature)
             elif isinstance(temperature, str) and re.fullmatch(
-                r"-?\\d+(?:\\.\\d+)?\\s*(?:°\\s*F)?", temperature.strip(),
+                r"-?\d+(?:\.\d+)?\s*(?:°\s*F)?", temperature.strip(),
                 flags=re.IGNORECASE,
             ):
-                value = float(re.match(r"-?\\d+(?:\\.\\d+)?", temperature.strip()).group())
+                value = float(re.match(r"-?\d+(?:\.\d+)?", temperature.strip()).group())
             else:
                 return False
             if not -150 <= value <= 150:
