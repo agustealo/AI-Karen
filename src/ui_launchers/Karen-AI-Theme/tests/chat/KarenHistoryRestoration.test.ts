@@ -102,6 +102,44 @@ describe("canonical assistant-ui history restoration", () => {
     expect(empty).toEqual([]);
   });
 
+  it("reopens an authenticated response with exactly one presentation and one execution receipt", async () => {
+    const saved = {
+      id: "owned-thread",
+      messages: [
+        { id: "u-1", role: "user", content: "What is scheduled?" },
+        { id: "a-1", role: "assistant", content: "One commitment is scheduled.",
+          structured_content: { presentation: envelope },
+          metadata: {
+            actual_provider: "ollama",
+            actual_model: "registered-local-model",
+            runtime_engine: "ollama",
+            response_source: "grounded_observation_model",
+            degraded_mode: false,
+          },
+        },
+      ],
+    };
+    const first = await readOwnedConversationHistory(saved.id, async () => saved);
+    const second = await readOwnedConversationHistory(saved.id, async () => saved);
+    expect(second).toEqual(first);
+    expect(second).toHaveLength(2);
+    const content = second[1].content;
+    if (!Array.isArray(content)) throw new Error("Expected saved assistant message parts");
+    const data = content.filter(part => part.type === "data");
+    expect(data).toHaveLength(2);
+    expect(data.map(part => "name" in part ? part.name : null)).toEqual([
+      "karen.presentation.v1", "karen.execution_receipt.v1",
+    ]);
+    expect(data[0]).toMatchObject({ data: envelope });
+    expect(data[1]).toMatchObject({ data: {
+      actual_provider: "ollama",
+      actual_model: "registered-local-model",
+      response_source: "grounded_observation_model",
+    } });
+    const user = second[0].content;
+    expect(Array.isArray(user) && user.some(part => part.type === "data")).toBe(false);
+  });
+
   it("refuses mismatched conversation IDs and propagates history read failure", async () => {
     await expect(readOwnedConversationHistory("owned-thread", async () => ({
       id: "foreign-thread", messages: [],
