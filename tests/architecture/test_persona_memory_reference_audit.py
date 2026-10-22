@@ -1,5 +1,6 @@
-import pytest
 """Legacy memory reference scanner finds production callers without DB access."""
+
+import pytest
 from pathlib import Path
 
 from scripts.audit.persona_memory_references import audit, classify
@@ -48,6 +49,7 @@ def test_audit_ignores_symlinks_that_escape_repository(tmp_path: Path):
     outside = tmp_path.parent / "legacy_reference_outside.py"
     outside.write_text("store_persona_memory()\n", encoding="utf-8")
     (tmp_path / "outside.py").symlink_to(outside)
+    _complete_checkout(tmp_path)
     assert audit(tmp_path) == []
 
 
