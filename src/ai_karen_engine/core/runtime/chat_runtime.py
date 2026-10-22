@@ -2412,7 +2412,7 @@ class ChatRuntime:
             correlation_id=request.context.correlation_id,
             metadata={
                 "execution_mode": (
-                    "grounded_search" if normalized.get("response_source") == "grounded_search_model"
+                    "grounded_synthesis" if normalized.get("response_source") in {"grounded_search_model", "grounded_observation_model"}
                     else "direct_capability"
                 ),
                 "actual_provider": normalized.get("actual_provider"),
