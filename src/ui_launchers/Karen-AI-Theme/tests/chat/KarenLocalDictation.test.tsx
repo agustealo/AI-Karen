@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { KarenLocalDictation } from "@/components/chat/assistant-ui/KarenLocalDictation";
 import { apiClient } from "@/lib/api";
@@ -78,6 +79,18 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(duration).toBe(0.5);
     await waitFor(() => expect(composer.setText).toHaveBeenCalledWith("Existing spoken words"));
     expect(stopTrack).toHaveBeenCalled();
+  });
+
+  it("ignores stale capability results from an earlier StrictMode effect", async () => {
+    let resolveFirst!: (value: { status: string; transcription_available: boolean }) => void;
+    vi.mocked(apiClient.get)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce({ status: "ready", transcription_available: true });
+    render(<StrictMode><KarenLocalDictation /></StrictMode>);
+    await screen.findByRole("button", { name: "Start local dictation" });
+    resolveFirst({ status: "unavailable", transcription_available: false });
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Start local dictation" })).toBeTruthy();
   });
 
   it("never requests microphone when backend does not advertise local STT", async () => {
