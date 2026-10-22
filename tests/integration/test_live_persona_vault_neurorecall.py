@@ -974,6 +974,51 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert (await session.execute(select(MemoryAssertion).where(
                 MemoryAssertion.assertion_id == uuid.UUID(staged_id),
             ))).scalar_one_or_none() is None
+        # A successful caller-owned commit becomes visible only after the
+        # canonical transaction manager exits cleanly.
+        committed_id = str(uuid.uuid4())
+        committed_entry = MemoryEntry(
+            id=committed_id, content="Synthetic committed transaction proof",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "memory.write"},
+            ),
+        )
+        committed_context = VaultContext(
+            tenant_id=str(tenant), user_id=str(user),
+            request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+            actor_id=str(user), policy_context={"memory_write_authorized": True},
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            pending = await PostgresNeuroVault().persist_in_transaction(
+                committed_entry, context=committed_context, session=session,
+            )
+            assert not pending.persisted
+            assert pending.metadata["pending_commit"] is True
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            committed_assertion = (await session.execute(
+                select(MemoryAssertion).where(
+                    MemoryAssertion.assertion_id == uuid.UUID(committed_id),
+                )
+            )).scalar_one()
+            assert committed_assertion.content == committed_entry.content
+            # A replay collision within a caller-owned transaction propagates
+            # and must not commit a second canonical event or assertion.
+        from sqlalchemy.exc import IntegrityError
+        with pytest.raises(IntegrityError):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                await PostgresNeuroVault().persist_in_transaction(
+                    committed_entry, context=committed_context, session=session,
+                )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert len((await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(committed_id),
+            ))).scalars().all()) == 1
+            await session.execute(
+                text("DELETE FROM public.memory_event WHERE event_id=:event"),
+                {"event": str(committed_assertion.event_id)},
+            )
         # The same assertion with different operation provenance must never
         # be accepted as a completed migration or as a safe retry.
         from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
