@@ -423,3 +423,33 @@ async def test_migration_policy_precedes_all_historical_reads(monkeypatch, entry
             recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
             source_record_id="source-1",
         )
+
+
+@pytest.mark.asyncio
+async def test_consented_retry_rejects_unadmitted_policy_evidence_before_consent_read(monkeypatch):
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationWriteAuthority, prepare_consented_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_consent
+
+    async def fail_on_consent_read(**kwargs):
+        raise AssertionError("unadmitted migration queried the consent ledger")
+
+    monkeypatch.setattr(
+        legacy_persona_consent, "verify_legacy_migration_consent",
+        fail_on_consent_read,
+    )
+    denied = LegacyMigrationWriteAuthority(
+        tenant_id="tenant-a", user_id="user-a",
+        authorized_tenant_id="tenant-a", authorized_user_id="user-a",
+        capability="memory.write", policy_decision_id="denied-decision",
+        explicitly_granted=False,
+    )
+    with pytest.raises(ValueError, match="authorization required before consent lookup"):
+        await prepare_consented_legacy_migration_retry(
+            preflight=LegacyMigrationPreflight(True, ()),
+            authority=denied,
+            recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+            source_record_id="source-1",
+        )
