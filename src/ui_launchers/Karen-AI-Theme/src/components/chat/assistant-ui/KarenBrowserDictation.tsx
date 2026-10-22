@@ -27,6 +27,14 @@ type SpeechWindow = Window & {
 
 const enabled = process.env.NEXT_PUBLIC_KAREN_BROWSER_DICTATION_ENABLED === "true";
 
+/** Keep dictation additive to the pre-recording draft; never submit. */
+export function mergeDictatedText(existingDraft: string, transcript: string): string {
+  const words = transcript.trim();
+  if (!words) return existingDraft;
+  const prefix = existingDraft.trim();
+  return prefix ? `${prefix} ${words}` : words;
+}
+
 export function KarenBrowserDictation() {
   const aui = useAui();
   const recognition = useRef<BrowserRecognition | null>(null);
@@ -74,8 +82,7 @@ export function KarenBrowserDictation() {
     instance.onresult = (event) => {
       const words = Array.from(event.results).map((result) => result[0]?.transcript || "").join(" ").trim();
       if (!words || !mounted.current) return;
-      const prefix = draft.current.trim();
-      aui.composer().setText(prefix ? `${prefix} ${words}` : words);
+      aui.composer().setText(mergeDictatedText(draft.current, words));
     };
     instance.onerror = () => {
       if (mounted.current) setError("Speech recognition failed. Your draft was not sent.");
