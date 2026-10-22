@@ -44,6 +44,11 @@ async def lookup_legacy_replay_receipt(
             persisted_tenant_id=None, persisted_user_id=None, persisted=False,
         )
     assertion, event = match
+    vault_payload = (event.payload or {}).get("vault")
+    provenance_valid = (
+        isinstance(vault_payload, dict)
+        and vault_payload.get("request_id") == str(request)
+    )
     return LegacyReplayReceiptEvidence(
         expected_memory_id=str(expected), expected_tenant_id=str(tenant),
         expected_user_id=str(user),
