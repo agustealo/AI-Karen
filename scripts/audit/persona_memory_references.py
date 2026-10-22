@@ -38,16 +38,22 @@ EXCLUDED = {".git", "node_modules", ".venv", "venv", "dist", "build", ".next"}
 
 
 def audit(root: Path) -> list[dict[str, object]]:
+    if not root.is_dir():
+        raise ValueError("Audit root must be an existing directory")
     matches: list[dict[str, object]] = []
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.suffix not in SUFFIXES:
+        if path.is_symlink() or path.suffix not in SUFFIXES:
+            continue
+        if not path.is_file():
             continue
         if any(part in EXCLUDED for part in path.relative_to(root).parts):
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except (UnicodeError, OSError):
-            continue
+        except (UnicodeError, OSError) as exc:
+            raise RuntimeError(
+                f"Legacy caller audit incomplete: cannot read {path.relative_to(root)}"
+            ) from exc
         for index, line in enumerate(lines, start=1):
             for pattern in PATTERNS:
                 if pattern in line:
