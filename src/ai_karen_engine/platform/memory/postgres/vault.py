@@ -316,6 +316,16 @@ class PostgresNeuroVault(VaultPort):
             raise NeuroVaultAuthorizationError(
                 "caller transaction user scope does not match authenticated context"
             )
+        # Recheck the tenant scope after database reads to guard against
+        # transaction-local settings changing during authorization.
+        final_scope = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true)"
+        ))).one()
+        if final_scope[0] != scope[0] or final_scope[1] != scope[1]:
+            raise NeuroVaultAuthorizationError(
+                "caller transaction tenant scope changed during authorization"
+            )
         # Historical source admission never grants execution by itself.
         # Preserve final denial after database-scoped principal validation.
         self._require_non_historical_write(entry)
