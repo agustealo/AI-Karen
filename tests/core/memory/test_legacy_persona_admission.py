@@ -286,3 +286,41 @@ async def test_legacy_retention_requires_explicit_unexpired_policy(monkeypatch):
                         lambda **kwargs: FakeScope([SimpleNamespace(ttl_days=1)]))
     assert not await module.verify_legacy_migration_retention(
         **params, created_at=now - timedelta(days=10))
+
+
+@pytest.mark.asyncio
+async def test_retention_verified_preparation_denies_missing_or_expired_source(monkeypatch):
+    from datetime import datetime, timezone
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_retention_verified_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source, legacy_persona_retention
+
+    async def missing(**kwargs):
+        return None
+    monkeypatch.setattr(legacy_persona_source, "read_legacy_persona_source_retention_metadata", missing)
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    opts = dict(
+        authenticated_request=request, runtime_policy=RuntimePolicyEnforcer(),
+        preflight=LegacyMigrationPreflight(True, ()),
+        recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+        source_record_id="legacy-123",
+    )
+    with pytest.raises(ValueError, match="retention metadata"):
+        await prepare_retention_verified_legacy_migration_retry(**opts)
+    async def present(**kwargs):
+        return datetime.now(timezone.utc), "chat_interaction"
+    async def expired(**kwargs):
+        return False
+    monkeypatch.setattr(legacy_persona_source, "read_legacy_persona_source_retention_metadata", present)
+    monkeypatch.setattr(legacy_persona_retention, "verify_legacy_migration_retention", expired)
+    with pytest.raises(ValueError, match="retention not authorized"):
+        await prepare_retention_verified_legacy_migration_retry(**opts)
