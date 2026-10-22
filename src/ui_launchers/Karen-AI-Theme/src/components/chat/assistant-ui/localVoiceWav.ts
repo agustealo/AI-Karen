@@ -7,6 +7,7 @@ export function encodeMonoPcmWav(buffer: AudioBuffer, targetRate = 16000): Blob 
     throw new Error("Audio duration or format is unsupported");
   }
   const frameCount = Math.floor(buffer.duration * targetRate);
+  if (frameCount < 1) throw new Error("Audio contains no PCM frames");
   const bytes = new ArrayBuffer(44 + frameCount * 2);
   if (bytes.byteLength > 16 * 1024 * 1024) throw new Error("Audio exceeds local limit");
   const view = new DataView(bytes);
