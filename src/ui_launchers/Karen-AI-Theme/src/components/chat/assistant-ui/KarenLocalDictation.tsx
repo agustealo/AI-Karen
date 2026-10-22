@@ -7,6 +7,7 @@ import { Mic, Square } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { mergeDictatedText } from "./KarenBrowserDictation";
 import { encodeMonoPcmWav } from "./localVoiceWav";
+import { isCurrentVoiceSession } from "./voiceSessionGuard";
 
 type Capabilities = { transcription_available: boolean; status: string };
 
@@ -70,7 +71,7 @@ export function KarenLocalDictation() {
     setError(null);
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!mounted.current || generation.current !== currentGeneration) {
+      if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration)) {
         mic.getTracks().forEach((track) => track.stop());
         starting.current = false;
         return;
@@ -100,7 +101,7 @@ export function KarenLocalDictation() {
           const decoded = await audioContext.decodeAudioData(captured);
           const wav = encodeMonoPcmWav(decoded);
           const transcript = await apiClient.transcribeLocalAudio(wav, decoded.duration, controller.signal);
-          if (mounted.current && generation.current === currentGeneration && !controller.signal.aborted) {
+          if (isCurrentVoiceSession(mounted.current, generation.current, currentGeneration) && !controller.signal.aborted) {
             aui.composer().setText(mergeDictatedText(aui.composer().getState().text || "", transcript.text));
           }
         } catch {
