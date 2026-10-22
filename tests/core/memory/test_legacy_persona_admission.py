@@ -1257,7 +1257,8 @@ async def test_transaction_authority_rejects_scope_drift_during_verification():
     user = "22222222-2222-4222-8222-222222222222"
     first = (tenant, tenant, user, 901)
     changed = (tenant, tenant, "33333333-3333-4333-8333-333333333333", 901)
-    session = Mock()
+    from sqlalchemy.ext.asyncio import AsyncSession
+    session = Mock(spec=AsyncSession)
     session.in_transaction.return_value = True
     session.execute = AsyncMock(side_effect=[
         Mock(one=Mock(return_value=first)),
