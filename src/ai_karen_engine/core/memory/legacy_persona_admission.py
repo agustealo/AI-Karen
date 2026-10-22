@@ -408,3 +408,92 @@ def migration_policy_request_from_runtime_context(
         action="legacy_persona_memory_migration",
         requested_capabilities=["memory.write"],
     )
+
+
+async def prepare_governed_legacy_migration_retry(
+    *,
+    context: "ChatExecutionContext",
+    runtime_policy: "RuntimePolicyEnforcer",
+    source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Read-only, single-policy-evaluation preparation from canonical runtime.
+
+    This does not authenticate ingress, fetch source content, or persist memory.
+    Only an authenticated runtime caller may supply context; NeuroVault must
+    independently reauthorize and check live consent at the eventual write.
+    """
+    from ai_karen_engine.core.memory.legacy_persona_preflight import (
+        LegacyMigrationEvidence, preflight_legacy_memory,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import reconcile_legacy_replay
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_identity import (
+        verify_legacy_persona_identity,
+    )
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        read_legacy_persona_source_retention_metadata,
+    )
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_retention import (
+        verify_legacy_migration_retention,
+    )
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_consent import (
+        verify_legacy_migration_consent,
+    )
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+        lookup_legacy_replay_receipt,
+    )
+
+    request = migration_policy_request_from_runtime_context(context=context)
+    authority = await evaluate_migration_write_authority(
+        authenticated_request=request, runtime_policy=runtime_policy,
+    )
+    if not authority.explicitly_granted:
+        raise ValueError("current migration authorization required before database reads")
+    if (
+        not isinstance(source_record_id, str)
+        or not source_record_id.strip()
+        or len(source_record_id.strip()) > 64
+    ):
+        raise ValueError("valid legacy source identifier required before database reads")
+    source = source_record_id.strip()
+    tenant, user = request.tenant_id, request.user_id
+
+    if not await verify_legacy_persona_identity(tenant_id=tenant, user_id=user):
+        raise ValueError("canonical migration identity not verified")
+    metadata = await read_legacy_persona_source_retention_metadata(
+        tenant_id=tenant, user_id=user, source_record_id=source,
+    )
+    if metadata is None:
+        raise ValueError("verified historical retention metadata required")
+    created_at, memory_class = metadata
+    if not await verify_legacy_migration_retention(
+        tenant_id=tenant, created_at=created_at, memory_class=memory_class,
+    ):
+        raise ValueError("historical memory retention not authorized")
+    if not await verify_legacy_migration_consent(
+        tenant_id=tenant, user_id=user, consent_scope="persona-memory-migration",
+    ):
+        raise ValueError("explicit historical migration consent required")
+
+    preflight = preflight_legacy_memory(LegacyMigrationEvidence(
+        legacy_tenant_id=tenant, legacy_user_id=user,
+        authorized_tenant_id=tenant, authorized_user_id=user,
+        identity_verified=True, consent_verified=True, retention_verified=True,
+        source_record_verified=True, evidence_origin="authorized_runtime",
+    ))
+    admission = admit_legacy_migration(preflight, authority)
+    if not admission.admitted:
+        raise ValueError("current migration admission required")
+    replay = derive_legacy_migration_replay_identity(
+        admission=admission, tenant_id=tenant, user_id=user, source_record_id=source,
+    )
+    receipt = await lookup_legacy_replay_receipt(
+        tenant_id=tenant, user_id=user, expected_memory_id=replay.memory_id,
+        expected_request_id=replay.request_id,
+    )
+    recovery = reconcile_legacy_replay(receipt)
+    from ai_karen_engine.core.memory.legacy_persona_recovery import (
+        requires_fresh_migration_authorization,
+    )
+    if not requires_fresh_migration_authorization(recovery):
+        raise ValueError("migration recovery does not allow retry")
+    return replay
