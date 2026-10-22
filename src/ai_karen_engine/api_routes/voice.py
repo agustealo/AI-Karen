@@ -1,5 +1,6 @@
 """Authenticated and bounded voice ingress. Runtime owns local transcription."""
 from fastapi import APIRouter, Depends, HTTPException, Request
+from math import isfinite
 
 from ai_karen_engine.core.voice.contracts import AudioInput, MAX_AUDIO_BYTES, VoiceContractError
 
@@ -45,7 +46,7 @@ async def transcribe_voice(
         raise HTTPException(status_code=415, detail="wav_audio_required")
     try:
         duration = float(request.headers.get("x-audio-duration-seconds", ""))
-        if not 0 < duration <= 120:
+        if not isfinite(duration) or not 0 < duration <= 120:
             raise ValueError("invalid audio duration")
     except (TypeError, ValueError, OverflowError):
         raise HTTPException(status_code=422, detail="audio_duration_required") from None
