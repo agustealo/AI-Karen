@@ -2466,3 +2466,31 @@ async def test_vault_staging_exception_rolls_back_even_if_caller_swallows_it():
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == memory_id,
         ))).scalar_one_or_none() is None
+
+
+async def test_migration_inspection_transaction_identity_expires_after_commit():
+    """A prior read-only inspection cannot validate against a later real tx."""
+    from sqlalchemy import text
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user = str(uuid.uuid4()), str(uuid.uuid4())
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        await session.execute(
+            text("SELECT set_config('app.current_user_id', :user, true)"),
+            {"user": user},
+        )
+        inspection = await LegacyMigrationTransactionAuthority.inspect(
+            session=session, tenant_id=tenant, user_id=user,
+            policy_decision_id=str(uuid.uuid4()),
+        )
+        await inspection.verify_active(session=session)
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        await session.execute(
+            text("SELECT set_config('app.current_user_id', :user, true)"),
+            {"user": user},
+        )
+        with pytest.raises(PermissionError, match="transaction identity expired"):
+            await inspection.verify_active(session=session)
