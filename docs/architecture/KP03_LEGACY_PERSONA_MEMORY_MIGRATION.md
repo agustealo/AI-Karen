@@ -132,3 +132,42 @@ The source-verified and retention-verified preparation entrypoints now evaluate 
 ### Consent-ledger read isolation
 
 `prepare_consented_legacy_migration_retry` now checks the existing migration admission result before querying canonical consent. This prevents callers supplying denied/mismatched policy evidence from probing historical migration consent for another principal. A negative test fails if consent lookup is reached when authority is denied. This does not turn dataclass evidence into a trusted authorization token; the runtime must still construct the request from authenticated context. Historical writes remain disabled.
+
+
+## Authenticated ingress ownership checkpoint (2026-10-22)
+
+The canonical HTTP auth dependency is `core/services/dependencies.py:get_user_context`.
+It delegates to `auth/auth_middleware.py:get_current_user` in normal mode,
+enforces nonempty server-authenticated user/tenant scope, and can supply a
+configured development principal when `auth_config.should_bypass_auth()` is true.
+`ChatExecutionContext` is a transport-normalized, constructible value object,
+**not a verifiable authentication credential**. The existing
+`migration_policy_request_from_runtime_context` and
+`prepare_governed_legacy_migration_retry` therefore remain internal,
+read-only preparation APIs; callers cannot assert an authenticated ingress
+simply by constructing a context with matching UUIDs and `memory.write`.
+
+Before enabling migration execution:
+1. Reuse the canonical server authentication/session validator and the runtime
+   permission authority; reject development auth bypass and missing, expired,
+   revoked, or cross-tenant sessions. Bind identity and permissions to a
+   server-verified session, not a client-supplied `ChatExecutionContext`.
+2. Restrict the migration ingress to an explicitly authorized administrative
+   operation. Do not expose a general chat action or accept policy requests,
+   preflight evidence, or replay IDs from client JSON.
+3. Under the existing runtime owner, re-evaluate the migration-specific
+   RuntimePolicy action and source/identity/consent/retention evidence at the
+   actual write boundary. `PostgresNeuroVault.persist` currently accepts a
+   capability flag in `VaultContext.policy_context`; this flag alone does
+   not prove a fresh policy evaluation or authenticated session.
+4. Prove forgery, development bypass, logout/session revocation, permission
+   revocation, consent revocation, retention expiration, concurrent replay,
+   and transaction rollback using disposable PostgreSQL and authoritative
+   authentication fixtures. Keep historical import disabled until these
+   tests pass.
+5. Keep per-tenant RLS, canonical NeuroVault receipts, and audit metadata
+   intact. Do not introduce a second auth provider, service, migration ledger,
+   or shadow memory writer.
+
+This checkpoint is a verified architecture gap, **not implementation or
+acceptance proof of authenticated migration execution**.
