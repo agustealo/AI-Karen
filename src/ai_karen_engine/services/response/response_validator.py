@@ -80,7 +80,7 @@ class ResponseValidator:
             ]
             if not allowed and not observations:
                 return ValidationResult(valid=False, reason="missing_authorized_source_evidence")
-            cited = re.findall(r"https?://[^\\s)\\]>]+", text)
+            cited = re.findall(r"https?://[^\s)\]>]+", text)
             if allowed and not observations and not cited:
                 return ValidationResult(valid=False, reason="missing_evidence_citation")
             if any(url.rstrip("/").rstrip(".,;") not in allowed for url in cited):
