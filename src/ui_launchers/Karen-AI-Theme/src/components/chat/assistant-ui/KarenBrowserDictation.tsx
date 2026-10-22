@@ -33,6 +33,7 @@ export function KarenBrowserDictation() {
   const draft = useRef("");
   const mounted = useRef(true);
   const [recording, setRecording] = useState(false);
+  const [consented, setConsented] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     mounted.current = true;
@@ -52,6 +53,7 @@ export function KarenBrowserDictation() {
   if (!enabled) return null;
 
   const toggle = () => {
+    if (!consented) return;
     if (recognition.current) {
       recognition.current.stop();
       return;
@@ -93,8 +95,12 @@ export function KarenBrowserDictation() {
   };
 
   return <div className="flex items-center gap-2">
+    <label className="flex max-w-48 items-center gap-1 text-[10px] text-muted-foreground">
+      <input type="checkbox" checked={consented} disabled={recording} onChange={(event) => setConsented(event.target.checked)} />
+      Allow browser-vendor speech processing
+    </label>
     <button type="button" aria-label={recording ? "Stop dictation" : "Start browser dictation"}
-      aria-pressed={recording} onClick={toggle}
+      aria-pressed={recording} disabled={!consented} onClick={toggle}
       title="Optional browser dictation; recognition may use your browser vendor's servers"
       className="flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted">
       {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
