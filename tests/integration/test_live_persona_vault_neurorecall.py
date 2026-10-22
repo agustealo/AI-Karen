@@ -943,6 +943,37 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 MemoryAssertion.user_id == user,
             ))).scalar_one()
             assert stored.content == synthetic_entry.content
+        # Caller-owned vault writes stage both ledger rows but never commit.
+        # The canonical transaction manager owns rollback on failure.
+        staged_id = str(uuid.uuid4())
+        staged_entry = MemoryEntry(
+            id=staged_id, content="Synthetic transaction staging proof",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "memory.write"},
+            ),
+        )
+        with pytest.raises(RuntimeError, match="caller rollback"):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                staged = await PostgresNeuroVault().persist_in_transaction(
+                    staged_entry, context=VaultContext(
+                        tenant_id=str(tenant), user_id=str(user),
+                        request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()), actor_id=str(user),
+                        policy_context={"memory_write_authorized": True},
+                    ), session=session,
+                )
+                assert not staged.persisted
+                assert staged.metadata["pending_commit"] is True
+                assert (await session.execute(select(MemoryAssertion).where(
+                    MemoryAssertion.assertion_id == uuid.UUID(staged_id),
+                ))).scalar_one_or_none() is not None
+                raise RuntimeError("caller rollback")
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(staged_id),
+            ))).scalar_one_or_none() is None
         # The same assertion with different operation provenance must never
         # be accepted as a completed migration or as a safe retry.
         from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
