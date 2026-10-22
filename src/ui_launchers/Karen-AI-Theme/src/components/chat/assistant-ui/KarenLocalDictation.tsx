@@ -28,11 +28,15 @@ export function KarenLocalDictation() {
   const generation = useRef(0);
 
   useEffect(() => {
+    let active = true;
     mounted.current = true;
     apiClient.get<Capabilities>("/api/voice/capabilities")
-      .then((cap) => { if (mounted.current) setAvailable(cap.status === "ready" && cap.transcription_available === true); })
-      .catch(() => { if (mounted.current) setAvailable(false); });
+      .then((cap) => {
+        if (active && mounted.current) setAvailable(cap.status === "ready" && cap.transcription_available === true);
+      })
+      .catch(() => { if (active && mounted.current) setAvailable(false); });
     return () => {
+      active = false;
       mounted.current = false;
       generation.current += 1;
       if (timer.current) clearTimeout(timer.current);
