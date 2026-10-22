@@ -896,3 +896,69 @@ async def test_migration_http_real_jwt_integrity_and_revocation(monkeypatch, sce
             await migration_policy_request_from_authenticated_http(
                 request=request, request_id="request-1", correlation_id="trace-1",
             )
+
+
+@pytest.mark.asyncio
+async def test_authenticated_http_assembly_forwards_only_verified_policy(monkeypatch):
+    from uuid import uuid4
+    from starlette.requests import Request
+    from ai_karen_engine.core.memory import legacy_persona_admission as module
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationReplayIdentity,
+    )
+    tenant, user = str(uuid4()), str(uuid4())
+    verified = PolicyEvaluationRequest(
+        tenant_id=tenant, user_id=user, session_id="verified-session",
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    observed = []
+    async def authenticate(**kwargs):
+        observed.append("authenticate")
+        return verified
+    async def assemble(**kwargs):
+        observed.append("assemble")
+        assert kwargs["request"] is verified
+        assert kwargs["source_record_id"] == "legacy-source"
+        return LegacyMigrationReplayIdentity(
+            memory_id=str(uuid4()), request_id=str(uuid4()),
+            source_record_id="legacy-source",
+        )
+    monkeypatch.setattr(module, "migration_policy_request_from_authenticated_http", authenticate)
+    monkeypatch.setattr(module, "_prepare_governed_legacy_migration_from_policy_request", assemble)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [], "query_string": b"",
+    })
+    result = await module.prepare_authenticated_http_legacy_migration_retry(
+        request=request, request_id="req", correlation_id="trace",
+        source_record_id="legacy-source", runtime_policy=RuntimePolicyEnforcer(),
+    )
+    assert result.source_record_id == "legacy-source"
+    assert observed == ["authenticate", "assemble"]
+
+
+@pytest.mark.asyncio
+async def test_authenticated_http_assembly_never_reads_on_auth_failure(monkeypatch):
+    from starlette.requests import Request
+    from ai_karen_engine.core.memory import legacy_persona_admission as module
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+
+    async def denied(**kwargs):
+        raise PermissionError("revoked credential")
+    async def unexpected(**kwargs):
+        raise AssertionError("unauthenticated caller reached historical assembly")
+    monkeypatch.setattr(module, "migration_policy_request_from_authenticated_http", denied)
+    monkeypatch.setattr(module, "_prepare_governed_legacy_migration_from_policy_request", unexpected)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [], "query_string": b"",
+    })
+    with pytest.raises(PermissionError, match="revoked credential"):
+        await module.prepare_authenticated_http_legacy_migration_retry(
+            request=request, request_id="req", correlation_id="trace",
+            source_record_id="legacy-source", runtime_policy=RuntimePolicyEnforcer(),
+        )
