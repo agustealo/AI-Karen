@@ -1144,3 +1144,45 @@ async def test_unified_inspection_denies_policy_before_database(monkeypatch):
             request=request, request_id="req", correlation_id="trace",
             source_record_id="source", runtime_policy=RuntimePolicyEnforcer(),
         )
+
+
+@pytest.mark.asyncio
+async def test_unified_inspection_rejects_policy_principal_mismatch_before_sql(monkeypatch):
+    from uuid import uuid4
+    from starlette.requests import Request
+    from ai_karen_engine.core.memory import legacy_persona_admission as module
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+    from ai_karen_engine.persistence.postgres import transactions
+
+    tenant, user, different_user = (str(uuid4()) for _ in range(3))
+
+    class VerifiedPrincipal:
+        tenant_id = tenant
+        user_id = user
+
+    async def authenticate(**kwargs):
+        return VerifiedPrincipal()
+
+    async def mismatched_policy(**kwargs):
+        return module.LegacyMigrationWriteAuthority(
+            tenant_id=tenant, user_id=different_user,
+            authorized_tenant_id=tenant, authorized_user_id=different_user,
+            capability="memory.write", policy_decision_id="mismatched-policy",
+            explicitly_granted=True,
+        )
+
+    def forbidden_db(*args, **kwargs):
+        raise AssertionError("mismatched policy accessed historical records")
+
+    monkeypatch.setattr(module, "migration_policy_request_from_authenticated_http", authenticate)
+    monkeypatch.setattr(module, "evaluate_migration_write_authority", mismatched_policy)
+    monkeypatch.setattr(transactions, "async_transaction_scope", forbidden_db)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [], "query_string": b"",
+    })
+    with pytest.raises(PermissionError, match="policy principal mismatch"):
+        await module.inspect_authenticated_legacy_migration_transaction(
+            request=request, request_id="req", correlation_id="trace",
+            source_record_id="source", runtime_policy=RuntimePolicyEnforcer(),
+        )
