@@ -407,6 +407,82 @@ class PersonaService:
         logger.info("Updated persona '%s' for user %s", updated_persona.name, user_id)
         return updated_persona
 
+    async def save_and_activate_existing_persona(
+        self,
+        user_id: str,
+        tenant_id: str,
+        persona_id: str,
+        *,
+        name: str,
+        description: str,
+        system_prompt: str,
+        expected_revision: int,
+    ) -> UserPersonaPreferences:
+        """Persist an owned persona edit and active selection in one transaction.
+
+        A failed authorization, stale revision, duplicate name or SQL mutation
+        rolls back both operations. The endpoint does not create personas.
+        """
+        tenant_id = self._normalize_tenant_id(tenant_id)
+        if not user_id or not persona_id or persona_id in {p.id for p in SYSTEM_PERSONAS}:
+            raise ValueError("Only an owned custom persona may be edited")
+        if expected_revision < 0:
+            raise ValueError("expected_revision must be nonnegative")
+        if not name.strip() or len(name) > 100 or not 10 <= len(system_prompt.strip()) <= 2000:
+            raise ValueError("Invalid persona name or instructions")
+        if len(description) > 500:
+            raise ValueError("Persona description is too long")
+
+        # Initialize the preferences row outside the locked transaction; the
+        # row already has an idempotent tenant/user uniqueness constraint.
+        await self.get_user_preferences(user_id, tenant_id)
+        async with self._tenant_session(tenant_id) as session:
+            revision = await session.execute(
+                text("SELECT revision FROM user_persona_preferences "
+                     "WHERE tenant_id = :tenant_id AND user_id = :user_id FOR UPDATE"),
+                {"tenant_id": tenant_id, "user_id": user_id},
+            )
+            locked = revision.fetchone()
+            if locked is None or int(locked.revision) != expected_revision:
+                raise ValueError("Persona preference revision conflict")
+
+            duplicate = await session.execute(
+                text("SELECT 1 FROM custom_personas WHERE tenant_id = :tenant_id "
+                     "AND user_id = :user_id AND lower(name) = lower(:name) "
+                     "AND id <> :persona_id LIMIT 1"),
+                {"tenant_id": tenant_id, "user_id": user_id,
+                 "name": name.strip(), "persona_id": persona_id},
+            )
+            if duplicate.fetchone():
+                raise ValueError("Persona name already exists")
+
+            changed = await session.execute(
+                text("UPDATE custom_personas SET name = :name, "
+                     "description = :description, system_prompt = :system_prompt, "
+                     "updated_at = CURRENT_TIMESTAMP "
+                     "WHERE id = :persona_id AND tenant_id = :tenant_id "
+                     "AND user_id = :user_id AND is_active = TRUE"),
+                {"name": name.strip(), "description": description,
+                 "system_prompt": system_prompt.strip(),
+                 "persona_id": persona_id, "tenant_id": tenant_id, "user_id": user_id},
+            )
+            if changed.rowcount != 1:
+                raise ValueError("Selected persona is unavailable")
+
+            activated = await session.execute(
+                text("UPDATE user_persona_preferences SET active_persona_id = :persona_id, "
+                     "revision = revision + 1, updated_at = CURRENT_TIMESTAMP "
+                     "WHERE tenant_id = :tenant_id AND user_id = :user_id "
+                     "AND revision = :expected_revision"),
+                {"persona_id": persona_id, "tenant_id": tenant_id,
+                 "user_id": user_id, "expected_revision": expected_revision},
+            )
+            if activated.rowcount != 1:
+                raise ValueError("Persona preference revision conflict")
+
+        self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
+        return await self.get_user_preferences(user_id, tenant_id)
+
     async def delete_persona(self, user_id: str, tenant_id: str, persona_id: str) -> bool:
         """Delete a custom persona."""
         tenant_id = self._normalize_tenant_id(tenant_id)
