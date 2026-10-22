@@ -137,6 +137,7 @@ def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scop
     )
     request = PolicyEvaluationRequest(
         tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
         requested_capabilities=["memory.write"], permissions=["memory.write"],
     )
     decision = PolicyDecision(
@@ -158,6 +159,7 @@ def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scop
     ).explicitly_granted
     no_permission = PolicyEvaluationRequest(
         tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
         requested_capabilities=["memory.write"],
     )
     assert not migration_write_authority_from_policy(
