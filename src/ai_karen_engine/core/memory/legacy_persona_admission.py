@@ -745,4 +745,13 @@ async def inspect_authenticated_legacy_migration_transaction(
             raise PermissionError(
                 "historical migration transaction tenant changed during inspection"
             )
-        return replay, receipt
+        # Keep the read-only evidence tied to the final validated identity
+        # and policy decision; do not convert it into a write capability.
+        inspection = LegacyMigrationInspectionReceipt(
+            replay=replay,
+            receipt=receipt,
+            tenant_id=tenant,
+            user_id=user,
+            policy_decision_id=final_authority.policy_decision_id,
+        )
+        return inspection.replay, inspection.receipt
