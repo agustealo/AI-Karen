@@ -805,6 +805,34 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             await prepare_governed_legacy_migration_retry(
                 **{**base, "runtime_policy": RuntimePolicyEnforcer()}
             )
+        # Verify the ledger's parent event and child assertion disappear
+        # together on a failed transaction, not just an unreferenced event.
+        rolled_back_pair_event, rolled_back_pair_assertion = uuid.uuid4(), uuid.uuid4()
+        with pytest.raises(RuntimeError, match="rollback parent and child"):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                session.add(MemoryEvent(
+                    event_id=rolled_back_pair_event, tenant_id=tenant, user_id=user,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    event_type="memory_persisted", consent_state="granted",
+                    payload={"vault": {"request_id": str(uuid.uuid4())}},
+                ))
+                await session.flush()
+                session.add(MemoryAssertion(
+                    assertion_id=rolled_back_pair_assertion,
+                    event_id=rolled_back_pair_event, tenant_id=tenant, user_id=user,
+                    content="Transaction rollback proof", confidence=1.0,
+                    scope="user", sensitivity_class="normal",
+                    consent_state="granted",
+                ))
+                await session.flush()
+                raise RuntimeError("rollback parent and child")
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.event_id == rolled_back_pair_event
+            ))).scalar_one_or_none() is None
+            assert (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == rolled_back_pair_assertion
+            ))).scalar_one_or_none() is None
         # Force a transaction rollback after a speculative ledger event.
         # Reopening the transaction must show no durable partial receipt.
         rolled_back_event = uuid.uuid4()
