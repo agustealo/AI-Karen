@@ -131,7 +131,7 @@ async def test_real_whisper_through_authenticated_asgi_upload():
         patch(
             "ai_karen_engine.auth.session._authenticate_request",
             new_callable=AsyncMock,
-            side_effect=__import__("fastapi").HTTPException(
+            side_effect=HTTPException(
                 status_code=401, detail="Authentication required"
             ),
         ),
