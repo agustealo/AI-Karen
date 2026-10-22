@@ -124,3 +124,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Authorization before identity reads
 
 The identity-verified preparation entrypoint now evaluates live RuntimePolicy permission before consulting canonical identity records. Unauthorized permission sets fail before any identity lookup. A regression test uses an identity lookup that raises if touched and proves authorization denial comes first. Downstream admission still revalidates policy and explicit consent, providing a fresh check before preparing replay IDs. This does not authenticate caller-supplied `PolicyEvaluationRequest`, and historical writes remain disabled until a trusted runtime ingress supplies that request and fully verified source evidence.
+
+### RuntimePolicy-first on every read-capable preparation entrypoint
+
+The source-verified and retention-verified preparation entrypoints now evaluate RuntimePolicy before performing historical source/metadata lookups. Along with the identity-verified entrypoint, all three externally callable read-capable preparation variants reject denied `memory.write` permissions before database reads. Targeted regression tests replace source and retention readers with deliberately failing stubs, proving no unauthorized read occurs. These helpers still trust the supplied policy request's construction: production usage requires canonical authenticated ingress, not caller-provided claims. No legacy content is imported or written.
