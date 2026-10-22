@@ -139,6 +139,19 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(composer.setText).not.toHaveBeenCalled();
   });
 
+  it("releases microphone tracks if the recorder fails after becoming inactive", async () => {
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    const active = Recorder.instances[0];
+    active.state = "inactive";
+    active.onerror?.();
+    await waitFor(() => expect(stopTrack).toHaveBeenCalled());
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Audio capture failed.");
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+
   it("reports permission denial without uploading or changing the draft", async () => {
     vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(new Error("denied"));
     render(<KarenLocalDictation />);
