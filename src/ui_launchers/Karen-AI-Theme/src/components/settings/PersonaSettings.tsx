@@ -340,8 +340,16 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         );
         setPersonaRevision(selected.revision);
         setActivePersonaId(selected.active_persona_id ?? personaId);
-        const freshPersonas = await apiClient.get<PersonaRecord[]>(PERSONAS_ENDPOINT);
-        setAvailablePersonas(freshPersonas);
+        try {
+          const freshPersonas = await apiClient.get<PersonaRecord[]>(PERSONAS_ENDPOINT);
+          setAvailablePersonas(freshPersonas);
+        } catch {
+          // The persona and activation have already been committed. A gallery refresh
+          // failure must not report the confirmed backend activation as failed.
+          setAvailablePersonas((previous) => previous.some((persona) => persona.id === personaId)
+            ? previous.map((persona) => persona.id === personaId ? { ...persona, ...payload } : persona)
+            : [...previous, { id: personaId!, ...payload, is_system_persona: false }]);
+        }
 
         setCurrentPersonaId(personaId);
         setInstructions(normalizedInstructions);
