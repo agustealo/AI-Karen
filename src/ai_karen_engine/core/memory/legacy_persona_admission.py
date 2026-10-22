@@ -96,3 +96,31 @@ def derive_legacy_migration_replay_identity(
         request_id=str(uuid.uuid5(uuid.NAMESPACE_URL, stable + ":request")),
         source_record_id=source,
     )
+
+
+def prepare_legacy_migration_retry(
+    *,
+    preflight: "LegacyMigrationPreflight",
+    authority: LegacyMigrationWriteAuthority,
+    recovery: "LegacyReplayRecoveryDecision",
+    source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Prepare a retry only if every independent gate agrees.
+
+    This is a pure computation, not a migration executor. All supplied facts
+    must be independently authenticated and rechecked immediately before the
+    canonical NeuroVault persist operation.
+    """
+    from .legacy_persona_recovery import requires_fresh_migration_authorization
+
+    if not requires_fresh_migration_authorization(recovery):
+        raise ValueError("migration recovery does not allow retry")
+    admission = admit_legacy_migration(preflight, authority)
+    if not admission.admitted:
+        raise ValueError("current migration authorization required")
+    return derive_legacy_migration_replay_identity(
+        admission=admission,
+        tenant_id=authority.tenant_id,
+        user_id=authority.user_id,
+        source_record_id=source_record_id,
+    )
