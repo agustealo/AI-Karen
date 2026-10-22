@@ -531,13 +531,15 @@ async def migration_policy_request_from_authenticated_http(
             raise PermissionError("historical migration requires access token")
         payload = middleware._decode_jwt(token)
         token_id = str(payload.get("token_id") or "").strip()
-        if not token_id or middleware._is_token_revoked(token_id):
+        if not token_id:
             raise PermissionError("historical migration token invalid or revoked")
         # Check the revocation store directly because the generic middleware
         # intentionally degrades to not-revoked when its lookup fails.
         if store.exists(middleware._get_redis_key("revoked", token_id)):
             raise PermissionError("historical migration token revoked")
         principal = middleware._get_user_from_payload(payload)
+        if "memory.write" not in (principal.get("permissions") or []):
+            raise PermissionError("historical migration write permission required")
         if not request_id or not request_id.strip() or not correlation_id or not correlation_id.strip():
             raise ValueError("request and correlation identity required")
         context = ChatExecutionContext(
