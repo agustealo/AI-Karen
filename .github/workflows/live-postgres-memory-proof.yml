@@ -51,6 +51,27 @@ jobs:
       KAREN_TEST_POSTGRES_MEMORY: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Inventory legacy persona memory source references
+        run: |
+          python scripts/audit/persona_memory_references.py --root . --output persona-memory-references.json
+          python - <<'PY'
+          import collections
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path("persona-memory-references.json").read_text())
+          counts = collections.Counter(item["classification"] for item in report["matches"])
+          summary = [
+              "### Legacy persona memory reference inventory",
+              "",
+              f"Total references: {len(report['matches'])}",
+          ]
+          summary.extend(f"- {key}: {value}" for key, value in sorted(counts.items()))
+          summary.append("Review required references manually before legacy retirement.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write("\\n".join(summary) + "\\n")
+          PY
       - name: Start authenticated canonical PostgreSQL service
         env:
           KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
