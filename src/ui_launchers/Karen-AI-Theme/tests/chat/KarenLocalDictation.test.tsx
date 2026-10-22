@@ -58,7 +58,7 @@ afterEach(() => {
   cleanup();
   if (originalArrayBuffer) Object.defineProperty(Blob.prototype, "arrayBuffer", originalArrayBuffer);
   else delete (Blob.prototype as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -74,6 +74,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
     const [wav, duration] = vi.mocked(apiClient.transcribeLocalAudio).mock.calls[0];
     expect(wav.type).toBe("audio/wav");
+    expect(wav.size).toBe(44 + 16000);
     expect(duration).toBe(0.5);
     await waitFor(() => expect(composer.setText).toHaveBeenCalledWith("Existing spoken words"));
     expect(stopTrack).toHaveBeenCalled();
