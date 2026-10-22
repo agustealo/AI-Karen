@@ -626,10 +626,10 @@ class LegacyMigrationInspectionReceipt:
     policy_decision_id: str
 
 
-async def inspect_authenticated_legacy_migration_transaction(
+async def inspect_authenticated_legacy_migration_evidence(
     *, request: "Request", request_id: str, correlation_id: str,
     source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
-) -> tuple[LegacyMigrationReplayIdentity, "LegacyReplayReceiptEvidence"]:
+) -> LegacyMigrationInspectionReceipt:
     """Authenticate, authorize, then inspect locked evidence and replay.
 
     Read-only. Never returns a write grant, and no historical persistence path
@@ -754,4 +754,20 @@ async def inspect_authenticated_legacy_migration_transaction(
             user_id=user,
             policy_decision_id=final_authority.policy_decision_id,
         )
-        return inspection.replay, inspection.receipt
+        return inspection
+
+
+async def inspect_authenticated_legacy_migration_transaction(
+    *, request: "Request", request_id: str, correlation_id: str,
+    source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
+) -> tuple[LegacyMigrationReplayIdentity, "LegacyReplayReceiptEvidence"]:
+    """Compatibility projection of the canonical typed, read-only inspection.
+
+    This wrapper cannot issue a persistence grant. Callers requiring policy
+    provenance should use inspect_authenticated_legacy_migration_evidence.
+    """
+    inspection = await inspect_authenticated_legacy_migration_evidence(
+        request=request, request_id=request_id, correlation_id=correlation_id,
+        source_record_id=source_record_id, runtime_policy=runtime_policy,
+    )
+    return inspection.replay, inspection.receipt
