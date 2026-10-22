@@ -499,6 +499,15 @@ class ChatRuntime:
             request, text, provider_meta, trajectory_id=trajectory.trajectory_id
         )
         provider_meta.update(transcript_result.to_metadata())
+        transcript_failed = transcript_result.status in {"failed", "rejected"}
+        if transcript_failed:
+            # Conversation durability is independent of successful inference.
+            # A failed transcript write must never be presented as a saved turn.
+            provider_meta["degraded_mode"] = True
+            provider_meta["degradation_reason"] = (
+                provider_meta.get("degradation_reason")
+                or "transcript_persistence_failed"
+            )
 
         latency_ms = (time.time() - start) * 1000.0
         await self._record_trajectory_completion(
