@@ -77,3 +77,33 @@ async def test_simultaneous_transcription_is_rejected_without_second_model_call(
         await first
     assert (await runtime.transcribe(audio, metadata)).text == "verified speech"
     assert engine.transcribe.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_canceled_request_keeps_capacity_until_inference_completes():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def infer(audio, metadata):
+        entered.set()
+        await release.wait()
+        return TranscriptionResult(text="finished", engine="local-whisper")
+
+    engine = Engine()
+    engine.transcribe = AsyncMock(side_effect=infer)
+    runtime = VoiceRuntime(engine)
+    payload = b"pcm-data"
+    metadata = AudioInput("audio/wav", len(payload), 0.5)
+    first = asyncio.create_task(runtime.transcribe(payload, metadata))
+    await asyncio.wait_for(entered.wait(), 1)
+    first.cancel()
+    await asyncio.sleep(0)
+    try:
+        with pytest.raises(RuntimeError, match="local_transcription_busy"):
+            await runtime.transcribe(payload, metadata)
+        engine.transcribe.assert_awaited_once()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+    assert (await runtime.transcribe(payload, metadata)).text == "finished"
