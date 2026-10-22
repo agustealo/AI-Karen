@@ -2298,13 +2298,16 @@ async def test_vault_rejects_scope_drift_during_ledger_staging():
         return result
 
     vault._persist_with_session = drift_after_stage
-    with pytest.raises(
-        NeuroVaultAuthorizationError, match="scope changed during persistence",
-    ):
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        # Even a caller that swallows the authorization error and tries
+        # committing cannot persist already-flushed canonical ledger rows.
+        with pytest.raises(
+            NeuroVaultAuthorizationError, match="scope changed during persistence",
+        ):
             await vault.persist_in_transaction(
                 entry, context=context, session=session,
             )
+        await session.commit()
     async with async_transaction_scope(tenant_id=str(tenant)) as session:
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == memory_id,
