@@ -27,6 +27,7 @@ import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert,
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
 import { KarenPersonaSelector } from "./KarenPersonaSelector";
+import { KarenBrowserDictation } from "./KarenBrowserDictation";
 import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
 import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
@@ -404,6 +405,7 @@ function KarenThread() {
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
                 <Settings2 className="h-4 w-4" aria-hidden="true" />
               </button>
+              <KarenBrowserDictation />
               <ComposerPrimitive.Input
                 rows={1}
                 aria-label="Message Karen"
