@@ -695,6 +695,9 @@ async def inspect_authenticated_legacy_migration_transaction(
             raise PermissionError(
                 "historical migration authenticated principal changed during inspection"
             )
+        # A refreshed credential must still be valid at the moment of the
+        # final policy decision. This remains a read-only migration boundary.
+        # The final policy evaluation uses exactly this refreshed principal.
         # Refresh RuntimePolicy while source, consent, retention and replay
         # locks remain held. Initial admission is not a durable write grant.
         final_authority = await evaluate_migration_write_authority(
@@ -707,6 +710,8 @@ async def inspect_authenticated_legacy_migration_transaction(
             not final_admission.admitted
             or final_admission.tenant_id != tenant
             or final_admission.user_id != user
+            or final_authority.tenant_id != tenant
+            or final_authority.user_id != user
         ):
             raise PermissionError("historical migration authorization revoked during inspection")
         return replay, receipt
