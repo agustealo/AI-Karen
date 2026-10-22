@@ -1100,3 +1100,47 @@ async def test_retention_timestamp_validation_fails_before_database(monkeypatch,
     assert not await legacy_persona_retention.verify_legacy_migration_retention(
         tenant_id=str(uuid4()), created_at=created_at, memory_class="semantic",
     )
+
+
+@pytest.mark.asyncio
+async def test_unified_inspection_denies_policy_before_database(monkeypatch):
+    from starlette.requests import Request
+    from ai_karen_engine.core.memory import legacy_persona_admission as module
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+    from ai_karen_engine.persistence.postgres import transactions
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationWriteAuthority,
+    )
+    from uuid import uuid4
+
+    tenant, user = str(uuid4()), str(uuid4())
+    class Principal:
+        tenant_id = tenant
+        user_id = user
+
+    async def authenticate(**kwargs):
+        return Principal()
+
+    async def deny(**kwargs):
+        return LegacyMigrationWriteAuthority(
+            tenant_id=tenant, user_id=user,
+            authorized_tenant_id=tenant, authorized_user_id=user,
+            capability="memory.write", policy_decision_id="denied",
+            explicitly_granted=False,
+        )
+
+    def forbidden_db(*args, **kwargs):
+        raise AssertionError("denied policy accessed historical database")
+
+    monkeypatch.setattr(module, "migration_policy_request_from_authenticated_http", authenticate)
+    monkeypatch.setattr(module, "evaluate_migration_write_authority", deny)
+    monkeypatch.setattr(transactions, "async_transaction_scope", forbidden_db)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [], "query_string": b"",
+    })
+    with pytest.raises(PermissionError, match="policy authorization required"):
+        await module.inspect_authenticated_legacy_migration_transaction(
+            request=request, request_id="req", correlation_id="trace",
+            source_record_id="source", runtime_policy=RuntimePolicyEnforcer(),
+        )
