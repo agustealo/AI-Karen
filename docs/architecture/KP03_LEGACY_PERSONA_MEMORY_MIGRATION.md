@@ -68,3 +68,7 @@ The disposable PostgreSQL NeuroVault integration proof now writes one synthetic 
 ### Canonical ledger recovery evidence
 
 `platform/memory/postgres/legacy_persona_receipts.py` performs a read-only, fully tenant/user-scoped `MemoryAssertion`/`MemoryEvent` join and passes scoped receipt facts to the existing pure recovery classifier. Its evidence is not a permission grant: a missing record can only trigger renewed authorization, consent and retention checks. An integration test exercises matching persisted receipt evidence and cross-tenant non-disclosure against disposable PostgreSQL. The adapter uses `memory_persisted`, the existing NeuroVault event type. The ledger remains the sole durable source of truth; no parallel receipt store or backfill process is added.
+
+### Replay request provenance requirement
+
+Recovery lookup now requires the deterministic expected migration request ID alongside memory ID and authenticated tenant/user scope. Even if an assertion with the expected ID exists, its canonical `MemoryEvent.payload.vault.request_id` must match the expected operation before recovery reports a successful prior migration. A mismatch blocks automatic retry and requires reconciliation; the adapter does not use the stored request ID as an authorization token. Synthetic PostgreSQL tests assert that a mismatched request is not classified as already migrated.
