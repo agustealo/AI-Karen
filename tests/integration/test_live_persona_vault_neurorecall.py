@@ -2235,21 +2235,21 @@ async def test_vault_rejects_principal_drift_between_authorization_queries():
         principal_reads = 0
 
         async def mutate_principal_on_second_read(statement, *args, **kwargs):
-            nonlocal scope_reads
+            nonlocal principal_reads
             sql = str(statement)
             if (
                 "current_setting('app.current_tenant_id', true)" in sql
                 and "current_setting('app.tenant_id', true)" in sql
             ):
-                scope_reads += 1
-                if scope_reads == 2:
+                principal_reads += 1
+                if principal_reads == 2:
                     await original_execute(
                         text("SELECT set_config('app.current_user_id', :user, true)"),
                         {"user": str(uuid.uuid4())},
                     )
             return await original_execute(statement, *args, **kwargs)
 
-        session.execute = mutate_scope_on_second_read
+        session.execute = mutate_principal_on_second_read
         with pytest.raises(
             NeuroVaultAuthorizationError,
             match="caller transaction principal changed during authorization",
@@ -2257,7 +2257,7 @@ async def test_vault_rejects_principal_drift_between_authorization_queries():
             await PostgresNeuroVault().persist_in_transaction(
                 entry, context=context, session=session,
             )
-        assert scope_reads == 2
+        assert principal_reads == 2
     async with async_transaction_scope(tenant_id=str(tenant)) as session:
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == uuid.UUID(entry.id),
