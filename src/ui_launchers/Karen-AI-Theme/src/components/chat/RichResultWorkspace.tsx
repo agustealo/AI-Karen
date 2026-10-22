@@ -154,6 +154,14 @@ export default function RichResultWorkspace({
     next.splice(next.indexOf(destination), 0, source);
     saveLayout(next, hidden);
   };
+  const shift = (card: WorkspaceCard, direction: -1 | 1) => {
+    const from = order.indexOf(card);
+    const to = from + direction;
+    if (to < 0 || to >= order.length) return;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    saveLayout(next, hidden);
+  };
   const cardProps = (card: WorkspaceCard) => ({
     draggable: true,
     onDragStart: () => setDragged(card),
@@ -218,10 +226,10 @@ export default function RichResultWorkspace({
               {LABELS[card]}
             </label>
             <button type="button" aria-label={`Move ${LABELS[card]} up`} disabled={order.indexOf(card) === 0}
-              onClick={() => move(card, order[order.indexOf(card) - 1])}
+              onClick={() => shift(card, -1)}
               className="rounded border px-2 py-1 disabled:opacity-30">↑</button>
             <button type="button" aria-label={`Move ${LABELS[card]} down`} disabled={order.indexOf(card) === order.length - 1}
-              onClick={() => move(card, order[order.indexOf(card) + 1])}
+              onClick={() => shift(card, 1)}
               className="rounded border px-2 py-1 disabled:opacity-30">↓</button>
           </div>)}
         </div>}
