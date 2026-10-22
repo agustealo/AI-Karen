@@ -771,6 +771,8 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             )
             assert integrated_replay == replay
             assert not integrated_receipt.persisted
+            # The integrated runtime path binds the authenticated user into
+            # the caller transaction; this must not change replay identity.
             # RuntimePolicy may be revoked after initial admission but
             # before the locked transaction exits. Final re-evaluation
             # must deny without producing a migration receipt.
