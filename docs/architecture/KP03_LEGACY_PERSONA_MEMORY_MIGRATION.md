@@ -116,3 +116,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Source-derived retention admission
 
 `read_legacy_persona_source_retention_metadata` reads only `created_at` and `memory_type` for a nonblank historical source scoped to tenant/user. `prepare_retention_verified_legacy_migration_retry` requires that source-derived metadata pass the canonical `RetentionPolicy` TTL precheck before other read-only admission gates. Missing, expired or invalid evidence denies preparation. This does not verify legal holds, canonical identity, or permission to persist; import remains disabled, and legacy content is never returned by the metadata lookup.
+
+### Canonical principal existence boundary
+
+`legacy_persona_identity.py` now checks an exact UUID tenant/user pair against active, verified `auth_users` using a read-only scoped lookup. `prepare_identity_verified_legacy_migration_retry` denies absent or inactive/unverified users before source, retention, consent and live RuntimePolicy checks. No name/email remapping is permitted. This check is only a canonical existence check: the calling runtime still must prove its ingress identity and permissions independently; the database lookup does not authenticate the request, authorize any write, or migrate records.
