@@ -31,7 +31,7 @@ export function KarenLocalDictation() {
       mounted.current = false;
       if (timer.current) clearTimeout(timer.current);
       abort.current?.abort();
-      recorder.current?.stop();
+      if (recorder.current?.state === "recording") recorder.current.stop();
       stream.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -82,7 +82,7 @@ export function KarenLocalDictation() {
         } catch {
           if (mounted.current && !controller.signal.aborted) setError("Local transcription failed; no message was sent.");
         } finally {
-          await audioContext?.close();
+          try { await audioContext?.close(); } catch { /* Audio context may already be closed. */ }
           if (mounted.current) setProcessing(false);
           if (abort.current === controller) abort.current = null;
         }
