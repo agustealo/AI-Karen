@@ -889,6 +889,35 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         assert identical_retry.persisted
         assert identical_retry.memory_id == replay.memory_id
         assert identical_retry.metadata["idempotent_replay"] is True
+        # Competing canonical NeuroVault retries must resolve through the
+        # same durable assertion: identical content replays successfully,
+        # conflicting content fails closed without changing stored content.
+        async def retry_identical():
+            return await PostgresNeuroVault().persist(
+                synthetic_entry, context=vault_context,
+            )
+
+        async def retry_conflicting():
+            with pytest.raises(
+                NeuroVaultAuthorizationError, match="idempotency collision",
+            ):
+                await PostgresNeuroVault().persist(
+                    changed_entry, context=vault_context,
+                )
+
+        concurrent_retry, _ = await asyncio.gather(
+            retry_identical(), retry_conflicting(),
+        )
+        assert concurrent_retry.persisted
+        assert concurrent_retry.memory_id == replay.memory_id
+        assert concurrent_retry.metadata["idempotent_replay"] is True
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            stored = (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id),
+                MemoryAssertion.tenant_id == tenant,
+                MemoryAssertion.user_id == user,
+            ))).scalar_one()
+            assert stored.content == synthetic_entry.content
         # The same assertion with different operation provenance must never
         # be accepted as a completed migration or as a safe retry.
         from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
