@@ -255,8 +255,8 @@ class PostgresNeuroVault(VaultPort):
     ) -> VaultWriteReceipt:
         """Canonical standalone write. Owns and commits its PostgreSQL session."""
         self._validate_persist_authority(entry, context)
-        # All write paths reject historical sources at the final NeuroVault
-        # boundary, before opening a database connection or inspecting consent.
+        # Standalone writes cannot inherit transaction-scoped runtime authority.
+        # Reject migration data before opening any database connection.
         self._require_non_historical_write(entry)
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
@@ -316,6 +316,9 @@ class PostgresNeuroVault(VaultPort):
             raise NeuroVaultAuthorizationError(
                 "caller transaction user scope does not match authenticated context"
             )
+        # Historical source admission never grants execution by itself.
+        # Preserve final denial after database-scoped principal validation.
+        self._require_non_historical_write(entry)
         from dataclasses import replace
 
         receipt = await self._persist_with_session(
