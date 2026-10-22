@@ -2956,7 +2956,42 @@ class ChatRuntime:
                 (request.metadata or {}).get("memory_context", {}).get("recall") or []
             )
 
+        # Presentation preferences are resolved from the authenticated,
+        # tenant-scoped persona service. Client metadata never supplies a
+        # system prompt or an authoritative persona identifier.
+        persona_presentation: Dict[str, Any] = {}
+        try:
+            principal = request.context.require_authenticated_user()
+        except (AttributeError, PermissionError):
+            principal = None
+        if principal is not None:
+            try:
+                from ai_karen_engine.services.persona.persona_service import get_persona_service
+
+                service = get_persona_service()
+                preferences = await service.get_user_preferences(
+                    user_id=str(principal.user_id),
+                    tenant_id=str(principal.tenant_id),
+                )
+                if preferences.active_persona_id:
+                    selected = await service.get_persona(
+                        preferences.active_persona_id,
+                        str(principal.user_id),
+                        str(principal.tenant_id),
+                    )
+                    if selected is not None and selected.is_active:
+                        persona_presentation = {
+                            "tone": str(selected.default_tone.value),
+                            "verbosity": str(selected.default_verbosity.value),
+                            "language_style": str(selected.default_language.value),
+                        }
+            except Exception:
+                # Persona preferences are optional; unavailable storage must
+                # not turn a failed lookup into an invented selection.
+                logger.warning("Persona presentation unavailable", exc_info=False)
+
         assembly_request = PromptAssemblyRequest(
+            persona=persona_presentation,
             prompt_id="karen.chat.default",
             prompt_version="v1.0.0",
             memory_items=recall_items if decision.memory_recall_required else [],
