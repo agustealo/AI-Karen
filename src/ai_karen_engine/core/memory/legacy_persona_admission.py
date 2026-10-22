@@ -652,6 +652,27 @@ class LegacyMigrationTransactionAuthority:
     policy_decision_id: str
     transaction_id: int
 
+    async def verify_active(self, *, session: "AsyncSession") -> None:
+        """Verify this inspection still identifies the caller's live transaction.
+
+        This method checks identity only. It does not provide permission for a
+        historical write and must not substitute for fresh RuntimePolicy.
+        """
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        if not isinstance(session, AsyncSession) or not session.in_transaction():
+            raise PermissionError("active PostgreSQL transaction required")
+        actual = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true), "
+            "current_setting('app.current_user_id', true), txid_current()"
+        ))).one()
+        if actual != (
+            self.tenant_id, self.tenant_id, self.user_id, self.transaction_id
+        ):
+            raise PermissionError("historical inspection transaction identity expired")
+
     @classmethod
     async def inspect(
         cls, *, session: "AsyncSession", tenant_id: str,
