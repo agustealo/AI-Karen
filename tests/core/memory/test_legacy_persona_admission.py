@@ -44,6 +44,25 @@ def test_cross_principal_and_wrong_capability_denied():
     assert "write_capability_missing" in result.reason_codes
 
 
+@pytest.mark.parametrize(
+    "changed,reason",
+    [
+        ({"authorized_user_id": "other-user"}, "write_principal_mismatch"),
+        ({"authorized_tenant_id": "other-tenant"}, "write_principal_mismatch"),
+        ({"capability": "memory.read"}, "write_capability_missing"),
+        ({"policy_decision_id": ""}, "policy_decision_missing"),
+        ({"explicitly_granted": False}, "write_not_authorized"),
+    ],
+)
+def test_canonical_policy_admission_rejects_invalid_final_authority(changed, reason):
+    """One admission contract governs initial and final RuntimePolicy decisions."""
+    decision = admit_legacy_migration(
+        LegacyMigrationPreflight(True, ()), authority(**changed),
+    )
+    assert not decision.admitted
+    assert reason in decision.reason_codes
+
+
 def test_separately_verified_conditions_only_admit_not_persist():
     result = admit_legacy_migration(LegacyMigrationPreflight(True, ()), authority())
     assert result.admitted
