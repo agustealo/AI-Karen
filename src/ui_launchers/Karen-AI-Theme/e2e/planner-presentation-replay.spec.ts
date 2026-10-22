@@ -9,6 +9,9 @@ import { expect, test } from "@playwright/test";
  * KAREN_E2E_AUTH_STATE=/secure/path/authorized-storage-state.json
  * KAREN_E2E_PLANNER_CONVERSATION_TITLE=<existing unique title>
  * KAREN_E2E_PLANNER_TASK_TITLE=<persisted task title>
+ * Optional isolation proof:
+ * KAREN_E2E_FOREIGN_AUTH_STATE=/secure/path/other-user-storage-state.json
+ * KAREN_E2E_PLANNER_CONVERSATION_ID=<persisted conversation UUID>
  */
 const enabled = process.env.KAREN_E2E_PLANNER_REPLAY === "1";
 const authState = process.env.KAREN_E2E_AUTH_STATE;
@@ -76,6 +79,23 @@ test.describe("authenticated planner presentation replay", () => {
     await expect(shell).toBeVisible();
     await expect(plannerCards.getByText(taskTitle!, { exact: true })).toHaveCount(1);
     await expect(shell.getByRole("alert")).toHaveCount(0);
+  });
+
+  test("rejects a second authenticated user's attempt to read the planner conversation", async ({ browser, baseURL }) => {
+    const foreignState = process.env.KAREN_E2E_FOREIGN_AUTH_STATE;
+    const conversationId = process.env.KAREN_E2E_PLANNER_CONVERSATION_ID;
+    test.skip(!foreignState || !conversationId,
+      "Requires a separately authenticated user and a real owned conversation ID");
+    const foreignContext = await browser.newContext({ storageState: foreignState! });
+    try {
+      const response = await foreignContext.request.get(
+        new URL(`/api/conversations/${encodeURIComponent(conversationId!)}`, baseURL!).toString(),
+      );
+      expect([403, 404], "Foreign principal must not read conversation").toContain(response.status());
+      expect(response.ok()).toBe(false);
+    } finally {
+      await foreignContext.close();
+    }
   });
 
 });
