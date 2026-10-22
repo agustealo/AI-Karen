@@ -638,9 +638,9 @@ class ConversationRuntimeGateway:
                 role="assistant",
                 content=assistant_text,
                 metadata={
+                    **dict(response_metadata or {}),
                     **common_metadata,
                     "transcript_actor": "assistant",
-                    **dict(response_metadata or {}),
                 },
             )
             write_result = await self._repository.add_completed_turn(
