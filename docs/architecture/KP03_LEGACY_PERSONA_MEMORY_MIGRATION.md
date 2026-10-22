@@ -72,3 +72,7 @@ The disposable PostgreSQL NeuroVault integration proof now writes one synthetic 
 ### Replay request provenance requirement
 
 Recovery lookup now requires the deterministic expected migration request ID alongside memory ID and authenticated tenant/user scope. Even if an assertion with the expected ID exists, its canonical `MemoryEvent.payload.vault.request_id` must match the expected operation before recovery reports a successful prior migration. A mismatch blocks automatic retry and requires reconciliation; the adapter does not use the stored request ID as an authorization token. Synthetic PostgreSQL tests assert that a mismatched request is not classified as already migrated.
+
+### Recovery is not authorization
+
+A canonical ledger receipt can prove that a migration operation already persisted; it cannot prove continuing permission to write or to keep that content. `requires_fresh_migration_authorization` identifies only an absent-receipt retry candidate, which must still pass fresh canonical identity mapping, consent, retention, runtime policy and NeuroVault enforcement. Existing or conflicting receipts never trigger automatic replay. This helper has no migration execution capability.
