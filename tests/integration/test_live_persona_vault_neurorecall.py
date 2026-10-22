@@ -693,6 +693,20 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert (await session.execute(select(MemoryEvent).where(
                 MemoryEvent.event_id == rolled_back_event
             ))).scalar_one_or_none() is None
+        # Eligibility is not durable: a subsequent retention-policy change
+        # must invalidate an earlier successful read-only preparation.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            policy_row = (await session.execute(select(RetentionPolicy).where(
+                RetentionPolicy.policy_id == retention_id
+            ))).scalar_one()
+            policy_row.ttl_days = 0
+        with pytest.raises(ValueError, match="historical memory retention not authorized"):
+            await prepare_governed_legacy_migration_retry(**base)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            policy_row = (await session.execute(select(RetentionPolicy).where(
+                RetentionPolicy.policy_id == retention_id
+            ))).scalar_one()
+            policy_row.ttl_days = 30
         # A caller cannot reuse one tenant's historical source under another tenant.
         wrong_scope = ChatExecutionContext(
             tenant_id=str(uuid.uuid4()), user_id=str(user),
