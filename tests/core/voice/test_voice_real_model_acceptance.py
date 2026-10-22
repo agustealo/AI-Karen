@@ -18,10 +18,9 @@ import wave
 import pytest
 import httpx
 from fastapi import FastAPI
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from ai_karen_engine.api_routes.voice import router as voice_router
-from ai_karen_engine.auth.session import get_current_user
 
 from ai_karen_engine.core.voice.contracts import AudioInput, MAX_AUDIO_BYTES
 from ai_karen_engine.services.local_whisper_adapter import FasterWhisperLocalAdapter
@@ -98,11 +97,16 @@ async def test_real_whisper_through_authenticated_asgi_upload():
     app = FastAPI()
     app.include_router(voice_router)
 
-    async def authenticated_test_identity():
-        return {"user_id": "acceptance-user", "tenant_id": "acceptance-tenant"}
-
-    app.dependency_overrides[get_current_user] = authenticated_test_identity
-    with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime):
+    # Keep the production get_current_user dependency and its tenant checks.
+    # Replace only the external credential-verification boundary.
+    with (
+        patch(
+            "ai_karen_engine.auth.session._authenticate_request",
+            new_callable=AsyncMock,
+            return_value={"user_id": "acceptance-user", "tenant_id": "acceptance-tenant"},
+        ),
+        patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://acceptance",
