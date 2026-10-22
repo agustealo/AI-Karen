@@ -66,9 +66,11 @@ test.describe("authenticated planner presentation replay", () => {
 
     // Dashboard keeps the same chat mounted while workspaces change.
     await page.getByRole("button", { name: "Tasks", exact: true }).click();
+    await expect(page.getByTestId("persistent-karen-conversation")).toBeHidden();
     await expect(page.getByRole("button", { name: "Ask Karen" })).toBeVisible();
     await page.getByRole("button", { name: "Ask Karen" }).click();
     await expect(page.getByTestId("persistent-karen-conversation")).toBeVisible();
+    await expect(shell).toHaveCount(1);
     await expect(plannerCards.getByText(taskTitle!, { exact: true })).toHaveCount(1);
     await page.getByRole("button", { name: "Return to your Karen conversation" }).click();
     await expect(shell).toBeVisible();
