@@ -1560,3 +1560,99 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             await session.execute(text(
                 "DELETE FROM public.auth_users WHERE user_id=:user AND tenant_id=:tenant"
             ), {"user": str(user), "tenant": str(tenant)})
+
+
+async def test_vault_caller_transaction_serializes_consent_revocation():
+    """Real vault stage holds its consent row lock until caller commit."""
+    import asyncio
+    from sqlalchemy import update
+    from ai_karen_engine.platform.memory.postgres.vault import NeuroVaultAuthorizationError
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, grant_id, memory_id = (uuid.uuid4() for _ in range(4))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    revoked = asyncio.Event()
+    entry = MemoryEntry(
+        id=str(memory_id), content="Disposable consent contention proof",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(tenant), user_id=str(user), source="chat_user",
+            custom={"consent_scope": "kp03-revocation-proof"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=str(tenant), user_id=str(user),
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        actor_id=str(user), policy_context={"memory_write_authorized": True},
+    )
+
+    async def stage_under_lock():
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            receipt = await PostgresNeuroVault().persist_in_transaction(
+                entry, context=context, session=session,
+            )
+            assert not receipt.persisted
+            entered.set()
+            await release.wait()
+
+    async def revoke_after_stage():
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(
+                update(ConsentScope)
+                .where(ConsentScope.scope_id == grant_id)
+                .values(is_granted=False)
+            )
+        revoked.set()
+
+    writer = None
+    revoker = None
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                scope_id=grant_id, tenant_id=tenant, user_id=user,
+                scope_name="kp03-revocation-proof", is_granted=True,
+            ))
+        writer = asyncio.create_task(stage_under_lock())
+        await asyncio.wait_for(entered.wait(), timeout=10)
+        revoker = asyncio.create_task(revoke_after_stage())
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(revoked.wait()), timeout=0.2)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(writer, revoker), timeout=10)
+        assert revoked.is_set()
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == memory_id,
+            ))).scalar_one_or_none() is not None
+        with pytest.raises(NeuroVaultAuthorizationError, match="revoked"):
+            await PostgresNeuroVault().persist(
+                MemoryEntry(
+                    id=str(uuid.uuid4()), content="Must fail after revocation",
+                    memory_type=MemoryType.SEMANTIC,
+                    namespace=MemoryNamespace.LONG_TERM,
+                    metadata=entry.metadata,
+                ),
+                context=context,
+            )
+    finally:
+        release.set()
+        tasks = [task for task in (writer, revoker) if task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            events = (await session.execute(
+                select(MemoryAssertion.event_id).where(
+                    MemoryAssertion.assertion_id == memory_id,
+                )
+            )).scalars().all()
+            await session.execute(delete(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == memory_id,
+            ))
+            if events:
+                await session.execute(delete(MemoryEvent).where(
+                    MemoryEvent.event_id.in_(events),
+                ))
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.scope_id == grant_id,
+            ))
