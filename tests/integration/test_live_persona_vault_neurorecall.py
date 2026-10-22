@@ -925,6 +925,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         correlation_id=str(uuid.uuid4()), source_record_id=str(source),
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
+            assert final_authority_calls == 2
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
