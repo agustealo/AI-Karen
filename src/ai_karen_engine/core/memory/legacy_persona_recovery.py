@@ -44,3 +44,8 @@ def reconcile_legacy_replay(evidence: LegacyReplayReceiptEvidence) -> LegacyRepl
     if not evidence.persisted:
         return LegacyReplayRecoveryDecision(False, False, "receipt_not_persisted")
     return LegacyReplayRecoveryDecision(True, False, "already_persisted")
+
+
+def requires_fresh_migration_authorization(decision: LegacyReplayRecoveryDecision) -> bool:
+    """A missing receipt is only a retry candidate, never permission to write."""
+    return decision.safe_to_retry and not decision.already_persisted and decision.reason == "no_prior_receipt"
