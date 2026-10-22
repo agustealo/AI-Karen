@@ -89,8 +89,12 @@ async def transcribe_voice(
                 detail="local_transcription_busy",
                 headers={"Retry-After": "1"},
             ) from None
-        logger.warning("Local transcription runtime unavailable", extra={"error_type": type(exc).__name__})
-        raise HTTPException(status_code=503, detail="local_transcription_unavailable") from None
+        if str(exc) == "local_transcription_unavailable":
+            raise HTTPException(status_code=503, detail="local_transcription_unavailable") from None
+        # RuntimeError is also raised by CTranslate2 and model decoders. An
+        # unknown runtime failure must not masquerade as an unavailable model.
+        logger.error("Local transcription inference failed", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="local_transcription_failed") from None
     except Exception as exc:
         # Exception messages and traceback locals can include decoder paths or
         # sensitive input metadata. Emit only an error class, never raw audio.
