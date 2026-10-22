@@ -620,6 +620,7 @@ class ConversationRuntimeGateway:
                 "session_id": context.session_id,
                 "conversation_id": conversation_id,
                 "source": "chat_runtime",
+                "authorized_user_id": context.user_id,
             }
 
             user_message = Message(
