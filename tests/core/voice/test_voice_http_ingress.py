@@ -2,7 +2,7 @@
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from types import SimpleNamespace
 
 from ai_karen_engine.api_routes.voice import transcribe_voice
@@ -27,7 +27,7 @@ def request(audio: bytes, *, content_type: str = "audio/wav", duration: str = "1
 
 @pytest.mark.asyncio
 async def test_unavailable_engine_rejects_before_body_read():
-    runtime = SimpleNamespace(capabilities=AsyncMock(return_value=VoiceCapabilities()),
+    runtime = SimpleNamespace(transcription_busy=Mock(return_value=False), capabilities=AsyncMock(return_value=VoiceCapabilities()),
                               transcribe=AsyncMock())
     with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime):
         with pytest.raises(HTTPException) as caught:
