@@ -636,6 +636,64 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 scope_name="persona-memory-migration", is_granted=True,
             ))
         replay = await prepare_governed_legacy_migration_retry(**base)
+        # Exercise authenticated ingress with an actual signed access JWT,
+        # the existing middleware decoder, and real PostgreSQL evidence.
+        import jwt
+        from starlette.requests import Request
+        from ai_karen_engine.auth import auth_middleware
+        from ai_karen_engine.core.security.auth_config import auth_config
+        from ai_karen_engine.core.memory.legacy_persona_admission import (
+            prepare_authenticated_http_legacy_migration_retry,
+        )
+
+        class HealthyRevocationStore:
+            def ping(self):
+                return True
+
+            def exists(self, key):
+                return 0
+
+        middleware = auth_middleware.SecureAuthMiddleware.__new__(
+            auth_middleware.SecureAuthMiddleware
+        )
+        middleware.jwt_secret = "kp03-disposable-postgres-only"
+        middleware.jwt_algorithm = "HS256"
+        middleware.redis_client = HealthyRevocationStore()
+        claims = {
+            "sub": str(user), "tenant_id": str(tenant), "token_id": "kp03-live",
+            "roles": ["admin"], "permissions": ["memory.write"],
+            "iss": "ai-karen", "aud": "ai-karen-users",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        }
+        signed = jwt.encode(claims, middleware.jwt_secret, algorithm="HS256")
+        http_request = Request({
+            "type": "http", "method": "POST", "path": "/internal",
+            "headers": [(b"authorization", ("Bearer " + signed).encode())],
+            "query_string": b"",
+        })
+        from pytest import MonkeyPatch
+        with MonkeyPatch.context() as patch:
+            patch.setattr(auth_config, "should_bypass_auth", lambda: False)
+            patch.setattr(auth_middleware, "get_auth_middleware", lambda: middleware)
+            authenticated_replay = await prepare_authenticated_http_legacy_migration_retry(
+                request=http_request, request_id=str(uuid.uuid4()),
+                correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                runtime_policy=RuntimePolicyEnforcer(),
+            )
+            assert authenticated_replay == replay
+            # A forged signature must not reach the otherwise eligible source.
+            forged = jwt.encode(claims, "wrong-signing-key", algorithm="HS256")
+            forged_request = Request({
+                "type": "http", "method": "POST", "path": "/internal",
+                "headers": [(b"authorization", ("Bearer " + forged).encode())],
+                "query_string": b"",
+            })
+            with pytest.raises(PermissionError):
+                await prepare_authenticated_http_legacy_migration_retry(
+                    request=forged_request, request_id=str(uuid.uuid4()),
+                    correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                    runtime_policy=RuntimePolicyEnforcer(),
+                )
         assert replay == await prepare_governed_legacy_migration_retry(**base)
         synthetic_entry = MemoryEntry(
             id=replay.memory_id, content="Synthetic canonical replay receipt",
