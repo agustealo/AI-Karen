@@ -100,3 +100,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Live policy and consent combined admission
 
 `prepare_runtime_authorized_legacy_migration_retry` now evaluates an actual `RuntimePolicyEnforcer` policy decision for an explicitly scoped migration action and consults the canonical `ConsentScope` before the existing preflight/recovery retry preparation. The disposable PostgreSQL test verifies that no consent denies, correct policy plus consent permits only ID preparation, removal of trusted permission denies, and later consent revocation denies. The policy request and preflight are still passed into this function; it is not an authenticated ingress handler, evidence retriever, background runner or migration writer. Never construct its input from client claims. An authorized runtime executor and atomic NeuroVault writes remain necessary before backfill.
+
+### Source presence verified without importing content
+
+`platform/memory/postgres/legacy_persona_source.py` adds an RLS-tenant-scoped, read-only existence check for the historical source ID, tenant and user, rejecting blank records and malformed canonical principal identifiers. It returns only a Boolean, never historical content or user identifiers. This does not establish canonical user ownership, consent, retention eligibility, source immutability or a write grant; those remain separate runtime checks. The migration executor is not enabled, and no historical records are changed.
