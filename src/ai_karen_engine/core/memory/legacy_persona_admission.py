@@ -356,6 +356,8 @@ async def prepare_identity_verified_legacy_migration_retry(
     )
     if not authority.explicitly_granted:
         raise ValueError("current migration authorization required before identity lookup")
+    if not isinstance(source_record_id, str) or not source_record_id.strip() or len(source_record_id.strip()) > 64:
+        raise ValueError("valid legacy source identifier required before identity lookup")
     if not await verify_legacy_persona_identity(
         tenant_id=authenticated_request.tenant_id,
         user_id=authenticated_request.user_id,
