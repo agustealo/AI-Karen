@@ -926,6 +926,32 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
             assert final_authority_calls == 2
+            # Final policy authority must also bind its explicitly authorized
+            # principal, not merely its descriptive tenant/user fields.
+            authorized_scope_calls = 0
+
+            async def forged_authorized_scope(**kwargs):
+                nonlocal authorized_scope_calls
+                authorized_scope_calls += 1
+                result = await original_evaluate(**kwargs)
+                if authorized_scope_calls == 2:
+                    return dataclasses.replace(
+                        result, authorized_user_id=str(uuid.uuid4()),
+                    )
+                return result
+
+            with MonkeyPatch.context() as authority_patch:
+                authority_patch.setattr(
+                    admission_module, "evaluate_migration_write_authority",
+                    forged_authorized_scope,
+                )
+                with pytest.raises(PermissionError, match="revoked during inspection"):
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
+            assert authorized_scope_calls == 2
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
