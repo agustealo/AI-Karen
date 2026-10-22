@@ -25,7 +25,9 @@ import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
-import { KarenPresentationRegistry, presentationFromStructuredContent } from "./KarenPresentationRegistry";
+import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
+import { restoreOwnedHistoryMessages } from "./KarenHistoryRestoration";
+import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/ChatInterface";
@@ -420,13 +422,6 @@ function KarenThread() {
   );
 }
 
-type DurableMessage = {
-  id?: string;
-  role: string;
-  content: string;
-  structured_content?: Record<string, unknown> | null;
-};
-
 async function readOwnedHistory(conversationId: string) {
   const conversation = await apiClient.get<ConversationResponse>(
     `/api/conversations/${encodeURIComponent(conversationId)}`,
@@ -434,37 +429,9 @@ async function readOwnedHistory(conversationId: string) {
   if (conversation.id !== conversationId) {
     throw new Error("Conversation history identity mismatch");
   }
-  const saved = (conversation.messages || []) as DurableMessage[];
-  const eligible = saved.filter((m) =>
-    (m.role === "user" || m.role === "assistant") && typeof m.content === "string",
+  return restoreOwnedHistoryMessages(
+    conversationId, (conversation.messages || []) as DurableHistoryMessage[],
   );
-  const converted = eligible.map((m, i) => ({
-      id: m.id || `${conversationId}-persisted-${i}`,
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    }));
-  const imported = fromAgUiMessages(
-    converted as Parameters<typeof fromAgUiMessages>[0],
-    { showThinking: false },
-  );
-  const persistedById = new Map(converted.map((item, index) => [item.id, eligible[index]]));
-  // Keep assistant-ui's canonical text conversion; augment only a confirmed
-  // persisted, allowlisted read-only presentation. No local persistence.
-  return imported.map((message) => {
-    const original = message.id ? persistedById.get(message.id) : undefined;
-    const envelope = original?.role === "assistant"
-      ? presentationFromStructuredContent(original.structured_content) : null;
-    if (!envelope) return message;
-    return {
-      ...message,
-      content: [
-        ...(typeof message.content === "string"
-          ? [{ type: "text" as const, text: message.content }]
-          : message.content),
-        { type: "data" as const, name: "karen.presentation.v1", data: envelope },
-      ],
-    };
-  });
 }
 
 function KarenAgUiRuntime({ threadId }: { threadId: string }) {
