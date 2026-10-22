@@ -76,3 +76,7 @@ Recovery lookup now requires the deterministic expected migration request ID alo
 ### Recovery is not authorization
 
 A canonical ledger receipt can prove that a migration operation already persisted; it cannot prove continuing permission to write or to keep that content. `requires_fresh_migration_authorization` identifies only an absent-receipt retry candidate, which must still pass fresh canonical identity mapping, consent, retention, runtime policy and NeuroVault enforcement. Existing or conflicting receipts never trigger automatic replay. This helper has no migration execution capability.
+
+### Combined retry preparation is still not migration execution
+
+`prepare_legacy_migration_retry` now combines three existing fail-closed decisions: receipt absence (not already migrated or inconsistent), identity/consent/retention preflight, and tenant/user-scoped write admission. Only then does it derive deterministic replay identifiers. This consolidates gate ordering and prevents treating an isolated positive Boolean as approval. It remains pure and can receive forged inputs, so it must not be exposed to clients or mistaken for a RuntimePolicy grant. Production execution is not enabled until independently authenticated evidence is assembled and canonical NeuroVault enforces a new write permission and live consent.
