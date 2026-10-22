@@ -152,20 +152,26 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(composer.setText).not.toHaveBeenCalled();
   });
 
-  it("clears the old recording timer when the browser ends capture on its own", async () => {
+  it("clears the exact recording timeout when the browser ends capture on its own", async () => {
+    const schedule = vi.spyOn(globalThis, "setTimeout");
     const clear = vi.spyOn(globalThis, "clearTimeout");
     try {
       render(<KarenLocalDictation />);
       fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
       await screen.findByRole("button", { name: "Stop local dictation" });
+      const recordingTimeout = schedule.mock.results[
+        schedule.mock.calls.findIndex((call) => call[1] === 30_000)
+      ]?.value;
+      expect(recordingTimeout).toBeDefined();
       const active = Recorder.instances[0];
       active.state = "inactive";
       active.ondataavailable?.({ data: new Blob(["captured"]) });
       active.onstop?.();
       await waitFor(() => expect(screen.getByRole("button", { name: "Start local dictation" })).toBeTruthy());
-      expect(clear).toHaveBeenCalled();
+      expect(clear).toHaveBeenCalledWith(recordingTimeout);
       expect(stopTrack).toHaveBeenCalled();
     } finally {
+      schedule.mockRestore();
       clear.mockRestore();
     }
   });
