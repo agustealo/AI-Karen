@@ -45,7 +45,19 @@ class VoiceRuntime:
         if self._transcription_lock.locked():
             raise RuntimeError("local_transcription_busy")
         async with self._transcription_lock:
-            return await engine.transcribe(audio, metadata)
+            # Cancellation of the HTTP task cannot stop a model already
+            # running in a worker thread. Hold capacity until it actually
+            # finishes so another request cannot overlap inference.
+            inference = asyncio.create_task(engine.transcribe(audio, metadata))
+            try:
+                return await asyncio.shield(inference)
+            except asyncio.CancelledError:
+                try:
+                    await inference
+                except Exception:
+                    # Preserve cancellation; the abandoned result is not sent.
+                    pass
+                raise
 
     async def capabilities(self) -> VoiceCapabilities:
         engine = self.speech_engine
