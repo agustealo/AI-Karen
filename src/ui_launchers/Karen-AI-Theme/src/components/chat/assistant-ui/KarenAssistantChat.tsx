@@ -26,6 +26,7 @@ import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck, Settings2 } from "lucide-react";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
+import { KarenPersonaSelector } from "./KarenPersonaSelector";
 import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
 import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
@@ -396,6 +397,7 @@ function KarenThread() {
                 <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
               </section>
             )}
+            <div className="mb-2"><KarenPersonaSelector /></div>
             <ComposerPrimitive.Root className="flex items-end gap-2 rounded-2xl border border-input bg-card p-2 shadow-sm">
               <button type="button" aria-label="Composer settings" aria-expanded={composerSettingsOpen}
                 onClick={() => setComposerSettingsOpen((open) => !open)}
