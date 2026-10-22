@@ -2435,7 +2435,7 @@ class ChatRuntime:
             )
 
     async def _synthesize_search_evidence(self, request, decision, plan, meter, retrieved):
-        """Use the existing model gateway only for bounded fetched-page evidence."""
+        """Compose verified search and direct observations through the model gateway."""
         from ai_karen_engine.services.response.response_contracts import ResponseContract
         from ai_karen_engine.services.response.response_prompt_builder import ResponsePromptBuilder
         from ai_karen_engine.services.response.response_validator import ResponseValidator
