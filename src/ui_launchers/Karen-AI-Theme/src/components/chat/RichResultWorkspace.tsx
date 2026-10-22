@@ -191,6 +191,11 @@ export default function RichResultWorkspace({
     artifacts.length > 0 ||
     attachments.length > 0 ||
     references.length > 0;
+  const hasVisibleContent =
+    (artifacts.length > 0 && !hidden.includes('artifacts')) ||
+    (Object.keys(structured).length > 0 && !hidden.includes('structured')) ||
+    (attachments.length > 0 && !hidden.includes('attachments')) ||
+    (references.length > 0 && !hidden.includes('evidence'));
 
   return (
     <aside
@@ -233,6 +238,15 @@ export default function RichResultWorkspace({
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3.5">
         {!hasContent && <p role="status" className="rounded-lg border border-dashed border-border/70 p-3 text-xs text-muted-foreground">No files, artifacts, structured output, or evidence have been reported for this turn. Choose what to show using the settings menu.</p>}
+        {hasContent && !hasVisibleContent && (
+          <div role="status" className="rounded-lg border border-dashed border-border/70 p-3 text-xs text-muted-foreground">
+            This turn has workspace results, but their cards are hidden.
+            <button type="button" onClick={() => saveLayout(order, [])}
+              className="mt-2 block rounded-md border border-border px-2 py-1 font-medium text-foreground hover:bg-muted">
+              Show all workspace cards
+            </button>
+          </div>
+        )}}
         {artifacts.length > 0 && !hidden.includes('artifacts') && (
           <section {...cardProps('artifacts')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
