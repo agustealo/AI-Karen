@@ -315,3 +315,59 @@ async def test_consented_retry_preparation_uses_current_postgres_grant():
             await session.execute(delete(ConsentScope).where(
                 ConsentScope.scope_id == scope_id
             ))
+
+
+async def test_runtime_policy_and_explicit_consent_both_required_for_retry():
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_runtime_authorized_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_preflight import LegacyMigrationPreflight
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+
+    tenant, user, consent_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    policy = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        tenant_id=str(tenant), user_id=str(user),
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    options = dict(
+        authenticated_request=request, runtime_policy=policy,
+        preflight=LegacyMigrationPreflight(True, ()),
+        recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+        source_record_id=str(uuid.uuid4()),
+    )
+    with pytest.raises(ValueError, match="explicit historical migration consent"):
+        await prepare_runtime_authorized_legacy_migration_retry(**options)
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                scope_id=consent_id, tenant_id=tenant, user_id=user,
+                scope_name="persona-memory-migration", is_granted=True,
+            ))
+        replay = await prepare_runtime_authorized_legacy_migration_retry(**options)
+        assert replay.memory_id and replay.request_id
+        denied = PolicyEvaluationRequest(
+            tenant_id=str(tenant), user_id=str(user),
+            action="legacy_persona_memory_migration",
+            permissions=[], requested_capabilities=["memory.write"],
+        )
+        with pytest.raises(ValueError, match="current migration authorization"):
+            await prepare_runtime_authorized_legacy_migration_retry(
+                **{**options, "authenticated_request": denied}
+            )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            grant = (await session.execute(select(ConsentScope).where(
+                ConsentScope.scope_id == consent_id
+            ))).scalar_one()
+            grant.is_granted = False
+        with pytest.raises(ValueError, match="explicit historical migration consent"):
+            await prepare_runtime_authorized_legacy_migration_retry(**options)
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.scope_id == consent_id
+            ))
