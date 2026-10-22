@@ -87,6 +87,21 @@ describe("canonical assistant-ui history restoration", () => {
       && "type" in part && part.type === "data")).toHaveLength(1);
   });
 
+  it("rejects malformed authenticated history rather than displaying false empty state", async () => {
+    await expect(readOwnedConversationHistory("owned-thread", async () => ({
+      id: "owned-thread",
+    }))).rejects.toThrow("Conversation history response missing messages");
+    await expect(readOwnedConversationHistory("owned-thread", async () => ({
+      id: "owned-thread",
+      messages: null,
+    }))).rejects.toThrow("Conversation history response missing messages");
+    const empty = await readOwnedConversationHistory("owned-thread", async () => ({
+      id: "owned-thread",
+      messages: [],
+    }));
+    expect(empty).toEqual([]);
+  });
+
   it("refuses mismatched conversation IDs and propagates history read failure", async () => {
     await expect(readOwnedConversationHistory("owned-thread", async () => ({
       id: "foreign-thread", messages: [],
