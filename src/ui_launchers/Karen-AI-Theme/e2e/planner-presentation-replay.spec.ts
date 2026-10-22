@@ -32,11 +32,20 @@ test.describe("authenticated planner presentation replay", () => {
     await expect(match).toHaveCount(1);
     await match.click();
 
-    const task = shell.getByText(taskTitle!, { exact: true });
+    const plannerCards = shell.getByTestId("karen-planner-task-list");
+    const task = plannerCards.getByText(taskTitle!, { exact: true });
     await expect(task).toHaveCount(1);
+
+    // Reopen the *same* persisted conversation after reload. A reload may
+    // restore a different active thread, so do not mistake that for success.
     await page.reload();
     await expect(shell).toBeVisible();
-    await expect(shell.getByText(taskTitle!, { exact: true })).toHaveCount(1);
+    await shell.getByRole("button", { name: "Find conversations" }).click();
+    const reopened = page.getByRole("group", { name: "Matching conversations" })
+      .getByRole("button", { name: conversationTitle!, exact: true });
+    await expect(reopened).toHaveCount(1);
+    await reopened.click();
+    await expect(plannerCards.getByText(taskTitle!, { exact: true })).toHaveCount(1);
     await expect(shell.getByRole("alert")).toHaveCount(0);
   });
 });
