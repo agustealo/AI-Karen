@@ -187,6 +187,27 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce();
   });
 
+  it("recovers when MediaRecorder.start throws after permission is granted", async () => {
+    const failStart = vi.spyOn(Recorder.prototype, "start").mockImplementationOnce(() => {
+      throw new Error("device start failed");
+    });
+    try {
+      render(<KarenLocalDictation />);
+      fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+      expect((await screen.findByRole("alert")).textContent).toContain("Microphone access");
+      expect(stopTrack).toHaveBeenCalled();
+      expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+      expect(composer.setText).not.toHaveBeenCalled();
+      // The stale recorder must not block a subsequent successful recording.
+      fireEvent.click(screen.getByRole("button", { name: "Start local dictation" }));
+      await screen.findByRole("button", { name: "Discard local recording" });
+      fireEvent.click(screen.getByRole("button", { name: "Discard local recording" }));
+      expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    } finally {
+      failStart.mockRestore();
+    }
+  });
+
   it("invalidates recorder ownership when stopping the device throws", async () => {
     render(<KarenLocalDictation />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
