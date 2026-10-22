@@ -17,11 +17,11 @@ from ai_karen_engine.platform.memory.postgres.ledger_models import MemoryAsserti
 
 
 async def lookup_legacy_replay_receipt(
-    *, tenant_id: str, user_id: str, expected_memory_id: str,
+    *, tenant_id: str, user_id: str, expected_memory_id: str,\n    expected_request_id: str,
 ) -> LegacyReplayReceiptEvidence:
     tenant = uuid.UUID(tenant_id)
     user = uuid.UUID(user_id)
-    expected = uuid.UUID(expected_memory_id)
+    expected = uuid.UUID(expected_memory_id)\n    request = uuid.UUID(expected_request_id)
     async with async_transaction_scope(tenant_id=str(tenant)) as session:
         result = await session.execute(
             select(MemoryAssertion, MemoryEvent)
@@ -48,5 +48,5 @@ async def lookup_legacy_replay_receipt(
         persisted_memory_id=str(assertion.assertion_id),
         persisted_tenant_id=str(event.tenant_id),
         persisted_user_id=str(event.user_id),
-        persisted=event.event_type == "memory_persisted" and assertion.valid_to is None,
+        persisted=(provenance_valid and event.event_type == "memory_persisted"\n                   and assertion.valid_to is None),
     )
