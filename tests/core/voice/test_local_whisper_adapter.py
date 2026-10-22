@@ -64,10 +64,22 @@ async def test_truncated_pcm_payload_rejected_before_inference():
 async def test_malformed_binary_wav_header_is_client_contract_error():
     adapter = FasterWhisperLocalAdapter("/missing")
     adapter._model = object()
-    payload = b"RIFF" + b"\\x00" * 40
+    payload = b"RIFF" + bytes(40)
     with patch("ai_karen_engine.services.local_whisper_adapter.wave.open",
                side_effect=struct.error("private binary decoder detail")):
         with pytest.raises(VoiceContractError, match="invalid_wav_container"):
             await adapter.transcribe(
                 payload, AudioInput("audio/wav", len(payload), 0.5)
             )
+
+
+@pytest.mark.asyncio
+async def test_invalid_riff_header_bytes_rejected_without_model_inference():
+    adapter = FasterWhisperLocalAdapter("/missing")
+    adapter._model = object()
+    # Not a valid RIFF/WAVE container, even though the claimed MIME is WAV.
+    payload = b"RIFF" + bytes(40)
+    with pytest.raises(VoiceContractError, match="invalid_wav_container"):
+        await adapter.transcribe(
+            payload, AudioInput("audio/wav", len(payload), 0.5)
+        )
