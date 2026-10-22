@@ -26,7 +26,7 @@ import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
-import { restoreOwnedHistoryMessages } from "./KarenHistoryRestoration";
+import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
 import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
@@ -423,14 +423,10 @@ function KarenThread() {
 }
 
 async function readOwnedHistory(conversationId: string) {
-  const conversation = await apiClient.get<ConversationResponse>(
-    `/api/conversations/${encodeURIComponent(conversationId)}`,
-  );
-  if (conversation.id !== conversationId) {
-    throw new Error("Conversation history identity mismatch");
-  }
-  return restoreOwnedHistoryMessages(
-    conversationId, (conversation.messages || []) as DurableHistoryMessage[],
+  return readOwnedConversationHistory(conversationId, (id) =>
+    apiClient.get<ConversationResponse>(
+      `/api/conversations/${encodeURIComponent(id)}`,
+    ) as Promise<{ id: string; messages?: DurableHistoryMessage[] | null }>,
   );
 }
 
