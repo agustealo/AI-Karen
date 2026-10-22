@@ -50,6 +50,8 @@ class VoiceRuntime:
         if self._transcription_lock.locked():
             raise RuntimeError("local_transcription_busy")
         async with self._transcription_lock:
+            if engine is not self.speech_engine:
+                raise RuntimeError("local_transcription_unavailable")
             # Cancellation of the HTTP task cannot stop a model already
             # running in a worker thread. Hold capacity until it actually
             # finishes so another request cannot overlap inference.
@@ -111,35 +113,38 @@ async def configure_local_voice_runtime() -> VoiceCapabilities:
     # Concurrent lifespan entrypoints must not load the same large model twice.
     async with _voice_bootstrap_lock:
         runtime = get_voice_runtime()
-        if os.getenv("KAREN_LOCAL_STT_ENABLED", "false").lower() != "true":
-            # Disabling opt-in must revoke an already registered engine too.
-            # Do not let a previous healthy registration override policy.
+        # Reconfiguration shares inference capacity so engines are never
+        # replaced during an active native model operation.
+        async with runtime._transcription_lock:
+            if os.getenv("KAREN_LOCAL_STT_ENABLED", "false").lower() != "true":
+                # Disabling opt-in must revoke an already registered engine too.
+                # Do not let a previous healthy registration override policy.
+                runtime.speech_engine = None
+                runtime._local_engine_config = None
+                return await runtime.capabilities()
+            model_path = os.getenv("KAREN_LOCAL_STT_MODEL_PATH", "").strip()
+            device = os.getenv("KAREN_LOCAL_STT_DEVICE", "cpu").strip()
+            compute_type = os.getenv("KAREN_LOCAL_STT_COMPUTE_TYPE", "int8").strip()
+            config = (model_path, device, compute_type)
+            if not all(config):
+                runtime.speech_engine = None
+                runtime._local_engine_config = None
+                return await runtime.capabilities()
+            current = await runtime.capabilities()
+            if current.transcription_available and runtime._local_engine_config == config:
+                return current
+            # A changed selection must not leave the old healthy model advertised.
             runtime.speech_engine = None
             runtime._local_engine_config = None
-            return await runtime.capabilities()
-        model_path = os.getenv("KAREN_LOCAL_STT_MODEL_PATH", "").strip()
-        device = os.getenv("KAREN_LOCAL_STT_DEVICE", "cpu").strip()
-        compute_type = os.getenv("KAREN_LOCAL_STT_COMPUTE_TYPE", "int8").strip()
-        config = (model_path, device, compute_type)
-        if not all(config):
-            runtime.speech_engine = None
-            runtime._local_engine_config = None
-            return await runtime.capabilities()
-        current = await runtime.capabilities()
-        if current.transcription_available and runtime._local_engine_config == config:
-            return current
-        # A changed selection must not leave the old healthy model advertised.
-        runtime.speech_engine = None
-        runtime._local_engine_config = None
-        from ai_karen_engine.services.local_whisper_adapter import FasterWhisperLocalAdapter
+            from ai_karen_engine.services.local_whisper_adapter import FasterWhisperLocalAdapter
 
-        adapter = FasterWhisperLocalAdapter(
-            model_path, device=device, compute_type=compute_type,
-        )
-        try:
-            await adapter.load()
-        except (FileNotFoundError, RuntimeError, OSError):
+            adapter = FasterWhisperLocalAdapter(
+                model_path, device=device, compute_type=compute_type,
+            )
+            try:
+                await adapter.load()
+            except (FileNotFoundError, RuntimeError, OSError):
+                return await runtime.capabilities()
+            runtime.speech_engine = adapter
+            runtime._local_engine_config = config
             return await runtime.capabilities()
-        runtime.speech_engine = adapter
-        runtime._local_engine_config = config
-        return await runtime.capabilities()
