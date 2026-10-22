@@ -21,6 +21,8 @@ export function KarenLocalDictation() {
   const abort = useRef<AbortController | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(true);
+  const starting = useRef(false);
+  const recordingFailed = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
@@ -31,7 +33,8 @@ export function KarenLocalDictation() {
       mounted.current = false;
       if (timer.current) clearTimeout(timer.current);
       abort.current?.abort();
-      if (recorder.current?.state === "recording") recorder.current.stop();
+      recordingFailed.current = true;
+      try { if (recorder.current?.state === "recording") recorder.current.stop(); } catch { /* Recorder may already be closed. */ }
       stream.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -46,9 +49,11 @@ export function KarenLocalDictation() {
   };
 
   const start = async () => {
-    if (processing || recording) return;
+    if (processing || recording || starting.current) return;
+    starting.current = true;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("Microphone recording is unsupported in this browser.");
+      starting.current = false;
       return;
     }
     setError(null);
@@ -60,12 +65,16 @@ export function KarenLocalDictation() {
       const media = new MediaRecorder(mic);
       recorder.current = media;
       media.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
-      media.onerror = () => { if (mounted.current) setError("Audio capture failed."); stop(); };
+      media.onerror = () => {
+        recordingFailed.current = true;
+        if (mounted.current) setError("Audio capture failed.");
+        stop();
+      };
       media.onstop = async () => {
         mic.getTracks().forEach((track) => track.stop());
         stream.current = null;
         recorder.current = null;
-        if (!mounted.current || !chunks.length) return;
+        if (!mounted.current || recordingFailed.current || !chunks.length) return;
         setProcessing(true);
         const controller = new AbortController();
         abort.current = controller;
@@ -87,10 +96,13 @@ export function KarenLocalDictation() {
           if (abort.current === controller) abort.current = null;
         }
       };
+      recordingFailed.current = false;
       media.start();
+      starting.current = false;
       setRecording(true);
       timer.current = setTimeout(stop, 30_000);
     } catch {
+      starting.current = false;
       stream.current?.getTracks().forEach((track) => track.stop());
       stream.current = null;
       if (mounted.current) setError("Microphone access was denied or unavailable.");
