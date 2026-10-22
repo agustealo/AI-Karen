@@ -1,5 +1,7 @@
 """Local STT must reject malformed and spoofed audio before model inference."""
 import io
+import struct
+from unittest.mock import patch
 import wave
 
 import pytest
@@ -56,3 +58,16 @@ async def test_truncated_pcm_payload_rejected_before_inference():
         await adapter.transcribe(
             truncated, AudioInput("audio/wav", len(truncated), 0.5),
         )
+
+
+@pytest.mark.asyncio
+async def test_malformed_binary_wav_header_is_client_contract_error():
+    adapter = FasterWhisperLocalAdapter("/missing")
+    adapter._model = object()
+    payload = b"RIFF" + b"\\x00" * 40
+    with patch("ai_karen_engine.services.local_whisper_adapter.wave.open",
+               side_effect=struct.error("private binary decoder detail")):
+        with pytest.raises(VoiceContractError, match="invalid_wav_container"):
+            await adapter.transcribe(
+                payload, AudioInput("audio/wav", len(payload), 0.5)
+            )
