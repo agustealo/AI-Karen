@@ -32,6 +32,10 @@ class VoiceRuntime:
     speech_engine: LocalSpeechEngine | None = None
     _transcription_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
+    def transcription_busy(self) -> bool:
+        """Advisory ingress precheck. The execution lock remains authoritative."""
+        return self._transcription_lock.locked()
+
     async def transcribe(self, audio: bytes, metadata: AudioInput) -> TranscriptionResult:
         """Execute only an explicitly healthy local STT adapter."""
         capabilities = await self.capabilities()
