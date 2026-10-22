@@ -538,7 +538,16 @@ async def migration_policy_request_from_authenticated_http(
         if store.exists(middleware._get_redis_key("revoked", token_id)):
             raise PermissionError("historical migration token revoked")
         principal = middleware._get_user_from_payload(payload)
-        if "memory.write" not in (principal.get("permissions") or []):
+        permissions = principal.get("permissions")
+        roles = principal.get("roles")
+        if (
+            not isinstance(permissions, list)
+            or not all(isinstance(item, str) for item in permissions)
+            or not isinstance(roles, list)
+            or not all(isinstance(item, str) for item in roles)
+        ):
+            raise PermissionError("historical migration credential claims invalid")
+        if "memory.write" not in permissions:
             raise PermissionError("historical migration write permission required")
         if not request_id or not request_id.strip() or not correlation_id or not correlation_id.strip():
             raise ValueError("request and correlation identity required")
