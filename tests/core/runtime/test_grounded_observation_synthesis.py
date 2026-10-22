@@ -104,3 +104,22 @@ async def test_missing_provider_receipt_rejected():
         assert await runtime._synthesize_search_evidence(
             request, decision, plan, meter, result
         ) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent,answer", [
+    ("search.weather", "It's 99 degrees in NYC."),
+    ("search.weather", "Humidity is 88%."),
+    ("time.current", "It is 11:30 AM."),
+    ("time.current", "The date is 2027-10-22."),
+])
+async def test_unobserved_numeric_claims_never_leave_model_gateway(intent, answer):
+    runtime, gateway, request, decision, plan, meter, result = _fixture(
+        intent, answer
+    )
+    with patch.object(ChatRuntime, "_resolve_chat_generation_max_tokens", return_value=160):
+        composed = await runtime._synthesize_search_evidence(
+            request, decision, plan, meter, result
+        )
+    assert composed is None
+    gateway.generate.assert_awaited_once()
