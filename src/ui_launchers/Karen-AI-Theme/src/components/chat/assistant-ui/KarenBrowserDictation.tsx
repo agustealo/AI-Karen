@@ -45,7 +45,7 @@ export function KarenBrowserDictation() {
         active.onresult = null;
         active.onerror = null;
         active.onend = null;
-        active.stop();
+        try { active.stop(); } catch { /* Recognition may already be stopped. */ }
       }
     };
   }, []);
@@ -55,7 +55,8 @@ export function KarenBrowserDictation() {
   const toggle = () => {
     if (!consented) return;
     if (recognition.current) {
-      recognition.current.stop();
+      try { recognition.current.stop(); }
+      catch { setError("Could not stop browser dictation."); }
       return;
     }
     const browser = window as SpeechWindow;
@@ -66,7 +67,7 @@ export function KarenBrowserDictation() {
     }
     const instance = new Recognition();
     recognition.current = instance;
-    draft.current = aui.composer().getState().text;
+    draft.current = aui.composer().getState().text || "";
     instance.lang = navigator.language || "en-US";
     instance.interimResults = false;
     instance.continuous = false;
