@@ -1,0 +1,105 @@
+"use client";
+
+/**
+ * Optional compatibility dictation. Disabled unless explicitly configured.
+ * Browser speech recognition may send audio to a browser-vendor service.
+ * Never records automatically and never submits the resulting draft.
+ */
+import { useEffect, useRef, useState } from "react";
+import { useAui } from "@assistant-ui/react";
+import { Mic, MicOff } from "lucide-react";
+
+type SpeechResult = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
+type BrowserRecognition = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: SpeechResult) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechWindow = Window & {
+  SpeechRecognition?: new () => BrowserRecognition;
+  webkitSpeechRecognition?: new () => BrowserRecognition;
+};
+
+const enabled = process.env.NEXT_PUBLIC_KAREN_BROWSER_DICTATION_ENABLED === "true";
+
+export function KarenBrowserDictation() {
+  const aui = useAui();
+  const recognition = useRef<BrowserRecognition | null>(null);
+  const draft = useRef("");
+  const mounted = useRef(true);
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const active = recognition.current;
+      recognition.current = null;
+      if (active) {
+        active.onresult = null;
+        active.onerror = null;
+        active.onend = null;
+        active.stop();
+      }
+    };
+  }, []);
+
+  if (!enabled) return null;
+
+  const toggle = () => {
+    if (recognition.current) {
+      recognition.current.stop();
+      return;
+    }
+    const browser = window as SpeechWindow;
+    const Recognition = browser.SpeechRecognition || browser.webkitSpeechRecognition;
+    if (!Recognition) {
+      setError("Browser dictation is unavailable. Use the text input.");
+      return;
+    }
+    const instance = new Recognition();
+    recognition.current = instance;
+    draft.current = aui.composer.getState().text;
+    instance.lang = navigator.language || "en-US";
+    instance.interimResults = false;
+    instance.continuous = false;
+    instance.onresult = (event) => {
+      const words = Array.from(event.results).map((result) => result[0]?.transcript || "").join(" ").trim();
+      if (!words || !mounted.current) return;
+      const prefix = draft.current.trim();
+      aui.composer.setText(prefix ? `${prefix} ${words}` : words);
+    };
+    instance.onerror = () => {
+      if (mounted.current) setError("Speech recognition failed. Your draft was not sent.");
+    };
+    instance.onend = () => {
+      recognition.current = null;
+      if (mounted.current) setRecording(false);
+    };
+    setError(null);
+    try {
+      instance.start();
+      setRecording(true);
+    } catch {
+      recognition.current = null;
+      setRecording(false);
+      setError("Could not start microphone dictation.");
+    }
+  };
+
+  return <div className="flex items-center gap-2">
+    <button type="button" aria-label={recording ? "Stop dictation" : "Start browser dictation"}
+      aria-pressed={recording} onClick={toggle}
+      title="Optional browser dictation; recognition may use your browser vendor's servers"
+      className="flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted">
+      {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+    </button>
+    {recording && <span role="status" className="text-xs">Listening…</span>}
+    {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
+  </div>;
+}
