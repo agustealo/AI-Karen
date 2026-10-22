@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ai_karen_engine.core.voice.contracts import VoiceEngineStatus, AudioInput, TranscriptionResult
+from ai_karen_engine.core.voice.contracts import VoiceEngineStatus, AudioInput, TranscriptionResult, VoiceContractError
 from ai_karen_engine.services.voice_runtime import VoiceRuntime
 
 
@@ -107,3 +107,13 @@ async def test_canceled_request_keeps_capacity_until_inference_completes():
         with pytest.raises(asyncio.CancelledError):
             await first
     assert (await runtime.transcribe(payload, metadata)).text == "finished"
+
+
+@pytest.mark.asyncio
+async def test_mismatched_audio_metadata_is_contract_error_before_inference():
+    engine = Engine()
+    engine.transcribe = AsyncMock()
+    runtime = VoiceRuntime(engine)
+    with pytest.raises(VoiceContractError, match="audio_byte_count_mismatch"):
+        await runtime.transcribe(b"123", AudioInput("audio/wav", 4, 0.5))
+    engine.transcribe.assert_not_awaited()
