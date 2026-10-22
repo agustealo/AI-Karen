@@ -246,7 +246,7 @@ export default function RichResultWorkspace({
               Show all workspace cards
             </button>
           </div>
-        )}}
+        )}
         {artifacts.length > 0 && !hidden.includes('artifacts') && (
           <section {...cardProps('artifacts')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
