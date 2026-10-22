@@ -856,7 +856,9 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 expected_memory_id=replay.memory_id,
                 expected_request_id=replay.request_id,
             )
-            assert same_transaction_receipt.persisted
+            # A ledger row is not proof of legitimate migration provenance.
+            assert not same_transaction_receipt.persisted
+            assert same_transaction_receipt.persisted_memory_id == replay.memory_id
             assert same_transaction_receipt == await lookup_legacy_replay_receipt(
                 tenant_id=str(tenant), user_id=str(user),
                 expected_memory_id=replay.memory_id,
