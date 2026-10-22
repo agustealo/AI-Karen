@@ -607,3 +607,63 @@ async def test_foreign_tenant_cannot_read_persisted_presentation_evidence() -> N
             _context(tenant_id="tenant-other", request_id="foreign-read"),
             message_limit=10,
         )
+
+
+@pytest.mark.asyncio
+async def test_planner_presentation_round_trip_through_durable_gateway_and_api_serializer():
+    """Authorized planner data remains the same after storing and re-reading a turn."""
+    from types import SimpleNamespace
+
+    from ai_karen_engine.api_routes.chat.conversation import _canonical_snapshot_to_response
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk, ChatStreamEventType
+    from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "planner-corr-1",
+        "component_type": "planner.task_list",
+        "evidence_ref": "planner-owned-read:corr-1",
+        "correlation_id": "corr-1",
+        "data": {"tasks": [{"id": "task-1", "title": "Review release", "status": "todo"}]},
+    }
+    result = SimpleNamespace(
+        success=True, degraded=False, source="planner", source_id="planner.read",
+        payload={"presentation": envelope},
+    )
+    verified = ChatRuntime._verified_planner_presentation(
+        SimpleNamespace(intent="planner.read"),
+        SimpleNamespace(allowed_capabilities=["planner.read"]),
+        result,
+    )
+    assert verified == envelope
+    projection = AGUIEventProjection(thread_id="owned-thread", run_id="run-1")
+    projection.begin()
+    events = projection.project(ChatStreamChunk(
+        type=ChatStreamEventType.PRESENTATION, content="", correlation_id="corr-1",
+        metadata={"presentation": verified, "presentation_verified": True},
+    ))
+    assert events[0]["value"] == envelope
+
+    persisted = await gateway.persist_completed_turn(
+        _context(request_id="planner-request-1"),
+        user_text="List my tasks",
+        assistant_text="Found 1 planner commitments.",
+        response_metadata={"structured_content": {"presentation": verified}},
+    )
+    assert persisted.status == "persisted"
+    snapshot = await gateway.get_owned_snapshot(_context(request_id="planner-read"))
+    api_response = _canonical_snapshot_to_response(snapshot)
+    assert api_response.messages[-1].structured_content == {"presentation": envelope}
+    assert api_response.messages[-1].content == "Found 1 planner commitments."
+
+    with pytest.raises(RuntimeError, match="conversation_not_found"):
+        await gateway.get_owned_snapshot(
+            _context(tenant_id="tenant-foreign", request_id="foreign-read"),
+        )
+    with pytest.raises(PermissionError, match="conversation_user_mismatch"):
+        await gateway.get_owned_snapshot(
+            _context(user_id="user-foreign", request_id="foreign-read"),
+        )
