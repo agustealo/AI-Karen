@@ -39,6 +39,7 @@ async def test_unavailable_engine_rejects_before_body_read():
 @pytest.mark.asyncio
 async def test_excessive_upload_rejected_without_transcription():
     runtime = SimpleNamespace(
+        transcription_busy=Mock(return_value=False),
         capabilities=AsyncMock(return_value=VoiceCapabilities(
             status=VoiceEngineStatus.READY, transcription_available=True, engine="local")),
         transcribe=AsyncMock(),
