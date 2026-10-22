@@ -18,7 +18,12 @@ async def verify_legacy_migration_retention(
     *, tenant_id: str, created_at: datetime, memory_class: str,
 ) -> bool:
     tenant = uuid.UUID(tenant_id)
-    if not isinstance(created_at, datetime) or not memory_class.strip():
+    if (
+        not isinstance(created_at, datetime)
+        or not isinstance(memory_class, str)
+        or not memory_class.strip()
+        or memory_class != memory_class.strip()
+    ):
         return False
     created = created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at.astimezone(timezone.utc)
     now = datetime.now(timezone.utc)
