@@ -453,3 +453,45 @@ async def test_consented_retry_rejects_unadmitted_policy_evidence_before_consent
             recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
             source_record_id="source-1",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", [
+    "prepare_identity_verified_legacy_migration_retry",
+    "prepare_retention_verified_legacy_migration_retry",
+    "prepare_source_verified_legacy_migration_retry",
+])
+async def test_wrong_migration_action_never_reads_historical_principal(
+    monkeypatch, entrypoint,
+):
+    from ai_karen_engine.core.memory import legacy_persona_admission as admission
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.platform.memory.postgres import (
+        legacy_persona_identity, legacy_persona_source, legacy_persona_retention,
+    )
+
+    async def forbidden_read(**kwargs):
+        raise AssertionError("wrong policy action accessed historical identity/source")
+
+    monkeypatch.setattr(legacy_persona_identity, "verify_legacy_persona_identity", forbidden_read)
+    monkeypatch.setattr(legacy_persona_source, "verify_legacy_persona_source", forbidden_read)
+    monkeypatch.setattr(
+        legacy_persona_source, "read_legacy_persona_source_retention_metadata", forbidden_read,
+    )
+    monkeypatch.setattr(legacy_persona_retention, "verify_legacy_migration_retention", forbidden_read)
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="ordinary_memory_write",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    with pytest.raises(ValueError, match="migration-specific runtime policy action"):
+        await getattr(admission, entrypoint)(
+            authenticated_request=request,
+            runtime_policy=RuntimePolicyEnforcer(),
+            preflight=LegacyMigrationPreflight(True, ()),
+            recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+            source_record_id="source-1",
+        )
