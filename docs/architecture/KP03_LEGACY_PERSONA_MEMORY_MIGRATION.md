@@ -104,3 +104,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Source presence verified without importing content
 
 `platform/memory/postgres/legacy_persona_source.py` adds an RLS-tenant-scoped, read-only existence check for the historical source ID, tenant and user, rejecting blank records and malformed canonical principal identifiers. It returns only a Boolean, never historical content or user identifiers. This does not establish canonical user ownership, consent, retention eligibility, source immutability or a write grant; those remain separate runtime checks. The migration executor is not enabled, and no historical records are changed.
+
+### Source verification added to retry preparation
+
+`prepare_source_verified_legacy_migration_retry` consults the existing read-only historical source verifier for the trusted runtime request's tenant/user and source ID before invoking the combined RuntimePolicy, explicit consent, preflight and recovery admission checks. A missing or blank source is denied. The verifier does not expose or import content and cannot authenticate the request or establish retention eligibility. A unit test confirms missing-source denial. Actual historical writes remain disabled.
