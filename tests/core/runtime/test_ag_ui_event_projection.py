@@ -419,3 +419,164 @@ def test_agui_reports_shadow_learning_without_claiming_an_active_model_switch():
     assert provenance["claim"] == "operational_evidence_only"
     assert "unpromoted-model-b" not in str(events)
     assert "private" not in str(events)
+
+
+def test_presentation_requires_verified_bounded_runtime_evidence():
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "p-1",
+        "component_type": "weather.observation",
+        "data": {"location": "Detroit", "temperature_f": 60.3},
+        "evidence_ref": "tool-receipt-1",
+    }
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    assert projection.project(chunk("presentation", presentation=envelope)) == []
+    assert projection.project(chunk(
+        "presentation", presentation=envelope, presentation_verified=False
+    )) == []
+    events = projection.project(chunk(
+        "presentation", presentation=envelope, presentation_verified=True
+    ))
+    assert events == [{
+        "type": "CUSTOM", "name": "karen.presentation.v1", "value": envelope,
+    }]
+    invalid = [
+        {**envelope, "component_type": "javascript"},
+        {**envelope, "evidence_ref": ""},
+        {**envelope, "data": {"text": "x" * 40000}},
+        {**envelope, "schema_version": True},
+        {**envelope, "data": {"value": float("nan")}},
+        {**envelope, "unexpected": "ignored"},
+    ]
+    for bad in invalid:
+        assert projection.project(chunk(
+            "presentation", presentation=bad, presentation_verified=True
+        )) == []
+
+
+def test_presentation_rejects_verified_flag_when_weather_evidence_is_invalid():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "weather-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "receipt-1",
+    }
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    for bad in (
+        {"location": "Detroit"},
+        {"location": "Detroit", "temperature_f": "60%"},
+        {"location": "Detroit", "temperature_f": 60, "temperatureF": 85},
+        {"location": "Detroit", "temperature_f": float("inf")},
+        {"location": "", "temperature_f": 60},
+    ):
+        assert p.project(chunk("presentation", presentation={
+            **base, "data": bad,
+        }, presentation_verified=True)) == []
+    valid = {**base, "data": {"location": "Detroit", "temperature_f": 60.3}}
+    assert p.project(chunk(
+        "presentation", presentation=valid, presentation_verified=True
+    ))[0]["name"] == "karen.presentation.v1"
+
+
+def test_canonical_presentation_stream_event_projects_through_same_ag_ui_path():
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatStreamChunk, ChatStreamEventType,
+    )
+
+    payload = {
+        "schema_version": 1,
+        "presentation_id": "weather-request-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "request-1:authorized-weather-tool",
+        "correlation_id": "corr-1",
+        "data": {"location": "Detroit", "temperature_f": 60.3},
+    }
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    event = ChatStreamChunk(
+        type=ChatStreamEventType.PRESENTATION,
+        content="",
+        correlation_id="corr-1",
+        metadata={"presentation_verified": True, "presentation": payload},
+    )
+    assert projection.project(event) == [{
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": payload,
+    }]
+
+
+def test_presentation_projection_redacts_unrelated_tool_result_fields():
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "weather-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "receipt-1",
+        "data": {
+            "location": "Detroit", "temperature_f": 60.3,
+            "humidity": 70, "api_key": "never-expose",
+            "tool_arguments": {"secret": "not-public"},
+            "debug": "internal reasoning",
+        },
+    }
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    events = projection.project(chunk(
+        "presentation", presentation=envelope, presentation_verified=True,
+    ))
+    assert len(events) == 1
+    assert events[0]["value"]["data"] == {
+        "location": "Detroit", "temperature_f": 60.3, "humidity": 70,
+    }
+    assert "never-expose" not in str(events)
+    assert "not-public" not in str(events)
+    assert "internal reasoning" not in str(events)
+
+
+def test_authorized_planner_presentation_is_emitted_as_read_only_ag_ui_data():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatStreamChunk, ChatStreamEventType,
+    )
+    from types import SimpleNamespace
+
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "planner-request-1",
+        "component_type": "planner.task_list",
+        "evidence_ref": "planner-owned-read:request-1",
+        "correlation_id": "request-1",
+        "data": {"tasks": [
+            {"id": "task-1", "title": "Review build", "status": "todo"},
+            {"id": "task-2", "title": "Ship release", "status": "in_progress"},
+        ]},
+    }
+    decision = SimpleNamespace(intent="planner.read")
+    plan = SimpleNamespace(allowed_capabilities=["planner.read"])
+    result = SimpleNamespace(
+        success=True, degraded=False, source="planner", source_id="planner.read",
+        payload={"presentation": envelope},
+    )
+    verified = ChatRuntime._verified_planner_presentation(decision, plan, result)
+    assert verified == envelope
+
+    projector = AGUIEventProjection(thread_id="owned-thread", run_id="run-1")
+    projector.begin()
+    event = ChatStreamChunk(
+        type=ChatStreamEventType.PRESENTATION,
+        content="", correlation_id="request-1",
+        metadata={"presentation_verified": True, "presentation": verified},
+    )
+    assert projector.project(event) == [{
+        "type": "CUSTOM", "name": "karen.presentation.v1", "value": envelope,
+    }]
+    assert ChatRuntime._verified_planner_presentation(
+        decision, SimpleNamespace(allowed_capabilities=[]), result,
+    ) is None
+    assert projector.project(ChatStreamChunk(
+        type=ChatStreamEventType.PRESENTATION,
+        content="", correlation_id="request-1",
+        metadata={"presentation": envelope, "presentation_verified": False},
+    )) == []

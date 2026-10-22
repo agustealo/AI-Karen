@@ -94,17 +94,21 @@ class PromptAssembler:
         included_tool_contracts: List[str] = []
         metadata: Dict[str, Any] = {}
 
-        raw_persona = (
-            prompt_definition.persona_defaults
-            if prompt_definition is not None
-            else request.persona
+        # Registered defaults provide a presentation baseline. Runtime-supplied
+        # authenticated preferences override only presentation fields, never
+        # policy, system prompts, tools, or other authority-bearing fields.
+        defaults = self.persona_policy.sanitize_persona(
+            prompt_definition.persona_defaults if prompt_definition is not None else {}
         )
-        persona_result = self.persona_policy.sanitize_persona(raw_persona)
+        selected = self.persona_policy.sanitize_persona(request.persona)
+        persona_result = self.persona_policy.sanitize_persona(
+            {**defaults.data, **selected.data}
+        )
         metadata["persona_policy"] = {
             "authority": "presentation_only",
             "included_fields": sorted(persona_result.data.keys()),
-            "rejected_fields": list(persona_result.rejected_fields),
-            "ignored_fields": list(persona_result.ignored_fields),
+            "rejected_fields": sorted(set(defaults.rejected_fields + selected.rejected_fields)),
+            "ignored_fields": sorted(set(defaults.ignored_fields + selected.ignored_fields)),
         }
 
         if prompt_definition:

@@ -6,6 +6,8 @@ on:
     paths:
       - "src/ai_karen_engine/core/planner/**"
       - "src/ai_karen_engine/persistence/repositories/personal_planner_repository.py"
+      - "src/ai_karen_engine/services/personal_planner.py"
+      - "src/ai_karen_engine/core/runtime/presentation_contract.py"
       - "src/ai_karen_engine/persistence/postgres/**"
       - "tests/core/planner/**"
       - "tests/integration/test_live_personal_planner_postgres.py"

@@ -8,6 +8,8 @@ come from the authoritative ChatRuntime stream.
 from __future__ import annotations
 
 from collections.abc import Mapping
+
+from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 from typing import Any
 
 
@@ -18,6 +20,8 @@ def _text(value: Any, limit: int = 1000) -> str:
 def _event_type(chunk: Any) -> str:
     value = getattr(chunk, "type", "")
     return str(getattr(value, "value", value))
+
+
 
 
 class AGUIEventProjection:
@@ -249,6 +253,15 @@ class AGUIEventProjection:
             # CUSTOM retains the observed failed/cancelled outcome; AG-UI
             # TOOL_CALL_END means only that the invocation is no longer active.
             return events
+
+        if kind == "presentation":
+            # Only explicitly runtime-origin, evidence-backed projections.
+            if meta.get("presentation_verified") is not True:
+                return []
+            validated = validate_presentation(meta.get("presentation"))
+            if validated is None:
+                return []
+            return [self._custom("karen.presentation.v1", validated)]
 
         if kind == "citation":
             raw_citations = meta.get("citations")

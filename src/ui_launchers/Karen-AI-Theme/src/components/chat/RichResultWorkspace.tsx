@@ -1,6 +1,9 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import type { DragEvent } from 'react';
 import {
+  Settings2,
   Braces,
   ExternalLink,
   FileText,
@@ -15,6 +18,27 @@ import type {
   ChatMessage,
   Citation,
 } from '@/lib/types';
+
+type WorkspaceCard = 'artifacts' | 'structured' | 'attachments' | 'evidence';
+const DEFAULT_ORDER: WorkspaceCard[] = ['artifacts', 'structured', 'attachments', 'evidence'];
+const LABELS: Record<WorkspaceCard, string> = {
+  artifacts: 'Artifacts', structured: 'Structured output',
+  attachments: 'Files & attachments', evidence: 'Evidence',
+};
+const STORAGE_KEY = 'karen.workspace.cards.v1';
+function isWorkspaceCard(value: unknown): value is WorkspaceCard {
+  return typeof value === 'string' && DEFAULT_ORDER.includes(value as WorkspaceCard);
+}
+function readLayout(): { order: WorkspaceCard[]; hidden: WorkspaceCard[] } {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
+    const order = Array.isArray(saved.order) ? saved.order.filter(isWorkspaceCard) : [];
+    const hidden = Array.isArray(saved.hidden) ? saved.hidden.filter(isWorkspaceCard) : [];
+    return { order: [...new Set([...order, ...DEFAULT_ORDER])], hidden: [...new Set(hidden)] };
+  } catch {
+    return { order: [...DEFAULT_ORDER], hidden: [] };
+  }
+}
 
 interface RichResultWorkspaceProps {
   message?: ChatMessage;
@@ -109,17 +133,57 @@ const LinkRow = ({ citation }: { citation: Citation }) => {
 export default function RichResultWorkspace({
   message,
 }: RichResultWorkspaceProps) {
-  if (!message) return null;
-
-  const structured = nonEmptyObject(message.structuredContent)
+  const [order, setOrder] = useState<WorkspaceCard[]>(DEFAULT_ORDER);
+  const [hidden, setHidden] = useState<WorkspaceCard[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dragged, setDragged] = useState<WorkspaceCard | null>(null);
+  useEffect(() => {
+    const saved = readLayout();
+    setOrder(saved.order);
+    setHidden(saved.hidden);
+  }, []);
+  const saveLayout = (nextOrder: WorkspaceCard[], nextHidden: WorkspaceCard[]) => {
+    setOrder(nextOrder);
+    setHidden(nextHidden);
+    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ order: nextOrder, hidden: nextHidden })); }
+    catch { /* Browser storage may be unavailable: current-session layout still works. */ }
+  };
+  const move = (source: WorkspaceCard, destination: WorkspaceCard) => {
+    if (source === destination) return;
+    const next = order.filter((card) => card !== source);
+    next.splice(next.indexOf(destination), 0, source);
+    saveLayout(next, hidden);
+  };
+  const shift = (card: WorkspaceCard, direction: -1 | 1) => {
+    const from = order.indexOf(card);
+    const to = from + direction;
+    if (to < 0 || to >= order.length) return;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    saveLayout(next, hidden);
+  };
+  const cardProps = (card: WorkspaceCard) => ({
+    draggable: true,
+    onDragStart: () => setDragged(card),
+    onDragEnd: () => setDragged(null),
+    onDragOver: (event: DragEvent<HTMLElement>) => event.preventDefault(),
+    onDrop: (event: DragEvent<HTMLElement>) => {
+      event.preventDefault();
+      if (dragged) move(dragged, card);
+      setDragged(null);
+    },
+    style: { order: order.indexOf(card) },
+    'aria-label': `${LABELS[card]} card, draggable`,
+  });
+  const structured = nonEmptyObject(message?.structuredContent)
     ? message.structuredContent
     : {};
-  const artifacts = Array.isArray(message.artifacts) ? message.artifacts : [];
-  const attachments = Array.isArray(message.attachments)
+  const artifacts = Array.isArray(message?.artifacts) ? message.artifacts : [];
+  const attachments = Array.isArray(message?.attachments)
     ? message.attachments
     : [];
-  const sources = Array.isArray(message.sources) ? message.sources : [];
-  const citations = Array.isArray(message.citations) ? message.citations : [];
+  const sources = Array.isArray(message?.sources) ? message.sources : [];
+  const citations = Array.isArray(message?.citations) ? message.citations : [];
   const references = sources.length > 0 ? sources : citations;
 
   const hasContent =
@@ -127,8 +191,11 @@ export default function RichResultWorkspace({
     artifacts.length > 0 ||
     attachments.length > 0 ||
     references.length > 0;
-
-  if (!hasContent) return null;
+  const hasVisibleContent =
+    (artifacts.length > 0 && !hidden.includes('artifacts')) ||
+    (Object.keys(structured).length > 0 && !hidden.includes('structured')) ||
+    (attachments.length > 0 && !hidden.includes('attachments')) ||
+    (references.length > 0 && !hidden.includes('evidence'));
 
   return (
     <aside
@@ -145,15 +212,46 @@ export default function RichResultWorkspace({
               Files, artifacts, structured output, and evidence from this turn.
             </p>
           </div>
+          <button type="button" aria-label="Customize workspace cards" aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen(!settingsOpen)}
+            className="rounded-md p-2 hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
+            <Settings2 className="h-4 w-4" />
+          </button>
         </div>
+        {settingsOpen && <div className="mt-3 space-y-2" aria-label="Workspace card preferences">
+          <p className="text-xs text-muted-foreground">Choose cards and drag to reorder. Preferences are local to this browser.</p>
+          {order.map((card) => <div key={card} className="flex items-center gap-2 text-xs">
+            <label className="flex min-w-0 flex-1 items-center gap-2">
+              <input type="checkbox" checked={!hidden.includes(card)}
+                onChange={(e) => saveLayout(order, e.target.checked ? hidden.filter((v) => v !== card) : [...hidden, card])} />
+              {LABELS[card]}
+            </label>
+            <button type="button" aria-label={`Move ${LABELS[card]} up`} disabled={order.indexOf(card) === 0}
+              onClick={() => shift(card, -1)}
+              className="rounded border px-2 py-1 disabled:opacity-30">↑</button>
+            <button type="button" aria-label={`Move ${LABELS[card]} down`} disabled={order.indexOf(card) === order.length - 1}
+              onClick={() => shift(card, 1)}
+              className="rounded border px-2 py-1 disabled:opacity-30">↓</button>
+          </div>)}
+        </div>}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3.5">
-        {artifacts.length > 0 && (
-          <section className="karen-surface rounded-xl p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3.5">
+        {!hasContent && <p role="status" className="rounded-lg border border-dashed border-border/70 p-3 text-xs text-muted-foreground">No files, artifacts, structured output, or evidence have been reported for this turn. Choose what to show using the settings menu.</p>}
+        {hasContent && !hasVisibleContent && (
+          <div role="status" className="rounded-lg border border-dashed border-border/70 p-3 text-xs text-muted-foreground">
+            This turn has workspace results, but their cards are hidden.
+            <button type="button" onClick={() => saveLayout(order, [])}
+              className="mt-2 block rounded-md border border-border px-2 py-1 font-medium text-foreground hover:bg-muted">
+              Show all workspace cards
+            </button>
+          </div>
+        )}}
+        {artifacts.length > 0 && !hidden.includes('artifacts') && (
+          <section {...cardProps('artifacts')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
               <FileText className="h-3.5 w-3.5 text-primary" />
-              <span className="karen-panel-label">Artifacts</span>
+              <span className="text-sm font-semibold tracking-tight">Artifacts</span>
               <span className="ml-auto font-mono text-[10px] text-muted-foreground">
                 {artifacts.length}
               </span>
@@ -199,11 +297,11 @@ export default function RichResultWorkspace({
           </section>
         )}
 
-        {Object.keys(structured).length > 0 && (
-          <section className="karen-surface rounded-xl p-3">
+        {Object.keys(structured).length > 0 && !hidden.includes('structured') && (
+          <section {...cardProps('structured')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
               <Braces className="h-3.5 w-3.5 text-accent" />
-              <span className="karen-panel-label">Structured result</span>
+              <span className="text-sm font-semibold tracking-tight">Structured result</span>
             </div>
             <div className="space-y-2">
               {Object.entries(structured).map(([key, value]) => (
@@ -221,11 +319,11 @@ export default function RichResultWorkspace({
           </section>
         )}
 
-        {attachments.length > 0 && (
-          <section className="karen-surface rounded-xl p-3">
+        {attachments.length > 0 && !hidden.includes('attachments') && (
+          <section {...cardProps('attachments')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
               <Paperclip className="h-3.5 w-3.5 text-primary" />
-              <span className="karen-panel-label">Attachments</span>
+              <span className="text-sm font-semibold tracking-tight">Attachments</span>
             </div>
             <div className="space-y-2">
               {attachments.map((attachment, index) => {
@@ -266,11 +364,11 @@ export default function RichResultWorkspace({
           </section>
         )}
 
-        {references.length > 0 && (
-          <section className="karen-surface rounded-xl p-3">
+        {references.length > 0 && !hidden.includes('evidence') && (
+          <section {...cardProps('evidence')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
               <Link2 className="h-3.5 w-3.5 text-accent" />
-              <span className="karen-panel-label">Evidence</span>
+              <span className="text-sm font-semibold tracking-tight">Evidence</span>
               <span className="ml-auto font-mono text-[10px] text-muted-foreground">
                 {references.length}
               </span>

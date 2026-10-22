@@ -372,6 +372,13 @@ class ChatRuntime:
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
+                presentation = (self._verified_planner_presentation(decision, plan, direct_result)
+                                or self._verified_weather_presentation(request, decision, plan, direct_result))
+                if presentation is not None:
+                    structured = provider_meta.get("structured_content")
+                    structured = dict(structured) if isinstance(structured, dict) else {}
+                    structured["presentation"] = presentation
+                    provider_meta["structured_content"] = structured
                 if decision.intent == "search.general" and direct_result.success:
                     synthesized = await self._synthesize_search_evidence(request, decision, plan, meter, direct_result)
                     if synthesized is not None:
@@ -2294,6 +2301,55 @@ class ChatRuntime:
             },
         )
 
+    @staticmethod
+    def _verified_planner_presentation(decision, plan, result):
+        """Only previously authorized planner-service output may become a UI part."""
+        if (decision.intent != "planner.read" or not result.success or result.degraded
+                or result.source != "planner" or result.source_id != "planner.read"
+                or "planner.read" not in set(plan.allowed_capabilities)):
+            return None
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+        candidate = result.payload.get("presentation") if isinstance(result.payload, dict) else None
+        return validate_presentation(candidate) if candidate is not None else None
+
+    @staticmethod
+    def _verified_weather_presentation(request, decision, plan, result):
+        """Reuse one evidence contract for streaming and standard chat."""
+        # Projection is permitted only for a successful authorized tool receipt.
+        # This is not a model-authored layout or a substitute for evidence RBAC.
+        presentation = None
+        attempts = result.attempts if isinstance(result.attempts, list) else []
+        observed = isinstance(result.payload, dict) and result.payload.get("extractedData")
+        verified_tool = (
+            result.success and not result.degraded
+            and result.source == "tool"
+            and isinstance(result.source_id, str)
+            and result.source_id in plan.allowed_tools
+            and any(
+                isinstance(attempt, dict)
+                and attempt.get("type") == "tool"
+                and attempt.get("id") == result.source_id
+                and attempt.get("status") == "success"
+                for attempt in attempts
+            )
+        )
+        if decision.intent == "search.weather" and verified_tool and isinstance(observed, dict):
+            evidence_id = f"{request.context.request_id}:{result.source_id}"
+            candidate = {
+                "schema_version": 1,
+                "presentation_id": f"weather-{request.context.request_id}",
+                "component_type": "weather.observation",
+                "data": dict(observed),
+                "evidence_ref": evidence_id,
+                "correlation_id": request.context.correlation_id,
+            }
+            from ai_karen_engine.core.runtime.presentation_contract import (
+                validate_presentation,
+            )
+            presentation = validate_presentation(candidate)
+
+        return presentation
+
     async def _run_direct_capability_stream(
         self,
         request: ChatExecutionRequest,
@@ -2329,6 +2385,14 @@ class ChatRuntime:
         if _meta is not None:
             _meta.update(normalized)
 
+        presentation = (self._verified_planner_presentation(decision, plan, result)
+                        or self._verified_weather_presentation(request, decision, plan, result))
+        if presentation is not None and _meta is not None:
+            structured = _meta.get("structured_content")
+            structured = dict(structured) if isinstance(structured, dict) else {}
+            structured["presentation"] = presentation
+            _meta["structured_content"] = structured
+
         yield ChatStreamChunk(
             type=ChatStreamEventType.CONTENT,
             content=result.text,
@@ -2340,6 +2404,17 @@ class ChatRuntime:
                 "degraded_mode": normalized.get("degraded_mode", False),
             },
         )
+
+        if presentation is not None:
+            yield ChatStreamChunk(
+                type="presentation",
+                content="",
+                correlation_id=request.context.correlation_id,
+                metadata={
+                    "presentation_verified": True,
+                    "presentation": presentation,
+                },
+            )
 
     async def _synthesize_search_evidence(self, request, decision, plan, meter, retrieved):
         """Use the existing model gateway only for bounded fetched-page evidence."""
@@ -2881,7 +2956,42 @@ class ChatRuntime:
                 (request.metadata or {}).get("memory_context", {}).get("recall") or []
             )
 
+        # Presentation preferences are resolved from the authenticated,
+        # tenant-scoped persona service. Client metadata never supplies a
+        # system prompt or an authoritative persona identifier.
+        persona_presentation: Dict[str, Any] = {}
+        try:
+            principal = request.context.require_authenticated_user()
+        except (AttributeError, PermissionError):
+            principal = None
+        if principal is not None:
+            try:
+                from ai_karen_engine.services.persona.persona_service import get_persona_service
+
+                service = get_persona_service()
+                preferences = await service.get_user_preferences(
+                    user_id=str(principal.user_id),
+                    tenant_id=str(principal.tenant_id),
+                )
+                if preferences.active_persona_id:
+                    selected = await service.get_persona(
+                        preferences.active_persona_id,
+                        str(principal.user_id),
+                        str(principal.tenant_id),
+                    )
+                    if selected is not None and selected.is_active:
+                        persona_presentation = {
+                            "tone": str(selected.default_tone.value),
+                            "verbosity": str(selected.default_verbosity.value),
+                            "language_style": str(selected.default_language.value),
+                        }
+            except Exception:
+                # Persona preferences are optional; unavailable storage must
+                # not turn a failed lookup into an invented selection.
+                logger.warning("Persona presentation unavailable", exc_info=False)
+
         assembly_request = PromptAssemblyRequest(
+            persona=persona_presentation,
             prompt_id="karen.chat.default",
             prompt_version="v1.0.0",
             memory_items=recall_items if decision.memory_recall_required else [],
