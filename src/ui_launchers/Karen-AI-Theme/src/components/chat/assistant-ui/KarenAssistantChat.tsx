@@ -23,7 +23,7 @@ import { HttpAgent } from "@ag-ui/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
-import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck, Settings2 } from "lucide-react";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
 import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
@@ -357,6 +357,7 @@ function AssistantMessage() {
 }
 
 function KarenThread() {
+  const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
       <ThreadPrimitive.Viewport
@@ -388,7 +389,19 @@ function KarenThread() {
                 Karen is working
               </p>
             </AuiIf>
+            {composerSettingsOpen && (
+              <section aria-label="Karen composer settings" className="mb-3 rounded-xl border border-border/60 bg-card p-3 text-xs">
+                <h3 className="text-sm font-semibold">Karen conversation</h3>
+                <p className="mt-1 text-muted-foreground">Streaming, model routing, tools and approvals are decided by the authenticated runtime. Tool activity and approval requests appear only when reported by Karen.</p>
+                <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
+              </section>
+            )}
             <ComposerPrimitive.Root className="flex items-end gap-2 rounded-2xl border border-input bg-card p-2 shadow-sm">
+              <button type="button" aria-label="Composer settings" aria-expanded={composerSettingsOpen}
+                onClick={() => setComposerSettingsOpen((open) => !open)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
+                <Settings2 className="h-4 w-4" aria-hidden="true" />
+              </button>
               <ComposerPrimitive.Input
                 rows={1}
                 aria-label="Message Karen"
