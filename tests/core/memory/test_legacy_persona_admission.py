@@ -1273,3 +1273,27 @@ async def test_transaction_authority_rejects_scope_drift_during_verification():
                 session=session, tenant_id=tenant, user_id=user,
                 policy_decision_id="verified-decision",
             )
+
+
+@pytest.mark.asyncio
+async def test_inspection_transaction_evidence_cannot_be_reused_on_different_transaction():
+    from unittest.mock import AsyncMock, Mock, patch
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority,
+    )
+
+    tenant = "11111111-1111-4111-8111-111111111111"
+    user = "22222222-2222-4222-8222-222222222222"
+    evidence = LegacyMigrationTransactionAuthority(
+        tenant_id=tenant, user_id=user, policy_decision_id="decision",
+        transaction_id=901,
+    )
+    session = Mock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock(return_value=Mock(
+        one=Mock(return_value=(tenant, tenant, user, 902)),
+    ))
+    with patch("sqlalchemy.ext.asyncio.AsyncSession", new=type(session)):
+        with pytest.raises(PermissionError, match="transaction identity expired"):
+            await evidence.verify_active(session=session)
