@@ -175,17 +175,15 @@ export default function RichResultWorkspace({
     style: { order: order.indexOf(card) },
     'aria-label': `${LABELS[card]} card, draggable`,
   });
-  if (!message) return null;
-
-  const structured = nonEmptyObject(message.structuredContent)
+  const structured = nonEmptyObject(message?.structuredContent)
     ? message.structuredContent
     : {};
-  const artifacts = Array.isArray(message.artifacts) ? message.artifacts : [];
-  const attachments = Array.isArray(message.attachments)
+  const artifacts = Array.isArray(message?.artifacts) ? message.artifacts : [];
+  const attachments = Array.isArray(message?.attachments)
     ? message.attachments
     : [];
-  const sources = Array.isArray(message.sources) ? message.sources : [];
-  const citations = Array.isArray(message.citations) ? message.citations : [];
+  const sources = Array.isArray(message?.sources) ? message.sources : [];
+  const citations = Array.isArray(message?.citations) ? message.citations : [];
   const references = sources.length > 0 ? sources : citations;
 
   const hasContent =
@@ -193,8 +191,6 @@ export default function RichResultWorkspace({
     artifacts.length > 0 ||
     attachments.length > 0 ||
     references.length > 0;
-
-  if (!hasContent) return null;
 
   return (
     <aside
@@ -236,6 +232,7 @@ export default function RichResultWorkspace({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3.5">
+        {!hasContent && <p role="status" className="rounded-lg border border-dashed border-border/70 p-3 text-xs text-muted-foreground">No files, artifacts, structured output, or evidence have been reported for this turn. Choose what to show using the settings menu.</p>}
         {artifacts.length > 0 && !hidden.includes('artifacts') && (
           <section {...cardProps('artifacts')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
