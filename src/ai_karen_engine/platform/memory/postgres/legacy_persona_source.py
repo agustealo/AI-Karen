@@ -64,6 +64,12 @@ async def read_legacy_persona_source_retention_metadata(
             {"source_id": source_id, "tenant_id": tenant, "user_id": user},
         )
         row = result.one_or_none()
-    if row is None or not isinstance(row.created_at, datetime):
+    if (
+        row is None
+        or not isinstance(row.created_at, datetime)
+        or not isinstance(row.memory_type, str)
+        or not row.memory_type.strip()
+        or row.memory_type != row.memory_type.strip()
+    ):
         return None
-    return row.created_at, str(row.memory_type)
+    return row.created_at, row.memory_type
