@@ -802,6 +802,33 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
             assert decision_count == 2
+            # Credential revocation after locked evidence inspection must
+            # invalidate the final result, even if RuntimePolicy still grants.
+            original_authenticate = (
+                admission_module.migration_policy_request_from_authenticated_http
+            )
+            credential_checks = 0
+
+            async def revoked_after_admission(**kwargs):
+                nonlocal credential_checks
+                credential_checks += 1
+                if credential_checks == 2:
+                    raise PermissionError("historical migration token revoked")
+                return await original_authenticate(**kwargs)
+
+            with MonkeyPatch.context() as revoke_patch:
+                revoke_patch.setattr(
+                    admission_module,
+                    "migration_policy_request_from_authenticated_http",
+                    revoked_after_admission,
+                )
+                with pytest.raises(PermissionError, match="token revoked"):
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
+            assert credential_checks == 2
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
