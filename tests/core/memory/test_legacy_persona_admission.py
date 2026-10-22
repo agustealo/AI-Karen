@@ -833,3 +833,66 @@ async def test_migration_http_rejects_malformed_signed_claim_shapes(monkeypatch,
         await migration_policy_request_from_authenticated_http(
             request=request, request_id="request-1", correlation_id="trace-1",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "valid", "expired", "tampered", "revoked", "store_failure",
+    "wrong_tenant", "missing_token_id",
+])
+async def test_migration_http_real_jwt_integrity_and_revocation(monkeypatch, scenario):
+    """Exercise actual JWT decoder and fail-closed revocation read."""
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+    import jwt
+    from starlette.requests import Request
+    from ai_karen_engine.auth import auth_middleware
+    from ai_karen_engine.core.security.auth_config import auth_config
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_policy_request_from_authenticated_http,
+    )
+
+    class Store:
+        def ping(self):
+            return True
+        def exists(self, key):
+            if scenario == "store_failure":
+                raise ConnectionError("revocation lookup unavailable")
+            return int(scenario == "revoked")
+
+    middleware = auth_middleware.SecureAuthMiddleware.__new__(
+        auth_middleware.SecureAuthMiddleware
+    )
+    middleware.jwt_secret = "kp03-test-signing-key"
+    middleware.jwt_algorithm = "HS256"
+    middleware.redis_client = Store()
+    tenant, user = str(uuid4()), str(uuid4())
+    payload = {
+        "sub": user, "tenant_id": "default" if scenario == "wrong_tenant" else tenant,
+        "token_id": "" if scenario == "missing_token_id" else "kp03-session",
+        "roles": ["admin"], "permissions": ["memory.write"],
+        "iss": "ai-karen", "aud": "ai-karen-users",
+        "exp": datetime.now(timezone.utc) + (
+            timedelta(minutes=-1) if scenario == "expired" else timedelta(minutes=5)
+        ),
+    }
+    key = "different-signing-key" if scenario == "tampered" else middleware.jwt_secret
+    token = jwt.encode(payload, key, algorithm="HS256")
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+    monkeypatch.setattr(auth_middleware, "get_auth_middleware", lambda: middleware)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [(b"authorization", ("Bearer " + token).encode())],
+        "query_string": b"",
+    })
+    if scenario == "valid":
+        result = await migration_policy_request_from_authenticated_http(
+            request=request, request_id="request-1", correlation_id="trace-1",
+        )
+        assert result.tenant_id == tenant and result.user_id == user
+        assert result.action == "legacy_persona_memory_migration"
+    else:
+        with pytest.raises((PermissionError, ValueError)):
+            await migration_policy_request_from_authenticated_http(
+                request=request, request_id="request-1", correlation_id="trace-1",
+            )
