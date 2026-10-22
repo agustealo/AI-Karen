@@ -247,7 +247,9 @@ class PostgresNeuroVault(VaultPort):
         # Never accept a raw, unscoped session for a governed mutation.
         # The caller must own an active transaction; tenant enforcement still
         # comes from the canonical context and the database's tenant RLS.
-        if not session.in_transaction():
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        if not isinstance(session, AsyncSession) or not session.in_transaction():
             raise NeuroVaultAuthorizationError(
                 "active caller-owned PostgreSQL transaction required"
             )
