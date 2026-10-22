@@ -111,7 +111,10 @@ class PostgresRecallRetriever:
         return tuple(terms)
 
     @staticmethod
-    def _to_entry(\n        row: MemoryAssertion, query: MemoryQuery, query_text: str,\n        event_payload: dict[str, Any] | None = None,\n    ) -> MemoryEntry:
+    def _to_entry(
+        row: MemoryAssertion, query: MemoryQuery, query_text: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> MemoryEntry:
         content = str(row.content or "")
         relevance = PostgresRecallRetriever._lexical_relevance(query_text, content)
         created_at = row.created_at or datetime.now(timezone.utc).replace(tzinfo=None)
