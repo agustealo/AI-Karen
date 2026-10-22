@@ -771,6 +771,35 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             )
             assert integrated_replay == replay
             assert not integrated_receipt.persisted
+            # RuntimePolicy may be revoked after initial admission but
+            # before the locked transaction exits. Final re-evaluation
+            # must deny without producing a migration receipt.
+            import dataclasses
+            from ai_karen_engine.core.memory import legacy_persona_admission as admission_module
+            original_evaluate = admission_module.evaluate_migration_write_authority
+            decision_count = 0
+
+            async def revoking_decision(**kwargs):
+                nonlocal decision_count
+                decision_count += 1
+                first = await original_evaluate(**kwargs)
+                return (
+                    dataclasses.replace(first, explicitly_granted=False)
+                    if decision_count == 2 else first
+                )
+
+            with MonkeyPatch.context() as revoke_patch:
+                revoke_patch.setattr(
+                    admission_module, "evaluate_migration_write_authority",
+                    revoking_decision,
+                )
+                with pytest.raises(PermissionError, match="revoked during inspection"):
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
+            assert decision_count == 2
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
