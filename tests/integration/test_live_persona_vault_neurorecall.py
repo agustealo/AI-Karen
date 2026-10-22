@@ -1922,7 +1922,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             ), {"user": str(user), "tenant": str(tenant)})
 
 
-async def test_vault_caller_transaction_serializes_consent_revocation():
+async def test_vault_consent_lock_blocks_concurrent_revocation():
     """Real vault stage holds its consent row lock until caller commit."""
     import asyncio
     from sqlalchemy import update
