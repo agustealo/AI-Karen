@@ -902,6 +902,23 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert len(policy_inputs) == 2
             assert "audit.read" not in policy_inputs[0]
             assert "audit.read" in policy_inputs[1]
+            # A final authority scoped to another principal must be rejected
+            # even when admission validation is unexpectedly permissive.
+            async def forged_final_authority(**kwargs):
+                result = await original_evaluate(**kwargs)
+                return dataclasses.replace(result, user_id=str(uuid.uuid4()))
+
+            with MonkeyPatch.context() as authority_patch:
+                authority_patch.setattr(
+                    admission_module, "evaluate_migration_write_authority",
+                    forged_final_authority,
+                )
+                with pytest.raises(PermissionError, match="principal mismatch"):
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
