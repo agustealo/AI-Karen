@@ -6,7 +6,8 @@ executes chat requests.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 import os
 from typing import Protocol
 
@@ -29,6 +30,7 @@ class VoiceRuntime:
     """Single capability owner. No implicit network, mock, or vendor fallback."""
 
     speech_engine: LocalSpeechEngine | None = None
+    _transcription_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def transcribe(self, audio: bytes, metadata: AudioInput) -> TranscriptionResult:
         """Execute only an explicitly healthy local STT adapter."""
@@ -38,7 +40,12 @@ class VoiceRuntime:
             raise RuntimeError("local_transcription_unavailable")
         if len(audio) != metadata.byte_count:
             raise ValueError("audio_byte_count_mismatch")
-        return await engine.transcribe(audio, metadata)
+        # One inference per runtime instance. Refuse excess work instead of
+        # queueing unbounded audio payloads in memory.
+        if self._transcription_lock.locked():
+            raise RuntimeError("local_transcription_busy")
+        async with self._transcription_lock:
+            return await engine.transcribe(audio, metadata)
 
     async def capabilities(self) -> VoiceCapabilities:
         engine = self.speech_engine
