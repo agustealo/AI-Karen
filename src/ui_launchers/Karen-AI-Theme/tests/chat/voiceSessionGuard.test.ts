@@ -17,3 +17,13 @@ describe("voice upload cancellation", () => {
     expect(canCommitVoiceResult(false, 4, 4, false)).toBe(false);
   });
 });
+
+describe("late recorder error ownership", () => {
+  it("rejects error callbacks from a discarded or replaced session", () => {
+    const discardedGeneration = 3;
+    const activeGeneration = 4;
+    expect(isCurrentVoiceSession(true, activeGeneration, discardedGeneration)).toBe(false);
+    expect(isCurrentVoiceSession(false, discardedGeneration, discardedGeneration)).toBe(false);
+    expect(isCurrentVoiceSession(true, activeGeneration, activeGeneration)).toBe(true);
+  });
+});
