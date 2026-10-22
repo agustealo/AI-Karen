@@ -728,3 +728,56 @@ async def test_migration_http_requires_live_revocation_store(monkeypatch):
         await migration_policy_request_from_authenticated_http(
             request=request, request_id="req", correlation_id="corr",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["valid", "revoked", "store_failed", "expired", "no_permission"])
+async def test_migration_http_credential_authority_scenarios(monkeypatch, scenario):
+    from uuid import uuid4
+    from starlette.requests import Request
+    from ai_karen_engine.auth import auth_middleware
+    from ai_karen_engine.core.security.auth_config import auth_config
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_policy_request_from_authenticated_http,
+    )
+
+    tenant, user = str(uuid4()), str(uuid4())
+    class Store:
+        def ping(self):
+            return True
+        def exists(self, key):
+            if scenario == "store_failed":
+                raise ConnectionError("revocation backend offline")
+            return int(scenario == "revoked")
+    class Auth:
+        redis_client = Store()
+        def _extract_token_from_request(self, request):
+            return "signed-access-token"
+        def _decode_jwt(self, token):
+            if scenario == "expired":
+                raise auth_middleware.AuthenticationError("Token has expired")
+            return {"sub": user, "tenant_id": tenant, "token_id": "token-1",
+                    "permissions": ["memory.read"] if scenario == "no_permission" else ["memory.write"],
+                    "roles": ["admin"]}
+        def _get_redis_key(self, prefix, token_id):
+            return f"auth:{prefix}:{token_id}"
+        def _get_user_from_payload(self, payload):
+            return {"user_id": payload["sub"], "tenant_id": payload["tenant_id"],
+                    "roles": payload["roles"], "permissions": payload["permissions"]}
+
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+    monkeypatch.setattr(auth_middleware, "get_auth_middleware", lambda: Auth())
+    request = Request({"type": "http", "method": "POST", "path": "/internal",
+                       "headers": [], "query_string": b""})
+    if scenario == "valid":
+        result = await migration_policy_request_from_authenticated_http(
+            request=request, request_id="req", correlation_id="corr",
+        )
+        assert result.tenant_id == tenant and result.user_id == user
+        assert result.permissions == ["memory.write"]
+        assert result.action == "legacy_persona_memory_migration"
+    else:
+        with pytest.raises(PermissionError):
+            await migration_policy_request_from_authenticated_http(
+                request=request, request_id="req", correlation_id="corr",
+            )
