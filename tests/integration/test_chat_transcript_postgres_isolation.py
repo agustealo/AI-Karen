@@ -107,6 +107,12 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         owner_context,
         user_text="Tenant A durable context.",
         assistant_text="Tenant A durable response.",
+        response_metadata={
+            "actual_provider": "ollama",
+            "actual_model": "local-model",
+            "response_source": "grounded_observation_model",
+            "structured_content": {"presentation": {"type": "weather", "temperature": 20}},
+        },
     )
 
     assert persisted.status == "persisted"
@@ -164,6 +170,36 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         "Tenant A durable context.",
         "Tenant A durable response.",
     ]
+
+    # Read through a fresh gateway instance using durable PostgreSQL state.
+    restored = await ConversationRuntimeGateway(
+        repository=PostgresConversationRepository(session_factory=session_factory)
+    ).load_history(
+        _context(
+            tenant_id=tenant_a, user_id=user_a, session_id="shared-session",
+            request_id=str(uuid.uuid4()), conversation_id=attacked_conversation_id,
+        ),
+        limit=20,
+    )
+    assert restored.status == "loaded"
+    saved_assistant = next(row for row in restored.messages if row.role == "assistant")
+    assert saved_assistant.metadata["actual_provider"] == "ollama"
+    assert saved_assistant.metadata["actual_model"] == "local-model"
+    assert saved_assistant.metadata["response_source"] == "grounded_observation_model"
+    assert saved_assistant.metadata["structured_content"]["presentation"]["temperature"] == 20
+
+    conflict = await owner_gateway.persist_completed_turn(
+        owner_context,
+        user_text="Tenant A durable context.",
+        assistant_text="Conflicting assistant response.",
+    )
+    assert conflict.status == "failed"
+    after_conflict = await repository.get_messages(attacked_conversation_id, tenant_a, limit=20)
+    assert after_conflict.success
+    assert len(after_conflict.data or []) == 2
+    assert next(row for row in after_conflict.data if row.role == "assistant").content == (
+        "Tenant A durable response."
+    )
 
     # Force an assistant insert to fail inside the pair transaction.
     # The user half must not survive that failure.
