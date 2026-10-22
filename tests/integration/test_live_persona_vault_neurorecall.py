@@ -758,6 +758,37 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 runtime_policy=RuntimePolicyEnforcer(),
             )
             assert authenticated_replay == replay
+            from ai_karen_engine.core.memory.legacy_persona_admission import (
+                inspect_authenticated_legacy_migration_transaction,
+            )
+            integrated_replay, integrated_receipt = (
+                await inspect_authenticated_legacy_migration_transaction(
+                    request=http_request, request_id=str(uuid.uuid4()),
+                    correlation_id=str(uuid.uuid4()),
+                    source_record_id=str(source),
+                    runtime_policy=RuntimePolicyEnforcer(),
+                )
+            )
+            assert integrated_replay == replay
+            assert not integrated_receipt.persisted
+            # A correctly signed token for another tenant cannot inspect
+            # the source or receive its replay evidence.
+            foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
+            foreign_token = jwt.encode(
+                foreign_claims, middleware.jwt_secret, algorithm="HS256",
+            )
+            foreign_request = Request({
+                "type": "http", "method": "POST", "path": "/internal",
+                "headers": [(b"authorization", ("Bearer " + foreign_token).encode())],
+                "query_string": b"",
+            })
+            with pytest.raises(PermissionError, match="canonical migration evidence"):
+                await inspect_authenticated_legacy_migration_transaction(
+                    request=foreign_request, request_id=str(uuid.uuid4()),
+                    correlation_id=str(uuid.uuid4()),
+                    source_record_id=str(source),
+                    runtime_policy=RuntimePolicyEnforcer(),
+                )
             # A forged signature must not reach the otherwise eligible source.
             forged = jwt.encode(claims, "wrong-signing-key", algorithm="HS256")
             forged_request = Request({
