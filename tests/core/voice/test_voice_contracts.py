@@ -53,3 +53,9 @@ def test_no_fake_or_empty_transcripts():
         TranscriptionResult(text="  ", engine="local-stt")
     with pytest.raises(VoiceContractError, match="empty_or_unverified"):
         TranscriptionResult(text="recognized", engine=" ")
+
+
+@pytest.mark.parametrize("invalid_duration", [float("nan"), float("inf"), float("-inf")])
+def test_audio_contract_rejects_non_finite_durations(invalid_duration):
+    with pytest.raises(VoiceContractError, match="audio_duration_out_of_bounds"):
+        AudioInput("audio/wav", 128, invalid_duration)
