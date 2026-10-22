@@ -247,6 +247,21 @@ class PostgresNeuroVault(VaultPort):
             raise NeuroVaultAuthorizationError(
                 "active caller-owned PostgreSQL transaction required"
             )
+        # Verify the database-local RLS scope, not just caller-supplied
+        # VaultContext claims. Both canonical and compatibility settings
+        # are established by the existing transaction manager.
+        from sqlalchemy import text
+        scope = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true)"
+        ))).one()
+        if (
+            scope[0] != str(self._uuid(context.tenant_id, field_name="tenant_id"))
+            or scope[1] != str(self._uuid(context.tenant_id, field_name="tenant_id"))
+        ):
+            raise NeuroVaultAuthorizationError(
+                "caller transaction tenant scope does not match authenticated context"
+            )
         from dataclasses import replace
 
         receipt = await self._persist_with_session(
