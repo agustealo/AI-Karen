@@ -28,6 +28,22 @@ describe("right-side result workspace preferences", () => {
     expect(screen.getByText("Verified artifact")).toBeTruthy();
   });
 
+  it("restores hidden results from the empty workspace recovery control", () => {
+    render(<RichResultWorkspace message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: "Customize workspace cards" }));
+    for (const name of ["Artifacts", "Structured output", "Files & attachments", "Evidence"]) {
+      fireEvent.click(screen.getByRole("checkbox", { name }));
+    }
+    expect(screen.queryByText("Verified artifact")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("their cards are hidden");
+    fireEvent.click(screen.getByRole("button", { name: "Show all workspace cards" }));
+    expect(screen.getByText("Verified artifact")).toBeTruthy();
+    expect(screen.getByText("Public source")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show all workspace cards" })).toBeNull();
+    const saved = JSON.parse(window.localStorage.getItem("karen.workspace.cards.v1") || "{}");
+    expect(saved.hidden).toEqual([]);
+  });
+
   it("moves cards down and saves order for the next mount", () => {
     const view = render(<RichResultWorkspace message={message} />);
     fireEvent.click(screen.getByRole("button", { name: "Customize workspace cards" }));
