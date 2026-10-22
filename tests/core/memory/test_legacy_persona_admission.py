@@ -1205,3 +1205,28 @@ async def test_unified_inspection_rejects_policy_principal_mismatch_before_sql(m
             request=request, request_id="req", correlation_id="trace",
             source_record_id="source", runtime_policy=RuntimePolicyEnforcer(),
         )
+
+
+def test_inspection_receipt_rejects_noncanonical_principal_and_empty_decision():
+    import uuid
+    from unittest.mock import Mock
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationInspectionReceipt,
+    )
+
+    valid = {
+        "replay": Mock(),
+        "receipt": Mock(),
+        "tenant_id": str(uuid.uuid4()),
+        "user_id": str(uuid.uuid4()),
+        "policy_decision_id": "final-runtime-policy-decision",
+    }
+    assert LegacyMigrationInspectionReceipt(**valid).policy_decision_id
+    for override in (
+        {"tenant_id": "not-a-uuid"},
+        {"user_id": str(uuid.uuid4()).upper()},
+        {"policy_decision_id": ""},
+        {"policy_decision_id": "   "},
+    ):
+        with pytest.raises(ValueError):
+            LegacyMigrationInspectionReceipt(**{**valid, **override})
