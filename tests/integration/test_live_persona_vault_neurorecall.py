@@ -240,3 +240,34 @@ async def test_admitted_migration_replay_identity_is_idempotent_in_real_vault():
                     MemoryEvent.event_id.in_(event_ids)
                 ))
             await session.execute(delete(ConsentScope).where(ConsentScope.scope_id == consent_id))
+
+
+async def test_historical_migration_requires_explicit_current_consent():
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_consent import (
+        verify_legacy_migration_consent,
+    )
+    tenant, user, scope_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    kwargs = dict(tenant_id=str(tenant), user_id=str(user),
+                  consent_scope="persona-memory-migration")
+    try:
+        assert not await verify_legacy_migration_consent(**kwargs)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                scope_id=scope_id, tenant_id=tenant, user_id=user,
+                scope_name="persona-memory-migration", is_granted=True,
+            ))
+        assert await verify_legacy_migration_consent(**kwargs)
+        assert not await verify_legacy_migration_consent(
+            **{**kwargs, "tenant_id": str(uuid.uuid4())}
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            grant = (await session.execute(select(ConsentScope).where(
+                ConsentScope.scope_id == scope_id
+            ))).scalar_one()
+            grant.is_granted = False
+        assert not await verify_legacy_migration_consent(**kwargs)
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.scope_id == scope_id
+            ))
