@@ -1146,6 +1146,23 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             ))).scalars().all()
             assert len(recorded) == 1
             assert recorded[0].event_id == winner_id
+            # A conflicting idempotency key is not a completed migration
+            # receipt for the losing deterministic assertion identity.
+            from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+                lookup_locked_legacy_replay_receipt,
+            )
+            from ai_karen_engine.core.memory.legacy_persona_recovery import (
+                reconcile_legacy_replay,
+            )
+            losing_receipt = await lookup_locked_legacy_replay_receipt(
+                session=session, tenant_id=str(tenant), user_id=str(user),
+                expected_memory_id=str(loser_id),
+                expected_request_id=str(uuid.uuid4()),
+            )
+            assert not losing_receipt.persisted
+            losing_recovery = reconcile_legacy_replay(losing_receipt)
+            assert losing_recovery.reason == "no_prior_receipt"
+            assert losing_recovery.safe_to_retry
             # The failed insert cannot leave its own event behind.
             assert (await session.execute(select(MemoryEvent).where(
                 MemoryEvent.event_id == loser_id,
