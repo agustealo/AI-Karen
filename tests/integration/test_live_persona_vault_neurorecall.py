@@ -637,6 +637,28 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             ))
         replay = await prepare_governed_legacy_migration_retry(**base)
         assert replay == await prepare_governed_legacy_migration_retry(**base)
+        synthetic_entry = MemoryEntry(
+            id=replay.memory_id, content="Synthetic canonical replay receipt",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "persona-memory-migration"},
+            ),
+        )
+        vault_context = VaultContext(
+            tenant_id=str(tenant), user_id=str(user),
+            request_id=replay.request_id, correlation_id=str(uuid.uuid4()),
+            actor_id=str(user), policy_context={"memory_write_authorized": True},
+        )
+        assert (await PostgresNeuroVault().persist(
+            synthetic_entry, context=vault_context,
+        )).persisted
+        with pytest.raises(ValueError, match="migration recovery does not allow retry"):
+            await prepare_governed_legacy_migration_retry(**base)
+        with pytest.raises(ValueError, match="migration recovery does not allow retry"):
+            await prepare_governed_legacy_migration_retry(
+                **{**base, "runtime_policy": RuntimePolicyEnforcer()}
+            )
         # A caller cannot reuse one tenant's historical source under another tenant.
         wrong_scope = ChatExecutionContext(
             tenant_id=str(uuid.uuid4()), user_id=str(user),
@@ -654,13 +676,27 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             consent.is_granted = False
         with pytest.raises(ValueError, match="explicit historical migration consent"):
             await prepare_governed_legacy_migration_retry(**base)
-        # The read-only preparation path did not create a canonical assertion.
+        # The only assertion was created by the explicit synthetic vault write.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             result = await session.execute(select(MemoryAssertion).where(
                 MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id)
             ))
-            assert result.scalar_one_or_none() is None
+            assert result.scalar_one_or_none() is not None
     finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            if "replay" in locals():
+                event_ids = (await session.execute(
+                    select(MemoryAssertion.event_id).where(
+                        MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id)
+                    )
+                )).scalars().all()
+                await session.execute(delete(MemoryAssertion).where(
+                    MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id)
+                ))
+                if event_ids:
+                    await session.execute(delete(MemoryEvent).where(
+                        MemoryEvent.event_id.in_(event_ids)
+                    ))
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             await session.execute(text(
                 "DELETE FROM public.persona_memory_entries "
