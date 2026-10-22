@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { restoreOwnedHistoryMessages } from "./KarenHistoryRestoration";
+import { readOwnedConversationHistory, restoreOwnedHistoryMessages } from "./KarenHistoryRestoration";
 
 const envelope = {
   schema_version: 1,
@@ -63,6 +63,37 @@ describe("canonical assistant-ui history restoration", () => {
     const restored = restoreOwnedHistoryMessages("conversation-1", history);
     expect(restored).toHaveLength(1);
     expect(restored.some((message) => message.role === "assistant")).toBe(false);
+  });
+
+  it("loads the exact authenticated conversation and restores its saved planner card", async () => {
+    const calls: string[] = [];
+    const restored = await readOwnedConversationHistory("owned-thread", async (id) => {
+      calls.push(id);
+      return {
+        id: "owned-thread",
+        messages: [
+          { id: "u-1", role: "user", content: "List my tasks" },
+          { id: "a-1", role: "assistant", content: "Found 1 commitment",
+            structured_content: { presentation: envelope } },
+        ],
+      };
+    });
+    expect(calls).toEqual(["owned-thread"]);
+    expect(restored).toHaveLength(2);
+    const content = restored[1].content;
+    expect(Array.isArray(content)).toBe(true);
+    if (!Array.isArray(content)) throw new Error("Expected presentation data");
+    expect(content.filter((part) => typeof part === "object" && part !== null
+      && "type" in part && part.type === "data")).toHaveLength(1);
+  });
+
+  it("refuses mismatched conversation IDs and propagates history read failure", async () => {
+    await expect(readOwnedConversationHistory("owned-thread", async () => ({
+      id: "foreign-thread", messages: [],
+    }))).rejects.toThrow("Conversation history identity mismatch");
+    await expect(readOwnedConversationHistory("owned-thread", async () => {
+      throw new Error("Unauthorized conversation access");
+    })).rejects.toThrow("Unauthorized conversation access");
   });
 
 });
