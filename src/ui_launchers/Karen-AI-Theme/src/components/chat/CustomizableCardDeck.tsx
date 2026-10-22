@@ -8,12 +8,20 @@ import { CardTitle } from '@/components/ui/card';
 const STORAGE_KEY = 'karen.intelligence.cards.v1';
 type CardPreference = { order: string[]; hidden: string[] };
 
-function textOf(node: ReactNode): string {
-  if (typeof node === 'string' || typeof node === 'number') return String(node);
-  if (Array.isArray(node)) return node.map(textOf).join(' ');
+function findTitle(node: ReactNode): string {
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      const title = findTitle(entry);
+      if (title) return title;
+    }
+    return '';
+  }
   if (!isValidElement<{ children?: ReactNode }>(node)) return '';
-  if (node.type === CardTitle) return textOf(node.props.children).trim();
-  return Children.toArray(node.props.children).map(textOf).join(' ').trim();
+  if (node.type === CardTitle) {
+    return Children.toArray(node.props.children)
+      .filter((child) => typeof child === 'string').join(' ').trim();
+  }
+  return findTitle(node.props.children);
 }
 
 function restore(): CardPreference {
@@ -35,7 +43,7 @@ export default function CustomizableCardDeck({ children }: { children: ReactNode
   const [dragging, setDragging] = useState<string | null>(null);
   useEffect(() => setPreferences(restore()), []);
   const cards = Children.toArray(children).map((element, index) => {
-    const title = textOf(element) || `Card ${index + 1}`;
+    const title = findTitle(element) || `Card ${index + 1}`;
     return { id: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title, element };
   });
   const ordered = [...cards].sort((a, b) => {
