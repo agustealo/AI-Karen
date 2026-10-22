@@ -833,6 +833,65 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert (await session.execute(select(MemoryAssertion).where(
                 MemoryAssertion.assertion_id == rolled_back_pair_assertion
             ))).scalar_one_or_none() is None
+        # The same PostgreSQL lock discipline must serialize consent and
+        # retention mutations. These are DB primitive proofs only; no
+        # historical migration writer is enabled.
+        import asyncio
+        for model, row_id, field, revoked, restored, error in (
+            (ConsentScope, consent_id, "is_granted", False, True,
+             "explicit historical migration consent"),
+            (RetentionPolicy, retention_id, "ttl_days", 0, 30,
+             "historical memory retention not authorized"),
+        ):
+            locked = asyncio.Event()
+            release = asyncio.Event()
+            changed = asyncio.Event()
+
+            async def hold_policy_row():
+                async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                    row = (await session.execute(
+                        select(model).where(
+                            (model.scope_id if model is ConsentScope else model.policy_id)
+                            == row_id
+                        ).with_for_update()
+                    )).scalar_one()
+                    assert row is not None
+                    locked.set()
+                    await release.wait()
+
+            async def change_policy_row():
+                async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                    row = (await session.execute(
+                        select(model).where(
+                            (model.scope_id if model is ConsentScope else model.policy_id)
+                            == row_id
+                        ).with_for_update()
+                    )).scalar_one()
+                    setattr(row, field, revoked)
+                changed.set()
+
+            holding = asyncio.create_task(hold_policy_row())
+            contender = None
+            try:
+                await asyncio.wait_for(locked.wait(), timeout=10)
+                contender = asyncio.create_task(change_policy_row())
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(changed.wait()), timeout=0.2)
+            finally:
+                release.set()
+                tasks = [holding] + ([contender] if contender is not None else [])
+                await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+            assert changed.is_set()
+            with pytest.raises(ValueError, match=error):
+                await prepare_governed_legacy_migration_retry(**base)
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                row = (await session.execute(
+                    select(model).where(
+                        (model.scope_id if model is ConsentScope else model.policy_id)
+                        == row_id
+                    )
+                )).scalar_one()
+                setattr(row, field, restored)
         # PostgreSQL row locks serialize withdrawal behind a verification
         # transaction. This is a database primitive proof, not an enabled writer.
         import asyncio
