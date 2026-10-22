@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api";
 
 type PersonaSummary = { id: string; name: string; is_active: boolean };
 type PersonaPreferences = { active_persona_id: string | null; show_persona_selector: boolean };
 
 export function KarenPersonaSelector() {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [personas, setPersonas] = useState<PersonaSummary[]>([]);
   const [preferences, setPreferences] = useState<PersonaPreferences | null>(null);
   const [loading, setLoading] = useState(true);
@@ -20,7 +25,10 @@ export function KarenPersonaSelector() {
       apiClient.get<PersonaPreferences>("/api/personas/preferences/me"),
     ]).then(([available, current]) => {
       if (cancelled) return;
-      setPersonas(available.filter((persona) => persona.is_active));
+      if (!Array.isArray(available) || !current || typeof current.show_persona_selector !== "boolean") {
+        throw new Error("Invalid persona catalog response");
+      }
+      setPersonas(available.filter((persona) => persona && typeof persona.id === "string" && typeof persona.name === "string" && persona.is_active));
       setPreferences(current);
       setError(null);
     }).catch(() => {
@@ -49,11 +57,14 @@ export function KarenPersonaSelector() {
           const updated = await apiClient.post<PersonaPreferences>(
             "/api/personas/preferences/switch", { persona_id: requested },
           );
-          setPreferences(updated);
+          if (!updated || updated.active_persona_id !== requested || typeof updated.show_persona_selector !== "boolean") {
+            throw new Error("Persona switch not confirmed by server");
+          }
+          if (mounted.current) setPreferences(updated);
         } catch {
-          setError("Persona switch failed. Previous selection retained.");
+          if (mounted.current) setError("Persona switch failed. Previous selection retained.");
         } finally {
-          setSaving(false);
+          if (mounted.current) setSaving(false);
         }
       }}
       className="max-w-44 rounded-lg border border-input bg-background px-2 py-1.5 text-xs">
