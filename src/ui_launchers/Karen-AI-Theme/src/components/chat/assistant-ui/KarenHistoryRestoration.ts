@@ -7,6 +7,7 @@ export type DurableHistoryMessage = {
   role: string;
   content: string;
   structured_content?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 /** Restore backend-owned presentation parts without introducing client-side storage. */
@@ -31,14 +32,31 @@ export function restoreOwnedHistoryMessages(
     const original = message.id ? persistedById.get(message.id) : undefined;
     const envelope = original?.role === "assistant"
       ? presentationFromStructuredContent(original.structured_content) : null;
-    if (!envelope) return message;
+    const metadata = original?.role === "assistant" ? original.metadata : null;
+    const provider = metadata?.actual_provider;
+    const model = metadata?.actual_model;
+    const source = metadata?.response_source;
+    const receipt = typeof provider === "string" && provider.trim()
+      && typeof model === "string" && model.trim()
+      && typeof source === "string" && source.trim()
+      ? {
+          actual_provider: provider,
+          actual_model: model,
+          response_source: source,
+          runtime_engine: typeof metadata?.runtime_engine === "string"
+            ? metadata.runtime_engine : null,
+          degraded_mode: metadata?.degraded_mode === true,
+        }
+      : null;
+    if (!envelope && !receipt) return message;
     return {
       ...message,
       content: [
         ...(typeof message.content === "string"
           ? [{ type: "text" as const, text: message.content }]
           : message.content),
-        { type: "data" as const, name: "karen.presentation.v1", data: envelope },
+        ...(envelope ? [{ type: "data" as const, name: "karen.presentation.v1", data: envelope }] : []),
+        ...(receipt ? [{ type: "data" as const, name: "karen.execution_receipt.v1", data: receipt }] : []),
       ],
     };
   });
