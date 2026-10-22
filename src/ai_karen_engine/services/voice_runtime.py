@@ -82,6 +82,7 @@ class VoiceRuntime:
 
 
 _voice_runtime = VoiceRuntime()
+_voice_bootstrap_lock = asyncio.Lock()
 
 
 def get_voice_runtime() -> VoiceRuntime:
@@ -95,25 +96,27 @@ async def configure_local_voice_runtime() -> VoiceCapabilities:
     Call from the canonical application lifespan after settings validation.
     Repeated calls are idempotent while the existing engine is healthy.
     """
-    runtime = get_voice_runtime()
-    current = await runtime.capabilities()
-    if current.transcription_available:
-        return current
-    if os.getenv("KAREN_LOCAL_STT_ENABLED", "false").lower() != "true":
-        return current
-    model_path = os.getenv("KAREN_LOCAL_STT_MODEL_PATH", "").strip()
-    if not model_path:
-        return current
-    from ai_karen_engine.services.local_whisper_adapter import FasterWhisperLocalAdapter
+    # Concurrent lifespan entrypoints must not load the same large model twice.
+    async with _voice_bootstrap_lock:
+        runtime = get_voice_runtime()
+        current = await runtime.capabilities()
+        if current.transcription_available:
+            return current
+        if os.getenv("KAREN_LOCAL_STT_ENABLED", "false").lower() != "true":
+            return current
+        model_path = os.getenv("KAREN_LOCAL_STT_MODEL_PATH", "").strip()
+        if not model_path:
+            return current
+        from ai_karen_engine.services.local_whisper_adapter import FasterWhisperLocalAdapter
 
-    adapter = FasterWhisperLocalAdapter(
-        model_path,
-        device=os.getenv("KAREN_LOCAL_STT_DEVICE", "cpu"),
-        compute_type=os.getenv("KAREN_LOCAL_STT_COMPUTE_TYPE", "int8"),
-    )
-    try:
-        await adapter.load()
-    except (FileNotFoundError, RuntimeError, OSError):
+        adapter = FasterWhisperLocalAdapter(
+            model_path,
+            device=os.getenv("KAREN_LOCAL_STT_DEVICE", "cpu"),
+            compute_type=os.getenv("KAREN_LOCAL_STT_COMPUTE_TYPE", "int8"),
+        )
+        try:
+            await adapter.load()
+        except (FileNotFoundError, RuntimeError, OSError):
+            return await runtime.capabilities()
+        runtime.speech_engine = adapter
         return await runtime.capabilities()
-    runtime.speech_engine = adapter
-    return await runtime.capabilities()
