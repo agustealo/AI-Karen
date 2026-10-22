@@ -92,3 +92,31 @@ async def test_runtime_failure_maps_to_accurate_http_status(
     assert caught.value.detail == expected_detail
     if expected_status == 429:
         assert caught.value.headers["Retry-After"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_busy_engine_rejects_before_reading_request_body():
+    runtime = SimpleNamespace(
+        transcription_busy=Mock(return_value=True),
+        capabilities=AsyncMock(return_value=VoiceCapabilities(
+            status=VoiceEngineStatus.READY,
+            transcription_available=True,
+            engine="local",
+        )),
+        transcribe=AsyncMock(),
+    )
+    # If ingress tries to consume the body, receiving a chunk fails the test.
+    async def forbidden_receive():
+        raise AssertionError("busy engine must not read audio request bytes")
+    req = Request(
+        {"type": "http", "method": "POST", "path": "/api/voice/transcriptions",
+         "headers": [(b"content-type", b"audio/wav"),
+                     (b"x-audio-duration-seconds", b"1")]},
+        forbidden_receive,
+    )
+    with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime):
+        with pytest.raises(HTTPException) as caught:
+            await transcribe_voice(req, user=SimpleNamespace(user_id="u"))
+    assert caught.value.status_code == 429
+    assert caught.value.headers["Retry-After"] == "1"
+    runtime.transcribe.assert_not_awaited()
