@@ -328,24 +328,26 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
 
         let personaId = currentPersonaId;
 
+        let selected: PersonaPreferences;
         if (personaId) {
-          const updatedPersona = await apiClient.put<PersonaRecord>(
-            `/api/personas/${personaId}`,
-            payload,
+          // Existing personas update and activate in one backend transaction.
+          selected = await apiClient.post<PersonaPreferences>(
+            `/api/personas/${personaId}/save-and-activate`,
+            { ...payload, expected_revision: personaRevision },
           );
-          personaId = updatedPersona.id;
         } else {
+          // Creation still uses the legacy two-step contract; a failed
+          // activation is reported as failure, never as an active persona.
           const createdPersona = await apiClient.post<PersonaRecord>(
             PERSONAS_ENDPOINT,
             payload,
           );
           personaId = createdPersona.id;
+          selected = await apiClient.put<PersonaPreferences>(
+            PERSONA_PREFERENCES_ENDPOINT,
+            { active_persona_id: personaId, expected_revision: personaRevision },
+          );
         }
-
-        const selected = await apiClient.put<PersonaPreferences>(
-          PERSONA_PREFERENCES_ENDPOINT,
-          { active_persona_id: personaId, expected_revision: personaRevision },
-        );
         setPersonaRevision(selected.revision);
         setActivePersonaId(selected.active_persona_id ?? personaId);
         try {
