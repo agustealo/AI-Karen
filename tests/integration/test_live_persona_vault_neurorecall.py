@@ -655,6 +655,21 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 "UPDATE public.persona_memory_entries SET memory_type='semantic' "
                 "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
             ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+        # A source that becomes empty after a previous eligibility check
+        # cannot be admitted on the next attempt.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.persona_memory_entries SET content='   ' "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+        with pytest.raises(ValueError, match="verified historical retention metadata required"):
+            await prepare_governed_legacy_migration_retry(**base)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.persona_memory_entries SET content=:content "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user),
+                "content": "Synthetic read-only assembly proof"})
         replay = await prepare_governed_legacy_migration_retry(**base)
         # Exercise authenticated ingress with an actual signed access JWT,
         # the existing middleware decoder, and real PostgreSQL evidence.
