@@ -141,9 +141,28 @@ async def test_admitted_migration_replay_identity_is_idempotent_in_real_vault():
             explicitly_granted=True,
         ),
     )
-    replay = derive_legacy_migration_replay_identity(
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import (
+        LegacyReplayRecoveryDecision,
+    )
+    source_id = str(uuid.uuid4())
+    write_authority = LegacyMigrationWriteAuthority(
+        tenant_id=str(tenant), user_id=str(user),
+        authorized_tenant_id=str(tenant), authorized_user_id=str(user),
+        capability="memory.write", policy_decision_id=str(uuid.uuid4()),
+        explicitly_granted=True,
+    )
+    replay = prepare_legacy_migration_retry(
+        preflight=LegacyMigrationPreflight(True, ()),
+        authority=write_authority,
+        recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+        source_record_id=source_id,
+    )
+    assert replay == derive_legacy_migration_replay_identity(
         admission=admission, tenant_id=str(tenant),
-        user_id=str(user), source_record_id=str(uuid.uuid4()),
+        user_id=str(user), source_record_id=source_id,
     )
     try:
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
