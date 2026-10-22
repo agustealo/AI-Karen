@@ -169,6 +169,16 @@ async def test_admitted_migration_replay_identity_is_idempotent_in_real_vault():
         second = await vault.persist(entry, context=context)
         assert first.persisted and second.persisted
         assert first.memory_id == second.memory_id
+        # Consent is checked before the idempotency lookup. A retry after
+        # revocation must not yield a successful cached write receipt.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            scope = (await session.execute(select(ConsentScope).where(
+                ConsentScope.scope_id == consent_id
+            ))).scalar_one()
+            scope.is_granted = False
+        from ai_karen_engine.platform.memory.postgres.vault import NeuroVaultAuthorizationError
+        with pytest.raises(NeuroVaultAuthorizationError):
+            await vault.persist(entry, context=context)
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             events = (await session.execute(select(MemoryEvent).where(
                 MemoryEvent.tenant_id == tenant, MemoryEvent.user_id == user,
