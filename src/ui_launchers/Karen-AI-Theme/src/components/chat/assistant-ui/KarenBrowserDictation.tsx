@@ -68,7 +68,9 @@ export function KarenBrowserDictation() {
       return;
     }
     const browser = window as SpeechWindow;
-    const Recognition = browser.SpeechRecognition || browser.webkitSpeechRecognition;
+    const Recognition = (browser.SpeechRecognition ?? browser.webkitSpeechRecognition) as
+      | (new () => BrowserRecognition)
+      | undefined;
     if (!Recognition) {
       setError("Browser dictation is unavailable. Use the text input.");
       return;

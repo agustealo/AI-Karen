@@ -32,8 +32,12 @@ function isWorkspaceCard(value: unknown): value is WorkspaceCard {
 function readLayout(): { order: WorkspaceCard[]; hidden: WorkspaceCard[] } {
   try {
     const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
-    const order = Array.isArray(saved.order) ? saved.order.filter(isWorkspaceCard) : [];
-    const hidden = Array.isArray(saved.hidden) ? saved.hidden.filter(isWorkspaceCard) : [];
+    const order: WorkspaceCard[] = Array.isArray(saved.order)
+      ? (saved.order as unknown[]).filter(isWorkspaceCard)
+      : [];
+    const hidden: WorkspaceCard[] = Array.isArray(saved.hidden)
+      ? (saved.hidden as unknown[]).filter(isWorkspaceCard)
+      : [];
     return { order: [...new Set([...order, ...DEFAULT_ORDER])], hidden: [...new Set(hidden)] };
   } catch {
     return { order: [...DEFAULT_ORDER], hidden: [] };
@@ -246,7 +250,7 @@ export default function RichResultWorkspace({
               Show all workspace cards
             </button>
           </div>
-        )}}
+        )}
         {artifacts.length > 0 && !hidden.includes('artifacts') && (
           <section {...cardProps('artifacts')} className="karen-surface shrink-0 rounded-xl p-3">
             <div className="mb-2 flex items-center gap-2">
