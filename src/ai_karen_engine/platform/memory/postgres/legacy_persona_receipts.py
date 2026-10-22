@@ -54,6 +54,7 @@ async def lookup_locked_legacy_replay_receipt(
             MemoryEvent.tenant_id == tenant,
             MemoryEvent.user_id == user,
         )
+        .with_for_update(of=(MemoryAssertion, MemoryEvent))
     )
     match = result.one_or_none()
     if match is None:
