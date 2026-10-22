@@ -952,6 +952,34 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
             assert authorized_scope_calls == 2
+            # A transaction-local user changed after evidence inspection must
+            # be rejected at the final runtime principal continuity check.
+            from ai_karen_engine.platform.memory.postgres import legacy_persona_source as source_module
+            original_locked_inspect = source_module.inspect_locked_legacy_migration_preparation
+
+            async def tamper_transaction_principal(**kwargs):
+                result = await original_locked_inspect(**kwargs)
+                await kwargs["session"].execute(
+                    text("SELECT set_config('app.current_user_id', :user, true)"),
+                    {"user": str(uuid.uuid4())},
+                )
+                return result
+
+            with MonkeyPatch.context() as principal_patch:
+                principal_patch.setattr(
+                    source_module, "inspect_locked_legacy_migration_preparation",
+                    tamper_transaction_principal,
+                )
+                with pytest.raises(
+                    PermissionError,
+                    match="transaction principal changed during inspection",
+                ):
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()),
+                        source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
