@@ -171,6 +171,8 @@ class PostgresNeuroVault(VaultPort):
         )
         result = await session.execute(stmt)
         record = result.scalar_one_or_none()
+        if record is None and scope_name == "persona-memory-migration":
+            return False
         return True if record is None else bool(record.is_granted)
 
     async def _retention_deadline(
@@ -257,6 +259,12 @@ class PostgresNeuroVault(VaultPort):
                 tenant_id=tenant_uuid,
                 entry=entry,
             )
+            if consent_scope == "persona-memory-migration" and (
+                valid_to is None or valid_to <= datetime.utcnow()
+            ):
+                raise NeuroVaultAuthorizationError(
+                    "historical migration requires active bounded retention"
+                )
             event_id = uuid.uuid4()
             assertion_id = self._entry_uuid(entry.id)
             payload = entry.to_dict()
