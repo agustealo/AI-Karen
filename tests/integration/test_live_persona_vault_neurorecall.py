@@ -2033,3 +2033,35 @@ async def test_vault_caller_transaction_serializes_consent_revocation():
             await session.execute(delete(ConsentScope).where(
                 ConsentScope.scope_id == consent_id,
             ))
+
+
+def test_vault_historical_source_classification_is_canonical():
+    """The principal gate and ledger denial must classify identical inputs."""
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError,
+    )
+
+    for source, custom, expected in (
+        ("chat_user", {"consent_scope": "memory.write"}, False),
+        ("legacy_persona", {"consent_scope": "memory.write"}, True),
+        ("chat_user", {"source_type": "legacy_persona"}, True),
+        ("chat_user", {"consent_scope": "persona-memory-migration"}, True),
+    ):
+        entry = MemoryEntry(
+            id=str(uuid.uuid4()), content="Synthetic classification proof",
+            memory_type=MemoryType.SEMANTIC,
+            namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(uuid.uuid4()), user_id=str(uuid.uuid4()),
+                source=source, custom=custom,
+            ),
+        )
+        assert PostgresNeuroVault._is_historical_write(entry) is expected
+        if expected:
+            with pytest.raises(
+                NeuroVaultAuthorizationError,
+                match="historical migration persistence is disabled",
+            ):
+                PostgresNeuroVault._require_non_historical_write(entry)
+        else:
+            PostgresNeuroVault._require_non_historical_write(entry)
