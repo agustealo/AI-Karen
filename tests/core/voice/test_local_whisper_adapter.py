@@ -1,7 +1,6 @@
 """Local STT must reject malformed and spoofed audio before model inference."""
 import io
 import wave
-from unittest.mock import AsyncMock
 
 import pytest
 
