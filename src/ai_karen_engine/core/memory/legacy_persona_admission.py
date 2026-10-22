@@ -124,3 +124,43 @@ def prepare_legacy_migration_retry(
         user_id=authority.user_id,
         source_record_id=source_record_id,
     )
+
+
+def migration_write_authority_from_policy(
+    *,
+    request: "PolicyEvaluationRequest",
+    decision: "PolicyDecision",
+) -> LegacyMigrationWriteAuthority:
+    """Interpret an existing RuntimePolicy decision without issuing a new grant.
+
+    Both trusted permission context and the decision must contain memory.write.
+    The caller must construct the request from authenticated ingress identity,
+    not legacy rows or client-supplied claims.
+    """
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyDecision, PolicyEvaluationRequest,
+    )
+
+    if not isinstance(request, PolicyEvaluationRequest) or not isinstance(decision, PolicyDecision):
+        raise TypeError("canonical RuntimePolicy request and decision required")
+    scope = decision.runtime_constraints or {}
+    granted = (
+        decision.allowed is True
+        and "memory.write" in request.permissions
+        and "memory.write" in request.requested_capabilities
+        and "memory.write" in decision.allowed_capabilities
+        and "memory.write" not in decision.denied_capabilities
+        and scope.get("authorized_tenant_id") == request.tenant_id
+        and scope.get("authorized_user_id") == request.user_id
+        and bool(decision.decision_id)
+        and not decision.requires_human_gate
+    )
+    return LegacyMigrationWriteAuthority(
+        tenant_id=request.tenant_id,
+        user_id=request.user_id,
+        authorized_tenant_id=str(scope.get("authorized_tenant_id") or ""),
+        authorized_user_id=str(scope.get("authorized_user_id") or ""),
+        capability="memory.write",
+        policy_decision_id=decision.decision_id,
+        explicitly_granted=granted,
+    )
