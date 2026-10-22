@@ -371,3 +371,40 @@ async def prepare_identity_verified_legacy_migration_retry(
         recovery=recovery,
         source_record_id=source_record_id,
     )
+
+
+def migration_policy_request_from_runtime_context(
+    *, context: "ChatExecutionContext",
+) -> "PolicyEvaluationRequest":
+    """Build migration policy input from the runtime's canonical context.
+
+    Call only after authenticated ingress establishes the runtime context.
+    This adapter cannot authenticate a manually constructed context, and is
+    deliberately not an API or a migration execution authorization.
+    """
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import PolicyEvaluationRequest
+
+    if not isinstance(context, ChatExecutionContext):
+        raise TypeError("canonical runtime execution context required")
+    try:
+        tenant = str(uuid.UUID(context.tenant_id))
+        user = str(uuid.UUID(context.user_id))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("canonical scoped runtime principal required") from exc
+    if not context.session_id or not str(context.session_id).strip():
+        raise ValueError("authenticated runtime session required")
+    if not context.request_id or not str(context.request_id).strip():
+        raise ValueError("runtime request identifier required")
+    if not context.correlation_id or not str(context.correlation_id).strip():
+        raise ValueError("runtime correlation identifier required")
+    return PolicyEvaluationRequest(
+        tenant_id=tenant,
+        user_id=user,
+        session_id=context.session_id,
+        correlation_id=context.correlation_id,
+        roles=list(context.roles),
+        permissions=list(context.permissions),
+        action="legacy_persona_memory_migration",
+        requested_capabilities=["memory.write"],
+    )
