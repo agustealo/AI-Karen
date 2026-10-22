@@ -47,7 +47,13 @@ export function KarenLocalDictation() {
   const stop = () => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    if (recorder.current?.state === "recording") recorder.current.stop();
+    try {
+      if (recorder.current?.state === "recording") recorder.current.stop();
+    } catch {
+      recordingFailed.current = true;
+      stream.current?.getTracks().forEach((track) => track.stop());
+      if (mounted.current) setError("Could not finish microphone recording.");
+    }
     if (mounted.current) setRecording(false);
   };
 
@@ -90,7 +96,11 @@ export function KarenLocalDictation() {
         mic.getTracks().forEach((track) => track.stop());
         stream.current = null;
         recorder.current = null;
-        if (!mounted.current || generation.current !== currentGeneration || recordingFailed.current || !chunks.length) return;
+        if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration) || recordingFailed.current) return;
+        if (!chunks.length) {
+          setError("No audio was captured. Your message was not sent.");
+          return;
+        }
         setProcessing(true);
         const controller = new AbortController();
         abort.current = controller;
