@@ -2148,3 +2148,60 @@ def test_vault_historical_source_classification_is_canonical():
                 PostgresNeuroVault._require_non_historical_write(entry)
         else:
             PostgresNeuroVault._require_non_historical_write(entry)
+
+
+async def test_vault_rejects_tenant_scope_drift_between_authorization_queries():
+    """Real AsyncSession must fail closed if its RLS scope changes mid-check."""
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user = uuid.uuid4(), uuid.uuid4()
+    entry = MemoryEntry(
+        id=str(uuid.uuid4()), content="Scope drift must not be saved",
+        memory_type=MemoryType.SEMANTIC,
+        namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(tenant), user_id=str(user), source="chat_user",
+            custom={"consent_scope": "memory.write"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=str(tenant), user_id=str(user),
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        actor_id=str(user), policy_context={"memory_write_authorized": True},
+    )
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        original_execute = session.execute
+        scope_reads = 0
+
+        async def mutate_scope_on_second_read(statement, *args, **kwargs):
+            nonlocal scope_reads
+            sql = str(statement)
+            if (
+                "current_setting('app.current_tenant_id', true)" in sql
+                and "current_setting('app.tenant_id', true)" in sql
+            ):
+                scope_reads += 1
+                if scope_reads == 2:
+                    await original_execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        {"tenant": str(uuid.uuid4())},
+                    )
+            return await original_execute(statement, *args, **kwargs)
+
+        session.execute = mutate_scope_on_second_read
+        with pytest.raises(
+            NeuroVaultAuthorizationError,
+            match="caller transaction tenant scope changed during authorization",
+        ):
+            await PostgresNeuroVault().persist_in_transaction(
+                entry, context=context, session=session,
+            )
+        assert scope_reads == 2
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        assert (await session.execute(select(MemoryAssertion).where(
+            MemoryAssertion.assertion_id == uuid.UUID(entry.id),
+        ))).scalar_one_or_none() is None
