@@ -48,5 +48,5 @@ async def lookup_legacy_replay_receipt(
         persisted_memory_id=str(assertion.assertion_id),
         persisted_tenant_id=str(event.tenant_id),
         persisted_user_id=str(event.user_id),
-        persisted=event.event_type == "memory_created" and assertion.valid_to is None,
+        persisted=event.event_type == "memory_persisted" and assertion.valid_to is None,
     )
