@@ -251,6 +251,42 @@ async def update_persona(
         raise HTTPException(status_code=500, detail="Failed to update persona")
 
 
+class SaveAndActivateExistingPersonaRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    system_prompt: str = Field(..., min_length=10, max_length=2000)
+    expected_revision: int = Field(..., ge=0)
+
+
+@router.post("/{persona_id}/save-and-activate", response_model=PreferencesResponse)
+async def save_and_activate_existing_persona(
+    persona_id: str,
+    request: SaveAndActivateExistingPersonaRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> PreferencesResponse:
+    """Delegate atomic edit and selection to the tenant-scoped persona owner."""
+    service = get_persona_service()
+    try:
+        result = await service.save_and_activate_existing_persona(
+            user_id=current_user["user_id"],
+            tenant_id=current_user["tenant_id"],
+            persona_id=persona_id,
+            name=request.name,
+            description=request.description,
+            system_prompt=request.system_prompt,
+            expected_revision=request.expected_revision,
+        )
+        return PreferencesResponse(**result.dict())
+    except ValueError as exc:
+        detail = str(exc)
+        if "revision conflict" in detail:
+            raise HTTPException(status_code=409, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    except Exception:
+        logger.exception("Atomic persona update failed")
+        raise HTTPException(status_code=500, detail="Failed to save and activate persona")
+
+
 @router.delete("/{persona_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_persona(
     persona_id: str,
