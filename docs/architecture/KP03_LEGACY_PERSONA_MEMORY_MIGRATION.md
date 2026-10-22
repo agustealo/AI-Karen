@@ -26,3 +26,10 @@ The source scanner reports file, line and symbol, including declarations and tes
 
 ## Strict reference triage
 Run `python scripts/audit/persona_memory_references.py --root . --output persona-memory-references.json --fail-on-review` on a full checkout. A nonzero exit signals an unresolved production reference; it does not delete or modify code. Classifications are `historical_schema`, `audit_tool`, `test_reference`, `compatibility_declaration`, or `requires_review`. Review each unresolved result manually and record its active owner before removing or redirecting it. This is a conservative triage, not proof that all historical data can be migrated.
+
+## Verified source reference inventory, 2026-10-21
+
+- GitHub Actions run [39702857769](https://github.com/agustealo/AI-Karen/actions/runs/39702857769) completed successfully. Uploaded artifact `persona-memory-reference-inventory` (ID `12394131464`) contained 30 references: 11 test references, 9 audit-tool references, 6 historical-schema references, 2 fail-closed compatibility declarations and 2 references in the existing live PostgreSQL proof workflow.
+- The two previously `requires_review` matches in `.github/workflows/live-postgres-memory-proof.yml` are confirmed legacy-table RLS/security proof checks, not live application memory consumers. The scanner now assigns them `security_proof` classification.
+- No active application caller of the retired legacy APIs was identified **in this complete scanned checkout**. This is code-reference evidence, not a guarantee about unindexed external consumers or historical stored records.
+- Do not remove historical schema or security proofs yet. No user data backfill has been conducted. Before retiring table: inventory real tenant-level counts; prove authorized identity mapping, per-record consent, idempotent NeuroVault migration and recovery; verify all relevant deployments and integrations.
