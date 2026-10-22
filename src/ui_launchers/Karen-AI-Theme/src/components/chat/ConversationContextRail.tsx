@@ -30,6 +30,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { AgentStepEvent } from '@/lib/types';
 import { apiClient } from '@/lib/api';
+import CustomizableCardDeck from './CustomizableCardDeck';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -472,7 +473,7 @@ function RailContent({
     approvalsLoadState === 'unavailable';
 
   return (
-    <div className="space-y-3">
+    <CustomizableCardDeck>
       <Card className="karen-surface border-border/70 bg-card/70">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-tight">
@@ -1443,7 +1444,7 @@ function RailContent({
           </CardContent>
         </Card>
       )}
-    </div>
+    </CustomizableCardDeck>
   );
 }
 
@@ -1516,7 +1517,7 @@ export default function ConversationContextRail(
                 <Brain className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+                <p className="text-sm font-semibold tracking-tight text-foreground">
                   Conversation Intelligence
                 </p>
                 <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
