@@ -492,6 +492,14 @@ class ChatRuntime:
                 }
             )
 
+        # Ordinary and streamed chat must both persist the accepted final
+        # answer through the same authorized transcript owner. Episodic memory
+        # projection above is a separate concern, not transcript storage.
+        transcript_result = await self._persist_transcript(
+            request, text, provider_meta, trajectory_id=trajectory.trajectory_id
+        )
+        provider_meta.update(transcript_result.to_metadata())
+
         latency_ms = (time.time() - start) * 1000.0
         await self._record_trajectory_completion(
             trajectory,
