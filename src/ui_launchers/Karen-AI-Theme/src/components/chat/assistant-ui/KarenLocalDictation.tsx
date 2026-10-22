@@ -105,7 +105,12 @@ export function KarenLocalDictation() {
       media.onstop = async () => {
         mic.getTracks().forEach((track) => track.stop());
         if (stream.current === mic) stream.current = null;
-        if (recorder.current === media) recorder.current = null;
+        if (recorder.current === media) {
+          recorder.current = null;
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = null;
+          if (mounted.current) setRecording(false);
+        }
         if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration) || recordingFailed.current) return;
         if (!chunks.length) {
           setError("No audio was captured. Your message was not sent.");
