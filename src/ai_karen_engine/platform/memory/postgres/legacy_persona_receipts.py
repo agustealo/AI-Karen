@@ -44,6 +44,14 @@ async def lookup_locked_legacy_replay_receipt(
     user = uuid.UUID(user_id)
     expected = uuid.UUID(expected_memory_id)
     request = uuid.UUID(expected_request_id)
+    # Lock the deterministic assertion slot, including when no receipt exists.
+    # This prevents two prospective migration executors from both treating
+    # an absent row as an independently available replay identity.
+    from sqlalchemy import text
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:slot, 0))"),
+        {"slot": f"persona-migration-replay:{tenant}:{user}:{expected}"},
+    )
     result = await session.execute(
         select(MemoryAssertion, MemoryEvent)
         .join(MemoryEvent, MemoryAssertion.event_id == MemoryEvent.event_id)
