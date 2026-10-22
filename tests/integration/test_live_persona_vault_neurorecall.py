@@ -890,6 +890,19 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         assert not mismatch_decision.already_persisted
         assert not mismatch_decision.safe_to_retry
         assert mismatch_decision.reason == "receipt_not_persisted"
+        # The authenticated unified transaction must also reject a completed
+        # canonical replay, not only the older preparation entrypoint.
+        from pytest import MonkeyPatch
+        with MonkeyPatch.context() as patch:
+            patch.setattr(auth_config, "should_bypass_auth", lambda: False)
+            patch.setattr(auth_middleware, "get_auth_middleware", lambda: middleware)
+            with pytest.raises(PermissionError, match="replay not eligible"):
+                await inspect_authenticated_legacy_migration_transaction(
+                    request=http_request, request_id=str(uuid.uuid4()),
+                    correlation_id=str(uuid.uuid4()),
+                    source_record_id=str(source),
+                    runtime_policy=RuntimePolicyEnforcer(),
+                )
         with pytest.raises(ValueError, match="migration recovery does not allow retry"):
             await prepare_governed_legacy_migration_retry(**base)
         with pytest.raises(ValueError, match="migration recovery does not allow retry"):
