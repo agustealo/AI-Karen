@@ -889,6 +889,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         assert identical_retry.persisted
         assert identical_retry.memory_id == replay.memory_id
         assert identical_retry.metadata["idempotent_replay"] is True
+        import asyncio
         # Competing canonical NeuroVault retries must resolve through the
         # same durable assertion: identical content replays successfully,
         # conflicting content fails closed without changing stored content.
