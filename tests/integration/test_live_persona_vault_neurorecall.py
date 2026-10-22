@@ -670,6 +670,18 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
             ), {"id": str(source), "tenant": str(tenant), "user": str(user),
                 "content": "Synthetic read-only assembly proof"})
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+            lock_legacy_migration_evidence,
+        )
+        locked_evidence = await lock_legacy_migration_evidence(
+            tenant_id=str(tenant), user_id=str(user), source_record_id=str(source),
+        )
+        assert locked_evidence is not None
+        assert locked_evidence[1] == "semantic"
+        assert await lock_legacy_migration_evidence(
+            tenant_id=str(uuid.uuid4()), user_id=str(user),
+            source_record_id=str(source),
+        ) is None
         replay = await prepare_governed_legacy_migration_retry(**base)
         # A prepared replay identity is not valid after source deletion.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
