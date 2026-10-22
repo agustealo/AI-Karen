@@ -1165,6 +1165,24 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                     MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id),
                 ))).scalar_one()
                 canonical_assertion.content = original_assertion_content
+        # Revoked canonical assertion consent must invalidate an otherwise
+        # identical event replay. Restore the disposable assertion afterward.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            canonical_assertion = (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id),
+            ))).scalar_one()
+            canonical_assertion.consent_state = "revoked"
+        try:
+            with pytest.raises(NeuroVaultAuthorizationError, match="idempotency collision"):
+                await PostgresNeuroVault().persist(
+                    synthetic_entry, context=vault_context,
+                )
+        finally:
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                canonical_assertion = (await session.execute(select(MemoryAssertion).where(
+                    MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id),
+                ))).scalar_one()
+                canonical_assertion.consent_state = "granted"
         # Even identical content must not replay under a forged or stale
         # canonical event consent provenance.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
