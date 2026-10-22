@@ -339,9 +339,16 @@ class PostgresNeuroVault(VaultPort):
         # authorization must be implemented as a separate trusted contract.
         from dataclasses import replace
 
-        receipt = await self._persist_with_session(
-            entry, context=context, session=session, commit=False,
-        )
+        try:
+            receipt = await self._persist_with_session(
+                entry, context=context, session=session, commit=False,
+            )
+        except Exception:
+            # A failed ledger/consent write invalidates the caller's entire
+            # transaction. Do not rely on the caller to propagate the error:
+            # a swallowed IntegrityError must never permit a partial commit.
+            await session.rollback()
+            raise
         # A caller-owned transaction may have executed additional SQL inside
         # the writer. Never return staged success if its authenticated scope
         # drifted during ledger/consent writes.
