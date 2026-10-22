@@ -164,3 +164,29 @@ def migration_write_authority_from_policy(
         policy_decision_id=decision.decision_id,
         explicitly_granted=granted,
     )
+
+
+async def evaluate_migration_write_authority(
+    *,
+    authenticated_request: "PolicyEvaluationRequest",
+    runtime_policy: "RuntimePolicyEnforcer",
+) -> LegacyMigrationWriteAuthority:
+    """Evaluate live policy from trusted ingress context before admission.
+
+    The request must be built by canonical runtime code using authenticated
+    principal and permissions. Never accept it from legacy rows or client JSON.
+    """
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+
+    if not isinstance(authenticated_request, PolicyEvaluationRequest):
+        raise TypeError("canonical authenticated policy request required")
+    if not isinstance(runtime_policy, RuntimePolicyEnforcer):
+        raise TypeError("canonical RuntimePolicy enforcer required")
+    if authenticated_request.action != "legacy_persona_memory_migration":
+        raise ValueError("migration-specific runtime policy action required")
+    decision = await runtime_policy.evaluate(authenticated_request)
+    return migration_write_authority_from_policy(
+        request=authenticated_request, decision=decision,
+    )
