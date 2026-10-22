@@ -1,0 +1,53 @@
+"""Canonical local voice capability authority.
+
+A configured backend is not necessarily healthy. This owner advertises only
+observed, explicitly registered engine capability. It never chooses an LLM or
+executes chat requests.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from ai_karen_engine.core.voice.contracts import VoiceCapabilities, VoiceEngineStatus
+
+
+class LocalSpeechEngine(Protocol):
+    """Adapter implemented by an explicitly configured local STT backend."""
+
+    @property
+    def engine_id(self) -> str: ...
+
+    async def is_ready(self) -> bool: ...
+
+
+@dataclass
+class VoiceRuntime:
+    """Single capability owner. No implicit network, mock, or vendor fallback."""
+
+    speech_engine: LocalSpeechEngine | None = None
+
+    async def capabilities(self) -> VoiceCapabilities:
+        engine = self.speech_engine
+        if engine is None:
+            return VoiceCapabilities()
+        try:
+            engine_id = engine.engine_id.strip()
+            if not engine_id or not await engine.is_ready():
+                return VoiceCapabilities()
+        except Exception:
+            # Health failures are not evidence of available transcription.
+            return VoiceCapabilities()
+        return VoiceCapabilities(
+            status=VoiceEngineStatus.READY,
+            transcription_available=True,
+            engine=engine_id,
+        )
+
+
+_voice_runtime = VoiceRuntime()
+
+
+def get_voice_runtime() -> VoiceRuntime:
+    """Process-local registration point for configured voice engines."""
+    return _voice_runtime
