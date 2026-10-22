@@ -125,3 +125,50 @@ def test_retry_preparation_requires_all_three_gates():
                 user_id=user, authorized_user_id=user, explicitly_granted=False,
             ),
         })
+
+
+def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scope():
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_write_authority_from_policy,
+    )
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyDecision, PolicyEvaluationRequest,
+    )
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        requested_capabilities=["memory.write"], permissions=["memory.write"],
+    )
+    decision = PolicyDecision(
+        decision_id="decision-1", policy_version="v2", allowed=True,
+        allowed_capabilities=["memory.write"],
+        runtime_constraints={"authorized_tenant_id": "tenant-a",
+                             "authorized_user_id": "user-a"},
+    )
+    assert migration_write_authority_from_policy(
+        request=request, decision=decision
+    ).explicitly_granted
+    no_permission = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        requested_capabilities=["memory.write"],
+    )
+    assert not migration_write_authority_from_policy(
+        request=no_permission, decision=decision
+    ).explicitly_granted
+    cross_tenant = PolicyDecision(
+        decision_id="decision-2", policy_version="v2", allowed=True,
+        allowed_capabilities=["memory.write"],
+        runtime_constraints={"authorized_tenant_id": "tenant-b",
+                             "authorized_user_id": "user-a"},
+    )
+    assert not migration_write_authority_from_policy(
+        request=request, decision=cross_tenant
+    ).explicitly_granted
+    human_gate = PolicyDecision(
+        decision_id="decision-3", policy_version="v2", allowed=True,
+        allowed_capabilities=["memory.write"], requires_human_gate=True,
+        runtime_constraints={"authorized_tenant_id": "tenant-a",
+                             "authorized_user_id": "user-a"},
+    )
+    assert not migration_write_authority_from_policy(
+        request=request, decision=human_gate
+    ).explicitly_granted
