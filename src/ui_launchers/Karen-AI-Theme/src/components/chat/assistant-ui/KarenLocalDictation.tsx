@@ -48,6 +48,13 @@ export function KarenLocalDictation() {
     if (mounted.current) setRecording(false);
   };
 
+  const cancel = () => {
+    recordingFailed.current = true;
+    abort.current?.abort();
+    stop();
+    if (mounted.current) setProcessing(false);
+  };
+
   const start = async () => {
     if (processing || recording || starting.current) return;
     starting.current = true;
@@ -115,6 +122,10 @@ export function KarenLocalDictation() {
       className="flex h-11 w-11 items-center justify-center rounded-xl border border-input disabled:opacity-40">
       {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
     </button>
+    {recording && <button type="button" onClick={cancel} aria-label="Discard local recording"
+      className="rounded-lg border border-input px-2 py-2 text-xs">Discard</button>}
+    {processing && <button type="button" onClick={cancel} aria-label="Cancel local transcription"
+      className="rounded-lg border border-input px-2 py-2 text-xs">Cancel</button>}
     {recording && <span role="status" className="text-xs">Recording locally…</span>}
     {processing && <span role="status" className="text-xs">Transcribing locally…</span>}
     {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
