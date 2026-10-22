@@ -110,10 +110,13 @@ async def configure_local_voice_runtime() -> VoiceCapabilities:
     # Concurrent lifespan entrypoints must not load the same large model twice.
     async with _voice_bootstrap_lock:
         runtime = get_voice_runtime()
+        if os.getenv("KAREN_LOCAL_STT_ENABLED", "false").lower() != "true":
+            # Disabling opt-in must revoke an already registered engine too.
+            # Do not let a previous healthy registration override policy.
+            runtime.speech_engine = None
+            return await runtime.capabilities()
         current = await runtime.capabilities()
         if current.transcription_available:
-            return current
-        if os.getenv("KAREN_LOCAL_STT_ENABLED", "false").lower() != "true":
             return current
         model_path = os.getenv("KAREN_LOCAL_STT_MODEL_PATH", "").strip()
         if not model_path:
