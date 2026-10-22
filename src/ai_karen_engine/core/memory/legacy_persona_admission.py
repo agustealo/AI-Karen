@@ -714,13 +714,19 @@ async def inspect_authenticated_legacy_migration_transaction(
         ):
             raise PermissionError("historical migration authorization revoked during inspection")
         # A read-only admission never creates or carries a database write
-        # capability. Check that the transaction-local principal is still the
-        # authenticated identity immediately before returning.
-        db_principal = (await session.execute(
-            text("SELECT current_setting('app.current_user_id', true)")
-        )).scalar_one()
-        if db_principal != user:
+        # capability. Recheck transaction-local principal and tenant after
+        # all policy callbacks and before returning the inspection evidence.
+        db_scope = (await session.execute(text(
+            "SELECT current_setting('app.current_user_id', true), "
+            "current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true)"
+        ))).one()
+        if db_scope[0] != user:
             raise PermissionError(
                 "historical migration transaction principal changed during inspection"
+            )
+        if db_scope[1] != tenant or db_scope[2] != tenant:
+            raise PermissionError(
+                "historical migration transaction tenant changed during inspection"
             )
         return replay, receipt
