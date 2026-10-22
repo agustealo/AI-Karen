@@ -56,3 +56,27 @@ def test_persistence_receipt_is_consumed_by_both_transport_paths():
             and node.func.attr == "to_metadata"
             for node in ast.walk(method)
         )
+
+
+def test_ordinary_transport_never_silently_reports_failed_transcript_as_healthy():
+    source = ast.parse(RUNTIME_FILE.read_text(encoding="utf-8"))
+    runtime = next(
+        node for node in source.body
+        if isinstance(node, ast.ClassDef) and node.name == "ChatRuntime"
+    )
+    execute = next(
+        node for node in runtime.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "execute"
+    )
+    checks = [
+        node for node in ast.walk(execute)
+        if isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Attribute)
+        and node.left.attr == "status"
+    ]
+    assert checks, "Ordinary response must inspect transcript persistence status"
+    assert any(
+        isinstance(node, ast.Constant)
+        and node.value == "transcript_persistence_failed"
+        for node in ast.walk(execute)
+    )
