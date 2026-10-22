@@ -1056,6 +1056,27 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 ),
                 session=SpoofedSession(),
             )
+        # A runtime-scoped user ID that differs from the write principal
+        # must not be allowed to stage an assertion.
+        async with async_transaction_scope(tenant_id=str(tenant)) as mismatched_user_session:
+            await mismatched_user_session.execute(
+                text("SELECT set_config('app.current_user_id', :user, true)"),
+                {"user": str(uuid.uuid4())},
+            )
+            with pytest.raises(
+                NeuroVaultAuthorizationError,
+                match="caller transaction user scope does not match",
+            ):
+                await PostgresNeuroVault().persist_in_transaction(
+                    blocked_with_session,
+                    context=VaultContext(
+                        tenant_id=str(tenant), user_id=str(user),
+                        request_id=replay.request_id,
+                        correlation_id=str(uuid.uuid4()), actor_id=str(user),
+                        policy_context={"memory_write_authorized": True},
+                    ),
+                    session=mismatched_user_session,
+                )
         # Caller-owned vault writes stage both ledger rows but never commit.
         # The canonical transaction manager owns rollback on failure.
         staged_id = str(uuid.uuid4())
