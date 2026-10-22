@@ -601,3 +601,94 @@ async def test_migration_runtime_context_does_not_create_write_permission():
         authenticated_request=request, runtime_policy=RuntimePolicyEnforcer()
     )
     assert not authority.explicitly_granted
+
+
+@pytest.mark.asyncio
+async def test_governed_migration_evidence_is_read_only_and_scoped(monkeypatch):
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_governed_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayReceiptEvidence
+    from ai_karen_engine.platform.memory.postgres import (
+        legacy_persona_identity, legacy_persona_source, legacy_persona_retention,
+        legacy_persona_consent, legacy_persona_receipts,
+    )
+
+    tenant, user = str(uuid4()), str(uuid4())
+    calls = []
+
+    async def identity(**kwargs):
+        calls.append("identity")
+        assert kwargs == {"tenant_id": tenant, "user_id": user}
+        return True
+
+    async def source(**kwargs):
+        calls.append("source")
+        assert kwargs["source_record_id"] == "source-1"
+        return datetime.now(timezone.utc), "semantic"
+
+    async def retention(**kwargs):
+        calls.append("retention")
+        assert kwargs["tenant_id"] == tenant
+        return True
+
+    async def consent(**kwargs):
+        calls.append("consent")
+        assert kwargs["consent_scope"] == "persona-memory-migration"
+        return True
+
+    async def receipt(**kwargs):
+        calls.append("receipt")
+        return LegacyReplayReceiptEvidence(
+            expected_memory_id=kwargs["expected_memory_id"],
+            expected_tenant_id=tenant, expected_user_id=user,
+            persisted_memory_id=None, persisted_tenant_id=None,
+            persisted_user_id=None, persisted=False,
+        )
+
+    monkeypatch.setattr(legacy_persona_identity, "verify_legacy_persona_identity", identity)
+    monkeypatch.setattr(legacy_persona_source, "read_legacy_persona_source_retention_metadata", source)
+    monkeypatch.setattr(legacy_persona_retention, "verify_legacy_migration_retention", retention)
+    monkeypatch.setattr(legacy_persona_consent, "verify_legacy_migration_consent", consent)
+    monkeypatch.setattr(legacy_persona_receipts, "lookup_legacy_replay_receipt", receipt)
+
+    context = ChatExecutionContext(
+        tenant_id=tenant, user_id=user, session_id="session-1",
+        request_id="request-1", permissions=["memory.write"],
+    )
+    policy = RuntimePolicyEnforcer()
+    replay = await prepare_governed_legacy_migration_retry(
+        context=context, runtime_policy=policy, source_record_id="source-1",
+    )
+    assert replay.source_record_id == "source-1"
+    assert calls == ["identity", "source", "retention", "consent", "receipt"]
+
+
+@pytest.mark.asyncio
+async def test_governed_migration_denial_prevents_canonical_reads(monkeypatch):
+    from uuid import uuid4
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_governed_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_identity
+
+    async def forbidden_read(**kwargs):
+        raise AssertionError("policy-denied request performed a database read")
+
+    monkeypatch.setattr(legacy_persona_identity, "verify_legacy_persona_identity", forbidden_read)
+    context = ChatExecutionContext(
+        tenant_id=str(uuid4()), user_id=str(uuid4()),
+        session_id="session-1", request_id="request-1",
+        permissions=["memory.read"],
+    )
+    with pytest.raises(ValueError, match="authorization required"):
+        await prepare_governed_legacy_migration_retry(
+            context=context, runtime_policy=RuntimePolicyEnforcer(),
+            source_record_id="source-1",
+        )
