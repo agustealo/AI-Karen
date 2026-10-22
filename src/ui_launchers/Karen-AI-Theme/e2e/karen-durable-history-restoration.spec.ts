@@ -58,6 +58,15 @@ test("reopening an owned conversation preserves its saved answer and execution r
 
   // Reload verifies API-backed restoration, not only in-memory thread state.
   await page.reload();
-  await expect(page.getByTestId("karen-assistant-ui-chat")
-    .getByText(assistant.content, { exact: true })).toBeVisible({ timeout: 30_000 });
+  const reopened = page.getByTestId("karen-assistant-ui-chat");
+  await expect(reopened).toBeVisible({ timeout: 30_000 });
+  await reopened.getByRole("button", { name: "Find conversations" }).click();
+  await reopened.getByPlaceholder("Search conversation titles").fill(stored.title || "");
+  await reopened.getByRole("button", { name: title, exact: true }).click();
+  await expect(reopened.getByText(assistant.content, { exact: true }))
+    .toBeVisible({ timeout: 30_000 });
+  const restoredReceipt = reopened.getByTestId("karen-restored-execution-receipt").first();
+  await expect(restoredReceipt).toBeVisible();
+  await restoredReceipt.locator("summary").click();
+  await expect(restoredReceipt).toContainText(String(assistant.metadata?.actual_model));
 });
