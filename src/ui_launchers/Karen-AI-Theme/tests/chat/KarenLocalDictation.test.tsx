@@ -1,0 +1,91 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { KarenLocalDictation } from "@/components/chat/assistant-ui/KarenLocalDictation";
+import { apiClient } from "@/lib/api";
+
+const composer = { text: "Existing", getState: vi.fn(), setText: vi.fn() };
+vi.mock("@assistant-ui/react", () => ({ useAui: () => ({ composer: () => composer }) }));
+vi.mock("@/lib/api", () => ({
+  apiClient: { get: vi.fn(), transcribeLocalAudio: vi.fn() },
+}));
+
+class Recorder {
+  static instances: Recorder[] = [];
+  state = "inactive";
+  mimeType = "audio/webm";
+  onstop: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  ondataavailable: ((event: { data: Blob }) => void) | null = null;
+  constructor(_stream: MediaStream) { Recorder.instances.push(this); }
+  start() { this.state = "recording"; }
+  stop() {
+    this.state = "inactive";
+    this.ondataavailable?.({ data: new Blob(["captured"]) });
+    this.onstop?.();
+  }
+}
+
+let stopTrack: ReturnType<typeof vi.fn>;
+beforeEach(() => {
+  Recorder.instances = [];
+  stopTrack = vi.fn();
+  composer.getState.mockReturnValue({ text: "Existing" });
+  vi.mocked(apiClient.get).mockResolvedValue({ status: "ready", transcription_available: true });
+  vi.stubGlobal("MediaRecorder", Recorder);
+  vi.stubGlobal("AudioContext", class {
+    decodeAudioData = vi.fn().mockResolvedValue({
+      duration: 0.5, sampleRate: 16000, numberOfChannels: 1,
+      getChannelData: () => new Float32Array(8000),
+    });
+    close = vi.fn().mockResolvedValue(undefined);
+  });
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }) },
+  });
+});
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+describe("local dictation composer acceptance with controlled browser devices", () => {
+  it("records, sends WAV through authenticated API client, and edits draft without sending", async () => {
+    vi.mocked(apiClient.transcribeLocalAudio).mockResolvedValue({
+      text: "spoken words", engine: "faster-whisper-local", language: "en",
+    });
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    fireEvent.click(screen.getByRole("button", { name: "Stop local dictation" }));
+    await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
+    const [wav, duration] = vi.mocked(apiClient.transcribeLocalAudio).mock.calls[0];
+    expect(wav.type).toBe("audio/wav");
+    expect(duration).toBe(0.5);
+    await waitFor(() => expect(composer.setText).toHaveBeenCalledWith("Existing spoken words"));
+    expect(stopTrack).toHaveBeenCalled();
+  });
+
+  it("never requests microphone when backend does not advertise local STT", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ status: "unavailable", transcription_available: false });
+    render(<KarenLocalDictation />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith("/api/voice/capabilities"));
+    expect(screen.queryByRole("button", { name: "Start local dictation" })).toBeNull();
+  });
+
+  it("discards a recording without an upload or a draft mutation", async () => {
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Discard local recording" });
+    fireEvent.click(screen.getByRole("button", { name: "Discard local recording" }));
+    await waitFor(() => expect(stopTrack).toHaveBeenCalled());
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+
+  it("reports permission denial without uploading or changing the draft", async () => {
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(new Error("denied"));
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Microphone access");
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+});
