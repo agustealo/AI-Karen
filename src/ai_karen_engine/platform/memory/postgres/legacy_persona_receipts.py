@@ -44,18 +44,18 @@ async def lookup_locked_legacy_replay_receipt(
     user = uuid.UUID(user_id)
     expected = uuid.UUID(expected_memory_id)
     request = uuid.UUID(expected_request_id)
-        result = await session.execute(
-            select(MemoryAssertion, MemoryEvent)
-            .join(MemoryEvent, MemoryAssertion.event_id == MemoryEvent.event_id)
-            .where(
-                MemoryAssertion.assertion_id == expected,
-                MemoryAssertion.tenant_id == tenant,
-                MemoryAssertion.user_id == user,
-                MemoryEvent.tenant_id == tenant,
-                MemoryEvent.user_id == user,
-            )
+    result = await session.execute(
+        select(MemoryAssertion, MemoryEvent)
+        .join(MemoryEvent, MemoryAssertion.event_id == MemoryEvent.event_id)
+        .where(
+            MemoryAssertion.assertion_id == expected,
+            MemoryAssertion.tenant_id == tenant,
+            MemoryAssertion.user_id == user,
+            MemoryEvent.tenant_id == tenant,
+            MemoryEvent.user_id == user,
         )
-        match = result.one_or_none()
+    )
+    match = result.one_or_none()
     if match is None:
         return LegacyReplayReceiptEvidence(
             expected_memory_id=str(expected), expected_tenant_id=str(tenant),
