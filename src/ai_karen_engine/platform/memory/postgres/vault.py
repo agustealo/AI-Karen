@@ -239,8 +239,14 @@ class PostgresNeuroVault(VaultPort):
         """
         if session is None:
             raise ValueError("caller-owned active PostgreSQL session required")
-        return await self._persist_with_session(
+        from dataclasses import replace
+
+        receipt = await self._persist_with_session(
             entry, context=context, session=session, commit=False,
+        )
+        return replace(
+            receipt, persisted=False,
+            metadata={**receipt.metadata, "pending_commit": True},
         )
 
     async def _persist_with_session(
@@ -343,6 +349,7 @@ class PostgresNeuroVault(VaultPort):
             session.add(event)
             await session.flush()
             session.add(assertion)
+            await session.flush()
             if commit:
                 await session.commit()
         except IntegrityError:
