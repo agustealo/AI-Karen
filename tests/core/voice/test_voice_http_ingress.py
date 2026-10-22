@@ -63,3 +63,32 @@ async def test_invalid_claimed_duration_rejected_before_inference(duration):
             await transcribe_voice(request(b"wav", duration=duration), user=SimpleNamespace(user_id="u"))
     assert caught.value.status_code == 422
     runtime.transcribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_detail"),
+    [
+        ("local_transcription_busy", 429, "local_transcription_busy"),
+        ("local_transcription_unavailable", 503, "local_transcription_unavailable"),
+    ],
+)
+async def test_runtime_failure_maps_to_accurate_http_status(
+    failure, expected_status, expected_detail
+):
+    runtime = SimpleNamespace(
+        capabilities=AsyncMock(return_value=VoiceCapabilities(
+            status=VoiceEngineStatus.READY, transcription_available=True, engine="local"
+        )),
+        transcribe=AsyncMock(side_effect=RuntimeError(failure)),
+    )
+    with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime):
+        with pytest.raises(HTTPException) as caught:
+            await transcribe_voice(
+                request(b"sample", duration="1"),
+                user=SimpleNamespace(user_id="u"),
+            )
+    assert caught.value.status_code == expected_status
+    assert caught.value.detail == expected_detail
+    if expected_status == 429:
+        assert caught.value.headers["Retry-After"] == "1"
