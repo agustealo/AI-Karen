@@ -1,6 +1,7 @@
 """Authenticated and bounded voice ingress. Runtime owns local transcription."""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from math import isfinite
+import logging
 
 from ai_karen_engine.core.voice.contracts import AudioInput, MAX_AUDIO_BYTES, VoiceContractError
 
@@ -8,6 +9,7 @@ from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.services.voice_runtime import get_voice_runtime
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
 
@@ -78,7 +80,7 @@ async def transcribe_voice(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     try:
         result = await runtime.transcribe(b"".join(chunks), metadata)
-    except VoiceContractError as exc:
+    except (VoiceContractError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except RuntimeError as exc:
         if str(exc) == "local_transcription_busy":
@@ -87,5 +89,10 @@ async def transcribe_voice(
                 detail="local_transcription_busy",
                 headers={"Retry-After": "1"},
             ) from None
+        logger.warning("Local transcription runtime unavailable", extra={"error_type": type(exc).__name__})
         raise HTTPException(status_code=503, detail="local_transcription_unavailable") from None
+    except Exception:
+        # Do not return decoder/model internals or raw audio to clients/logs.
+        logger.exception("Local transcription inference failed")
+        raise HTTPException(status_code=503, detail="local_transcription_failed") from None
     return {"text": result.text, "engine": result.engine, "language": result.language}
