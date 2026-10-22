@@ -472,3 +472,62 @@ async def test_source_consent_and_runtime_policy_joint_preparation():
             await session.execute(delete(ConsentScope).where(
                 ConsentScope.scope_id == consent_id
             ))
+
+
+async def test_retention_source_metadata_and_policy_from_disposable_postgres():
+    """Use the existing canonical ledger schema and a synthetic source row."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        read_legacy_persona_source_retention_metadata,
+    )
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_retention import (
+        verify_legacy_migration_retention,
+    )
+    from ai_karen_engine.platform.memory.postgres.ledger_models import RetentionPolicy
+
+    tenant, user, source, policy_id = (uuid.uuid4() for _ in range(4))
+    created = datetime.now(timezone.utc) - timedelta(days=2)
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "INSERT INTO public.persona_memory_entries "
+                "(id, tenant_id, user_id, content, memory_type, created_at) "
+                "VALUES (:id, :tenant, :user, :content, :kind, :created)"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user),
+                "content": "Synthetic retention record", "kind": "semantic",
+                "created": created.replace(tzinfo=None)})
+            session.add(RetentionPolicy(
+                policy_id=policy_id, tenant_id=tenant,
+                memory_class="semantic", ttl_days=30,
+            ))
+        metadata = await read_legacy_persona_source_retention_metadata(
+            tenant_id=str(tenant), user_id=str(user),
+            source_record_id=str(source),
+        )
+        assert metadata is not None
+        assert metadata[1] == "semantic"
+        assert await verify_legacy_migration_retention(
+            tenant_id=str(tenant), created_at=metadata[0], memory_class=metadata[1],
+        )
+        assert await read_legacy_persona_source_retention_metadata(
+            tenant_id=str(uuid.uuid4()), user_id=str(user),
+            source_record_id=str(source),
+        ) is None
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            policy = (await session.execute(select(RetentionPolicy).where(
+                RetentionPolicy.policy_id == policy_id
+            ))).scalar_one()
+            policy.ttl_days = 1
+        assert not await verify_legacy_migration_retention(
+            tenant_id=str(tenant), created_at=metadata[0], memory_class=metadata[1],
+        )
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "DELETE FROM public.persona_memory_entries "
+                "WHERE id = :id AND tenant_id = :tenant AND user_id = :user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+            await session.execute(delete(RetentionPolicy).where(
+                RetentionPolicy.policy_id == policy_id
+            ))
