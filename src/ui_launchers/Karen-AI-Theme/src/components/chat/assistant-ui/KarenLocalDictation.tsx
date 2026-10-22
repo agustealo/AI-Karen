@@ -70,7 +70,11 @@ export function KarenLocalDictation() {
     setError(null);
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!mounted.current || generation.current !== currentGeneration) { mic.getTracks().forEach((track) => track.stop()); return; }
+      if (!mounted.current || generation.current !== currentGeneration) {
+        mic.getTracks().forEach((track) => track.stop());
+        starting.current = false;
+        return;
+      }
       stream.current = mic;
       const chunks: Blob[] = [];
       const media = new MediaRecorder(mic);
@@ -100,10 +104,12 @@ export function KarenLocalDictation() {
             aui.composer().setText(mergeDictatedText(aui.composer().getState().text || "", transcript.text));
           }
         } catch {
-          if (mounted.current && !controller.signal.aborted) setError("Local transcription failed; no message was sent.");
+          if (mounted.current && generation.current === currentGeneration && !controller.signal.aborted) {
+            setError("Local transcription failed; no message was sent.");
+          }
         } finally {
           try { await audioContext?.close(); } catch { /* Audio context may already be closed. */ }
-          if (mounted.current) setProcessing(false);
+          if (mounted.current && generation.current === currentGeneration) setProcessing(false);
           if (abort.current === controller) abort.current = null;
         }
       };
@@ -114,9 +120,11 @@ export function KarenLocalDictation() {
       timer.current = setTimeout(stop, 30_000);
     } catch {
       starting.current = false;
-      stream.current?.getTracks().forEach((track) => track.stop());
-      stream.current = null;
-      if (mounted.current) setError("Microphone access was denied or unavailable.");
+      if (generation.current === currentGeneration) {
+        stream.current?.getTracks().forEach((track) => track.stop());
+        stream.current = null;
+        if (mounted.current) setError("Microphone access was denied or unavailable.");
+      }
     }
   };
 
