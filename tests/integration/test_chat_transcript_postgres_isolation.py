@@ -201,6 +201,28 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         "Tenant A durable response."
     )
 
+    # Equal text with a changed model receipt is not an identical replay.
+    # The stored provider and presentation must remain the original evidence.
+    receipt_conflict = await owner_gateway.persist_completed_turn(
+        owner_context,
+        user_text="Tenant A durable context.",
+        assistant_text="Tenant A durable response.",
+        response_metadata={
+            "actual_provider": "external",
+            "actual_model": "substituted-model",
+            "response_source": "grounded_observation_model",
+            "structured_content": {"presentation": {"type": "weather", "temperature": 99}},
+        },
+    )
+    assert receipt_conflict.status == "failed"
+    assert receipt_conflict.reason == "message_idempotency_conflict"
+    preserved = await repository.get_messages(attacked_conversation_id, tenant_a, limit=20)
+    assert preserved.success
+    assert len(preserved.data or []) == 2
+    unchanged = next(row for row in preserved.data if row.role == "assistant")
+    assert unchanged.metadata["actual_model"] == "local-model"
+    assert unchanged.metadata["structured_content"]["presentation"]["temperature"] == 20
+
     # Ownership may be revoked after an earlier successful turn. The
     # transaction must check the current database owner, not cached ingress.
     async with engine.begin() as connection:
