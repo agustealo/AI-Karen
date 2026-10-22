@@ -1293,3 +1293,26 @@ async def test_inspection_transaction_evidence_cannot_be_reused_on_different_tra
     ))
     with pytest.raises(PermissionError, match="transaction identity expired"):
         await evidence.verify_active(session=session)
+
+
+@pytest.mark.asyncio
+async def test_transaction_inspection_uses_canonical_verifier_once():
+    """Issue inspection evidence with one initial read and one verified read."""
+    from unittest.mock import AsyncMock, Mock
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority,
+    )
+
+    tenant = "11111111-1111-4111-8111-111111111111"
+    user = "22222222-2222-4222-8222-222222222222"
+    scope = (tenant, tenant, user, 901)
+    session = Mock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock(return_value=Mock(one=Mock(return_value=scope)))
+    evidence = await LegacyMigrationTransactionAuthority.inspect(
+        session=session, tenant_id=tenant, user_id=user,
+        policy_decision_id="verified-decision",
+    )
+    assert evidence.transaction_id == 901
+    assert session.execute.await_count == 2
