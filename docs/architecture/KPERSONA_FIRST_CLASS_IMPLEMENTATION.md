@@ -694,3 +694,29 @@ The active `core/persona/contracts.py` defines a dataclass Persona with `tone`, 
 A first security remediation has been committed: the service's process-global `_persona_cache` is restricted to built-in system personas, and custom ID lookup now goes through user/tenant-scoped preferences. Prior global caching by persona ID alone risked cross-user and cross-tenant disclosure. A targeted regression test for identical IDs across tenants was committed. **The test has not been run, and no full authorization or runtime guarantee is claimed.**
 
 Next: reconcile existing typed contracts and Pydantic/SQL consumers in place; execute import and unit tests, PostgreSQL RLS and rollback/restart tests, and audit other global caches before adding migrations, Advisor UI, or team execution. Keep KP-01/02 open until proven.
+
+
+## KP-05 integration acceptance: one Karen conversation across workspace and context windows
+
+Persona Studio MUST NOT render or instantiate `SessionProvider`, `ChatInterface`, `KarenAssistantChat`, `ThreadPrimitive.Root`, a second `ComposerPrimitive.Input`, an AG-UI `HttpAgent`, or a replacement session store. The application shell's already-mounted Karen chat owns all composer, thread, draft and message identity. Persona Studio only edits/publishes persona configuration, opens the existing chat through shell navigation, and shows backend-confirmed active persona state.
+
+The distinction must remain visible in both code and UX:
+
+1. **Workspace continuity (existing frontend pattern):** Navigate Chat -> Persona Studio -> Agent Runtime -> Planner -> Chat without remounting the conversation. Preserve draft, thread ID, in-flight cancellation state and panel focus. One active composer instance; no duplicate chat transport.
+2. **Context-window continuity (runtime-owned, requires proof):** When model context budgets are exceeded, the canonical ConversationRuntimeGateway, persisted transcript, authorized summary and NeuroRecall retrieve relevant earlier context. The interface must never imply that mounted React state by itself guarantees long-horizon memory. Recall may degrade but saved transcript must remain distinct from model prompt.
+3. **Persona switch semantics:** A successful activation updates the backend preference revision. The active conversation and transcript remain unchanged. The *next* canonical turn resolves the revised persona at turn start; an in-flight turn retains its immutable prior persona revision. A failed activation leaves the previous persona active and preserves the unsaved editor draft.
+4. **Cross-surface behavior:** Legacy chat and assistant-ui show the same backend-confirmed active persona; AG-UI may project an allowlisted `karen.persona_applied` event only after runtime resolution. Neither browser nor AG-UI has authority to modify the effective persona in a turn.
+5. **Identity and tenant boundaries:** Persona Studio cannot read/activate another user's persona, and a client-provided persona ID or thread ID cannot bypass ownership. Authorization must occur in the backend on every mutation and context resolution.
+6. **Accessible shell interaction:** Persona creation from a conversational request uses the existing composer, then opens the existing Studio editor with an explicit user-reviewable proposal. No implicit save, no automatic activation, and no new chat panel. Focus returns to the original launcher after closing overlays.
+
+### Required automated and live proof
+
+- Source-level architecture test: exactly one application-shell chat mount; zero nested SessionProviders/composers inside Persona Studio.
+- Authenticated Playwright: start an unsent draft; visit Persona Studio, switch workspace, open/close floating Karen; assert exact draft and thread identity; verify keyboard focus and mobile viewport.
+- Persistence Playwright: send an authorized turn, reload, verify stored user/assistant messages are restored from backend; do not count an in-memory draft as durable transcript.
+- Real long-horizon test: create conversation exceeding the selected model's effective context window, record canonical truncation/summary/recall metadata, and verify relevant authorized earlier evidence survives or is honestly reported unavailable.
+- Persona switching integration: compare request correlation ID and applied persona revision on consecutive turns; switch during a streaming turn and prove the in-flight revision does not mutate.
+- Negative tests: denied persona switch, stale revision conflict, cross-tenant persona ID, disconnected backend, legacy/assistant-ui parity, premature AG-UI disconnect. No fabricated save or run completion.
+- `npm run typecheck && npm run lint && npm run build`, focused pytest and actual browser Playwright with authenticated real backend. A skipped browser run is not proof.
+
+**Release decision:** Keep Persona Studio feature-gated until shared-composer browser acceptance, tenant authorization, and a real runtime applied-persona receipt pass. Never add a second chat just to make Persona Studio conversational.
