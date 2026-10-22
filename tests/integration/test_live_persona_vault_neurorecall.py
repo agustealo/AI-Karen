@@ -695,12 +695,32 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                     runtime_policy=RuntimePolicyEnforcer(),
                 )
         assert replay == await prepare_governed_legacy_migration_retry(**base)
+        # Historical writes are disabled even after successful preflight,
+        # explicit consent, and a caller-provided capability flag.
+        blocked_migration_entry = MemoryEntry(
+            id=str(uuid.uuid4()), content="Forbidden historical write",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "persona-memory-migration"},
+            ),
+        )
+        from ai_karen_engine.platform.memory.postgres.vault import NeuroVaultAuthorizationError
+        with pytest.raises(NeuroVaultAuthorizationError, match="historical migration persistence is disabled"):
+            await PostgresNeuroVault().persist(
+                blocked_migration_entry, context=VaultContext(
+                    tenant_id=str(tenant), user_id=str(user),
+                    request_id=replay.request_id, correlation_id=str(uuid.uuid4()),
+                    actor_id=str(user),
+                    policy_context={"memory_write_authorized": True},
+                ),
+            )
         synthetic_entry = MemoryEntry(
             id=replay.memory_id, content="Synthetic canonical replay receipt",
             memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
             metadata=MemoryMetadata(
                 tenant_id=str(tenant), user_id=str(user), source="chat_user",
-                custom={"consent_scope": "persona-memory-migration"},
+                custom={"consent_scope": "memory.write"},
             ),
         )
         vault_context = VaultContext(
@@ -779,7 +799,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 custom={"consent_scope": "persona-memory-migration"},
             ),
         )
-        with pytest.raises(NeuroVaultAuthorizationError, match="active bounded retention"):
+        with pytest.raises(NeuroVaultAuthorizationError, match="historical migration persistence is disabled"):
             await PostgresNeuroVault().persist(
                 expired_entry, context=VaultContext(
                     tenant_id=str(tenant), user_id=str(user),
