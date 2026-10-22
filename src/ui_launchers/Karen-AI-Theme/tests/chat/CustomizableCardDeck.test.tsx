@@ -31,4 +31,17 @@ describe("conversation intelligence card preferences", () => {
     render(<CustomizableCardDeck>{cards}</CustomizableCardDeck>);
     expect(screen.getByText("Execution trace")).toBeTruthy();
   });
+  it("never allows local preferences to hide a human approval notice", () => {
+    window.localStorage.setItem("karen.intelligence.cards.v1",
+      JSON.stringify({ hidden: ["human-attention"], order: ["human-attention"] }));
+    render(<CustomizableCardDeck>{[
+      <Card key="approval"><CardHeader><CardTitle>Human attention</CardTitle></CardHeader></Card>,
+    ]}</CustomizableCardDeck>);
+    fireEvent.click(screen.getByRole("button", { name: "Customize intelligence cards" }));
+    const toggle = screen.getByRole("checkbox", { name: /Human attention/ }) as HTMLInputElement;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.checked).toBe(true);
+    expect(screen.getAllByText("Human attention")).toHaveLength(1);
+  });
+
 });
