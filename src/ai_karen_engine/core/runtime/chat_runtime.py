@@ -2463,12 +2463,19 @@ class ChatRuntime:
                 return None
         else:
             return None
-        evidence = {
-            key: observation[key] for key in allowed
-            if key in observation
-            and isinstance(observation[key], (str, int, float))
-            and not isinstance(observation[key], bool)
-        }
+        # Bound tool-controlled strings before placing them in a model prompt.
+        # Never pass through arbitrary provider metadata or nested payloads.
+        import math
+        evidence = {}
+        for key in allowed:
+            value = observation.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+                if value and len(value) <= 160:
+                    evidence[key] = value
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                if math.isfinite(value):
+                    evidence[key] = value
         if not evidence or not await meter.consume_model_call():
             return None
         from ai_karen_engine.services.response.response_contracts import ResponseContract
