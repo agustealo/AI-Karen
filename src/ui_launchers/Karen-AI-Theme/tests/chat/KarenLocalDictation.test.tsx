@@ -45,37 +45,6 @@ beforeEach(() => {
     configurable: true,
     value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }) },
   });
-  it("cancels an in-flight authenticated upload without altering the draft", async () => {
-    let resolveUpload!: (value: { text: string; engine: string; language: string }) => void;
-    vi.mocked(apiClient.transcribeLocalAudio).mockImplementation(
-      () => new Promise((resolve) => { resolveUpload = resolve; }),
-    );
-    render(<KarenLocalDictation />);
-    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Stop local dictation" }));
-    await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
-    const signal = vi.mocked(apiClient.transcribeLocalAudio).mock.calls[0][2];
-    fireEvent.click(screen.getByRole("button", { name: "Cancel local transcription" }));
-    expect(signal?.aborted).toBe(true);
-    resolveUpload({ text: "late response", engine: "local", language: "en" });
-    await waitFor(() => expect(screen.queryByText("Transcribing locally…")).toBeNull());
-    expect(composer.setText).not.toHaveBeenCalled();
-  });
-
-  it("aborts the upload and stops tracks when composer unmounts", async () => {
-    vi.mocked(apiClient.transcribeLocalAudio).mockImplementation(
-      () => new Promise(() => { /* Leave the mocked request pending. */ }),
-    );
-    const { unmount } = render(<KarenLocalDictation />);
-    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Stop local dictation" }));
-    await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
-    const signal = vi.mocked(apiClient.transcribeLocalAudio).mock.calls[0][2];
-    unmount();
-    expect(signal?.aborted).toBe(true);
-    expect(stopTrack).toHaveBeenCalled();
-    expect(composer.setText).not.toHaveBeenCalled();
-  });
 
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
@@ -122,4 +91,37 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
     expect(composer.setText).not.toHaveBeenCalled();
   });
+  it("cancels an in-flight authenticated upload without altering the draft", async () => {
+    let resolveUpload!: (value: { text: string; engine: string; language: string }) => void;
+    vi.mocked(apiClient.transcribeLocalAudio).mockImplementation(
+      () => new Promise((resolve) => { resolveUpload = resolve; }),
+    );
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop local dictation" }));
+    await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
+    const signal = vi.mocked(apiClient.transcribeLocalAudio).mock.calls[0][2];
+    fireEvent.click(screen.getByRole("button", { name: "Cancel local transcription" }));
+    expect(signal?.aborted).toBe(true);
+    resolveUpload({ text: "late response", engine: "local", language: "en" });
+    await waitFor(() => expect(screen.queryByText("Transcribing locally…")).toBeNull());
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+
+  it("aborts the upload and stops tracks when composer unmounts", async () => {
+    vi.mocked(apiClient.transcribeLocalAudio).mockImplementation(
+      () => new Promise(() => { /* Leave the mocked request pending. */ }),
+    );
+    const { unmount } = render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop local dictation" }));
+    await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
+    const signal = vi.mocked(apiClient.transcribeLocalAudio).mock.calls[0][2];
+    unmount();
+    expect(signal?.aborted).toBe(true);
+    expect(stopTrack).toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+
+
 });
