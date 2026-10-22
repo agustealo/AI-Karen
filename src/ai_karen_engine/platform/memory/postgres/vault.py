@@ -320,11 +320,16 @@ class PostgresNeuroVault(VaultPort):
         # transaction-local settings changing during authorization.
         final_scope = (await session.execute(text(
             "SELECT current_setting('app.current_tenant_id', true), "
-            "current_setting('app.tenant_id', true)"
+            "current_setting('app.tenant_id', true), "
+            "current_setting('app.current_user_id', true)"
         ))).one()
         if final_scope[0] != scope[0] or final_scope[1] != scope[1]:
             raise NeuroVaultAuthorizationError(
                 "caller transaction tenant scope changed during authorization"
+            )
+        if final_scope[2] != principal:
+            raise NeuroVaultAuthorizationError(
+                "caller transaction principal changed during authorization"
             )
         # Historical source admission never grants execution by itself.
         # Preserve final denial after database-scoped principal validation.
