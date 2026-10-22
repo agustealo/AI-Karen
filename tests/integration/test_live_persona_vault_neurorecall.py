@@ -2262,3 +2262,50 @@ async def test_vault_rejects_principal_drift_between_authorization_queries():
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == uuid.UUID(entry.id),
         ))).scalar_one_or_none() is None
+
+
+async def test_vault_rejects_scope_drift_during_ledger_staging():
+    """Post-write scope drift rolls back staged PostgreSQL ledger rows."""
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, memory_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    entry = MemoryEntry(
+        id=str(memory_id), content="Staged scope drift rollback proof",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(tenant), user_id=str(user),
+            source="chat_user", custom={"consent_scope": "memory.write"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=str(tenant), user_id=str(user),
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        actor_id=str(user), policy_context={"memory_write_authorized": True},
+    )
+    vault = PostgresNeuroVault()
+    original_write = vault._persist_with_session
+
+    async def drift_after_stage(*args, **kwargs):
+        result = await original_write(*args, **kwargs)
+        await kwargs["session"].execute(
+            text("SELECT set_config('app.current_user_id', :user, true)"),
+            {"user": str(uuid.uuid4())},
+        )
+        return result
+
+    vault._persist_with_session = drift_after_stage
+    with pytest.raises(
+        NeuroVaultAuthorizationError, match="scope changed during persistence",
+    ):
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await vault.persist_in_transaction(
+                entry, context=context, session=session,
+            )
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        assert (await session.execute(select(MemoryAssertion).where(
+            MemoryAssertion.assertion_id == memory_id,
+        ))).scalar_one_or_none() is None
