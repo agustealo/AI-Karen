@@ -765,6 +765,33 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 RetentionPolicy.policy_id == retention_id
             ))).scalar_one()
             policy_row.ttl_days = 30
+        # The vault independently rejects expired historical retention even
+        # when the caller carries an old, affirmative capability flag.
+        from ai_karen_engine.platform.memory.postgres.vault import (
+            NeuroVaultAuthorizationError,
+        )
+        expired_entry = MemoryEntry(
+            id=str(uuid.uuid4()), content="Expired migration must not persist",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "persona-memory-migration"},
+            ),
+        )
+        with pytest.raises(NeuroVaultAuthorizationError, match="active bounded retention"):
+            await PostgresNeuroVault().persist(
+                expired_entry, context=VaultContext(
+                    tenant_id=str(tenant), user_id=str(user),
+                    request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+                    actor_id=str(user),
+                    policy_context={"memory_write_authorized": True},
+                ),
+            )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(expired_entry.id)
+            ))).scalar_one_or_none() is None
         # Runtime permissions must also be reassessed for every preparation.
         no_write_context = ChatExecutionContext(
             tenant_id=str(tenant), user_id=str(user),
