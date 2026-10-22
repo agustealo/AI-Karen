@@ -833,6 +833,29 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert (await session.execute(select(MemoryAssertion).where(
                 MemoryAssertion.assertion_id == rolled_back_pair_assertion
             ))).scalar_one_or_none() is None
+        # Concurrent withdrawal must not be confused with an eligible source.
+        # Commit the withdrawal in a separate transaction, then re-run the
+        # canonical preparation against the fresh database state.
+        import asyncio
+        withdrawal_committed = asyncio.Event()
+        async def withdraw_source():
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                await session.execute(text(
+                    "UPDATE public.persona_memory_entries SET content=' ' "
+                    "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+                ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+            withdrawal_committed.set()
+        withdrawal = asyncio.create_task(withdraw_source())
+        await withdrawal_committed.wait()
+        await withdrawal
+        with pytest.raises(ValueError, match="verified historical retention metadata required"):
+            await prepare_governed_legacy_migration_retry(**base)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.persona_memory_entries SET content=:content "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user),
+                "content": "Synthetic read-only assembly proof"})
         # Force a transaction rollback after a speculative ledger event.
         # Reopening the transaction must show no durable partial receipt.
         rolled_back_event = uuid.uuid4()
