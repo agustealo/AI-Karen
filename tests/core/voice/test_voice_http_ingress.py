@@ -155,3 +155,22 @@ async def test_transcription_errors_do_not_leak_internal_details(
     assert caught.value.detail == expected_detail
     assert "private_model_trace" not in caught.value.detail
     assert "private_decoder_details" not in caught.value.detail
+
+
+@pytest.mark.asyncio
+async def test_unexpected_model_exception_is_not_logged_verbatim(caplog):
+    runtime = SimpleNamespace(
+        transcription_busy=Mock(return_value=False),
+        capabilities=AsyncMock(return_value=VoiceCapabilities(
+            status=VoiceEngineStatus.READY,
+            transcription_available=True, engine="local",
+        )),
+        transcribe=AsyncMock(side_effect=ValueError("secret-path-and-private-input")),
+    )
+    with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime):
+        with pytest.raises(HTTPException) as caught:
+            await transcribe_voice(request(b"audio"), user=SimpleNamespace(user_id="u"))
+    assert caught.value.status_code == 503
+    assert "secret-path-and-private-input" not in caplog.text
+    assert "secret-path-and-private-input" not in str(caught.value.detail)
+    assert "ValueError" in caplog.text
