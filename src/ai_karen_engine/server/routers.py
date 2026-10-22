@@ -21,6 +21,7 @@ from ai_karen_engine.api_routes.admin.training import router as admin_training_r
 from ai_karen_engine.api_routes.training.data import router as training_data_router
 from ai_karen_engine.api_routes.agents.runtime import router as agent_runtime_router
 from ai_karen_engine.api_routes.artifacts import router as artifacts_router
+from ai_karen_engine.api_routes.voice import router as voice_router
 from ai_karen_engine.api_routes.auth.auth import router as auth_router
 from ai_karen_engine.api_routes.auth.privacy import router as privacy_router
 from ai_karen_engine.api_routes.automation.approvals import router as approvals_router
@@ -143,6 +144,7 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(copilot_router, "/api/copilot", ("copilot",)),
     RouterSpec(conversation_router, "/api/conversations", ("conversations",)),
     RouterSpec(artifacts_router, "/api/artifacts", ("artifacts",)),
+    RouterSpec(voice_router),
     RouterSpec(plugin_router, "/api/plugins", ("plugins",)),
     RouterSpec(plugin_store_router, "/api", ("plugin-store",)),
     RouterSpec(plugin_public_router, tags=("plugins-public",)),
