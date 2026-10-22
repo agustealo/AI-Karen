@@ -87,6 +87,21 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(screen.queryByRole("button", { name: "Start local dictation" })).toBeNull();
   });
 
+  it("cancels pending microphone permission and closes a late-granted stream", async () => {
+    let grant!: (stream: MediaStream) => void;
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(
+      () => new Promise<MediaStream>((resolve) => { grant = resolve; }),
+    );
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel microphone permission request" }));
+    grant({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
+    await waitFor(() => expect(stopTrack).toHaveBeenCalledOnce());
+    expect(Recorder.instances).toHaveLength(0);
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+
   it("discards a recording without an upload or a draft mutation", async () => {
     render(<KarenLocalDictation />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
