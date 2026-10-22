@@ -829,6 +829,35 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
             assert credential_checks == 2
+            # A credential whose permissions contract during the locked
+            # operation is rejected, even when memory.write remains present.
+            permission_checks = 0
+
+            async def contracted_permissions(**kwargs):
+                nonlocal permission_checks
+                permission_checks += 1
+                authenticated = await original_authenticate(**kwargs)
+                if permission_checks == 2:
+                    return dataclasses.replace(
+                        authenticated, permissions=["memory.write"],
+                    )
+                return dataclasses.replace(
+                    authenticated, permissions=["memory.write", "audit.read"],
+                )
+
+            with MonkeyPatch.context() as permissions_patch:
+                permissions_patch.setattr(
+                    admission_module,
+                    "migration_policy_request_from_authenticated_http",
+                    contracted_permissions,
+                )
+                with pytest.raises(PermissionError, match="principal changed"):
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
+            assert permission_checks == 2
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
