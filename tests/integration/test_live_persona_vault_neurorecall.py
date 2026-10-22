@@ -1095,6 +1095,61 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 text("DELETE FROM public.memory_event WHERE event_id=:event"),
                 {"event": str(first_collision_event)},
             )
+        # Two simultaneous writers for one canonical idempotency key must
+        # serialize at PostgreSQL's unique index. The losing transaction
+        # rolls back without leaving a partial event.
+        collision_ready = asyncio.Event()
+        release_collision = asyncio.Event()
+        simultaneous_key = "kp03-concurrent-" + uuid.uuid4().hex
+        winner_id, loser_id = uuid.uuid4(), uuid.uuid4()
+
+        async def first_inserter():
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                session.add(MemoryEvent(
+                    event_id=winner_id, tenant_id=tenant, user_id=user,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    idempotency_key=simultaneous_key,
+                    event_type="memory_persisted", consent_state="granted",
+                    payload={"vault": {"test": "concurrent-winner"}},
+                ))
+                await session.flush()
+                collision_ready.set()
+                await release_collision.wait()
+
+        async def second_inserter():
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                session.add(MemoryEvent(
+                    event_id=loser_id, tenant_id=tenant, user_id=user,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    idempotency_key=simultaneous_key,
+                    event_type="memory_persisted", consent_state="granted",
+                    payload={"vault": {"test": "concurrent-loser"}},
+                ))
+                await session.flush()
+
+        winning = asyncio.create_task(first_inserter())
+        losing = None
+        try:
+            await asyncio.wait_for(collision_ready.wait(), timeout=10)
+            losing = asyncio.create_task(second_inserter())
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(losing), timeout=0.2)
+        finally:
+            release_collision.set()
+            await asyncio.wait_for(winning, timeout=10)
+        assert losing is not None
+        with pytest.raises(IntegrityError):
+            await asyncio.wait_for(losing, timeout=10)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            recorded = (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.idempotency_key == simultaneous_key,
+            ))).scalars().all()
+            assert len(recorded) == 1
+            assert recorded[0].event_id == winner_id
+            await session.execute(
+                text("DELETE FROM public.memory_event WHERE event_id=:event"),
+                {"event": str(winner_id)},
+            )
         # Force a transaction rollback after a speculative ledger event.
         # Reopening the transaction must show no durable partial receipt.
         rolled_back_event = uuid.uuid4()
