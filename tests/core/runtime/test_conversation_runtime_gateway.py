@@ -119,6 +119,40 @@ class _Repository(ConversationRepository):
             metadata={"idempotent_replay": False},
         )
 
+    async def add_completed_turn(
+        self, user_message: Message, assistant_message: Message
+    ) -> RepositoryResult[int]:
+        if self.fail_add_role in {"user", "assistant"}:
+            return RepositoryResult(
+                success=False, error=f"{self.fail_add_role}_write_failed"
+            )
+        for candidate in (user_message, assistant_message):
+            for prior in self.messages:
+                if prior.id == candidate.id and (
+                    prior.tenant_id != candidate.tenant_id
+                    or prior.conversation_id != candidate.conversation_id
+                    or prior.role != candidate.role
+                    or prior.content != candidate.content
+                ):
+                    return RepositoryResult(
+                        success=False, error="message_idempotency_conflict"
+                    )
+        replays = [
+            any(prior.id == msg.id for prior in self.messages)
+            for msg in (user_message, assistant_message)
+        ]
+        if sum(replays) == 1:
+            return RepositoryResult(
+                success=False, error="incomplete_turn_replay"
+            )
+        if all(replays):
+            return RepositoryResult(
+                success=True, data=0,
+                metadata={"idempotent_replay": True},
+            )
+        self.messages.extend((user_message, assistant_message))
+        return RepositoryResult(success=True, data=2)
+
     async def get_messages(
         self,
         conversation_id: str,
@@ -394,7 +428,7 @@ async def test_same_conversation_id_is_isolated_by_tenant_lookup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assistant_failure_reports_partial_transcript_truth() -> None:
+async def test_assistant_failure_rolls_back_both_messages() -> None:
     repository = _Repository()
     repository.fail_add_role = "assistant"
     gateway = ConversationRuntimeGateway(repository=repository)
@@ -406,9 +440,9 @@ async def test_assistant_failure_reports_partial_transcript_truth() -> None:
     )
 
     assert result.status == "failed"
-    assert result.persisted_messages == 1
+    assert result.persisted_messages == 0
     assert result.reason == "assistant_write_failed"
-    assert [message.role for message in repository.messages] == ["user"]
+    assert repository.messages == []
 
 
 @pytest.mark.asyncio
