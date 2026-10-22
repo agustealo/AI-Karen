@@ -178,10 +178,33 @@ function KarenSubagent({ data }: { data: unknown }) {
   return <KarenActivity data={data} category="Subagent" />;
 }
 
+function KarenRestoredExecutionReceipt({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const receipt = data as Record<string, unknown>;
+  if (
+    typeof receipt.actual_provider !== "string" || !receipt.actual_provider ||
+    typeof receipt.actual_model !== "string" || !receipt.actual_model ||
+    typeof receipt.response_source !== "string" || !receipt.response_source
+  ) return null;
+  return (
+    <details data-testid="karen-restored-execution-receipt"
+      className="my-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
+      <summary className="cursor-pointer font-medium">Saved execution details</summary>
+      <p className="mt-2">Provider: {receipt.actual_provider}</p>
+      <p>Model: {receipt.actual_model}</p>
+      <p>Response source: {receipt.response_source}</p>
+      {typeof receipt.runtime_engine === "string" && receipt.runtime_engine &&
+        <p>Engine: {receipt.runtime_engine}</p>}
+      {receipt.degraded_mode === true && <p>Degraded execution reported</p>}
+    </details>
+  );
+}
+
 const agentParts = {
   data: {
     by_name: {
       "karen.learning_decision": KarenLearningDecision,
+      "karen.execution_receipt.v1": KarenRestoredExecutionReceipt,
       "karen.presentation.v1": KarenPresentationRegistry,
       "karen.weather": KarenWeatherPresentation,
       "karen.weather_observation": KarenWeatherPresentation,
