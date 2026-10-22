@@ -980,6 +980,31 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         source_record_id=str(source),
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
+            # A database tenant setting altered after evidence inspection
+            # must also be rejected by the final transaction-scope gate.
+            async def tamper_transaction_tenant(**kwargs):
+                result = await original_locked_inspect(**kwargs)
+                await kwargs["session"].execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": str(uuid.uuid4())},
+                )
+                return result
+
+            with MonkeyPatch.context() as tenant_patch:
+                tenant_patch.setattr(
+                    source_module, "inspect_locked_legacy_migration_preparation",
+                    tamper_transaction_tenant,
+                )
+                with pytest.raises(
+                    PermissionError,
+                    match="transaction tenant changed during inspection",
+                ):
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()),
+                        source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
