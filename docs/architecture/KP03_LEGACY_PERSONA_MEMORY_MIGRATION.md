@@ -120,3 +120,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Canonical principal existence boundary
 
 `legacy_persona_identity.py` now checks an exact UUID tenant/user pair against active, verified `auth_users` using a read-only scoped lookup. `prepare_identity_verified_legacy_migration_retry` denies absent or inactive/unverified users before source, retention, consent and live RuntimePolicy checks. No name/email remapping is permitted. This check is only a canonical existence check: the calling runtime still must prove its ingress identity and permissions independently; the database lookup does not authenticate the request, authorize any write, or migrate records.
+
+### Authorization before identity reads
+
+The identity-verified preparation entrypoint now evaluates live RuntimePolicy permission before consulting canonical identity records. Unauthorized permission sets fail before any identity lookup. A regression test uses an identity lookup that raises if touched and proves authorization denial comes first. Downstream admission still revalidates policy and explicit consent, providing a fresh check before preparing replay IDs. This does not authenticate caller-supplied `PolicyEvaluationRequest`, and historical writes remain disabled until a trusted runtime ingress supplies that request and fully verified source evidence.
