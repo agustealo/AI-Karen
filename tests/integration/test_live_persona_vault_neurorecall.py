@@ -868,6 +868,20 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         assert (await PostgresNeuroVault().persist(
             synthetic_entry, context=vault_context,
         )).persisted
+        # Same idempotency key with changed content is a collision, not a
+        # successful replay. Vault must never claim it persisted the new text.
+        changed_entry = MemoryEntry(
+            id=replay.memory_id, content="Conflicting canonical replay content",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "memory.write"},
+            ),
+        )
+        with pytest.raises(NeuroVaultAuthorizationError, match="idempotency collision"):
+            await PostgresNeuroVault().persist(
+                changed_entry, context=vault_context,
+            )
         # The same assertion with different operation provenance must never
         # be accepted as a completed migration or as a safe retry.
         from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
