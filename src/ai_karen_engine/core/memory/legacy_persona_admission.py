@@ -639,6 +639,40 @@ class LegacyMigrationInspectionReceipt:
             raise ValueError("inspection requires a final policy decision identifier")
 
 
+@dataclass(frozen=True)
+class LegacyMigrationTransactionAuthority:
+    """Non-transferable, read-only snapshot of a verified active transaction.
+
+    This is an inspection invariant, NOT a persistence grant. Historical
+    migration still fails closed at NeuroVault's canonical writer.
+    """
+
+    tenant_id: str
+    user_id: str
+    policy_decision_id: str
+    transaction_id: int
+
+    @classmethod
+    async def inspect(
+        cls, *, session: "AsyncSession", tenant_id: str,
+        user_id: str, policy_decision_id: str,
+    ) -> "LegacyMigrationTransactionAuthority":
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import AsyncSession
+        if not isinstance(session, AsyncSession) or not session.in_transaction():
+            raise PermissionError("active PostgreSQL transaction required")
+        scope = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true), "
+            "current_setting('app.current_user_id', true), txid_current()"
+        ))).one()
+        if scope[:3] != (tenant_id, tenant_id, user_id):
+            raise PermissionError("historical inspection transaction identity mismatch")
+        if not policy_decision_id:
+            raise PermissionError("fresh policy decision required")
+        return cls(tenant_id, user_id, policy_decision_id, int(scope[3]))
+
+
 async def inspect_authenticated_legacy_migration_evidence(
     *, request: "Request", request_id: str, correlation_id: str,
     source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
@@ -758,6 +792,12 @@ async def inspect_authenticated_legacy_migration_evidence(
             raise PermissionError(
                 "historical migration transaction tenant changed during inspection"
             )
+        transaction_authority = await LegacyMigrationTransactionAuthority.inspect(
+            session=session, tenant_id=tenant, user_id=user,
+            policy_decision_id=final_authority.policy_decision_id,
+        )
+        if transaction_authority.transaction_id <= 0:
+            raise PermissionError("valid migration inspection transaction required")
         # Keep the read-only evidence tied to the final validated identity
         # and policy decision; do not convert it into a write capability.
         inspection = LegacyMigrationInspectionReceipt(
