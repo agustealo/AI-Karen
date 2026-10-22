@@ -219,10 +219,33 @@ class PostgresNeuroVault(VaultPort):
         return created + timedelta(days=int(policy.ttl_days))
 
     async def persist(
-        self,
-        entry: MemoryEntry,
-        *,
-        context: VaultContext,
+        self, entry: MemoryEntry, *, context: VaultContext,
+    ) -> VaultWriteReceipt:
+        """Canonical standalone write. Owns and commits its PostgreSQL session."""
+        session_factory = self._resolve_session_factory()
+        async with session_factory() as session:
+            return await self._persist_with_session(
+                entry, context=context, session=session, commit=True,
+            )
+
+    async def persist_in_transaction(
+        self, entry: MemoryEntry, *, context: VaultContext, session: Any,
+    ) -> VaultWriteReceipt:
+        """Stage a governed write in a caller-owned transaction.
+
+        The caller must commit or roll back. Integrity collisions propagate
+        so the entire caller transaction fails closed; no success receipt
+        implies a commit. Historical migration remains blocked.
+        """
+        if session is None:
+            raise ValueError("caller-owned active PostgreSQL session required")
+        return await self._persist_with_session(
+            entry, context=context, session=session, commit=False,
+        )
+
+    async def _persist_with_session(
+        self, entry: MemoryEntry, *, context: VaultContext,
+        session: Any, commit: bool,
     ) -> VaultWriteReceipt:
         self._require_capability(context, self.WRITE_CAPABILITY)
         self._validate_entry_scope(entry, context)
@@ -249,126 +272,127 @@ class PostgresNeuroVault(VaultPort):
             or context.request_id
         )
 
-        session_factory = self._resolve_session_factory()
-        async with session_factory() as session:
-            if not await self._consent_granted(
-                session,
-                tenant_id=tenant_uuid,
-                user_id=user_uuid,
-                scope_name=consent_scope,
-            ):
-                raise NeuroVaultAuthorizationError(
-                    f"memory consent scope is revoked: {consent_scope}"
-                )
+        if not await self._consent_granted(
+            session,
+            tenant_id=tenant_uuid,
+            user_id=user_uuid,
+            scope_name=consent_scope,
+        ):
+            raise NeuroVaultAuthorizationError(
+                f"memory consent scope is revoked: {consent_scope}"
+            )
 
-            valid_to = await self._retention_deadline(
-                session,
-                tenant_id=tenant_uuid,
-                entry=entry,
+        valid_to = await self._retention_deadline(
+            session,
+            tenant_id=tenant_uuid,
+            entry=entry,
+        )
+        if consent_scope == "persona-memory-migration" and (
+            valid_to is None or valid_to <= datetime.utcnow()
+        ):
+            raise NeuroVaultAuthorizationError(
+                "historical migration requires active bounded retention"
             )
-            if consent_scope == "persona-memory-migration" and (
-                valid_to is None or valid_to <= datetime.utcnow()
-            ):
-                raise NeuroVaultAuthorizationError(
-                    "historical migration requires active bounded retention"
-                )
-            event_id = uuid.uuid4()
-            assertion_id = self._entry_uuid(entry.id)
-            payload = entry.to_dict()
-            payload.setdefault("vault", {})
-            payload["vault"] = {
-                "request_id": context.request_id,
-                "correlation_id": context.correlation_id,
-                "actor_id": context.actor_id,
-                "consent_scope": consent_scope,
-            }
+        event_id = uuid.uuid4()
+        assertion_id = self._entry_uuid(entry.id)
+        payload = entry.to_dict()
+        payload.setdefault("vault", {})
+        payload["vault"] = {
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+            "actor_id": context.actor_id,
+            "consent_scope": consent_scope,
+        }
 
-            event = MemoryEvent(
-                event_id=event_id,
-                tenant_id=tenant_uuid,
-                user_id=user_uuid,
-                source_type=source_type,
-                source_ref=source_ref,
-                payload_hash=self._payload_hash(entry),
-                idempotency_key=self._idempotency_key(entry, context),
-                confidence=float(entry.confidence),
-                scope=str(custom.get("scope") or "user"),
-                sensitivity_class=sensitivity,
-                consent_state="granted",
-                valid_from=self._naive_utc(entry.created_at),
-                valid_to=valid_to,
-                supersedes=self._optional_uuid(entry.parent_id),
-                event_type="memory_persisted",
-                payload=payload,
-            )
-            assertion = MemoryAssertion(
-                assertion_id=assertion_id,
-                event_id=event_id,
-                tenant_id=tenant_uuid,
-                user_id=user_uuid,
-                content=entry.content,
-                confidence=float(entry.confidence),
-                scope=str(custom.get("scope") or "user"),
-                sensitivity_class=sensitivity,
-                consent_state="granted",
-                valid_from=self._naive_utc(entry.created_at),
-                valid_to=valid_to,
-                supersedes=self._optional_uuid(entry.parent_id),
-            )
-            try:
-                # Explicitly flush the parent row before inserting the child.
-                # Independent ORM objects without relationship wiring are not
-                # guaranteed to flush in FK dependency order.
-                session.add(event)
-                await session.flush()
-                session.add(assertion)
+        event = MemoryEvent(
+            event_id=event_id,
+            tenant_id=tenant_uuid,
+            user_id=user_uuid,
+            source_type=source_type,
+            source_ref=source_ref,
+            payload_hash=self._payload_hash(entry),
+            idempotency_key=self._idempotency_key(entry, context),
+            confidence=float(entry.confidence),
+            scope=str(custom.get("scope") or "user"),
+            sensitivity_class=sensitivity,
+            consent_state="granted",
+            valid_from=self._naive_utc(entry.created_at),
+            valid_to=valid_to,
+            supersedes=self._optional_uuid(entry.parent_id),
+            event_type="memory_persisted",
+            payload=payload,
+        )
+        assertion = MemoryAssertion(
+            assertion_id=assertion_id,
+            event_id=event_id,
+            tenant_id=tenant_uuid,
+            user_id=user_uuid,
+            content=entry.content,
+            confidence=float(entry.confidence),
+            scope=str(custom.get("scope") or "user"),
+            sensitivity_class=sensitivity,
+            consent_state="granted",
+            valid_from=self._naive_utc(entry.created_at),
+            valid_to=valid_to,
+            supersedes=self._optional_uuid(entry.parent_id),
+        )
+        try:
+            # Explicitly flush the parent row before inserting the child.
+            # Independent ORM objects without relationship wiring are not
+            # guaranteed to flush in FK dependency order.
+            session.add(event)
+            await session.flush()
+            session.add(assertion)
+            if commit:
                 await session.commit()
-            except IntegrityError:
-                await session.rollback()
-                existing = await self._find_by_idempotency(
-                    session,
-                    self._idempotency_key(entry, context),
+        except IntegrityError:
+            if not commit:
+                raise
+            await session.rollback()
+            existing = await self._find_by_idempotency(
+                session,
+                self._idempotency_key(entry, context),
+            )
+            if existing is None:
+                raise
+            assertion_stmt = select(MemoryAssertion).where(
+                MemoryAssertion.event_id == existing.event_id
+            )
+            result = await session.execute(assertion_stmt)
+            existing_assertion = result.scalar_one_or_none()
+            # A unique-key collision is only an idempotent replay when
+            # the original event and assertion match this exact request.
+            # Never report another principal's write, a partial ledger
+            # event, or changed content as successfully persisted.
+            if (
+                existing.tenant_id != tenant_uuid
+                or existing.user_id != user_uuid
+                or existing.event_type != "memory_persisted"
+                or not isinstance(existing.payload, dict)
+                or not isinstance(existing.payload.get("vault"), dict)
+                or existing.payload["vault"].get("request_id") != context.request_id
+                or existing.payload["vault"].get("consent_scope") != consent_scope
+                or existing.source_type != source_type
+                or existing.payload_hash != self._payload_hash(entry)
+                or existing.idempotency_key != self._idempotency_key(entry, context)
+                or existing_assertion is None
+                or existing_assertion.assertion_id != assertion_id
+                or existing_assertion.tenant_id != tenant_uuid
+                or existing_assertion.user_id != user_uuid
+                or existing_assertion.valid_to is not None
+            ):
+                raise NeuroVaultAuthorizationError(
+                    "idempotency collision does not match canonical memory write"
                 )
-                if existing is None:
-                    raise
-                assertion_stmt = select(MemoryAssertion).where(
-                    MemoryAssertion.event_id == existing.event_id
-                )
-                result = await session.execute(assertion_stmt)
-                existing_assertion = result.scalar_one_or_none()
-                # A unique-key collision is only an idempotent replay when
-                # the original event and assertion match this exact request.
-                # Never report another principal's write, a partial ledger
-                # event, or changed content as successfully persisted.
-                if (
-                    existing.tenant_id != tenant_uuid
-                    or existing.user_id != user_uuid
-                    or existing.event_type != "memory_persisted"
-                    or not isinstance(existing.payload, dict)
-                    or not isinstance(existing.payload.get("vault"), dict)
-                    or existing.payload["vault"].get("request_id") != context.request_id
-                    or existing.payload["vault"].get("consent_scope") != consent_scope
-                    or existing.source_type != source_type
-                    or existing.payload_hash != self._payload_hash(entry)
-                    or existing.idempotency_key != self._idempotency_key(entry, context)
-                    or existing_assertion is None
-                    or existing_assertion.assertion_id != assertion_id
-                    or existing_assertion.tenant_id != tenant_uuid
-                    or existing_assertion.user_id != user_uuid
-                    or existing_assertion.valid_to is not None
-                ):
-                    raise NeuroVaultAuthorizationError(
-                        "idempotency collision does not match canonical memory write"
-                    )
-                return VaultWriteReceipt(
-                    memory_id=str(existing_assertion.assertion_id),
-                    persisted=True,
-                    version=entry.version,
-                    metadata={
-                        "event_id": str(existing.event_id),
-                        "idempotent_replay": True,
-                    },
-                )
+            return VaultWriteReceipt(
+                memory_id=str(existing_assertion.assertion_id),
+                persisted=True,
+                version=entry.version,
+                metadata={
+                    "event_id": str(existing.event_id),
+                    "idempotent_replay": True,
+                },
+            )
 
         return VaultWriteReceipt(
             memory_id=str(assertion_id),
