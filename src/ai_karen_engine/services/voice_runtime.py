@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from ai_karen_engine.core.voice.contracts import VoiceCapabilities, VoiceEngineStatus
+from ai_karen_engine.core.voice.contracts import VoiceCapabilities, VoiceEngineStatus, TranscriptionResult, AudioInput
 
 
 class LocalSpeechEngine(Protocol):
@@ -20,12 +20,24 @@ class LocalSpeechEngine(Protocol):
 
     async def is_ready(self) -> bool: ...
 
+    async def transcribe(self, audio: bytes, metadata: AudioInput) -> TranscriptionResult: ...
+
 
 @dataclass
 class VoiceRuntime:
     """Single capability owner. No implicit network, mock, or vendor fallback."""
 
     speech_engine: LocalSpeechEngine | None = None
+
+    async def transcribe(self, audio: bytes, metadata: AudioInput) -> TranscriptionResult:
+        """Execute only an explicitly healthy local STT adapter."""
+        capabilities = await self.capabilities()
+        engine = self.speech_engine
+        if not capabilities.transcription_available or engine is None:
+            raise RuntimeError("local_transcription_unavailable")
+        if len(audio) != metadata.byte_count:
+            raise ValueError("audio_byte_count_mismatch")
+        return await engine.transcribe(audio, metadata)
 
     async def capabilities(self) -> VoiceCapabilities:
         engine = self.speech_engine
