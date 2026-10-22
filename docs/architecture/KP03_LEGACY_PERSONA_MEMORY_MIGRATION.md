@@ -52,3 +52,7 @@ The preflight now rejects evidence whose origin is not explicitly marked `author
 ## Deterministic replay identity, not execution authorization
 
 `derive_legacy_migration_replay_identity` derives stable UUIDv5 `memory_id` and `request_id` from canonical tenant/user identifiers plus the immutable legacy source-record ID. NeuroVault's existing idempotency key includes `request_id`, so arbitrary fresh request IDs on retry cannot provide durable replay semantics. This helper does not read rows, assert consent, create `VaultContext`, migrate memories or persist receipts. Before using it, the future migration executor must verify the separately authorized admission is bound to the identical principals, re-check current consent/retention and carry trusted policy evidence into NeuroVault. Store actual write receipts in the governed ledger. No general chat idempotency behavior is changed.
+
+### Principal-bound replay admission
+
+`LegacyMigrationAdmission` now carries the tenant/user identity for the admitted decision; rejected decisions carry no principals. Retry-identifier generation rejects a different requested tenant or user even when `admitted=True` was returned for another principal. This prevents accidental cross-principal reuse of an approved decision in the pure migration helper. Its dataclass remains forgeable; authenticated execution must still derive it from canonical runtime policy, revalidate current consent and let NeuroVault enforce its own checks.
