@@ -20,6 +20,12 @@ export function encodeMonoPcmWav(buffer: AudioBuffer, targetRate = 16000): Blob 
   view.setUint32(28, targetRate * 2, true); view.setUint16(32, 2, true);
   view.setUint16(34, 16, true); tag(36, "data"); view.setUint32(40, frameCount * 2, true);
   const channels = Array.from({length: buffer.numberOfChannels}, (_, i) => buffer.getChannelData(i));
+  // Reject inconsistent decoded buffers rather than indexing -1 or writing
+  // NaN samples into a WAV that looks valid to the HTTP ingress.
+  const expectedSourceFrames = Math.ceil((frameCount - 1) * buffer.sampleRate / targetRate) + 1;
+  if (channels.some((channel) => channel.length < expectedSourceFrames)) {
+    throw new Error("Captured audio has inconsistent channel lengths");
+  }
   for (let i = 0; i < frameCount; i++) {
     const sourceIndex = i * buffer.sampleRate / targetRate;
     const low = Math.min(Math.floor(sourceIndex), channels[0].length - 1);
@@ -29,7 +35,9 @@ export function encodeMonoPcmWav(buffer: AudioBuffer, targetRate = 16000): Blob 
     for (const channel of channels) {
       sample += channel[low] * (1 - fraction) + channel[high] * fraction;
     }
-    sample = Math.max(-1, Math.min(1, sample / channels.length));
+    sample /= channels.length;
+    if (!Number.isFinite(sample)) throw new Error("Captured audio contains invalid samples");
+    sample = Math.max(-1, Math.min(1, sample));
     view.setInt16(44 + i * 2, sample < 0 ? sample * 32768 : sample * 32767, true);
   }
   return new Blob([bytes], {type: "audio/wav"});
