@@ -407,6 +407,80 @@ class PersonaService:
         logger.info("Updated persona '%s' for user %s", updated_persona.name, user_id)
         return updated_persona
 
+    async def create_and_activate_persona(
+        self,
+        user_id: str,
+        tenant_id: str,
+        persona_data: Dict[str, Any],
+        *,
+        expected_revision: int,
+    ) -> tuple[Persona, UserPersonaPreferences]:
+        """Atomically insert an owned persona and select it.
+
+        The existing tenant-scoped database session owns both writes. Stale
+        preferences and duplicate names fail before the insert, and SQL
+        failures roll back the insert together with the activation.
+        """
+        tenant_id = self._normalize_tenant_id(tenant_id)
+        if not user_id or expected_revision < 0:
+            raise ValueError("Valid user and expected_revision are required")
+        persona = Persona(**persona_data)
+        persona.is_system_persona = False
+        if not 10 <= len(persona.system_prompt.strip()) <= 2000:
+            raise ValueError("Invalid persona instructions")
+
+        await self.get_user_preferences(user_id, tenant_id)
+        async with self._tenant_session(tenant_id) as session:
+            locked_result = await session.execute(
+                text("SELECT revision FROM user_persona_preferences "
+                     "WHERE tenant_id = :tenant_id AND user_id = :user_id FOR UPDATE"),
+                {"tenant_id": tenant_id, "user_id": user_id},
+            )
+            locked = locked_result.fetchone()
+            if locked is None or int(locked.revision) != expected_revision:
+                raise ValueError("Persona preference revision conflict")
+
+            duplicate = await session.execute(
+                text("SELECT 1 FROM custom_personas WHERE tenant_id = :tenant_id "
+                     "AND user_id = :user_id AND lower(name) = lower(:name) LIMIT 1"),
+                {"tenant_id": tenant_id, "user_id": user_id, "name": persona.name},
+            )
+            if duplicate.fetchone():
+                raise ValueError("Persona name already exists")
+
+            payload = self._persona_payload(persona)
+            payload.update({"tenant_id": tenant_id, "user_id": user_id})
+            await session.execute(
+                text(
+                    "INSERT INTO custom_personas ("
+                    "id, tenant_id, user_id, name, description, system_prompt, "
+                    "default_tone, default_verbosity, default_language, memory_weight, "
+                    "context_window_size, domain_knowledge, specialized_instructions, "
+                    "use_emoji, formality_level, creativity_level, is_active, "
+                    "created_at, updated_at"
+                    ") VALUES ("
+                    ":id, :tenant_id, :user_id, :name, :description, :system_prompt, "
+                    ":default_tone, :default_verbosity, :default_language, :memory_weight, "
+                    ":context_window_size, :domain_knowledge, :specialized_instructions, "
+                    ":use_emoji, :formality_level, :creativity_level, :is_active, "
+                    ":created_at, :updated_at)"
+                ),
+                payload,
+            )
+            result = await session.execute(
+                text("UPDATE user_persona_preferences SET active_persona_id = :persona_id, "
+                     "revision = revision + 1, updated_at = CURRENT_TIMESTAMP "
+                     "WHERE tenant_id = :tenant_id AND user_id = :user_id "
+                     "AND revision = :expected_revision"),
+                {"persona_id": persona.id, "tenant_id": tenant_id,
+                 "user_id": user_id, "expected_revision": expected_revision},
+            )
+            if result.rowcount != 1:
+                raise ValueError("Persona preference revision conflict")
+
+        self._user_preferences_cache.pop(self._cache_key(user_id, tenant_id), None)
+        return persona, await self.get_user_preferences(user_id, tenant_id)
+
     async def save_and_activate_existing_persona(
         self,
         user_id: str,
