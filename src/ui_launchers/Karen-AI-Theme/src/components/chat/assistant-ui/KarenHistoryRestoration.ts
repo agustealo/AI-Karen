@@ -71,5 +71,10 @@ export async function readOwnedConversationHistory(
   if (conversation.id !== conversationId) {
     throw new Error("Conversation history identity mismatch");
   }
-  return restoreOwnedHistoryMessages(conversationId, conversation.messages || []);
+  // An absent or malformed messages collection is a broken backend contract,
+  // not an authenticated empty conversation.
+  if (!Array.isArray(conversation.messages)) {
+    throw new Error("Conversation history response missing messages");
+  }
+  return restoreOwnedHistoryMessages(conversationId, conversation.messages);
 }
