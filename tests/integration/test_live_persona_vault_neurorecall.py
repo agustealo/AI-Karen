@@ -882,6 +882,13 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             await PostgresNeuroVault().persist(
                 changed_entry, context=vault_context,
             )
+        # An identical request remains a legitimate idempotent replay.
+        identical_retry = await PostgresNeuroVault().persist(
+            synthetic_entry, context=vault_context,
+        )
+        assert identical_retry.persisted
+        assert identical_retry.memory_id == replay.memory_id
+        assert identical_retry.metadata["idempotent_replay"] is True
         # The same assertion with different operation provenance must never
         # be accepted as a completed migration or as a safe retry.
         from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
