@@ -321,3 +321,29 @@ async def prepare_retention_verified_legacy_migration_retry(
         recovery=recovery,
         source_record_id=source_record_id,
     )
+
+
+async def prepare_identity_verified_legacy_migration_retry(
+    *,
+    authenticated_request: "PolicyEvaluationRequest",
+    runtime_policy: "RuntimePolicyEnforcer",
+    preflight: "LegacyMigrationPreflight",
+    recovery: "LegacyReplayRecoveryDecision",
+    source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Require exact canonical active identity before historical source checks."""
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_identity import (
+        verify_legacy_persona_identity,
+    )
+    if not await verify_legacy_persona_identity(
+        tenant_id=authenticated_request.tenant_id,
+        user_id=authenticated_request.user_id,
+    ):
+        raise ValueError("canonical migration identity not verified")
+    return await prepare_retention_verified_legacy_migration_retry(
+        authenticated_request=authenticated_request,
+        runtime_policy=runtime_policy,
+        preflight=preflight,
+        recovery=recovery,
+        source_record_id=source_record_id,
+    )
