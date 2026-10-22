@@ -335,6 +335,12 @@ async def prepare_identity_verified_legacy_migration_retry(
     from ai_karen_engine.platform.memory.postgres.legacy_persona_identity import (
         verify_legacy_persona_identity,
     )
+    authority = await evaluate_migration_write_authority(
+        authenticated_request=authenticated_request,
+        runtime_policy=runtime_policy,
+    )
+    if not authority.explicitly_granted:
+        raise ValueError("current migration authorization required before identity lookup")
     if not await verify_legacy_persona_identity(
         tenant_id=authenticated_request.tenant_id,
         user_id=authenticated_request.user_id,
