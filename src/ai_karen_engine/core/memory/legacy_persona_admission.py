@@ -146,6 +146,7 @@ def migration_write_authority_from_policy(
     scope = decision.runtime_constraints or {}
     granted = (
         decision.allowed is True
+        and request.action == "legacy_persona_memory_migration"
         and "memory.write" in request.permissions
         and "memory.write" in request.requested_capabilities
         and "memory.write" in decision.allowed_capabilities
