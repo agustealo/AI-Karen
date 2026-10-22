@@ -243,3 +243,46 @@ async def test_source_verified_retry_denies_missing_source_before_policy(monkeyp
         )
     assert calls == [{"tenant_id": "tenant-a", "user_id": "user-a",
                       "source_record_id": "legacy-123"}]
+
+
+@pytest.mark.asyncio
+async def test_legacy_retention_requires_explicit_unexpired_policy(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_retention as module
+
+    class FakeResult:
+        def __init__(self, policy):
+            self.policy = policy
+        def scalar_one_or_none(self):
+            return self.policy
+
+    class FakeSession:
+        def __init__(self, policies):
+            self.policies = iter(policies)
+        async def execute(self, statement):
+            return FakeResult(next(self.policies))
+
+    class FakeScope:
+        def __init__(self, policies):
+            self.session = FakeSession(policies)
+        async def __aenter__(self):
+            return self.session
+        async def __aexit__(self, *args):
+            return False
+
+    now = datetime.now(timezone.utc)
+    params = dict(tenant_id="ba8cc62d-ed28-471d-bdda-8545e56e20f5",
+                  memory_class="semantic")
+    monkeypatch.setattr(module, "async_transaction_scope",
+                        lambda **kwargs: FakeScope([None, None]))
+    assert not await module.verify_legacy_migration_retention(
+        **params, created_at=now - timedelta(days=1))
+    monkeypatch.setattr(module, "async_transaction_scope",
+                        lambda **kwargs: FakeScope([SimpleNamespace(ttl_days=30)]))
+    assert await module.verify_legacy_migration_retention(
+        **params, created_at=now - timedelta(days=1))
+    monkeypatch.setattr(module, "async_transaction_scope",
+                        lambda **kwargs: FakeScope([SimpleNamespace(ttl_days=1)]))
+    assert not await module.verify_legacy_migration_retention(
+        **params, created_at=now - timedelta(days=10))
