@@ -120,3 +120,72 @@ async def test_vault_to_recall_persona_filter_and_revocation():
             if event_ids:
                 await session.execute(delete(MemoryEvent).where(MemoryEvent.event_id.in_(event_ids)))
             await session.execute(delete(ConsentScope).where(ConsentScope.scope_id == consent_id))
+
+
+async def test_admitted_migration_replay_identity_is_idempotent_in_real_vault():
+    """Exercise real ledger duplicate handling without importing legacy rows."""
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationWriteAuthority, admit_legacy_migration,
+        derive_legacy_migration_replay_identity,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_preflight import LegacyMigrationPreflight
+
+    tenant, user = uuid.uuid4(), uuid.uuid4()
+    consent_id = uuid.uuid4()
+    admission = admit_legacy_migration(
+        LegacyMigrationPreflight(True, ()),
+        LegacyMigrationWriteAuthority(
+            tenant_id=str(tenant), user_id=str(user),
+            authorized_tenant_id=str(tenant), authorized_user_id=str(user),
+            capability="memory.write", policy_decision_id=str(uuid.uuid4()),
+            explicitly_granted=True,
+        ),
+    )
+    replay = derive_legacy_migration_replay_identity(
+        admission=admission, tenant_id=str(tenant),
+        user_id=str(user), source_record_id=str(uuid.uuid4()),
+    )
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                scope_id=consent_id, tenant_id=tenant, user_id=user,
+                scope_name="persona-replay-proof", is_granted=True,
+            ))
+        entry = MemoryEntry(
+            id=replay.memory_id, content="Synthetic idempotent migration proof",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "persona-replay-proof"},
+            ),
+        )
+        context = VaultContext(
+            tenant_id=str(tenant), user_id=str(user),
+            request_id=replay.request_id, correlation_id=str(uuid.uuid4()),
+            actor_id=str(user), policy_context={"memory_write_authorized": True},
+        )
+        vault = PostgresNeuroVault()
+        first = await vault.persist(entry, context=context)
+        second = await vault.persist(entry, context=context)
+        assert first.persisted and second.persisted
+        assert first.memory_id == second.memory_id
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            events = (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.tenant_id == tenant, MemoryEvent.user_id == user,
+            ))).scalars().all()
+            assert len(events) == 1
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            event_ids = (await session.execute(
+                select(MemoryAssertion.event_id).where(
+                    MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id)
+                )
+            )).scalars().all()
+            await session.execute(delete(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id)
+            ))
+            if event_ids:
+                await session.execute(delete(MemoryEvent).where(
+                    MemoryEvent.event_id.in_(event_ids)
+                ))
+            await session.execute(delete(ConsentScope).where(ConsentScope.scope_id == consent_id))
