@@ -180,6 +180,8 @@ describe("local dictation composer acceptance with controlled browser devices", 
     const active = Recorder.instances[0];
     fireEvent.click(screen.getByRole("button", { name: "Stop local dictation" }));
     await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
+    // The first Stop click already hides the button. Reproduce the browser's
+    // duplicate event on the recorder instance rather than clicking again.
     active.onstop?.();
     await waitFor(() => expect(composer.setText).toHaveBeenCalledOnce());
     expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce();
