@@ -345,6 +345,7 @@ class PostgresNeuroVault(VaultPort):
                     or existing.user_id != user_uuid
                     or existing.event_type != "memory_persisted"
                     or existing.payload_hash != self._payload_hash(entry)
+                    or existing.idempotency_key != self._idempotency_key(entry, context)
                     or existing_assertion is None
                     or existing_assertion.assertion_id != assertion_id
                     or existing_assertion.tenant_id != tenant_uuid
