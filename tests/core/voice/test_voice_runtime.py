@@ -1,9 +1,10 @@
 """Voice readiness must be grounded in a real local engine health check."""
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
 
-from ai_karen_engine.core.voice.contracts import VoiceEngineStatus
+from ai_karen_engine.core.voice.contracts import VoiceEngineStatus, AudioInput, TranscriptionResult
 from ai_karen_engine.services.voice_runtime import VoiceRuntime
 
 
@@ -48,3 +49,31 @@ async def test_blank_engine_identifier_is_never_marked_ready():
     engine.engine_id = "   "
     assert not (await VoiceRuntime(engine).capabilities()).transcription_available
     engine.is_ready.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_transcription_is_rejected_without_second_model_call():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def infer(audio, metadata):
+        entered.set()
+        await release.wait()
+        return TranscriptionResult(text="verified speech", engine="local-whisper")
+
+    engine = Engine()
+    engine.transcribe = AsyncMock(side_effect=infer)
+    runtime = VoiceRuntime(engine)
+    audio = b"pcm-data"
+    metadata = AudioInput("audio/wav", len(audio), 0.5)
+    first = asyncio.create_task(runtime.transcribe(audio, metadata))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        with pytest.raises(RuntimeError, match="local_transcription_busy"):
+            await runtime.transcribe(audio, metadata)
+        engine.transcribe.assert_awaited_once()
+    finally:
+        release.set()
+        await first
+    assert (await runtime.transcribe(audio, metadata)).text == "verified speech"
+    assert engine.transcribe.await_count == 2
