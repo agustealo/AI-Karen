@@ -233,7 +233,8 @@ class PostgresNeuroVault(VaultPort):
         assert metadata is not None
         custom = dict(metadata.custom or {})
         consent_scope = str(custom.get("consent_scope") or "memory.write")
-        if consent_scope == "persona-memory-migration":
+        source_type = str(custom.get("source_type") or metadata.source or "runtime")
+        if consent_scope == "persona-memory-migration" or source_type == "legacy_persona":
             # An ordinary memory.write capability is not a historical
             # migration authorization. Until a runtime-owned signed admission
             # contract is implemented, fail closed at this final write gate.
@@ -241,7 +242,6 @@ class PostgresNeuroVault(VaultPort):
                 "historical migration persistence is disabled pending trusted runtime authorization"
             )
         sensitivity = str(custom.get("sensitivity_class") or "normal")
-        source_type = str(custom.get("source_type") or metadata.source or "runtime")
         source_ref = str(
             custom.get("source_ref")
             or context.conversation_id
