@@ -828,6 +828,9 @@ async def inspect_authenticated_legacy_migration_evidence(
         )
         if transaction_authority.transaction_id <= 0:
             raise PermissionError("valid migration inspection transaction required")
+        # Verify transaction continuity after all source/replay and policy
+        # checks, immediately before returning read-only evidence.
+        await transaction_authority.verify_active(session=session)
         # Keep the read-only evidence tied to the final validated identity
         # and policy decision; do not convert it into a write capability.
         inspection = LegacyMigrationInspectionReceipt(
