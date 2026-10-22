@@ -198,3 +198,56 @@ async def test_planner_live_idempotency_conflicts_and_owner_isolation():
                 DELETE FROM public.personal_planner_commitments
                 WHERE id=:id AND tenant_id=:tenant AND owner_id=:owner
             """), {"id": first.id, "tenant": tenant, "owner": owner})
+
+
+async def test_authorized_planner_presentation_reads_committed_postgres_and_isolates_owner():
+    """A fresh service/repository must render only rows owned by the authenticated user."""
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.services.personal_planner import (
+        PersonalPlannerService, PlannerAuthorizationError,
+    )
+
+    tenant, owner = _scope()
+    repo = PersonalPlannerRepository()
+    created, _ = await repo.create(
+        tenant_id=tenant,
+        owner_id=owner,
+        title="PostgreSQL planner presentation proof",
+        timezone="America/Detroit",
+        idempotency_key=uuid4(),
+        correlation_id="planner-presentation-db",
+    )
+    principal = UserData(user_id=str(owner), tenant_id=str(tenant), roles=["user"])
+    foreign = UserData(user_id=str(uuid4()), tenant_id=str(tenant), roles=["user"])
+    denied = UserData(user_id=str(owner), tenant_id=str(tenant), roles=["readonly"])
+    try:
+        # Construct a new service and repository after the transaction commits.
+        service = PersonalPlannerService(repository=PersonalPlannerRepository())
+        result = await service.list_presentation(
+            user=principal, correlation_id="planner-db-reopen", limit=20,
+        )
+        assert result["empty"] is False
+        presentation = result["presentation"]
+        assert presentation["component_type"] == "planner.task_list"
+        own = [task for task in presentation["data"]["tasks"]
+               if task["id"] == str(created.id)]
+        assert own == [{"id": str(created.id),
+                        "title": created.title, "status": created.status.value}]
+        assert "owner_id" not in str(presentation)
+        assert "tenant_id" not in str(presentation)
+
+        other = await service.list_presentation(
+            user=foreign, correlation_id="planner-foreign-read", limit=20,
+        )
+        assert other == {"presentation": None, "empty": True}
+
+        with pytest.raises(PlannerAuthorizationError):
+            await service.list_presentation(
+                user=denied, correlation_id="planner-denied-read", limit=20,
+            )
+    finally:
+        async with async_transaction_scope(str(tenant)) as session:
+            await session.execute(text("""
+                DELETE FROM public.personal_planner_commitments
+                WHERE id=:id AND tenant_id=:tenant AND owner_id=:owner
+            """), {"id": created.id, "tenant": tenant, "owner": owner})
