@@ -448,8 +448,10 @@ class PersonaService:
     ) -> UserPersonaPreferences:
         """Update user's persona preferences."""
         tenant_id = self._normalize_tenant_id(tenant_id)
-        preferences = await self.get_user_preferences(user_id, tenant_id)
-        previous_active_persona_id = preferences.active_persona_id
+        current = await self.get_user_preferences(user_id, tenant_id)
+        # Work on a detached value: failed validation or persistence must not
+        # mutate the already-cached authoritative preference snapshot.
+        preferences = current.copy(deep=True)
 
         for key, value in updates.items():
             if hasattr(preferences, key):
