@@ -668,8 +668,17 @@ class LegacyMigrationTransactionAuthority:
         ))).one()
         if scope[:3] != (tenant_id, tenant_id, user_id):
             raise PermissionError("historical inspection transaction identity mismatch")
-        if not policy_decision_id:
+        if not isinstance(policy_decision_id, str) or not policy_decision_id.strip():
             raise PermissionError("fresh policy decision required")
+        # Re-read transaction identity after the policy provenance check.
+        # Do not issue inspection evidence if the session scope was mutated.
+        confirmed = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true), "
+            "current_setting('app.current_user_id', true), txid_current()"
+        ))).one()
+        if confirmed != scope:
+            raise PermissionError("historical inspection transaction changed during verification")
         return cls(tenant_id, user_id, policy_decision_id, int(scope[3]))
 
 
