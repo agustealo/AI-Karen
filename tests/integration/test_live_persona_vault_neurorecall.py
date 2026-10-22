@@ -833,6 +833,51 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert (await session.execute(select(MemoryAssertion).where(
                 MemoryAssertion.assertion_id == rolled_back_pair_assertion
             ))).scalar_one_or_none() is None
+        # PostgreSQL row locks serialize withdrawal behind a verification
+        # transaction. This is a database primitive proof, not an enabled writer.
+        import asyncio
+        source_locked = asyncio.Event()
+        release_source = asyncio.Event()
+        withdrawal_finished = asyncio.Event()
+
+        async def hold_source_lock():
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                locked = await session.execute(text(
+                    "SELECT id FROM public.persona_memory_entries "
+                    "WHERE id=:id AND tenant_id=:tenant AND user_id=:user FOR UPDATE"
+                ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+                assert locked.scalar_one() == str(source)
+                source_locked.set()
+                await release_source.wait()
+
+        async def withdraw_after_lock():
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                await session.execute(text(
+                    "UPDATE public.persona_memory_entries SET content=' ' "
+                    "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+                ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+            withdrawal_finished.set()
+
+        holder = asyncio.create_task(hold_source_lock())
+        await asyncio.wait_for(source_locked.wait(), timeout=10)
+        contender = asyncio.create_task(withdraw_after_lock())
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(withdrawal_finished.wait()), timeout=0.2,
+                )
+        finally:
+            release_source.set()
+            await asyncio.wait_for(asyncio.gather(holder, contender), timeout=10)
+        assert withdrawal_finished.is_set()
+        with pytest.raises(ValueError, match="verified historical retention metadata required"):
+            await prepare_governed_legacy_migration_retry(**base)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.persona_memory_entries SET content=:content "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user),
+                "content": "Synthetic read-only assembly proof"})
         # Concurrent withdrawal must not be confused with an eligible source.
         # Commit the withdrawal in a separate transaction, then re-run the
         # canonical preparation against the fresh database state.
