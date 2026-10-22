@@ -96,6 +96,11 @@ export function KarenLocalDictation() {
         recordingFailed.current = true;
         setError("Audio capture failed.");
         stop();
+        // Some browsers report recorder errors after it is already inactive.
+        // In that state stop() cannot dispatch onstop to release the device.
+        mic.getTracks().forEach((track) => track.stop());
+        if (stream.current === mic) stream.current = null;
+        if (recorder.current === media) recorder.current = null;
       };
       media.onstop = async () => {
         mic.getTracks().forEach((track) => track.stop());
