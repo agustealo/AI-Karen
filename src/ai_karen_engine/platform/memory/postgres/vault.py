@@ -219,10 +219,23 @@ class PostgresNeuroVault(VaultPort):
         created = self._naive_utc(entry.created_at) or datetime.utcnow()
         return created + timedelta(days=int(policy.ttl_days))
 
+    def _validate_persist_authority(
+        self, entry: MemoryEntry, context: VaultContext,
+    ) -> None:
+        """One canonical pre-database gate for memory write authorization.
+
+        Both public entrypoints invoke this before opening or inspecting a
+        database session. The shared ledger implementation does not duplicate
+        policy evaluation; the runtime retains responsibility for decisions.
+        """
+        self._require_capability(context, self.WRITE_CAPABILITY)
+        self._validate_entry_scope(entry, context)
+
     async def persist(
         self, entry: MemoryEntry, *, context: VaultContext,
     ) -> VaultWriteReceipt:
         """Canonical standalone write. Owns and commits its PostgreSQL session."""
+        self._validate_persist_authority(entry, context)
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
             return await self._persist_with_session(
@@ -240,8 +253,7 @@ class PostgresNeuroVault(VaultPort):
         """
         # Validate policy capability and principal scope before any database
         # query, including transaction-local tenant introspection.
-        self._require_capability(context, self.WRITE_CAPABILITY)
-        self._validate_entry_scope(entry, context)
+        self._validate_persist_authority(entry, context)
         if session is None:
             raise ValueError("caller-owned active PostgreSQL session required")
         # Never accept a raw, unscoped session for a governed mutation.
@@ -302,9 +314,6 @@ class PostgresNeuroVault(VaultPort):
         self, entry: MemoryEntry, *, context: VaultContext,
         session: Any, commit: bool,
     ) -> VaultWriteReceipt:
-        self._require_capability(context, self.WRITE_CAPABILITY)
-        self._validate_entry_scope(entry, context)
-
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
         metadata = entry.metadata
