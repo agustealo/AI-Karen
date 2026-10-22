@@ -9,7 +9,6 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
 )
-from ai_karen_engine.core.runtime.prompt.prompt_contract import PromptAssemblyResult
 
 
 @pytest.mark.asyncio
