@@ -58,9 +58,17 @@ class FasterWhisperLocalAdapter:
                     raise VoiceContractError("unsupported_wav_encoding")
                 if wav.getnchannels() not in (1, 2) or wav.getframerate() not in (8000, 16000, 22050, 44100, 48000):
                     raise VoiceContractError("unsupported_wav_format")
-                actual_duration = wav.getnframes() / wav.getframerate()
+                frame_count = wav.getnframes()
+                actual_duration = frame_count / wav.getframerate()
                 if actual_duration <= 0 or actual_duration > 120 or abs(actual_duration - metadata.duration_seconds) > 0.25:
                     raise VoiceContractError("audio_duration_mismatch")
+                # WAV headers can claim more PCM frames than are present.
+                # Read the declared frames and reject truncated data before
+                # passing anything to the media decoder or inference engine.
+                frame_bytes = wav.getnchannels() * wav.getsampwidth()
+                pcm = wav.readframes(frame_count)
+                if len(pcm) != frame_count * frame_bytes:
+                    raise VoiceContractError("truncated_wav_payload")
         except (wave.Error, EOFError) as exc:
             raise VoiceContractError("invalid_wav_container") from exc
 
