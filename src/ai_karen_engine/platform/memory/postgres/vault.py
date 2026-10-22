@@ -238,6 +238,10 @@ class PostgresNeuroVault(VaultPort):
         so the entire caller transaction fails closed; no success receipt
         implies a commit. Historical migration remains blocked.
         """
+        # Validate policy capability and principal scope before any database
+        # query, including transaction-local tenant introspection.
+        self._require_capability(context, self.WRITE_CAPABILITY)
+        self._validate_entry_scope(entry, context)
         if session is None:
             raise ValueError("caller-owned active PostgreSQL session required")
         # Never accept a raw, unscoped session for a governed mutation.
