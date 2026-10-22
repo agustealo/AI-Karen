@@ -67,10 +67,21 @@ class ResponseValidator:
                     for item in value:
                         collect(item)
             collect(getattr(contract, "tool_results", []))
-            if not allowed:
+            # Receipts originate from the authorized runtime, not retrieved web content.
+            # Do not demand fictitious source URLs for weather/time measurements.
+            tool_results = getattr(contract, "tool_results", [])
+            observations = [
+                item for item in tool_results
+                if isinstance(item, dict)
+                and item.get("evidence_level") == "verified_measurement"
+                and item.get("capability") in {"search.weather", "time.current"}
+                and isinstance(item.get("observation"), dict)
+                and bool(item["observation"])
+            ]
+            if not allowed and not observations:
                 return ValidationResult(valid=False, reason="missing_authorized_source_evidence")
-            cited = re.findall(r"https?://[^\s)\]>]+", text)
-            if not cited:
+            cited = re.findall(r"https?://[^\\s)\\]>]+", text)
+            if allowed and not observations and not cited:
                 return ValidationResult(valid=False, reason="missing_evidence_citation")
             if any(url.rstrip("/").rstrip(".,;") not in allowed for url in cited):
                 return ValidationResult(valid=False, reason="unverified_citation_url")
