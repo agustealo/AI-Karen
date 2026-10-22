@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import os
 from typing import Protocol
 
-from ai_karen_engine.core.voice.contracts import VoiceCapabilities, VoiceEngineStatus, TranscriptionResult, AudioInput
+from ai_karen_engine.core.voice.contracts import VoiceCapabilities, VoiceEngineStatus, TranscriptionResult, AudioInput, VoiceContractError
 
 
 class LocalSpeechEngine(Protocol):
@@ -43,7 +43,7 @@ class VoiceRuntime:
         if not capabilities.transcription_available or engine is None:
             raise RuntimeError("local_transcription_unavailable")
         if len(audio) != metadata.byte_count:
-            raise ValueError("audio_byte_count_mismatch")
+            raise VoiceContractError("audio_byte_count_mismatch")
         # One inference per runtime instance. Refuse excess work instead of
         # queueing unbounded audio payloads in memory.
         if self._transcription_lock.locked():
