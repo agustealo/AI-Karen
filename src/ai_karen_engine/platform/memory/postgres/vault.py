@@ -268,6 +268,16 @@ class PostgresNeuroVault(VaultPort):
             raise NeuroVaultAuthorizationError(
                 "caller transaction tenant scope does not match authenticated context"
             )
+        # Confirm the RLS-scoped authenticated principal when provided by
+        # the runtime transaction. The database principal must never differ
+        # from the entry's canonical VaultContext.
+        principal = (await session.execute(text(
+            "SELECT current_setting('app.current_user_id', true)"
+        ))).scalar_one()
+        if principal and principal != str(self._uuid(context.user_id, field_name="user_id")):
+            raise NeuroVaultAuthorizationError(
+                "caller transaction user scope does not match authenticated context"
+            )
         from dataclasses import replace
 
         receipt = await self._persist_with_session(
