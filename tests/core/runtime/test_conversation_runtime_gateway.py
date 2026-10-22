@@ -742,3 +742,38 @@ async def test_planner_presentation_write_failure_is_not_reported_as_saved():
     assert (await gateway.get_owned_snapshot(context)).messages[-1].metadata[
         "structured_content"
     ]["presentation"] == envelope
+
+
+
+@pytest.mark.asyncio
+async def test_history_restores_grounded_presentation_and_model_receipt() -> None:
+    repository = _Repository()
+    context = _context(request_id="grounded-receipt")
+    gateway = ConversationRuntimeGateway(repository=repository)
+    metadata = {
+        "actual_provider": "ollama",
+        "actual_model": "authorized-model",
+        "response_source": "grounded_observation_model",
+        "structured_content": {
+            "presentation": {
+                "type": "weather",
+                "data": {"temperature": 20, "unit": "celsius"},
+            }
+        },
+    }
+    committed = await gateway.persist_completed_turn(
+        context,
+        user_text="What is the weather?",
+        assistant_text="The verified temperature is 20 degrees Celsius.",
+        response_metadata=metadata,
+    )
+    assert committed.success
+    history = await gateway.load_history(
+        _context(request_id="subsequent-request"), limit=10
+    )
+    assert history.status == "loaded"
+    assistant = next(message for message in history.messages if message.role == "assistant")
+    assert assistant.content == "The verified temperature is 20 degrees Celsius."
+    for key, value in metadata.items():
+        assert assistant.metadata[key] == value
+    assert assistant.metadata["request_id"] == context.request_id
