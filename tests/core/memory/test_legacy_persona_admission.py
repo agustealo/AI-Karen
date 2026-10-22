@@ -57,7 +57,7 @@ def test_migration_replay_identity_is_stable_across_retries():
         tenant_id=tenant, user_id=user, source_record_id="legacy-row-42",
     )
     # The helper requires a separately admitted decision, not bare preflight.
-    kwargs["admission"] = admit_legacy_migration(LegacyMigrationPreflight(True, ()), authority())
+    kwargs["admission"] = admit_legacy_migration(LegacyMigrationPreflight(True, ()), authority(tenant_id=tenant, authorized_tenant_id=tenant, user_id=user, authorized_user_id=user))
     first = derive_legacy_migration_replay_identity(**kwargs)
     assert first == derive_legacy_migration_replay_identity(**kwargs)
     assert first.memory_id != first.request_id
@@ -76,4 +76,19 @@ def test_migration_replay_identity_denied_without_admission():
         derive_legacy_migration_replay_identity(
             admission=rejected, tenant_id=str(uuid4()),
             user_id=str(uuid4()), source_record_id="legacy-row",
+        )
+
+
+def test_migration_replay_cannot_reuse_admission_for_another_principal():
+    import pytest
+    from uuid import uuid4
+    tenant, user = str(uuid4()), str(uuid4())
+    approved = admit_legacy_migration(
+        LegacyMigrationPreflight(True, ()),
+        authority(tenant_id=tenant, authorized_tenant_id=tenant, user_id=user, authorized_user_id=user),
+    )
+    with pytest.raises(ValueError, match="does not match admitted scope"):
+        derive_legacy_migration_replay_identity(
+            admission=approved, tenant_id=str(uuid4()),
+            user_id=user, source_record_id="row-1",
         )
