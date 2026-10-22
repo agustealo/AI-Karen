@@ -88,3 +88,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Actual runtime policy evaluation
 
 `evaluate_migration_write_authority` now calls the existing `RuntimePolicyEnforcer.evaluate` for a trusted `PolicyEvaluationRequest` explicitly tagged `legacy_persona_memory_migration`, then applies the strict scoped `memory.write` decision adapter. Integration tests use the real policy evaluator, proving a missing authenticated `memory.write` permission remains denied even when requested. **Do not accept a `PolicyEvaluationRequest` assembled from client/legacy-row data.** This is not a migration endpoint or data import: authenticated ingress, verified consent/retention, canonical NeuroVault writes and recovery audit are still outstanding.
+
+### Explicit canonical consent for historical import
+
+`platform/memory/postgres/legacy_persona_consent.py` queries the canonical `ConsentScope` table using exact tenant/user scope and only `persona-memory-migration`. Unlike the ordinary write path, an absent historical-import grant is denied. The latest explicit revocation is denied as well. Disposable PostgreSQL tests cover absent, granted, revoked and cross-tenant outcomes. This is read-only evidence, not runtime identity verification or a grant to persist. NeuroVault must recheck consent at the moment of an eventual write; migration execution remains disabled.
