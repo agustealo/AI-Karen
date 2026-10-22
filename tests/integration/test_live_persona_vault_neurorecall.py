@@ -943,6 +943,41 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 MemoryAssertion.user_id == user,
             ))).scalar_one()
             assert stored.content == synthetic_entry.content
+        # The final canonical write gate remains closed even when a trusted
+        # caller supplies a session containing verified migration evidence.
+        blocked_with_session = MemoryEntry(
+            id=replay.memory_id, content="Forbidden staged historical import",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user),
+                source="legacy_persona",
+                custom={"consent_scope": "persona-memory-migration"},
+            ),
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+                inspect_locked_legacy_migration_preparation,
+            )
+            authorized_evidence = await inspect_locked_legacy_migration_preparation(
+                session=session, tenant_id=str(tenant), user_id=str(user),
+                source_record_id=str(source),
+                expected_memory_id=replay.memory_id,
+                expected_request_id=replay.request_id,
+            )
+            assert authorized_evidence is not None
+            with pytest.raises(
+                NeuroVaultAuthorizationError,
+                match="historical migration persistence is disabled",
+            ):
+                await PostgresNeuroVault().persist_in_transaction(
+                    blocked_with_session,
+                    context=VaultContext(
+                        tenant_id=str(tenant), user_id=str(user),
+                        request_id=replay.request_id,
+                        correlation_id=str(uuid.uuid4()), actor_id=str(user),
+                        policy_context={"memory_write_authorized": True},
+                    ), session=session,
+                )
         # Caller-owned vault writes stage both ledger rows but never commit.
         # The canonical transaction manager owns rollback on failure.
         staged_id = str(uuid.uuid4())
