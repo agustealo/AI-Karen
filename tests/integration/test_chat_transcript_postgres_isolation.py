@@ -281,6 +281,44 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
     assert rollback_rows.success
     assert rollback_rows.data == []
 
+    # A legacy one-message partial write must not be silently repaired by
+    # a completed-turn replay. It needs explicit migration/reconciliation.
+    orphan_context = _context(
+        tenant_id=tenant_a, user_id=user_a,
+        session_id="orphan-session", request_id=str(uuid.uuid4()),
+    )
+    orphan_conversation_id = await owner_gateway.ensure_conversation(
+        orphan_context, first_user_message="orphan question",
+    )
+    orphan_user_id = ConversationRuntimeGateway._message_id(
+        context=orphan_context,
+        conversation_id=orphan_conversation_id,
+        role="user",
+    )
+    orphan_write = await repository.add_message(
+        Message(
+            id=orphan_user_id,
+            conversation_id=orphan_conversation_id,
+            tenant_id=tenant_a,
+            role="user",
+            content="orphan question",
+            metadata={"request_id": orphan_context.request_id},
+        )
+    )
+    assert orphan_write.success
+    refused = await owner_gateway.persist_completed_turn(
+        orphan_context, user_text="orphan question",
+        assistant_text="must not complete legacy partial write",
+    )
+    assert refused.status == "failed"
+    assert refused.persisted_messages == 0
+    orphan_rows = await repository.get_messages(
+        orphan_conversation_id, tenant_a, limit=20,
+    )
+    assert orphan_rows.success
+    assert len(orphan_rows.data or []) == 1
+    assert orphan_rows.data[0].role == "user"
+
     # Repeated identical calls must resolve under the same conversation row
     # lock without creating duplicate user/assistant pairs.
     concurrent_context = _context(
