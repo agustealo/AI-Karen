@@ -55,10 +55,12 @@ class RuntimeEvidenceResolver:
         memory_manager: Any | None = None,
         conversation_gateway: ConversationRuntimeGateway | None = None,
         proactive_continuity_service: Any | None = None,
+        persona_service: Any | None = None,
     ) -> None:
         self._memory_manager = memory_manager
         self._conversation_gateway = conversation_gateway
         self._proactive_continuity_service = proactive_continuity_service
+        self._persona_service = persona_service
         self._emitter = get_observability_emitter()
 
     async def resolve(
@@ -207,7 +209,8 @@ class RuntimeEvidenceResolver:
         try:
             from ai_karen_engine.services.persona.persona_service import get_persona_service
 
-            preferences = await get_persona_service().get_user_preferences(
+            persona_service = self._persona_service or get_persona_service()
+            preferences = await persona_service.get_user_preferences(
                 user_id=ctx.user_id, tenant_id=ctx.tenant_id
             )
             if (
