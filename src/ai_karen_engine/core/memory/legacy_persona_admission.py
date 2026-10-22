@@ -710,13 +710,7 @@ async def inspect_authenticated_legacy_migration_transaction(
             not final_admission.admitted
             or final_admission.tenant_id != tenant
             or final_admission.user_id != user
-            or final_authority.tenant_id != tenant
-            or final_authority.user_id != user
-            or final_authority.authorized_tenant_id != tenant
-            or final_authority.authorized_user_id != user
-            or final_authority.capability != "memory.write"
-            or not final_authority.policy_decision_id.strip()
-            or final_authority.explicitly_granted is not True
+            or final_admission.reason_codes
         ):
             raise PermissionError("historical migration authorization revoked during inspection")
         return replay, receipt
