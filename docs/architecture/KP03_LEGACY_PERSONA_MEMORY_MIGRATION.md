@@ -64,3 +64,7 @@ The disposable PostgreSQL NeuroVault integration proof now writes one synthetic 
 ### Interrupted-run receipt reconciliation
 
 `legacy_persona_recovery.py` now provides a pure, fail-closed classification of *already authenticated, tenant/user-scoped* persisted receipt evidence. A matching persisted memory receipt means do not retry; an absent receipt can permit **consideration** of retry only after new consent, retention and policy checks. Partial, failed or cross-principal receipts are blocked pending operator reconciliation. This helper does not fetch receipts or prove that a receipt is authentic, and `safe_to_retry` must not be interpreted as a write grant. Durable canonical ledger lookups and authenticated migration execution remain outstanding.
+
+### Canonical ledger recovery evidence
+
+`platform/memory/postgres/legacy_persona_receipts.py` performs a read-only, fully tenant/user-scoped `MemoryAssertion`/`MemoryEvent` join and passes scoped receipt facts to the existing pure recovery classifier. Its evidence is not a permission grant: a missing record can only trigger renewed authorization, consent and retention checks. An integration test exercises matching persisted receipt evidence and cross-tenant non-disclosure against disposable PostgreSQL. The adapter uses `memory_persisted`, the existing NeuroVault event type. The ledger remains the sole durable source of truth; no parallel receipt store or backfill process is added.
