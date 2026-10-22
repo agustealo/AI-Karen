@@ -5,10 +5,17 @@ from pathlib import Path
 from scripts.audit.persona_memory_references import audit, classify
 
 
+def _complete_checkout(root: Path) -> None:
+    for directory in ("src/ai_karen_engine", "supabase/migrations", "tests"):
+        (root / directory).mkdir(parents=True, exist_ok=True)
+
+
+
 def test_audit_detects_symbol_with_location(tmp_path: Path):
     target = tmp_path / "src" / "caller.py"
     target.parent.mkdir()
     target.write_text("service.store_persona_memory('x')\n", encoding="utf-8")
+    _complete_checkout(tmp_path)
     result = audit(tmp_path)
     assert result == [
         {"path": "src/caller.py", "line": 1, "symbol": "store_persona_memory", "classification": "requires_review"}
@@ -19,6 +26,7 @@ def test_audit_skips_build_outputs(tmp_path: Path):
     build = tmp_path / "node_modules"
     build.mkdir()
     (build / "caller.py").write_text("_retrieve_memories()", encoding="utf-8")
+    _complete_checkout(tmp_path)
     assert audit(tmp_path) == []
 
 
@@ -41,3 +49,8 @@ def test_audit_ignores_symlinks_that_escape_repository(tmp_path: Path):
     outside.write_text("store_persona_memory()\n", encoding="utf-8")
     (tmp_path / "outside.py").symlink_to(outside)
     assert audit(tmp_path) == []
+
+
+def test_audit_refuses_partial_checkout(tmp_path: Path):
+    with pytest.raises(ValueError, match="full AI-Karen checkout"):
+        audit(tmp_path)
