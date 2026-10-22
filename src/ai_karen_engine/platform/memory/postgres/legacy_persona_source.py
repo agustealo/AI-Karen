@@ -179,3 +179,29 @@ async def verify_locked_legacy_migration_evidence(
     ):
         return None
     return row.created_at, row.memory_type
+
+
+async def inspect_locked_legacy_migration_preparation(
+    *, session: "AsyncSession", tenant_id: str, user_id: str,
+    source_record_id: str, expected_memory_id: str, expected_request_id: str,
+) -> tuple[tuple[datetime, str], "LegacyReplayReceiptEvidence"] | None:
+    """Inspect eligibility and canonical replay in one caller-owned transaction.
+
+    The caller owns commit/rollback and must establish policy authority before
+    calling. No authorization or writer is created by this inspection.
+    """
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+        lookup_locked_legacy_replay_receipt,
+    )
+    evidence = await verify_locked_legacy_migration_evidence(
+        session=session, tenant_id=tenant_id, user_id=user_id,
+        source_record_id=source_record_id,
+    )
+    if evidence is None:
+        return None
+    receipt = await lookup_locked_legacy_replay_receipt(
+        session=session, tenant_id=tenant_id, user_id=user_id,
+        expected_memory_id=expected_memory_id,
+        expected_request_id=expected_request_id,
+    )
+    return evidence, receipt
