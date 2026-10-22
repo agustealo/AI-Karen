@@ -339,6 +339,18 @@ class PostgresNeuroVault(VaultPort):
         receipt = await self._persist_with_session(
             entry, context=context, session=session, commit=False,
         )
+        # A caller-owned transaction may have executed additional SQL inside
+        # the writer. Never return staged success if its authenticated scope
+        # drifted during ledger/consent writes.
+        post_write_scope = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true), "
+            "current_setting('app.current_user_id', true)"
+        ))).one()
+        if post_write_scope != final_scope:
+            raise NeuroVaultAuthorizationError(
+                "caller transaction scope changed during persistence"
+            )
         return replace(
             receipt, persisted=False,
             metadata={**receipt.metadata, "pending_commit": True},
