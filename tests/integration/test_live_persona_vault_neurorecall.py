@@ -1066,6 +1066,35 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
             ), {"id": str(source), "tenant": str(tenant), "user": str(user),
                 "content": "Synthetic read-only assembly proof"})
+        # Canonical idempotency uniqueness must reject a second event with
+        # the same key, even across independent committed transactions.
+        from sqlalchemy.exc import IntegrityError
+        collision_key = "kp03-" + uuid.uuid4().hex
+        first_collision_event = uuid.uuid4()
+        second_collision_event = uuid.uuid4()
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(MemoryEvent(
+                event_id=first_collision_event, tenant_id=tenant, user_id=user,
+                source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                idempotency_key=collision_key, event_type="memory_persisted",
+                consent_state="granted", payload={"vault": {"test": "collision"}},
+            ))
+        with pytest.raises(IntegrityError):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                session.add(MemoryEvent(
+                    event_id=second_collision_event, tenant_id=tenant, user_id=user,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    idempotency_key=collision_key, event_type="memory_persisted",
+                    consent_state="granted", payload={"vault": {"test": "collision"}},
+                ))
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.idempotency_key == collision_key,
+            ))).scalars().all().__len__() == 1
+            await session.execute(
+                text("DELETE FROM public.memory_event WHERE event_id=:event"),
+                {"event": str(first_collision_event)},
+            )
         # Force a transaction rollback after a speculative ledger event.
         # Reopening the transaction must show no durable partial receipt.
         rolled_back_event = uuid.uuid4()
