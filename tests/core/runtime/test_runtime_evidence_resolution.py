@@ -369,3 +369,37 @@ async def test_persona_preference_outage_fails_closed_before_memory_recall() -> 
     assert resolved.metadata["memory_degraded"] is True
     assert resolved.metadata["memory_degradation_reason"] == "persona_scope_unavailable"
     assert EvidenceSource.MEMORY.value in resolved.unresolved_sources
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filtering", "sharing", "active", "expected"),
+    [
+        (True, False, "expert", "expert"),
+        (True, True, "expert", None),
+        (False, False, "expert", None),
+        (True, False, None, None),
+    ],
+)
+async def test_persona_scope_respects_backend_memory_sharing_preferences(
+    filtering: bool, sharing: bool, active: str | None, expected: str | None
+) -> None:
+    class ScopedPersonaService:
+        async def get_user_preferences(self, *, user_id: str, tenant_id: str):
+            assert user_id == "user-1"
+            assert tenant_id == "tenant-1"
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                active_persona_id=active,
+                enable_persona_memory_filtering=filtering,
+                cross_persona_memory_sharing=sharing,
+            )
+
+    manager = RecordingMemoryManager()
+    resolver = RuntimeEvidenceResolver(
+        memory_manager=manager, persona_service=ScopedPersonaService()
+    )
+    request = _request()
+    await resolver.resolve(request, _authorized_context(request))
+    assert len(manager.calls) == 1
+    assert manager.calls[0]["persona_filter"] == expected
