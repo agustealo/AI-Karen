@@ -701,8 +701,6 @@ async def inspect_authenticated_legacy_migration_transaction(
             refreshed.tenant_id != tenant
             or refreshed.user_id != user
             or refreshed.session_id != policy_request.session_id
-            or refreshed.request_id != policy_request.request_id
-            or refreshed.correlation_id != policy_request.correlation_id
             or "memory.write" not in refreshed.permissions
         ):
             raise PermissionError(
