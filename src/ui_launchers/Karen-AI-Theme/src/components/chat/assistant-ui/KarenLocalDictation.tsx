@@ -23,6 +23,7 @@ export function KarenLocalDictation() {
   const mounted = useRef(true);
   const starting = useRef(false);
   const recordingFailed = useRef(false);
+  const generation = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -31,6 +32,7 @@ export function KarenLocalDictation() {
       .catch(() => { if (mounted.current) setAvailable(false); });
     return () => {
       mounted.current = false;
+      generation.current += 1;
       if (timer.current) clearTimeout(timer.current);
       abort.current?.abort();
       recordingFailed.current = true;
@@ -49,6 +51,7 @@ export function KarenLocalDictation() {
   };
 
   const cancel = () => {
+    generation.current += 1;
     recordingFailed.current = true;
     abort.current?.abort();
     stop();
@@ -58,6 +61,7 @@ export function KarenLocalDictation() {
   const start = async () => {
     if (processing || recording || starting.current) return;
     starting.current = true;
+    const currentGeneration = ++generation.current;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("Microphone recording is unsupported in this browser.");
       starting.current = false;
@@ -66,7 +70,7 @@ export function KarenLocalDictation() {
     setError(null);
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!mounted.current) { mic.getTracks().forEach((track) => track.stop()); return; }
+      if (!mounted.current || generation.current !== currentGeneration) { mic.getTracks().forEach((track) => track.stop()); return; }
       stream.current = mic;
       const chunks: Blob[] = [];
       const media = new MediaRecorder(mic);
@@ -81,7 +85,7 @@ export function KarenLocalDictation() {
         mic.getTracks().forEach((track) => track.stop());
         stream.current = null;
         recorder.current = null;
-        if (!mounted.current || recordingFailed.current || !chunks.length) return;
+        if (!mounted.current || generation.current !== currentGeneration || recordingFailed.current || !chunks.length) return;
         setProcessing(true);
         const controller = new AbortController();
         abort.current = controller;
@@ -92,7 +96,7 @@ export function KarenLocalDictation() {
           const decoded = await audioContext.decodeAudioData(captured);
           const wav = encodeMonoPcmWav(decoded);
           const transcript = await apiClient.transcribeLocalAudio(wav, decoded.duration, controller.signal);
-          if (mounted.current && !controller.signal.aborted) {
+          if (mounted.current && generation.current === currentGeneration && !controller.signal.aborted) {
             aui.composer().setText(mergeDictatedText(aui.composer().getState().text || "", transcript.text));
           }
         } catch {
