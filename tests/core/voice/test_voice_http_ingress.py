@@ -130,6 +130,7 @@ async def test_busy_engine_rejects_before_reading_request_body():
     [
         (VoiceContractError("audio_byte_count_mismatch"), 422, "audio_byte_count_mismatch"),
         (ValueError("private_decoder_details"), 503, "local_transcription_failed"),
+        (RuntimeError("private_runtime_failure"), 503, "local_transcription_failed"),
         (Exception("private_model_trace"), 503, "local_transcription_failed"),
     ],
 )
@@ -155,6 +156,7 @@ async def test_transcription_errors_do_not_leak_internal_details(
     assert caught.value.detail == expected_detail
     assert "private_model_trace" not in caught.value.detail
     assert "private_decoder_details" not in caught.value.detail
+    assert "private_runtime_failure" not in caught.value.detail
 
 
 @pytest.mark.asyncio
