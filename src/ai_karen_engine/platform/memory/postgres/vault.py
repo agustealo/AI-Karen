@@ -344,6 +344,11 @@ class PostgresNeuroVault(VaultPort):
                     existing.tenant_id != tenant_uuid
                     or existing.user_id != user_uuid
                     or existing.event_type != "memory_persisted"
+                    or not isinstance(existing.payload, dict)
+                    or not isinstance(existing.payload.get("vault"), dict)
+                    or existing.payload["vault"].get("request_id") != context.request_id
+                    or existing.payload["vault"].get("consent_scope") != consent_scope
+                    or existing.source_type != source_type
                     or existing.payload_hash != self._payload_hash(entry)
                     or existing.idempotency_key != self._idempotency_key(entry, context)
                     or existing_assertion is None
