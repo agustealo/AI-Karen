@@ -1176,6 +1176,51 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 text("DELETE FROM public.memory_event WHERE event_id=:event"),
                 {"event": str(winner_id)},
             )
+        # Missing-receipt inspection must serialize contenders using the
+        # deterministic transaction advisory lock, not merely row locks.
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+            lookup_locked_legacy_replay_receipt,
+        )
+        first_lookup_ready = asyncio.Event()
+        release_first_lookup = asyncio.Event()
+        second_lookup_finished = asyncio.Event()
+        absent_memory_id, absent_request_id = str(uuid.uuid4()), str(uuid.uuid4())
+
+        async def hold_missing_receipt_slot():
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                receipt = await lookup_locked_legacy_replay_receipt(
+                    session=session, tenant_id=str(tenant), user_id=str(user),
+                    expected_memory_id=absent_memory_id,
+                    expected_request_id=absent_request_id,
+                )
+                assert receipt.persisted_memory_id is None
+                first_lookup_ready.set()
+                await release_first_lookup.wait()
+
+        async def inspect_same_missing_slot():
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                await lookup_locked_legacy_replay_receipt(
+                    session=session, tenant_id=str(tenant), user_id=str(user),
+                    expected_memory_id=absent_memory_id,
+                    expected_request_id=absent_request_id,
+                )
+            second_lookup_finished.set()
+
+        first_lookup = asyncio.create_task(hold_missing_receipt_slot())
+        second_lookup = None
+        try:
+            await asyncio.wait_for(first_lookup_ready.wait(), timeout=10)
+            second_lookup = asyncio.create_task(inspect_same_missing_slot())
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(second_lookup_finished.wait()), timeout=0.2,
+                )
+        finally:
+            release_first_lookup.set()
+            await asyncio.wait_for(first_lookup, timeout=10)
+        assert second_lookup is not None
+        await asyncio.wait_for(second_lookup, timeout=10)
+        assert second_lookup_finished.is_set()
         # Force a transaction rollback after a speculative ledger event.
         # Reopening the transaction must show no durable partial receipt.
         rolled_back_event = uuid.uuid4()
