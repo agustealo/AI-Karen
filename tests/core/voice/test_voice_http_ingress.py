@@ -55,6 +55,7 @@ async def test_excessive_upload_rejected_without_transcription():
 @pytest.mark.parametrize("duration", ["NaN", "Infinity", "-Infinity", "0", "121"])
 async def test_invalid_claimed_duration_rejected_before_inference(duration):
     runtime = SimpleNamespace(
+        transcription_busy=Mock(return_value=False),
         capabilities=AsyncMock(return_value=VoiceCapabilities(
             status=VoiceEngineStatus.READY, transcription_available=True, engine="local")),
         transcribe=AsyncMock(),
