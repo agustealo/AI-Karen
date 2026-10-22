@@ -349,3 +349,23 @@ def test_canonical_profile_recall_semantics_survive_typed_runtime_resolution():
             retrieved_at=datetime.now(timezone.utc),
         )
         assert untrusted.fact_semantics is None
+
+
+@pytest.mark.asyncio
+async def test_persona_preference_outage_fails_closed_before_memory_recall() -> None:
+    class UnavailablePersonaService:
+        async def get_user_preferences(self, *, user_id: str, tenant_id: str):
+            raise RuntimeError("secret-preference-backend-details")
+
+    manager = RecordingMemoryManager()
+    resolver = RuntimeEvidenceResolver(
+        memory_manager=manager, persona_service=UnavailablePersonaService()
+    )
+    request = _request()
+    context = _authorized_context(request)
+    resolved = await resolver.resolve(request, context)
+
+    assert manager.calls == []
+    assert resolved.metadata["memory_degraded"] is True
+    assert resolved.metadata["memory_degradation_reason"] == "persona_scope_unavailable"
+    assert EvidenceSource.MEMORY.value in resolved.unresolved_sources
