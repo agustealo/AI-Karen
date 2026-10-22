@@ -348,6 +348,10 @@ class PostgresNeuroVault(VaultPort):
             "current_setting('app.current_user_id', true)"
         ))).one()
         if post_write_scope != final_scope:
+            # Ledger rows were already flushed. Roll back the complete
+            # caller-owned transaction even if its caller catches this
+            # authorization error and attempts to commit afterward.
+            await session.rollback()
             raise NeuroVaultAuthorizationError(
                 "caller transaction scope changed during persistence"
             )
