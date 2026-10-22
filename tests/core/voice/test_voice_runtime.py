@@ -210,6 +210,46 @@ async def test_changed_local_model_configuration_replaces_existing_engine(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["disable", "model"])
+async def test_settings_changed_during_model_load_do_not_register_stale_engine(monkeypatch, change):
+    from ai_karen_engine.services import voice_runtime as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Adapter:
+        engine_id = "faster-whisper-local"
+
+        def __init__(self, model_path, *, device, compute_type):
+            pass
+
+        async def load(self):
+            entered.set()
+            await release.wait()
+
+        async def is_ready(self):
+            return True
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/first")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        loading = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.wait_for(entered.wait(), 1)
+        if change == "disable":
+            monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "false")
+        else:
+            monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/second")
+        release.set()
+        capabilities = await asyncio.wait_for(loading, 1)
+    assert not capabilities.transcription_available
+    assert runtime.speech_engine is None
+
+
+@pytest.mark.asyncio
 async def test_configuration_change_waits_for_running_inference(monkeypatch):
     from ai_karen_engine.services import voice_runtime as module
 
