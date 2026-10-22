@@ -45,3 +45,30 @@ async def test_unrelated_read_capability_not_conflated_with_planner_permissions(
         )
     )
     assert "planner.read" not in result.denied_capabilities
+
+
+@pytest.mark.asyncio
+async def test_planner_read_uses_canonical_inherited_user_role():
+    result = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(
+            user_id="user", tenant_id="tenant", action="planner.read",
+            requested_capabilities=["planner.read"],
+            roles=["user"], permissions=[],
+        )
+    )
+    assert PolicyReasonCode.INSUFFICIENT_PERMISSION not in result.reason_codes
+    if result.allowed:
+        assert "planner.read" in result.allowed_capabilities
+
+
+@pytest.mark.asyncio
+async def test_readonly_role_cannot_acquire_planner_data():
+    result = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(
+            user_id="user", tenant_id="tenant", action="planner.read",
+            requested_capabilities=["planner.read"],
+            roles=["readonly"], permissions=[],
+        )
+    )
+    assert not result.allowed
+    assert "planner.read" in result.denied_capabilities
