@@ -108,3 +108,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Source verification added to retry preparation
 
 `prepare_source_verified_legacy_migration_retry` consults the existing read-only historical source verifier for the trusted runtime request's tenant/user and source ID before invoking the combined RuntimePolicy, explicit consent, preflight and recovery admission checks. A missing or blank source is denied. The verifier does not expose or import content and cannot authenticate the request or establish retention eligibility. A unit test confirms missing-source denial. Actual historical writes remain disabled.
+
+### Historical TTL retention evidence
+
+`platform/memory/postgres/legacy_persona_retention.py` adds read-only evaluation against the canonical `RetentionPolicy` table using a verified source timestamp, explicitly requested memory class and scoped tenant/global TTL precedence. Missing or nonpositive TTL policy, future timestamps and expired records are rejected, rather than assuming indefinite historical retention. This is a preliminary predicate, **not** a complete retention authorization: callers must read and verify the historical source timestamp/class from trusted storage and reconcile deletion/legal-hold policy as applicable before import. No write or bulk backfill is enabled.
