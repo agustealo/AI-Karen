@@ -676,6 +676,23 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             await prepare_governed_legacy_migration_retry(
                 **{**base, "runtime_policy": RuntimePolicyEnforcer()}
             )
+        # Force a transaction rollback after a speculative ledger event.
+        # Reopening the transaction must show no durable partial receipt.
+        rolled_back_event = uuid.uuid4()
+        with pytest.raises(RuntimeError, match="forced migration rollback"):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                session.add(MemoryEvent(
+                    event_id=rolled_back_event, tenant_id=tenant, user_id=user,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    event_type="memory_persisted", consent_state="granted",
+                    payload={"vault": {"request_id": str(uuid.uuid4())}},
+                ))
+                await session.flush()
+                raise RuntimeError("forced migration rollback")
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.event_id == rolled_back_event
+            ))).scalar_one_or_none() is None
         # A caller cannot reuse one tenant's historical source under another tenant.
         wrong_scope = ChatExecutionContext(
             tenant_id=str(uuid.uuid4()), user_id=str(user),
