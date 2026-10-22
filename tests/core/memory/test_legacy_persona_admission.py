@@ -148,6 +148,14 @@ def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scop
     assert migration_write_authority_from_policy(
         request=request, decision=decision
     ).explicitly_granted
+    wrong_action = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="ordinary_memory_write",
+        requested_capabilities=["memory.write"], permissions=["memory.write"],
+    )
+    assert not migration_write_authority_from_policy(
+        request=wrong_action, decision=decision
+    ).explicitly_granted
     no_permission = PolicyEvaluationRequest(
         tenant_id="tenant-a", user_id="user-a",
         requested_capabilities=["memory.write"],
