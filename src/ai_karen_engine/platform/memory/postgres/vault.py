@@ -391,12 +391,6 @@ class PostgresNeuroVault(VaultPort):
             tenant_id=tenant_uuid,
             entry=entry,
         )
-        if consent_scope == "persona-memory-migration" and (
-            valid_to is None or valid_to <= datetime.utcnow()
-        ):
-            raise NeuroVaultAuthorizationError(
-                "historical migration requires active bounded retention"
-            )
         event_id = uuid.uuid4()
         assertion_id = self._entry_uuid(entry.id)
         payload = entry.to_dict()
