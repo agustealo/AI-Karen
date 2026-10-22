@@ -1146,6 +1146,25 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         assert identical_retry.persisted
         assert identical_retry.memory_id == replay.memory_id
         assert identical_retry.metadata["idempotent_replay"] is True
+        # The assertion itself must also match. A valid event fingerprint is
+        # insufficient if its canonical assertion was altered independently.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            canonical_assertion = (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id),
+            ))).scalar_one()
+            original_assertion_content = canonical_assertion.content
+            canonical_assertion.content = "tampered canonical assertion"
+        try:
+            with pytest.raises(NeuroVaultAuthorizationError, match="idempotency collision"):
+                await PostgresNeuroVault().persist(
+                    synthetic_entry, context=vault_context,
+                )
+        finally:
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                canonical_assertion = (await session.execute(select(MemoryAssertion).where(
+                    MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id),
+                ))).scalar_one()
+                canonical_assertion.content = original_assertion_content
         # Even identical content must not replay under a forged or stale
         # canonical event consent provenance.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
