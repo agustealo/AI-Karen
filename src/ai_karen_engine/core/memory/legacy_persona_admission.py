@@ -690,4 +690,22 @@ async def inspect_authenticated_legacy_migration_transaction(
             or final_admission.user_id != user
         ):
             raise PermissionError("historical migration authorization revoked during inspection")
+        # Re-authenticate against the live revocation store after policy
+        # re-evaluation and before leaving the locked transaction. An earlier
+        # valid JWT is not a durable migration capability.
+        refreshed = await migration_policy_request_from_authenticated_http(
+            request=request, request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if (
+            refreshed.tenant_id != tenant
+            or refreshed.user_id != user
+            or refreshed.session_id != policy_request.session_id
+            or refreshed.request_id != policy_request.request_id
+            or refreshed.correlation_id != policy_request.correlation_id
+            or "memory.write" not in refreshed.permissions
+        ):
+            raise PermissionError(
+                "historical migration authenticated principal changed during inspection"
+            )
         return replay, receipt
