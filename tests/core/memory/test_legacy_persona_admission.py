@@ -538,3 +538,66 @@ async def test_invalid_legacy_source_id_rejected_before_identity_read(
             recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
             source_record_id=source_id,
         )
+
+
+def test_migration_policy_request_reuses_canonical_runtime_identity():
+    from uuid import uuid4
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_policy_request_from_runtime_context,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    tenant, user = str(uuid4()), str(uuid4())
+    context = ChatExecutionContext(
+        tenant_id=tenant, user_id=user, session_id="session-1",
+        request_id="request-1", correlation_id="trace-1",
+        roles=["member"], permissions=["memory.read"],
+    )
+    request = migration_policy_request_from_runtime_context(context=context)
+    assert request.tenant_id == tenant
+    assert request.user_id == user
+    assert request.session_id == "session-1"
+    assert request.correlation_id == "trace-1"
+    assert request.action == "legacy_persona_memory_migration"
+    assert request.requested_capabilities == ["memory.write"]
+    assert request.permissions == ["memory.read"]
+
+
+@pytest.mark.parametrize("missing", ["tenant_id", "user_id", "session_id", "request_id", "correlation_id"])
+def test_migration_policy_request_rejects_incomplete_runtime_context(missing):
+    from uuid import uuid4
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_policy_request_from_runtime_context,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    fields = dict(tenant_id=str(uuid4()), user_id=str(uuid4()),
+                  session_id="session-1", request_id="request-1",
+                  correlation_id="trace-1")
+    fields[missing] = ""
+    with pytest.raises(ValueError):
+        migration_policy_request_from_runtime_context(
+            context=ChatExecutionContext(**fields)
+        )
+
+
+@pytest.mark.asyncio
+async def test_migration_runtime_context_does_not_create_write_permission():
+    from uuid import uuid4
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_policy_request_from_runtime_context,
+        evaluate_migration_write_authority,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+
+    context = ChatExecutionContext(
+        tenant_id=str(uuid4()), user_id=str(uuid4()),
+        session_id="session-1", request_id="request-1",
+        permissions=["memory.read"],
+    )
+    request = migration_policy_request_from_runtime_context(context=context)
+    authority = await evaluate_migration_write_authority(
+        authenticated_request=request, runtime_policy=RuntimePolicyEnforcer()
+    )
+    assert not authority.explicitly_granted
