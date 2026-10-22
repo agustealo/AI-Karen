@@ -1248,7 +1248,7 @@ async def test_transaction_authority_rejects_missing_active_session():
 
 @pytest.mark.asyncio
 async def test_transaction_authority_rejects_scope_drift_during_verification():
-    from unittest.mock import AsyncMock, Mock, patch
+    from unittest.mock import AsyncMock, Mock
     from ai_karen_engine.core.memory.legacy_persona_admission import (
         LegacyMigrationTransactionAuthority,
     )
@@ -1264,20 +1264,17 @@ async def test_transaction_authority_rejects_scope_drift_during_verification():
         Mock(one=Mock(return_value=first)),
         Mock(one=Mock(return_value=changed)),
     ])
-    with patch(
-        "sqlalchemy.ext.asyncio.AsyncSession",
-        new=type(session),
-    ):
-        with pytest.raises(PermissionError, match="changed during verification"):
-            await LegacyMigrationTransactionAuthority.inspect(
-                session=session, tenant_id=tenant, user_id=user,
-                policy_decision_id="verified-decision",
-            )
+    with pytest.raises(PermissionError, match="changed during verification"):
+        await LegacyMigrationTransactionAuthority.inspect(
+            session=session, tenant_id=tenant, user_id=user,
+            policy_decision_id="verified-decision",
+        )
+
 
 
 @pytest.mark.asyncio
 async def test_inspection_transaction_evidence_cannot_be_reused_on_different_transaction():
-    from unittest.mock import AsyncMock, Mock, patch
+    from unittest.mock import AsyncMock, Mock
     from sqlalchemy.ext.asyncio import AsyncSession
     from ai_karen_engine.core.memory.legacy_persona_admission import (
         LegacyMigrationTransactionAuthority,
@@ -1294,6 +1291,5 @@ async def test_inspection_transaction_evidence_cannot_be_reused_on_different_tra
     session.execute = AsyncMock(return_value=Mock(
         one=Mock(return_value=(tenant, tenant, user, 902)),
     ))
-    with patch("sqlalchemy.ext.asyncio.AsyncSession", new=type(session)):
-        with pytest.raises(PermissionError, match="transaction identity expired"):
-            await evidence.verify_active(session=session)
+    with pytest.raises(PermissionError, match="transaction identity expired"):
+        await evidence.verify_active(session=session)
