@@ -51,4 +51,29 @@ test.describe("authenticated planner presentation replay", () => {
     await expect(plannerCards.getByText(taskTitle!, { exact: true })).toHaveCount(1);
     await expect(shell.getByRole("alert")).toHaveCount(0);
   });
+  test("preserves the same planner card while navigating to Tasks and back", async ({ page }) => {
+    await page.goto("/dashboard");
+    const shell = page.getByTestId("karen-assistant-ui-chat");
+    await expect(shell).toBeVisible();
+    await shell.getByRole("button", { name: "Find conversations" }).click();
+    const target = page.getByRole("group", { name: "Matching conversations" })
+      .getByRole("button", { name: conversationTitle!, exact: true });
+    await expect(target).toHaveCount(1);
+    await target.click();
+
+    const plannerCards = shell.getByTestId("karen-planner-task-list");
+    await expect(plannerCards.getByText(taskTitle!, { exact: true })).toHaveCount(1);
+
+    // Dashboard keeps the same chat mounted while workspaces change.
+    await page.getByRole("button", { name: "Tasks", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Ask Karen" })).toBeVisible();
+    await page.getByRole("button", { name: "Ask Karen" }).click();
+    await expect(page.getByTestId("persistent-karen-conversation")).toBeVisible();
+    await expect(plannerCards.getByText(taskTitle!, { exact: true })).toHaveCount(1);
+    await page.getByRole("button", { name: "Return to your Karen conversation" }).click();
+    await expect(shell).toBeVisible();
+    await expect(plannerCards.getByText(taskTitle!, { exact: true })).toHaveCount(1);
+    await expect(shell.getByRole("alert")).toHaveCount(0);
+  });
+
 });
