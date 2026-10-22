@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import struct
 import tempfile
 import wave
 from pathlib import Path
@@ -69,7 +70,7 @@ class FasterWhisperLocalAdapter:
                 pcm = wav.readframes(frame_count)
                 if len(pcm) != frame_count * frame_bytes:
                     raise VoiceContractError("truncated_wav_payload")
-        except (wave.Error, EOFError) as exc:
+        except (wave.Error, EOFError, struct.error) as exc:
             raise VoiceContractError("invalid_wav_container") from exc
 
         def infer() -> TranscriptionResult:
