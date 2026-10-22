@@ -707,6 +707,16 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 RetentionPolicy.policy_id == retention_id
             ))).scalar_one()
             policy_row.ttl_days = 30
+        # Runtime permissions must also be reassessed for every preparation.
+        no_write_context = ChatExecutionContext(
+            tenant_id=str(tenant), user_id=str(user),
+            session_id="kp03-postgres-proof", request_id=str(uuid.uuid4()),
+            permissions=["memory.read"],
+        )
+        with pytest.raises(ValueError, match="current migration authorization required"):
+            await prepare_governed_legacy_migration_retry(
+                **{**base, "context": no_write_context}
+            )
         # A caller cannot reuse one tenant's historical source under another tenant.
         wrong_scope = ChatExecutionContext(
             tenant_id=str(uuid.uuid4()), user_id=str(user),
