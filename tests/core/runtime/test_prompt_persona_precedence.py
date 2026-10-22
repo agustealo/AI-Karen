@@ -25,4 +25,5 @@ async def test_runtime_persona_overrides_registered_presentation_defaults_only()
     assert '"verbosity": "brief"' in overlays[0]["content"]
     assert "untrusted override" not in overlays[0]["content"]
     assert "override policy" not in overlays[0]["content"]
+    assert result.metadata["persona_policy"]["rejected_fields"] == ["provider", "system_prompt"]
     assert result.messages[-1]["role"] == "user"
