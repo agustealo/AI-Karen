@@ -240,6 +240,13 @@ class PostgresNeuroVault(VaultPort):
         """
         if session is None:
             raise ValueError("caller-owned active PostgreSQL session required")
+        # Never accept a raw, unscoped session for a governed mutation.
+        # The caller must own an active transaction; tenant enforcement still
+        # comes from the canonical context and the database's tenant RLS.
+        if not session.in_transaction():
+            raise NeuroVaultAuthorizationError(
+                "active caller-owned PostgreSQL transaction required"
+            )
         from dataclasses import replace
 
         receipt = await self._persist_with_session(
