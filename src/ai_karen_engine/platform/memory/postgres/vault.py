@@ -484,6 +484,9 @@ class PostgresNeuroVault(VaultPort):
                 or existing_assertion.assertion_id != assertion_id
                 or existing_assertion.tenant_id != tenant_uuid
                 or existing_assertion.user_id != user_uuid
+                or existing_assertion.event_id != existing.event_id
+                or existing_assertion.content != entry.content
+                or existing_assertion.consent_state != "granted"
                 or (existing_assertion.valid_to is not None
                     and existing_assertion.valid_to <= datetime.utcnow())
             ):
