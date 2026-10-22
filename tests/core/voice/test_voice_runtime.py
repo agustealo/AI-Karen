@@ -1,6 +1,7 @@
 """Voice readiness must be grounded in a real local engine health check."""
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 import pytest
 
@@ -117,3 +118,45 @@ async def test_mismatched_audio_metadata_is_contract_error_before_inference():
     with pytest.raises(VoiceContractError, match="audio_byte_count_mismatch"):
         await runtime.transcribe(b"123", AudioInput("audio/wav", 4, 0.5))
     engine.transcribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_optional_bootstrap_loads_model_once(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    loads = 0
+
+    class Adapter:
+        engine_id = "faster-whisper-local"
+
+        def __init__(self, model_path, *, device, compute_type):
+            assert model_path == "/local/model"
+
+        async def load(self):
+            nonlocal loads
+            loads += 1
+            entered.set()
+            await release.wait()
+
+        async def is_ready(self):
+            return True
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/model")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        first = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.sleep(0)
+        assert loads == 1
+        release.set()
+        first_capabilities, second_capabilities = await asyncio.gather(first, second)
+    assert loads == 1
+    assert first_capabilities.transcription_available
+    assert second_capabilities.transcription_available
