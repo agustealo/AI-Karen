@@ -38,4 +38,11 @@ describe("right-side result workspace preferences", () => {
     render(<RichResultWorkspace message={message} />);
     expect(screen.getByRole("button", { name: "Customize workspace cards" })).toBeTruthy();
   });
+  it("offers workspace card settings even before a response has any evidence", () => {
+    render(<RichResultWorkspace />);
+    expect(screen.getByRole("status").textContent).toContain("No files, artifacts");
+    fireEvent.click(screen.getByRole("button", { name: "Customize workspace cards" }));
+    expect(screen.getByRole("checkbox", { name: "Artifacts" })).toBeTruthy();
+  });
+
 });
