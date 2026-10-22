@@ -169,6 +169,23 @@ async def test_admitted_migration_replay_identity_is_idempotent_in_real_vault():
         second = await vault.persist(entry, context=context)
         assert first.persisted and second.persisted
         assert first.memory_id == second.memory_id
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+            lookup_legacy_replay_receipt,
+        )
+        from ai_karen_engine.core.memory.legacy_persona_recovery import (
+            reconcile_legacy_replay,
+        )
+        evidence = await lookup_legacy_replay_receipt(
+            tenant_id=str(tenant), user_id=str(user),
+            expected_memory_id=replay.memory_id,
+        )
+        decision = reconcile_legacy_replay(evidence)
+        assert decision.already_persisted and not decision.safe_to_retry
+        unrelated = await lookup_legacy_replay_receipt(
+            tenant_id=str(uuid.uuid4()), user_id=str(user),
+            expected_memory_id=replay.memory_id,
+        )
+        assert not reconcile_legacy_replay(unrelated).already_persisted
         # Consent is checked before the idempotency lookup. A retry after
         # revocation must not yield a successful cached write receipt.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
