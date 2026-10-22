@@ -44,3 +44,7 @@ Run `python scripts/audit/persona_memory_references.py --root . --output persona
 
 ### Evidence-origin guard
 The preflight now rejects evidence whose origin is not explicitly marked `authorized_runtime`. This is a **defense-in-depth marker, not cryptographic attestation or RBAC enforcement**: a caller can construct the dataclass, so migration execution must still derive all evidence server-side from authenticated canonical sources and independently obtain a valid RuntimePolicy write grant. Never expose this preflight contract directly as a user-controlled API payload.
+
+## Independent write-admission boundary
+
+`core/memory/legacy_persona_admission.py` requires both eligible preflight and an explicitly granted, principal-scoped `memory.write` policy decision. This is a **pure guard**, not an authorization service or executable migration: its dataclass values can be fabricated by an untrusted caller. Only the canonical runtime may construct it from authenticated policy decisions, and NeuroVault must independently enforce the authentic RuntimePolicy/consent at persistence time. No new write owner, bypass or bulk-import endpoint is introduced. Negative tests cover policy denial, preflight denial, principal mismatches and missing write capability.
