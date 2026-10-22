@@ -30,3 +30,30 @@ def test_persona_activation_stays_in_backend_preferences_contract():
     assert "expected_revision: personaRevision" in source
     assert "setPersonaRevision(selected.revision)" in source
     assert "setPersonaRevision(null)" in source
+
+
+DASHBOARD = Path(
+    "src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx"
+)
+
+
+def test_persona_navigation_keeps_single_shell_conversation():
+    """Settings must live inside the shell without mounting another chat."""
+    dashboard = DASHBOARD.read_text(encoding="utf-8")
+    persona = PERSONA_SETTINGS.read_text(encoding="utf-8")
+    assert dashboard.count("<SessionProvider>") == 1
+    assert dashboard.count('data-testid="persistent-karen-conversation"') == 1
+    assert "USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />" in dashboard
+    assert "<KarenAssistantChat" not in persona
+    assert "<ChatInterface" not in persona
+    assert "new HttpAgent(" not in persona
+
+
+def test_persona_saved_activation_requires_revision_receipt():
+    """An editor draft must not be represented as active without server truth."""
+    source = PERSONA_SETTINGS.read_text(encoding="utf-8")
+    assert "expected_revision: personaRevision" in source
+    assert "const selected = await apiClient.put<PersonaPreferences>(" in source
+    assert "setPersonaRevision(selected.revision)" in source
+    assert "clearDraftInstructions()" in source
+    assert "Persona Save Failed" in source
