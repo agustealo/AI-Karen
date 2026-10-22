@@ -172,3 +172,39 @@ def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scop
     assert not migration_write_authority_from_policy(
         request=request, decision=human_gate
     ).explicitly_granted
+
+
+async def test_live_runtime_policy_gate_requires_trusted_permission():
+    import pytest
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        evaluate_migration_write_authority,
+    )
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    policy = RuntimePolicyEnforcer()
+    base = dict(tenant_id="tenant-a", user_id="user-a",
+                action="legacy_persona_memory_migration",
+                requested_capabilities=["memory.write"])
+    allowed = await evaluate_migration_write_authority(
+        authenticated_request=PolicyEvaluationRequest(
+            **base, permissions=["memory.write"],
+        ),
+        runtime_policy=policy,
+    )
+    assert allowed.explicitly_granted
+    denied = await evaluate_migration_write_authority(
+        authenticated_request=PolicyEvaluationRequest(**base, permissions=[]),
+        runtime_policy=policy,
+    )
+    assert not denied.explicitly_granted
+    with pytest.raises(ValueError, match="migration-specific"):
+        await evaluate_migration_write_authority(
+            authenticated_request=PolicyEvaluationRequest(
+                tenant_id="tenant-a", user_id="user-a",
+                action="general_assist",
+                permissions=["memory.write"],
+                requested_capabilities=["memory.write"],
+            ),
+            runtime_policy=policy,
+        )
