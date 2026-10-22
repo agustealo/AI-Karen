@@ -107,8 +107,8 @@ class PromptAssembler:
         metadata["persona_policy"] = {
             "authority": "presentation_only",
             "included_fields": sorted(persona_result.data.keys()),
-            "rejected_fields": list(persona_result.rejected_fields),
-            "ignored_fields": list(persona_result.ignored_fields),
+            "rejected_fields": sorted(set(defaults.rejected_fields + selected.rejected_fields)),
+            "ignored_fields": sorted(set(defaults.ignored_fields + selected.ignored_fields)),
         }
 
         if prompt_definition:
