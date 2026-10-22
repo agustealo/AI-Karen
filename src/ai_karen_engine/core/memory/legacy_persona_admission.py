@@ -211,6 +211,9 @@ async def prepare_consented_legacy_migration_retry(
         raise ValueError("migration recovery does not allow retry")
     if not preflight.eligible or preflight.reason_codes:
         raise ValueError("migration preflight not eligible")
+    admission = admit_legacy_migration(preflight, authority)
+    if not admission.admitted:
+        raise ValueError("current migration authorization required before consent lookup")
     if not await verify_legacy_migration_consent(
         tenant_id=authority.tenant_id, user_id=authority.user_id,
         consent_scope="persona-memory-migration",
