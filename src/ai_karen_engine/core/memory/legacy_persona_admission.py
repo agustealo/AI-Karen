@@ -220,3 +220,30 @@ async def prepare_consented_legacy_migration_retry(
         preflight=preflight, authority=authority,
         recovery=recovery, source_record_id=source_record_id,
     )
+
+
+async def prepare_runtime_authorized_legacy_migration_retry(
+    *,
+    authenticated_request: "PolicyEvaluationRequest",
+    runtime_policy: "RuntimePolicyEnforcer",
+    preflight: "LegacyMigrationPreflight",
+    recovery: "LegacyReplayRecoveryDecision",
+    source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Gate retry on a fresh real policy decision and current ledger consent.
+
+    The runtime must construct authenticated_request and preflight from trusted
+    identity, source, and retention evidence. No writes happen here.
+    """
+    authority = await evaluate_migration_write_authority(
+        authenticated_request=authenticated_request,
+        runtime_policy=runtime_policy,
+    )
+    if not authority.explicitly_granted:
+        raise ValueError("current migration authorization required")
+    return await prepare_consented_legacy_migration_retry(
+        preflight=preflight,
+        authority=authority,
+        recovery=recovery,
+        source_record_id=source_record_id,
+    )
