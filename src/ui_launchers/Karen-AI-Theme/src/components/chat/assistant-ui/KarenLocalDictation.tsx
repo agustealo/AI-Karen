@@ -88,8 +88,9 @@ export function KarenLocalDictation() {
       recorder.current = media;
       media.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
       media.onerror = () => {
+        if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration)) return;
         recordingFailed.current = true;
-        if (mounted.current) setError("Audio capture failed.");
+        setError("Audio capture failed.");
         stop();
       };
       media.onstop = async () => {
