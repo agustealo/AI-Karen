@@ -9,7 +9,7 @@ from __future__ import annotations
 import io
 import wave
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -50,6 +50,7 @@ def app_with_identity(*, authenticated: bool) -> FastAPI:
 
 def runtime_stub():
     return SimpleNamespace(
+        transcription_busy=Mock(return_value=False),
         capabilities=AsyncMock(
             return_value=VoiceCapabilities(
                 status=VoiceEngineStatus.READY,
