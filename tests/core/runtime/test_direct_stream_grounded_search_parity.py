@@ -68,3 +68,48 @@ async def test_stream_search_composes_once_or_truthfully_reports_tool_only(gener
     assert chunks[0].metadata["response_source"] == (
         "grounded_search_model" if generated else "tool"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent", ["search.general", "search.weather", "time.current"])
+async def test_canonical_composer_identical_metadata_in_both_transports(intent):
+    runtime = object.__new__(ChatRuntime)
+    request, plan, meter = object(), object(), object()
+    decision = SimpleNamespace(intent=intent)
+    result = DirectCapabilityResult(
+        handled=True, success=True, text="Evidence-only response",
+        source="tool", source_id="approved_tool",
+    )
+    generated = ("Grounded response", {
+        "actual_provider": "ollama", "actual_model": "verified-model",
+        "response_source": "grounded_observation_model",
+    })
+    with patch.object(
+        runtime, "_synthesize_search_evidence",
+        new_callable=AsyncMock, return_value=generated,
+    ) as synthesize:
+        answer, meta = await runtime._compose_direct_capability_answer(
+            request, decision, plan, meter, result, result.normalized_metadata()
+        )
+    assert answer == "Grounded response"
+    assert meta["actual_model"] == "verified-model"
+    assert meta["response_source"] == "grounded_observation_model"
+    synthesize.assert_awaited_once_with(request, decision, plan, meter, result)
+
+
+@pytest.mark.asyncio
+async def test_canonical_composer_does_not_attempt_generation_on_failed_tool():
+    runtime = object.__new__(ChatRuntime)
+    result = DirectCapabilityResult(
+        handled=True, success=False, text="Live data unavailable",
+        degraded=True, source="capability_unavailable",
+    )
+    with patch.object(runtime, "_synthesize_search_evidence", new_callable=AsyncMock) as synthesize:
+        answer, meta = await runtime._compose_direct_capability_answer(
+            object(), SimpleNamespace(intent="search.weather"),
+            object(), object(), result, result.normalized_metadata()
+        )
+    assert answer == "Live data unavailable"
+    assert meta["actual_model"] is None
+    assert meta["degraded_mode"] is True
+    synthesize.assert_not_called()
