@@ -904,16 +904,22 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert "audit.read" in policy_inputs[1]
             # A final authority scoped to another principal must be rejected
             # even when admission validation is unexpectedly permissive.
+            final_authority_calls = 0
+
             async def forged_final_authority(**kwargs):
+                nonlocal final_authority_calls
+                final_authority_calls += 1
                 result = await original_evaluate(**kwargs)
-                return dataclasses.replace(result, user_id=str(uuid.uuid4()))
+                if final_authority_calls == 2:
+                    return dataclasses.replace(result, user_id=str(uuid.uuid4()))
+                return result
 
             with MonkeyPatch.context() as authority_patch:
                 authority_patch.setattr(
                     admission_module, "evaluate_migration_write_authority",
                     forged_final_authority,
                 )
-                with pytest.raises(PermissionError, match="principal mismatch"):
+                with pytest.raises(PermissionError, match="revoked during inspection"):
                     await inspect_authenticated_legacy_migration_transaction(
                         request=http_request, request_id=str(uuid.uuid4()),
                         correlation_id=str(uuid.uuid4()), source_record_id=str(source),
