@@ -702,6 +702,10 @@ async def inspect_authenticated_legacy_migration_transaction(
             or refreshed.user_id != user
             or refreshed.session_id != policy_request.session_id
             or "memory.write" not in refreshed.permissions
+            or not set(refreshed.permissions).issuperset(
+                set(policy_request.permissions)
+            )
+            or not set(refreshed.roles).issuperset(set(policy_request.roles))
         ):
             raise PermissionError(
                 "historical migration authenticated principal changed during inspection"
