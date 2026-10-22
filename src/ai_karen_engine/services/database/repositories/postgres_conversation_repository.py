@@ -441,6 +441,97 @@ class PostgresConversationRepository(ConversationRepository):
             return RepositoryResult(success=False, error=str(exc))
 
     @instrument_repository(
+        operation="add_completed_turn", repository="PostgresConversationRepository"
+    )
+    async def add_completed_turn(
+        self, user_message: Message, assistant_message: Message
+    ) -> RepositoryResult[int]:
+        """Commit both messages under one locked, tenant-owned transaction."""
+        if (
+            user_message.role != "user" or assistant_message.role != "assistant"
+            or user_message.conversation_id != assistant_message.conversation_id
+            or user_message.tenant_id != assistant_message.tenant_id
+            or user_message.id == assistant_message.id
+        ):
+            return RepositoryResult(success=False, error="invalid_completed_turn")
+        try:
+            async with await self._session() as session:
+                async with session.begin():
+                    # Serialize concurrent replay attempts on the parent row.
+                    owner = await session.execute(
+                        text("""
+                            SELECT conversation_id FROM conversations
+                            WHERE conversation_id = :conversation_id
+                              AND tenant_id = :tenant_id
+                            FOR UPDATE
+                        """),
+                        {"conversation_id": user_message.conversation_id,
+                         "tenant_id": user_message.tenant_id},
+                    )
+                    if owner.fetchone() is None:
+                        return RepositoryResult(
+                            success=False,
+                            error="conversation_not_found_or_tenant_mismatch",
+                        )
+                    persisted = 0
+                    for message in (user_message, assistant_message):
+                        inserted = await session.execute(
+                            text("""
+                                INSERT INTO messages (
+                                    message_id, conversation_id, role, content,
+                                    message_metadata, created_at
+                                ) VALUES (
+                                    :id, :conversation_id, :role, :content,
+                                    :metadata, :created_at
+                                )
+                                ON CONFLICT (message_id) DO NOTHING
+                            """),
+                            {"id": message.id,
+                             "conversation_id": message.conversation_id,
+                             "role": message.role,
+                             "content": message.content,
+                             "metadata": json.dumps(message.metadata),
+                             "created_at": message.created_at},
+                        )
+                        if inserted.rowcount == 1:
+                            persisted += 1
+                            continue
+                        existing = await session.execute(
+                            text("""
+                                SELECT conversation_id, role, content,
+                                       message_metadata
+                                FROM messages WHERE message_id = :id
+                            """),
+                            {"id": message.id},
+                        )
+                        row = existing.fetchone()
+                        stored_meta = row.message_metadata if row is not None else None
+                        if isinstance(stored_meta, str):
+                            stored_meta = json.loads(stored_meta)
+                        if (
+                            row is None
+                            or str(row.conversation_id) != message.conversation_id
+                            or str(row.role) != message.role
+                            or str(row.content) != message.content
+                            or not isinstance(stored_meta, dict)
+                            or stored_meta.get("request_id") != message.metadata.get("request_id")
+                        ):
+                            raise ValueError("message_idempotency_conflict")
+                    if persisted == 1:
+                        # A complete turn is never allowed to repair an orphan
+                        # from the obsolete non-atomic write path implicitly.
+                        raise ValueError("incomplete_turn_replay")
+                return RepositoryResult(
+                    success=True, data=persisted,
+                    metadata={"idempotent_replay": persisted == 0},
+                )
+        except ValueError as exc:
+            return RepositoryResult(success=False, error=str(exc))
+        except Exception:
+            logger.exception("Atomic completed-turn persistence failed")
+            return RepositoryResult(success=False, error="completed_turn_write_failed")
+
+    @instrument_repository(
         operation="get_messages", repository="PostgresConversationRepository"
     )
     async def get_messages(
