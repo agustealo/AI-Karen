@@ -56,11 +56,22 @@ class VoiceRuntime:
             try:
                 return await asyncio.shield(inference)
             except asyncio.CancelledError:
-                try:
-                    await inference
-                except Exception:
-                    # Preserve cancellation; the abandoned result is not sent.
-                    pass
+                # Repeated cancellation of the request must not cancel the
+                # inference task or release the lock while a model is running.
+                while not inference.done():
+                    try:
+                        await asyncio.shield(inference)
+                    except asyncio.CancelledError:
+                        # Cancellation belongs to the caller, not the model.
+                        continue
+                    except Exception:
+                        break
+                # Read the result to account for a failed abandoned inference.
+                if inference.done() and not inference.cancelled():
+                    try:
+                        inference.result()
+                    except Exception:
+                        pass
                 raise
 
     async def capabilities(self) -> VoiceCapabilities:
