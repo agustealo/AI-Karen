@@ -587,3 +587,91 @@ async def test_canonical_identity_requires_active_verified_same_tenant_user():
                 "DELETE FROM public.auth_users "
                 "WHERE user_id=:user AND tenant_id=:tenant"
             ), {"user": str(user), "tenant": str(tenant)})
+
+
+async def test_governed_migration_assembly_disposable_postgres_recovery():
+    """Real read-only assembly, revocation and replay proof; never import source."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_governed_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+    from ai_karen_engine.platform.memory.postgres.ledger_models import RetentionPolicy
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, source, consent_id, retention_id = (uuid.uuid4() for _ in range(5))
+    context = ChatExecutionContext(
+        tenant_id=str(tenant), user_id=str(user), session_id="kp03-postgres-proof",
+        request_id=str(uuid.uuid4()), permissions=["memory.write"],
+    )
+    base = dict(context=context, runtime_policy=RuntimePolicyEnforcer(),
+                source_record_id=str(source))
+    created = datetime.now(timezone.utc) - timedelta(days=1)
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "CREATE TABLE IF NOT EXISTS public.auth_users ("
+                "user_id UUID PRIMARY KEY, tenant_id TEXT, "
+                "is_active BOOLEAN DEFAULT TRUE, is_verified BOOLEAN DEFAULT FALSE)"
+            ))
+            await session.execute(text(
+                "INSERT INTO public.auth_users (user_id, tenant_id, is_active, is_verified) "
+                "VALUES (:user, :tenant, TRUE, TRUE)"
+            ), {"user": str(user), "tenant": str(tenant)})
+            await session.execute(text(
+                "INSERT INTO public.persona_memory_entries "
+                "(id, tenant_id, user_id, content, memory_type, created_at) "
+                "VALUES (:id, :tenant, :user, :content, :kind, :created)"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user),
+                "content": "Synthetic read-only assembly proof",
+                "kind": "semantic", "created": created.replace(tzinfo=None)})
+            session.add(RetentionPolicy(
+                policy_id=retention_id, tenant_id=tenant,
+                memory_class="semantic", ttl_days=30,
+            ))
+            session.add(ConsentScope(
+                scope_id=consent_id, tenant_id=tenant, user_id=user,
+                scope_name="persona-memory-migration", is_granted=True,
+            ))
+        replay = await prepare_governed_legacy_migration_retry(**base)
+        assert replay == await prepare_governed_legacy_migration_retry(**base)
+        # A caller cannot reuse one tenant's historical source under another tenant.
+        wrong_scope = ChatExecutionContext(
+            tenant_id=str(uuid.uuid4()), user_id=str(user),
+            session_id="kp03-postgres-proof", request_id=str(uuid.uuid4()),
+            permissions=["memory.write"],
+        )
+        with pytest.raises(ValueError, match="identity not verified"):
+            await prepare_governed_legacy_migration_retry(
+                **{**base, "context": wrong_scope}
+            )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            consent = (await session.execute(select(ConsentScope).where(
+                ConsentScope.scope_id == consent_id
+            ))).scalar_one()
+            consent.is_granted = False
+        with pytest.raises(ValueError, match="explicit historical migration consent"):
+            await prepare_governed_legacy_migration_retry(**base)
+        # The read-only preparation path did not create a canonical assertion.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            result = await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(replay.memory_id)
+            ))
+            assert result.scalar_one_or_none() is None
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "DELETE FROM public.persona_memory_entries "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.scope_id == consent_id
+            ))
+            await session.execute(delete(RetentionPolicy).where(
+                RetentionPolicy.policy_id == retention_id
+            ))
+            await session.execute(text(
+                "DELETE FROM public.auth_users WHERE user_id=:user AND tenant_id=:tenant"
+            ), {"user": str(user), "tenant": str(tenant)})
