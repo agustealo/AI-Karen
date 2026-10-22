@@ -168,6 +168,7 @@ class PostgresNeuroVault(VaultPort):
             )
             .order_by(ConsentScope.granted_at.desc())
             .limit(1)
+            .with_for_update()
         )
         result = await session.execute(stmt)
         record = result.scalar_one_or_none()
