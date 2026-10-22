@@ -71,3 +71,20 @@ def test_planner_task_list_is_read_only_and_strips_unapproved_fields():
     assert validate_presentation({
         **envelope, "data": {"tasks": []},
     }) is None
+
+
+def test_weather_fahrenheit_strings_parse_without_being_relabelled():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "weather-observation-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "authorized-weather-read",
+        "data": {"location": "Detroit", "temperature": "60.3°F"},
+    }
+    assert validate_presentation(base) is not None
+    assert validate_presentation({
+        **base, "data": {"location": "Detroit", "temperature_f": "60.3"},
+    }) is not None
+    assert validate_presentation({
+        **base, "data": {"location": "Detroit", "temperature": "60.3"},
+    }) is None
