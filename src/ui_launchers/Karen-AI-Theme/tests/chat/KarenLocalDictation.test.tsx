@@ -187,6 +187,22 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce();
   });
 
+  it("invalidates recorder ownership when stopping the device throws", async () => {
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    const failed = Recorder.instances[0];
+    failed.stop = () => { throw new Error("device disconnected"); };
+    fireEvent.click(screen.getByRole("button", { name: "Stop local dictation" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Could not finish microphone recording");
+    expect(stopTrack).toHaveBeenCalled();
+    // Any delayed browser event from the failed recorder must be ignored.
+    failed.ondataavailable?.({ data: new Blob(["late"]) });
+    failed.onstop?.();
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+  });
+
   it("releases microphone tracks if the recorder fails after becoming inactive", async () => {
     render(<KarenLocalDictation />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
