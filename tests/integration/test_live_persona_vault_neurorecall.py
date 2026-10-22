@@ -1091,6 +1091,10 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 expected_request_id=replay.request_id,
             )
             assert authorized_evidence is not None
+            await session.execute(
+                text("SELECT set_config('app.current_user_id', :user, true)"),
+                {"user": str(user)},
+            )
             with pytest.raises(
                 NeuroVaultAuthorizationError,
                 match="historical migration persistence is disabled",
