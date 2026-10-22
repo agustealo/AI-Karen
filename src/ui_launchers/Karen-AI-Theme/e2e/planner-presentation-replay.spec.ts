@@ -15,11 +15,14 @@ const authState = process.env.KAREN_E2E_AUTH_STATE;
 const conversationTitle = process.env.KAREN_E2E_PLANNER_CONVERSATION_TITLE;
 const taskTitle = process.env.KAREN_E2E_PLANNER_TASK_TITLE;
 
-test.describe("authenticated planner presentation replay", () => {
-  test.skip(
-    !enabled || !authState || !conversationTitle || !taskTitle,
-    "Requires approved authenticated storage state and a real seeded planner conversation",
+if (enabled && (!authState || !conversationTitle || !taskTitle)) {
+  throw new Error(
+    "Planner replay enabled without authenticated storage state, unique conversation title, or persisted task title",
   );
+}
+
+test.describe("authenticated planner presentation replay", () => {
+  test.skip(!enabled, "Opt in with KAREN_E2E_PLANNER_REPLAY=1");
   test.use({ storageState: authState || { cookies: [], origins: [] } });
 
   test("reopens a real planner card across page reload without duplication", async ({ page }) => {
