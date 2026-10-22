@@ -667,3 +667,44 @@ async def test_planner_presentation_round_trip_through_durable_gateway_and_api_s
         await gateway.get_owned_snapshot(
             _context(user_id="user-foreign", request_id="foreign-read"),
         )
+
+
+@pytest.mark.asyncio
+async def test_planner_presentation_write_failure_is_not_reported_as_saved():
+    """Failed assistant-message writes must not create a recoverable planner card."""
+    repository = _Repository()
+    repository.fail_add_role = "assistant"
+    gateway = ConversationRuntimeGateway(repository=repository)
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "planner-request-2",
+        "component_type": "planner.task_list",
+        "evidence_ref": "planner-owned-read:request-2",
+        "data": {"tasks": [{"id": "task-1", "title": "Review release", "status": "todo"}]},
+    }
+    context = _context(request_id="planner-request-2")
+    failed = await gateway.persist_completed_turn(
+        context,
+        user_text="List my tasks",
+        assistant_text="Found 1 planner commitments.",
+        response_metadata={"structured_content": {"presentation": envelope}},
+    )
+    assert failed.status == "failed"
+    assert failed.success is False
+    assert not [m for m in repository.messages if m.role == "assistant"]
+    snapshot = await gateway.get_owned_snapshot(context)
+    assert all("presentation" not in m.metadata.get("structured_content", {})
+               for m in snapshot.messages)
+
+    repository.fail_add_role = None
+    recovered = await gateway.persist_completed_turn(
+        context,
+        user_text="List my tasks",
+        assistant_text="Found 1 planner commitments.",
+        response_metadata={"structured_content": {"presentation": envelope}},
+    )
+    assert recovered.status == "persisted"
+    assert len(repository.messages) == 2
+    assert (await gateway.get_owned_snapshot(context)).messages[-1].metadata[
+        "structured_content"
+    ]["presentation"] == envelope
