@@ -889,6 +889,30 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         assert identical_retry.persisted
         assert identical_retry.memory_id == replay.memory_id
         assert identical_retry.metadata["idempotent_replay"] is True
+        # Even identical content must not replay under a forged or stale
+        # canonical event consent provenance.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            original_event = (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.idempotency_key == PostgresNeuroVault._idempotency_key(
+                    synthetic_entry, vault_context,
+                ),
+            ))).scalar_one()
+            original_payload = dict(original_event.payload)
+            original_event.payload = {
+                **original_payload,
+                "vault": {**original_payload["vault"], "consent_scope": "different-scope"},
+            }
+        try:
+            with pytest.raises(NeuroVaultAuthorizationError, match="idempotency collision"):
+                await PostgresNeuroVault().persist(synthetic_entry, context=vault_context)
+        finally:
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                original_event = (await session.execute(select(MemoryEvent).where(
+                    MemoryEvent.idempotency_key == PostgresNeuroVault._idempotency_key(
+                        synthetic_entry, vault_context,
+                    ),
+                ))).scalar_one()
+                original_event.payload = original_payload
         import asyncio
         # Competing canonical NeuroVault retries must resolve through the
         # same durable assertion: identical content replays successfully,
