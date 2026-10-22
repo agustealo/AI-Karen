@@ -56,7 +56,10 @@ export function KarenLocalDictation() {
       if (recorder.current?.state === "recording") recorder.current.stop();
     } catch {
       recordingFailed.current = true;
+      generation.current += 1;
       stream.current?.getTracks().forEach((track) => track.stop());
+      stream.current = null;
+      recorder.current = null;
       if (mounted.current) setError("Could not finish microphone recording.");
     }
     if (mounted.current) setRecording(false);
