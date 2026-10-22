@@ -1075,12 +1075,28 @@ async def on_shutdown_with_extensions(app: FastAPI) -> None:
     logger.info("Server shutdown completed")
 
 
+async def _initialize_optional_local_voice() -> None:
+    """Bind optional voice model once in the existing canonical lifespan."""
+    from ai_karen_engine.services.voice_runtime import configure_local_voice_runtime
+
+    try:
+        capabilities = await configure_local_voice_runtime()
+        logger.info(
+            "Local voice startup status: %s",
+            capabilities.status.value,
+        )
+    except Exception:
+        # Voice is optional; never misrepresent startup failures as healthy STT.
+        logger.exception("Optional local voice initialization failed")
+
+
 def create_lifespan(settings: Any):
     """Create a lifespan context manager bound to settings."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await on_startup(settings, app)
+        await _initialize_optional_local_voice()
         try:
             yield
         finally:
@@ -1095,6 +1111,7 @@ def create_lifespan_with_extensions(settings: Any):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await on_startup_with_extensions(settings, app)
+        await _initialize_optional_local_voice()
         try:
             yield
         finally:
