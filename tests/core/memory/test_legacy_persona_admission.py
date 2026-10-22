@@ -324,3 +324,34 @@ async def test_retention_verified_preparation_denies_missing_or_expired_source(m
     monkeypatch.setattr(legacy_persona_retention, "verify_legacy_migration_retention", expired)
     with pytest.raises(ValueError, match="retention not authorized"):
         await prepare_retention_verified_legacy_migration_retry(**opts)
+
+
+@pytest.mark.asyncio
+async def test_identity_gate_blocks_unverified_user_before_retention(monkeypatch):
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_identity_verified_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_identity
+
+    async def unverified(**kwargs):
+        assert kwargs == {"tenant_id": "tenant-a", "user_id": "user-a"}
+        return False
+
+    monkeypatch.setattr(legacy_persona_identity, "verify_legacy_persona_identity", unverified)
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    with pytest.raises(ValueError, match="canonical migration identity"):
+        await prepare_identity_verified_legacy_migration_retry(
+            authenticated_request=request,
+            runtime_policy=RuntimePolicyEnforcer(),
+            preflight=LegacyMigrationPreflight(True, ()),
+            recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+            source_record_id="source-1",
+        )
