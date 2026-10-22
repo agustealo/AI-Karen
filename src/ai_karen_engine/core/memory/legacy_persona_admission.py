@@ -263,6 +263,12 @@ async def prepare_source_verified_legacy_migration_retry(
     runtime from trustworthy identity, retention, and provenance evidence.
     Presence alone never grants import permissions or access to record content.
     """
+    authority = await evaluate_migration_write_authority(
+        authenticated_request=authenticated_request,
+        runtime_policy=runtime_policy,
+    )
+    if not authority.explicitly_granted:
+        raise ValueError("current migration authorization required before source lookup")
     from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
         verify_legacy_persona_source,
     )
@@ -293,6 +299,12 @@ async def prepare_retention_verified_legacy_migration_retry(
 
     This remains read-only preparation, not an identity, consent or write grant.
     """
+    authority = await evaluate_migration_write_authority(
+        authenticated_request=authenticated_request,
+        runtime_policy=runtime_policy,
+    )
+    if not authority.explicitly_granted:
+        raise ValueError("current migration authorization required before source lookup")
     from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
         read_legacy_persona_source_retention_metadata,
     )
