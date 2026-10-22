@@ -858,6 +858,50 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
             assert permission_checks == 2
+            # The last RuntimePolicy evaluation must see freshly verified
+            # credential claims, not the pre-lock policy request.
+            policy_inputs = []
+            refresh_count = 0
+
+            async def permissions_added_after_lock(**kwargs):
+                nonlocal refresh_count
+                refresh_count += 1
+                authenticated = await original_authenticate(**kwargs)
+                if refresh_count == 2:
+                    return dataclasses.replace(
+                        authenticated,
+                        permissions=[*authenticated.permissions, "audit.read"],
+                    )
+                return authenticated
+
+            async def record_policy_input(**kwargs):
+                policy_inputs.append(tuple(kwargs["authenticated_request"].permissions))
+                return await original_evaluate(**kwargs)
+
+            with MonkeyPatch.context() as refresh_patch:
+                refresh_patch.setattr(
+                    admission_module,
+                    "migration_policy_request_from_authenticated_http",
+                    permissions_added_after_lock,
+                )
+                refresh_patch.setattr(
+                    admission_module,
+                    "evaluate_migration_write_authority",
+                    record_policy_input,
+                )
+                fresh_replay, fresh_receipt = (
+                    await inspect_authenticated_legacy_migration_transaction(
+                        request=http_request, request_id=str(uuid.uuid4()),
+                        correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                        runtime_policy=RuntimePolicyEnforcer(),
+                    )
+                )
+            assert fresh_replay == replay
+            assert not fresh_receipt.persisted
+            assert refresh_count == 2
+            assert len(policy_inputs) == 2
+            assert "audit.read" not in policy_inputs[0]
+            assert "audit.read" in policy_inputs[1]
             # A correctly signed token for another tenant cannot inspect
             # the source or receive its replay evidence.
             foreign_claims = {**claims, "tenant_id": str(uuid.uuid4())}
