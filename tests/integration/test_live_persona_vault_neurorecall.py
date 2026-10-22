@@ -371,3 +371,40 @@ async def test_runtime_policy_and_explicit_consent_both_required_for_retry():
             await session.execute(delete(ConsentScope).where(
                 ConsentScope.scope_id == consent_id
             ))
+
+
+async def test_legacy_source_presence_is_scoped_in_real_postgres():
+    """Disposable synthetic source only; no historical content is imported."""
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        verify_legacy_persona_source,
+    )
+
+    tenant, user = str(uuid.uuid4()), str(uuid.uuid4())
+    source_id = str(uuid.uuid4())
+    try:
+        async with async_transaction_scope(tenant_id=tenant) as session:
+            await session.execute(text(
+                "INSERT INTO public.persona_memory_entries "
+                "(id, tenant_id, user_id, content) "
+                "VALUES (:id, :tenant, :user, :content)"
+            ), {"id": source_id, "tenant": tenant, "user": user,
+                "content": "Synthetic source proof"})
+        assert await verify_legacy_persona_source(
+            tenant_id=tenant, user_id=user, source_record_id=source_id,
+        )
+        assert not await verify_legacy_persona_source(
+            tenant_id=str(uuid.uuid4()), user_id=user, source_record_id=source_id,
+        )
+        assert not await verify_legacy_persona_source(
+            tenant_id=tenant, user_id=str(uuid.uuid4()), source_record_id=source_id,
+        )
+        assert not await verify_legacy_persona_source(
+            tenant_id=tenant, user_id=user, source_record_id=str(uuid.uuid4()),
+        )
+    finally:
+        async with async_transaction_scope(tenant_id=tenant) as session:
+            await session.execute(text(
+                "DELETE FROM public.persona_memory_entries "
+                "WHERE id = :id AND tenant_id = :tenant AND user_id = :user"
+            ), {"id": source_id, "tenant": tenant, "user": user})
