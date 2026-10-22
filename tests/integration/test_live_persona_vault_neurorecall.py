@@ -788,6 +788,41 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             assert typed_inspection.policy_decision_id
             assert not hasattr(typed_inspection, "session")
             assert not hasattr(typed_inspection, "write_capability")
+            # Read-only inspection provenance cannot be laundered through an
+            # ordinary VaultContext into historical persistence.
+            from ai_karen_engine.platform.memory.postgres.vault import (
+                NeuroVaultAuthorizationError,
+            )
+            forbidden_entry = MemoryEntry(
+                id=typed_inspection.replay.memory_id,
+                content="Historical write using read-only inspection evidence",
+                memory_type=MemoryType.SEMANTIC,
+                namespace=MemoryNamespace.LONG_TERM,
+                metadata=MemoryMetadata(
+                    tenant_id=typed_inspection.tenant_id,
+                    user_id=typed_inspection.user_id,
+                    source="legacy_persona",
+                    custom={"consent_scope": "persona-memory-migration"},
+                ),
+            )
+            with pytest.raises(
+                NeuroVaultAuthorizationError,
+                match="historical migration persistence is disabled",
+            ):
+                await PostgresNeuroVault().persist(
+                    forbidden_entry,
+                    context=VaultContext(
+                        tenant_id=typed_inspection.tenant_id,
+                        user_id=typed_inspection.user_id,
+                        request_id=typed_inspection.replay.request_id,
+                        correlation_id=str(uuid.uuid4()),
+                        actor_id=typed_inspection.user_id,
+                        policy_context={
+                            "memory_write_authorized": True,
+                            "policy_decision_id": typed_inspection.policy_decision_id,
+                        },
+                    ),
+                )
             # The integrated runtime path binds the authenticated user into
             # the caller transaction; this must not change replay identity.
             # RuntimePolicy may be revoked after initial admission but
