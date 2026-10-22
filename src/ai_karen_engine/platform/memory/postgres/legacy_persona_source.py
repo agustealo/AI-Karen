@@ -13,13 +13,23 @@ from sqlalchemy import text
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 
+def _validated_source_id(value: object) -> str | None:
+    """Validate a canonical source key without coercing caller objects."""
+    if not isinstance(value, str):
+        return None
+    source_id = value.strip()
+    if not source_id or len(source_id) > 64:
+        return None
+    return source_id
+
+
 async def verify_legacy_persona_source(
     *, tenant_id: str, user_id: str, source_record_id: str,
 ) -> bool:
     tenant = str(uuid.UUID(tenant_id))
     user = str(uuid.UUID(user_id))
-    source_id = str(source_record_id or "").strip()
-    if not source_id or len(source_id) > 64:
+    source_id = _validated_source_id(source_record_id)
+    if source_id is None:
         return False
     async with async_transaction_scope(tenant_id=tenant) as session:
         result = await session.execute(
@@ -41,8 +51,8 @@ async def read_legacy_persona_source_retention_metadata(
     """Read only trusted source timestamp and class under tenant/user scope."""
     tenant = str(uuid.UUID(tenant_id))
     user = str(uuid.UUID(user_id))
-    source_id = str(source_record_id or "").strip()
-    if not source_id or len(source_id) > 64:
+    source_id = _validated_source_id(source_record_id)
+    if source_id is None:
         return None
     async with async_transaction_scope(tenant_id=tenant) as session:
         result = await session.execute(
