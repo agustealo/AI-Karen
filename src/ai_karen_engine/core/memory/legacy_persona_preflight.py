@@ -20,6 +20,7 @@ class LegacyMigrationEvidence:
     consent_verified: bool
     retention_verified: bool
     source_record_verified: bool
+    evidence_origin: str = "unverified"
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,8 @@ def preflight_legacy_memory(evidence: LegacyMigrationEvidence) -> LegacyMigratio
     except (TypeError, AttributeError, ValueError):
         return LegacyMigrationPreflight(False, ("invalid_identity_format",))
 
+    if evidence.evidence_origin != "authorized_runtime":
+        reasons.append("evidence_origin_untrusted")
     if legacy_tenant != approved_tenant or legacy_user != approved_user:
         reasons.append("principal_mismatch")
     if not evidence.identity_verified:
