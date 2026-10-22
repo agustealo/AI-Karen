@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from types import SimpleNamespace
 
 from ai_karen_engine.api_routes.voice import transcribe_voice
-from ai_karen_engine.core.voice.contracts import VoiceCapabilities, VoiceEngineStatus
+from ai_karen_engine.core.voice.contracts import VoiceCapabilities, VoiceEngineStatus, VoiceContractError
 
 
 def request(audio: bytes, *, content_type: str = "audio/wav", duration: str = "1") -> Request:
@@ -127,7 +127,8 @@ async def test_busy_engine_rejects_before_reading_request_body():
 @pytest.mark.parametrize(
     ("failure", "expected_status", "expected_detail"),
     [
-        (ValueError("audio_byte_count_mismatch"), 422, "audio_byte_count_mismatch"),
+        (VoiceContractError("audio_byte_count_mismatch"), 422, "audio_byte_count_mismatch"),
+        (ValueError("private_decoder_details"), 503, "local_transcription_failed"),
         (Exception("private_model_trace"), 503, "local_transcription_failed"),
     ],
 )
@@ -152,3 +153,4 @@ async def test_transcription_errors_do_not_leak_internal_details(
     assert caught.value.status_code == expected_status
     assert caught.value.detail == expected_detail
     assert "private_model_trace" not in caught.value.detail
+    assert "private_decoder_details" not in caught.value.detail
