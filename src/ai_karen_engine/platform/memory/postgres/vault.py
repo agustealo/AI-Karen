@@ -232,15 +232,20 @@ class PostgresNeuroVault(VaultPort):
         self._validate_entry_scope(entry, context)
 
     @staticmethod
-    def _require_non_historical_write(entry: MemoryEntry) -> None:
-        """Fail closed before database access for every public write path."""
+    def _is_historical_write(entry: MemoryEntry) -> bool:
+        """Canonical historical source classification, shared by both gates."""
         metadata = entry.metadata
         custom = dict(metadata.custom or {}) if metadata else {}
-        if (
+        return (
             custom.get("consent_scope") == "persona-memory-migration"
             or custom.get("source_type") == "legacy_persona"
             or (metadata is not None and metadata.source == "legacy_persona")
-        ):
+        )
+
+    @classmethod
+    def _require_non_historical_write(cls, entry: MemoryEntry) -> None:
+        """Fail closed before canonical ledger persistence."""
+        if cls._is_historical_write(entry):
             raise NeuroVaultAuthorizationError(
                 "historical migration persistence is disabled pending trusted runtime authorization"
             )
@@ -303,13 +308,7 @@ class PostgresNeuroVault(VaultPort):
         principal = (await session.execute(text(
             "SELECT current_setting('app.current_user_id', true)"
         ))).scalar_one()
-        custom = dict(entry.metadata.custom or {}) if entry.metadata else {}
-        historical = (
-            custom.get("consent_scope") == "persona-memory-migration"
-            or custom.get("source_type") == "legacy_persona"
-            or (entry.metadata is not None and entry.metadata.source == "legacy_persona")
-        )
-        if historical and not principal:
+        if self._is_historical_write(entry) and not principal:
             raise NeuroVaultAuthorizationError(
                 "historical migration requires authenticated transaction principal"
             )
