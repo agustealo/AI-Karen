@@ -41,6 +41,13 @@ async def transcribe_voice(
     capabilities = await runtime.capabilities()
     if not capabilities.transcription_available:
         raise HTTPException(status_code=503, detail="local_transcription_unavailable")
+    # Avoid buffering uploads that cannot begin inference. This is advisory:
+    # VoiceRuntime still rejects a race with another request after body read.
+    if runtime.transcription_busy():
+        raise HTTPException(
+            status_code=429, detail="local_transcription_busy",
+            headers={"Retry-After": "1"},
+        )
     media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media_type not in ("audio/wav", "audio/x-wav"):
         raise HTTPException(status_code=415, detail="wav_audio_required")
