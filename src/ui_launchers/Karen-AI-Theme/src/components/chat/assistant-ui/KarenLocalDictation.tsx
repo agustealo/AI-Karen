@@ -161,10 +161,16 @@ export function KarenLocalDictation() {
       timer.current = setTimeout(stop, 30_000);
     } catch {
       if (generation.current === currentGeneration) {
+        // Construction/start can throw after permission was granted. Invalidate
+        // that recorder before releasing its stream so late events cannot
+        // dispatch a transcript from a failed recording.
+        generation.current += 1;
+        recordingFailed.current = true;
         starting.current = false;
         setRequesting(false);
         stream.current?.getTracks().forEach((track) => track.stop());
         stream.current = null;
+        recorder.current = null;
         if (mounted.current) setError("Microphone access was denied or unavailable.");
       }
     }
