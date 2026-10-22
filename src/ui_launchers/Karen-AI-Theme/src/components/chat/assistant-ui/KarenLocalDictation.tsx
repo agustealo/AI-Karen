@@ -7,7 +7,7 @@ import { Mic, Square } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { mergeDictatedText } from "./KarenBrowserDictation";
 import { encodeMonoPcmWav } from "./localVoiceWav";
-import { isCurrentVoiceSession } from "./voiceSessionGuard";
+import { canCommitVoiceResult, isCurrentVoiceSession } from "./voiceSessionGuard";
 
 type Capabilities = { transcription_available: boolean; status: string };
 
@@ -109,13 +109,13 @@ export function KarenLocalDictation() {
           audioContext = new AudioContext();
           const captured = await new Blob(chunks, { type: media.mimeType }).arrayBuffer();
           const decoded = await audioContext.decodeAudioData(captured);
-          if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration) || controller.signal.aborted) return;
+          if (!canCommitVoiceResult(mounted.current, generation.current, currentGeneration, controller.signal.aborted)) return;
           const wav = encodeMonoPcmWav(decoded);
           // Decoding and resampling are asynchronous. Cancellation during
           // either stage must prevent the authenticated upload entirely.
-          if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration) || controller.signal.aborted) return;
+          if (!canCommitVoiceResult(mounted.current, generation.current, currentGeneration, controller.signal.aborted)) return;
           const transcript = await apiClient.transcribeLocalAudio(wav, decoded.duration, controller.signal);
-          if (isCurrentVoiceSession(mounted.current, generation.current, currentGeneration) && !controller.signal.aborted) {
+          if (canCommitVoiceResult(mounted.current, generation.current, currentGeneration, controller.signal.aborted)) {
             aui.composer().setText(mergeDictatedText(aui.composer().getState().text || "", transcript.text));
           }
         } catch {
