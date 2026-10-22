@@ -145,6 +145,17 @@ async def configure_local_voice_runtime() -> VoiceCapabilities:
                 await adapter.load()
             except (FileNotFoundError, RuntimeError, OSError):
                 return await runtime.capabilities()
+            # Loading can be slow. Do not register a model if the opt-in or
+            # selected model configuration changed during that await.
+            if (
+                os.getenv("KAREN_LOCAL_STT_ENABLED", "false").lower() != "true"
+                or (
+                    os.getenv("KAREN_LOCAL_STT_MODEL_PATH", "").strip(),
+                    os.getenv("KAREN_LOCAL_STT_DEVICE", "cpu").strip(),
+                    os.getenv("KAREN_LOCAL_STT_COMPUTE_TYPE", "int8").strip(),
+                ) != config
+            ):
+                return await runtime.capabilities()
             runtime.speech_engine = adapter
             runtime._local_engine_config = config
             return await runtime.capabilities()
