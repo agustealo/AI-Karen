@@ -292,6 +292,22 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # Planner reads expose tenant-private commitments. Requested capability
+        # alone never grants access, even for a read-only presentation.
+        if "planner.read" in request.requested_capabilities and (
+            "planner:read" not in request.permissions
+            and "admin" not in request.roles
+        ):
+            return PolicyDecision(
+                decision_id=decision_id,
+                policy_version=policy_version,
+                allowed=False,
+                reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                denied_capabilities=["planner.read"],
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
+                evaluated_at=evaluated_at,
+            )
+
         forbidden = set(request.forbidden_capabilities)
         for cap in request.requested_capabilities:
             if cap in forbidden:
