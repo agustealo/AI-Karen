@@ -56,3 +56,7 @@ The preflight now rejects evidence whose origin is not explicitly marked `author
 ### Principal-bound replay admission
 
 `LegacyMigrationAdmission` now carries the tenant/user identity for the admitted decision; rejected decisions carry no principals. Retry-identifier generation rejects a different requested tenant or user even when `admitted=True` was returned for another principal. This prevents accidental cross-principal reuse of an approved decision in the pure migration helper. Its dataclass remains forgeable; authenticated execution must still derive it from canonical runtime policy, revalidate current consent and let NeuroVault enforce its own checks.
+
+### Consent revocation versus idempotent replay
+
+The disposable PostgreSQL NeuroVault integration proof now writes one synthetic admitted migration record twice, revokes its consent scope, and asserts that a further retry with identical deterministic IDs is rejected. This ensures replay identifiers never function as a consent bypass. The existing canonical vault checks current consent before it looks up a duplicate idempotency key. This is a test of the current ordering, not an alternative migration writer, and no historical records are touched.
