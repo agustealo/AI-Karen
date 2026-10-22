@@ -816,6 +816,21 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         from ai_karen_engine.core.memory.legacy_persona_recovery import (
             reconcile_legacy_replay,
         )
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+            lookup_locked_legacy_replay_receipt,
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            same_transaction_receipt = await lookup_locked_legacy_replay_receipt(
+                session=session, tenant_id=str(tenant), user_id=str(user),
+                expected_memory_id=replay.memory_id,
+                expected_request_id=replay.request_id,
+            )
+            assert same_transaction_receipt.persisted
+            assert same_transaction_receipt == await lookup_legacy_replay_receipt(
+                tenant_id=str(tenant), user_id=str(user),
+                expected_memory_id=replay.memory_id,
+                expected_request_id=replay.request_id,
+            )
         mismatched = await lookup_legacy_replay_receipt(
             tenant_id=str(tenant), user_id=str(user),
             expected_memory_id=replay.memory_id,
