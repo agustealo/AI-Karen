@@ -91,8 +91,9 @@ async def transcribe_voice(
             ) from None
         logger.warning("Local transcription runtime unavailable", extra={"error_type": type(exc).__name__})
         raise HTTPException(status_code=503, detail="local_transcription_unavailable") from None
-    except Exception:
-        # Do not return decoder/model internals or raw audio to clients/logs.
-        logger.exception("Local transcription inference failed")
+    except Exception as exc:
+        # Exception messages and traceback locals can include decoder paths or
+        # sensitive input metadata. Emit only an error class, never raw audio.
+        logger.error("Local transcription inference failed", extra={"error_type": type(exc).__name__})
         raise HTTPException(status_code=503, detail="local_transcription_failed") from None
     return {"text": result.text, "engine": result.engine, "language": result.language}
