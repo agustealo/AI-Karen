@@ -80,3 +80,7 @@ A canonical ledger receipt can prove that a migration operation already persiste
 ### Combined retry preparation is still not migration execution
 
 `prepare_legacy_migration_retry` now combines three existing fail-closed decisions: receipt absence (not already migrated or inconsistent), identity/consent/retention preflight, and tenant/user-scoped write admission. Only then does it derive deterministic replay identifiers. This consolidates gate ordering and prevents treating an isolated positive Boolean as approval. It remains pure and can receive forged inputs, so it must not be exposed to clients or mistaken for a RuntimePolicy grant. Production execution is not enabled until independently authenticated evidence is assembled and canonical NeuroVault enforces a new write permission and live consent.
+
+### RuntimePolicy evidence adaptation
+
+`migration_write_authority_from_policy` converts an existing typed `PolicyEvaluationRequest`/`PolicyDecision` into the migration write-admission input. It denies unless the trusted request contains `memory.write` permission and requested capability, the decision expressly allows that capability, the decision's authorized tenant/user matches the request, and any human gate has been satisfied. **This adapter does not call RuntimePolicy or obtain an authenticated request.** The future executor must use trusted ingress context and an actual fresh policy evaluation, not user-supplied dataclasses. NeuroVault independently rechecks live consent and write capability.
