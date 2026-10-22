@@ -190,3 +190,33 @@ async def evaluate_migration_write_authority(
     return migration_write_authority_from_policy(
         request=authenticated_request, decision=decision,
     )
+
+
+async def prepare_consented_legacy_migration_retry(
+    *,
+    preflight: "LegacyMigrationPreflight",
+    authority: LegacyMigrationWriteAuthority,
+    recovery: "LegacyReplayRecoveryDecision",
+    source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Reconcile canonical affirmative consent before preparing a retry.
+
+    Caller still owns authenticated identity, source validation, retention and
+    fresh RuntimePolicy evaluation. This helper does not execute a write.
+    """
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_consent import (
+        verify_legacy_migration_consent,
+    )
+    if not recovery.safe_to_retry or recovery.already_persisted:
+        raise ValueError("migration recovery does not allow retry")
+    if not preflight.eligible or preflight.reason_codes:
+        raise ValueError("migration preflight not eligible")
+    if not await verify_legacy_migration_consent(
+        tenant_id=authority.tenant_id, user_id=authority.user_id,
+        consent_scope="persona-memory-migration",
+    ):
+        raise ValueError("explicit historical migration consent required")
+    return prepare_legacy_migration_retry(
+        preflight=preflight, authority=authority,
+        recovery=recovery, source_record_id=source_record_id,
+    )
