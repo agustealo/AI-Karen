@@ -155,6 +155,21 @@ async def test_mismatched_audio_metadata_is_contract_error_before_inference():
 
 
 @pytest.mark.asyncio
+async def test_disabling_opt_in_removes_previously_healthy_engine(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    engine = Engine()
+    runtime = VoiceRuntime(engine)
+    assert (await runtime.capabilities()).transcription_available
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "false")
+    with patch.object(module, "get_voice_runtime", return_value=runtime):
+        capabilities = await module.configure_local_voice_runtime()
+    assert capabilities.status is VoiceEngineStatus.UNAVAILABLE
+    assert not capabilities.transcription_available
+    assert runtime.speech_engine is None
+
+
+@pytest.mark.asyncio
 async def test_concurrent_optional_bootstrap_loads_model_once(monkeypatch):
     from ai_karen_engine.services import voice_runtime as module
 
