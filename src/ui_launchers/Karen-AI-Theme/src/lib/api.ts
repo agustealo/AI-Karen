@@ -753,6 +753,31 @@ class ApiClient {
     return this.get('/api/runtime/providers');
   }
 
+  async transcribeLocalAudio(wav: Blob, durationSeconds: number, signal?: AbortSignal): Promise<{
+    text: string; engine: string; language: string | null;
+  }> {
+    if (wav.size <= 0 || wav.size > 16 * 1024 * 1024 ||
+        !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 120) {
+      throw new Error("Audio exceeds local transcription limits");
+    }
+    const response = await this.request<{ text: string; engine: string; language: string | null }>(
+      "/api/voice/transcriptions", {
+        method: "POST",
+        body: wav,
+        signal,
+        headers: {
+          "Content-Type": "audio/wav",
+          "X-Audio-Duration-Seconds": String(durationSeconds),
+        },
+      },
+    );
+    if (!response || typeof response.text !== "string" || !response.text.trim() ||
+        typeof response.engine !== "string" || !response.engine.trim()) {
+      throw new Error("Local transcription returned no verified transcript");
+    }
+    return response;
+  }
+
   async get<T>(endpoint: string): Promise<T> {
     return this.request<T>(endpoint);
   }
