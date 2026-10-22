@@ -823,6 +823,33 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         },
                     ),
                 )
+            # Nor can inspection provenance authorize the caller-owned
+            # transaction entrypoint, even under matching tenant/user scope.
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                from sqlalchemy import text
+                await session.execute(
+                    text("SELECT set_config('app.current_user_id', :user, true)"),
+                    {"user": str(user)},
+                )
+                with pytest.raises(
+                    NeuroVaultAuthorizationError,
+                    match="historical migration persistence is disabled",
+                ):
+                    await PostgresNeuroVault().persist_in_transaction(
+                        forbidden_entry,
+                        context=VaultContext(
+                            tenant_id=typed_inspection.tenant_id,
+                            user_id=typed_inspection.user_id,
+                            request_id=typed_inspection.replay.request_id,
+                            correlation_id=str(uuid.uuid4()),
+                            actor_id=typed_inspection.user_id,
+                            policy_context={
+                                "memory_write_authorized": True,
+                                "policy_decision_id": typed_inspection.policy_decision_id,
+                            },
+                        ),
+                        session=session,
+                    )
             # The integrated runtime path binds the authenticated user into
             # the caller transaction; this must not change replay identity.
             # RuntimePolicy may be revoked after initial admission but
