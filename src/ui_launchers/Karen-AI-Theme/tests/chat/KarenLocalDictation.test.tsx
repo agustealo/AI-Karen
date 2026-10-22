@@ -157,6 +157,21 @@ describe("local dictation composer acceptance with controlled browser devices", 
     }
   });
 
+  it("ignores duplicate recorder stop events without a second transcript upload", async () => {
+    vi.mocked(apiClient.transcribeLocalAudio).mockResolvedValue({
+      text: "once", engine: "local", language: "en",
+    });
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    const active = Recorder.instances[0];
+    fireEvent.click(screen.getByRole("button", { name: "Stop local dictation" }));
+    await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
+    active.onstop?.();
+    await waitFor(() => expect(composer.setText).toHaveBeenCalledOnce());
+    expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce();
+  });
+
   it("releases microphone tracks if the recorder fails after becoming inactive", async () => {
     render(<KarenLocalDictation />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
