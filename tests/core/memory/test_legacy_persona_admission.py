@@ -1264,7 +1264,7 @@ async def test_transaction_authority_rejects_scope_drift_during_verification():
         Mock(one=Mock(return_value=first)),
         Mock(one=Mock(return_value=changed)),
     ])
-    with pytest.raises(PermissionError, match="changed during verification"):
+    with pytest.raises(PermissionError, match="transaction identity expired"):
         await LegacyMigrationTransactionAuthority.inspect(
             session=session, tenant_id=tenant, user_id=user,
             policy_decision_id="verified-decision",
