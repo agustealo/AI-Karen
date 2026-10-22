@@ -408,3 +408,67 @@ async def test_legacy_source_presence_is_scoped_in_real_postgres():
                 "DELETE FROM public.persona_memory_entries "
                 "WHERE id = :id AND tenant_id = :tenant AND user_id = :user"
             ), {"id": source_id, "tenant": tenant, "user": user})
+
+
+async def test_source_consent_and_runtime_policy_joint_preparation():
+    """Synthetic legacy row requires all three authorities, with no import."""
+    from sqlalchemy import text
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        prepare_source_verified_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_preflight import LegacyMigrationPreflight
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+
+    tenant, user, source_id, consent_id = (uuid.uuid4() for _ in range(4))
+    request = PolicyEvaluationRequest(
+        tenant_id=str(tenant), user_id=str(user),
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    options = dict(
+        authenticated_request=request,
+        runtime_policy=RuntimePolicyEnforcer(),
+        preflight=LegacyMigrationPreflight(True, ()),
+        recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+        source_record_id=str(source_id),
+    )
+    try:
+        with pytest.raises(ValueError, match="matching nonempty legacy source"):
+            await prepare_source_verified_legacy_migration_retry(**options)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "INSERT INTO public.persona_memory_entries "
+                "(id, tenant_id, user_id, content) "
+                "VALUES (:id, :tenant, :user, :content)"
+            ), {"id": str(source_id), "tenant": str(tenant),
+                "user": str(user), "content": "Synthetic source for admission proof"})
+        with pytest.raises(ValueError, match="explicit historical migration consent"):
+            await prepare_source_verified_legacy_migration_retry(**options)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                scope_id=consent_id, tenant_id=tenant, user_id=user,
+                scope_name="persona-memory-migration", is_granted=True,
+            ))
+        prepared = await prepare_source_verified_legacy_migration_retry(**options)
+        assert prepared.memory_id and prepared.request_id
+        untrusted = PolicyEvaluationRequest(
+            tenant_id=str(tenant), user_id=str(user),
+            action="legacy_persona_memory_migration",
+            requested_capabilities=["memory.write"], permissions=[],
+        )
+        with pytest.raises(ValueError, match="current migration authorization"):
+            await prepare_source_verified_legacy_migration_retry(
+                **{**options, "authenticated_request": untrusted}
+            )
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "DELETE FROM public.persona_memory_entries "
+                "WHERE id = :id AND tenant_id = :tenant AND user_id = :user"
+            ), {"id": str(source_id), "tenant": str(tenant), "user": str(user)})
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.scope_id == consent_id
+            ))
