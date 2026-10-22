@@ -201,6 +201,30 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         "Tenant A durable response."
     )
 
+    # Ownership may be revoked after an earlier successful turn. The
+    # transaction must check the current database owner, not cached ingress.
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE conversations SET user_id = :new_owner WHERE conversation_id = :id"),
+            {"new_owner": user_b, "id": attacked_conversation_id},
+        )
+    revoked = await owner_gateway.persist_completed_turn(
+        _context(
+            tenant_id=tenant_a, user_id=user_a, session_id="shared-session",
+            request_id=str(uuid.uuid4()), conversation_id=attacked_conversation_id,
+        ),
+        user_text="Should be denied after owner change.",
+        assistant_text="This response must not be persisted.",
+    )
+    assert revoked.status == "rejected"
+    revoked_rows = await repository.get_messages(attacked_conversation_id, tenant_a, limit=20)
+    assert revoked_rows.success and len(revoked_rows.data or []) == 2
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE conversations SET user_id = :old_owner WHERE conversation_id = :id"),
+            {"old_owner": user_a, "id": attacked_conversation_id},
+        )
+
     # Force an assistant insert to fail inside the pair transaction.
     # The user half must not survive that failure.
     async with engine.begin() as connection:
