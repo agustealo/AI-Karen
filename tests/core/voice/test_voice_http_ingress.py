@@ -51,7 +51,8 @@ async def test_excessive_upload_rejected_without_transcription():
 
 
 @pytest.mark.asyncio
-async def test_invalid_claimed_duration_rejected_before_inference():
+@pytest.mark.parametrize("duration", ["NaN", "Infinity", "-Infinity", "0", "121"])
+async def test_invalid_claimed_duration_rejected_before_inference(duration):
     runtime = SimpleNamespace(
         capabilities=AsyncMock(return_value=VoiceCapabilities(
             status=VoiceEngineStatus.READY, transcription_available=True, engine="local")),
@@ -59,6 +60,6 @@ async def test_invalid_claimed_duration_rejected_before_inference():
     )
     with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime):
         with pytest.raises(HTTPException) as caught:
-            await transcribe_voice(request(b"wav", duration="NaN"), user=SimpleNamespace(user_id="u"))
+            await transcribe_voice(request(b"wav", duration=duration), user=SimpleNamespace(user_id="u"))
     assert caught.value.status_code == 422
     runtime.transcribe.assert_not_awaited()
