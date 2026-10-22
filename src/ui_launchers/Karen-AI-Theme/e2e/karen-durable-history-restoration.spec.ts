@@ -11,6 +11,15 @@ const password = process.env.KAREN_UX_PASSWORD;
 const conversationId = process.env.KAREN_HISTORY_CONVERSATION_ID;
 
 test("reopening an owned conversation preserves its saved answer and execution receipt", async ({ page }) => {
+  // The dashboard defaults to legacy chat. Never report a skipped or
+  // legacy-chat run as evidence of assistant-ui restoration.
+  if (required && process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED !== "true") {
+    throw new Error("Assistant-ui browser acceptance requires NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED=true at build time");
+  }
+  test.skip(
+    process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED !== "true" && !required,
+    "The tested deployment must be built with assistant-ui enabled",
+  );
   if (required && (!email || !password || !conversationId)) {
     throw new Error("Live history acceptance requires credentials and KAREN_HISTORY_CONVERSATION_ID");
   }
