@@ -210,6 +210,57 @@ async def test_changed_local_model_configuration_replaces_existing_engine(monkey
 
 
 @pytest.mark.asyncio
+async def test_configuration_change_waits_for_running_inference(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    initialized = []
+
+    class Adapter:
+        engine_id = "faster-whisper-local"
+
+        def __init__(self, model_path, *, device, compute_type):
+            initialized.append(model_path)
+
+        async def load(self):
+            pass
+
+        async def is_ready(self):
+            return True
+
+        async def transcribe(self, audio, metadata):
+            entered.set()
+            await release.wait()
+            return TranscriptionResult(text="original model", engine=self.engine_id)
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/first")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        await module.configure_local_voice_runtime()
+        payload = b"pcm-data"
+        metadata = AudioInput("audio/wav", len(payload), 0.5)
+        running = asyncio.create_task(runtime.transcribe(payload, metadata))
+        await asyncio.wait_for(entered.wait(), 1)
+        monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/second")
+        reconfigure = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.sleep(0)
+        try:
+            assert not reconfigure.done()
+            assert initialized == ["/local/first"]
+            assert runtime.transcription_busy()
+        finally:
+            release.set()
+        assert (await running).text == "original model"
+        assert (await asyncio.wait_for(reconfigure, 1)).transcription_available
+    assert initialized == ["/local/first", "/local/second"]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_optional_bootstrap_loads_model_once(monkeypatch):
     from ai_karen_engine.services import voice_runtime as module
 
