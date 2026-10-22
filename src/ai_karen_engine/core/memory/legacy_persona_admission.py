@@ -700,7 +700,9 @@ class LegacyMigrationTransactionAuthority:
         ))).one()
         if confirmed != scope:
             raise PermissionError("historical inspection transaction changed during verification")
-        return cls(tenant_id, user_id, policy_decision_id, int(scope[3]))
+        authority = cls(tenant_id, user_id, policy_decision_id, int(scope[3]))
+        await authority.verify_active(session=session)
+        return authority
 
 
 async def inspect_authenticated_legacy_migration_evidence(
