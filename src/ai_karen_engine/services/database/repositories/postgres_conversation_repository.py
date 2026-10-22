@@ -452,6 +452,8 @@ class PostgresConversationRepository(ConversationRepository):
             or user_message.conversation_id != assistant_message.conversation_id
             or user_message.tenant_id != assistant_message.tenant_id
             or user_message.id == assistant_message.id
+            or not user_message.metadata.get("authorized_user_id")
+            or user_message.metadata.get("authorized_user_id") != assistant_message.metadata.get("authorized_user_id")
         ):
             return RepositoryResult(success=False, error="invalid_completed_turn")
         try:
@@ -463,10 +465,12 @@ class PostgresConversationRepository(ConversationRepository):
                             SELECT conversation_id FROM conversations
                             WHERE conversation_id = :conversation_id
                               AND tenant_id = :tenant_id
+                              AND user_id = :user_id
                             FOR UPDATE
                         """),
                         {"conversation_id": user_message.conversation_id,
-                         "tenant_id": user_message.tenant_id},
+                         "tenant_id": user_message.tenant_id,
+                         "user_id": user_message.metadata["authorized_user_id"]},
                     )
                     if owner.fetchone() is None:
                         return RepositoryResult(
@@ -514,7 +518,7 @@ class PostgresConversationRepository(ConversationRepository):
                             or str(row.role) != message.role
                             or str(row.content) != message.content
                             or not isinstance(stored_meta, dict)
-                            or stored_meta.get("request_id") != message.metadata.get("request_id")
+                            or stored_meta != message.metadata
                         ):
                             raise ValueError("message_idempotency_conflict")
                     if persisted == 1:
