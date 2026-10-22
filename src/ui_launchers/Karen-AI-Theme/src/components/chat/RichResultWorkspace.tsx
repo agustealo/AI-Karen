@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import type { DragEvent } from 'react';
 import {
-  GripVertical,
   Settings2,
   Braces,
   ExternalLink,
