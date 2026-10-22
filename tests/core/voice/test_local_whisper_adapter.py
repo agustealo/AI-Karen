@@ -42,3 +42,17 @@ async def test_wrong_metadata_and_unsupported_audio_fail_closed():
         await adapter.transcribe(b"x" * 100, AudioInput("audio/wav", 100, 0.5))
     with pytest.raises(VoiceContractError, match="audio_duration_mismatch"):
         await adapter.transcribe(payload, AudioInput("audio/wav", len(payload), 30))
+
+
+@pytest.mark.asyncio
+async def test_truncated_pcm_payload_rejected_before_inference():
+    adapter = FasterWhisperLocalAdapter("/missing")
+    adapter._model = object()
+    full = wav_bytes(seconds=0.5)
+    # Preserve a valid RIFF/WAV header while removing the PCM frames it
+    # declares, so duration metadata alone cannot authorize inference.
+    truncated = full[:44] + full[44:144]
+    with pytest.raises(VoiceContractError, match="truncated_wav_payload"):
+        await adapter.transcribe(
+            truncated, AudioInput("audio/wav", len(truncated), 0.5),
+        )
