@@ -1064,3 +1064,39 @@ async def test_source_provenance_rejects_invalid_keys_before_sql(monkeypatch, so
              "source_record_id": source_id}
     assert not await source.verify_legacy_persona_source(**scope)
     assert await source.read_legacy_persona_source_retention_metadata(**scope) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("memory_class", [None, 1, [], {}, "", "   ", " semantic "])
+async def test_retention_class_validation_fails_before_database(monkeypatch, memory_class):
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_retention
+
+    def forbidden_transaction(*args, **kwargs):
+        raise AssertionError("invalid retention class accessed database")
+
+    monkeypatch.setattr(
+        legacy_persona_retention, "async_transaction_scope", forbidden_transaction,
+    )
+    assert not await legacy_persona_retention.verify_legacy_migration_retention(
+        tenant_id=str(uuid4()), created_at=datetime.now(timezone.utc),
+        memory_class=memory_class,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("created_at", [None, "2026-01-01", 0])
+async def test_retention_timestamp_validation_fails_before_database(monkeypatch, created_at):
+    from uuid import uuid4
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_retention
+
+    def forbidden_transaction(*args, **kwargs):
+        raise AssertionError("invalid retention timestamp accessed database")
+
+    monkeypatch.setattr(
+        legacy_persona_retention, "async_transaction_scope", forbidden_transaction,
+    )
+    assert not await legacy_persona_retention.verify_legacy_migration_retention(
+        tenant_id=str(uuid4()), created_at=created_at, memory_class="semantic",
+    )
