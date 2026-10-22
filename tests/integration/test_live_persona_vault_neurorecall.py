@@ -271,3 +271,47 @@ async def test_historical_migration_requires_explicit_current_consent():
             await session.execute(delete(ConsentScope).where(
                 ConsentScope.scope_id == scope_id
             ))
+
+
+async def test_consented_retry_preparation_uses_current_postgres_grant():
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationWriteAuthority, prepare_consented_legacy_migration_retry,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_preflight import LegacyMigrationPreflight
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+
+    tenant, user, scope_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    authority = LegacyMigrationWriteAuthority(
+        tenant_id=str(tenant), user_id=str(user),
+        authorized_tenant_id=str(tenant), authorized_user_id=str(user),
+        capability="memory.write", policy_decision_id=str(uuid.uuid4()),
+        explicitly_granted=True,
+    )
+    options = dict(
+        preflight=LegacyMigrationPreflight(True, ()),
+        authority=authority,
+        recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+        source_record_id=str(uuid.uuid4()),
+    )
+    with pytest.raises(ValueError, match="explicit historical migration consent"):
+        await prepare_consented_legacy_migration_retry(**options)
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                scope_id=scope_id, tenant_id=tenant, user_id=user,
+                scope_name="persona-memory-migration", is_granted=True,
+            ))
+        replay = await prepare_consented_legacy_migration_retry(**options)
+        assert replay.memory_id and replay.request_id
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            grant = (await session.execute(select(ConsentScope).where(
+                ConsentScope.scope_id == scope_id
+            ))).scalar_one()
+            grant.is_granted = False
+        with pytest.raises(ValueError, match="explicit historical migration consent"):
+            await prepare_consented_legacy_migration_retry(**options)
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.scope_id == scope_id
+            ))
