@@ -193,3 +193,24 @@ async def test_real_session_dependency_accepts_explicit_tenant_scope():
             )
     assert response.status_code == 200
     fake_runtime.transcribe.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_busy_runtime_returns_retryable_http_without_leaking_engine_failure():
+    app = app_with_identity(authenticated=True)
+    runtime = runtime_stub()
+    runtime.transcribe.side_effect = RuntimeError("local_transcription_busy")
+    with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/voice/transcriptions",
+                content=wav_payload(),
+                headers={"content-type": "audio/wav",
+                         "x-audio-duration-seconds": "0.5"},
+            )
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "1"
+    assert response.json() == {"detail": "local_transcription_busy"}
+    runtime.transcribe.assert_awaited_once()
