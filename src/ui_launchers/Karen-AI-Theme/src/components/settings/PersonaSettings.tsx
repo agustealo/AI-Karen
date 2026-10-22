@@ -305,6 +305,17 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         return;
       }
 
+      // Reject stale or unavailable activation revisions before modifying any persona.
+      // This prevents a partial backend content write when activation cannot proceed.
+      if (personaRevision === null || isSwitchingPersona) {
+        toast({
+          title: 'Persona revision unavailable',
+          description: 'Reload Persona Studio before saving. Your draft remains unchanged.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
       setIsSavingPersona(true);
       writeDraftInstructions(normalizedInstructions);
 
@@ -331,9 +342,6 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
           personaId = createdPersona.id;
         }
 
-        if (personaRevision === null) {
-          throw new Error('Persona revision is unavailable. Reload settings before saving.');
-        }
         const selected = await apiClient.put<PersonaPreferences>(
           PERSONA_PREFERENCES_ENDPOINT,
           { active_persona_id: personaId, expected_revision: personaRevision },
@@ -383,7 +391,7 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         setIsSavingPersona(false);
       }
     },
-    [currentPersonaId, isSavingPersona, personaRevision, toast],
+    [currentPersonaId, isSavingPersona, isSwitchingPersona, personaRevision, toast],
   );
 
   const switchActivePersona = useCallback(async (personaId: string) => {
