@@ -28,6 +28,8 @@ def classify(path: str, symbol: str, line: str) -> str:
         return "historical_schema"
     if normalized.startswith(("scripts/audit/",)):
         return "audit_tool"
+    if normalized == ".github/workflows/live-postgres-memory-proof.yml" and symbol == "persona_memory_entries":
+        return "security_proof"
     if symbol in ("store_persona_memory", "recall_persona_memories") and (
         line.lstrip().startswith(("async def " + symbol, "def " + symbol))
     ):
