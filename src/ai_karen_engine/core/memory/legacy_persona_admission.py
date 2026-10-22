@@ -610,6 +610,22 @@ async def prepare_authenticated_http_legacy_migration_retry(
     )
 
 
+@dataclass(frozen=True)
+class LegacyMigrationInspectionReceipt:
+    """Non-authorizing evidence of a completed read-only transaction.
+
+    This object deliberately contains no session, write capability, or
+    transferable RuntimePolicy decision. It cannot be supplied to NeuroVault
+    as persistence authorization.
+    """
+
+    replay: LegacyMigrationReplayIdentity
+    receipt: "LegacyReplayReceiptEvidence"
+    tenant_id: str
+    user_id: str
+    policy_decision_id: str
+
+
 async def inspect_authenticated_legacy_migration_transaction(
     *, request: "Request", request_id: str, correlation_id: str,
     source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
