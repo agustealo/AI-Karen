@@ -379,7 +379,14 @@ class ChatRuntime:
                     structured = dict(structured) if isinstance(structured, dict) else {}
                     structured["presentation"] = presentation
                     provider_meta["structured_content"] = structured
-                if decision.intent == "search.general" and direct_result.success:
+                if direct_result.success and decision.intent in {"search.weather", "time.current"}:
+                    synthesized = await self._synthesize_direct_measurement(
+                        request, decision, plan, meter, direct_result
+                    )
+                    if synthesized is not None:
+                        text, answer_meta = synthesized
+                        provider_meta.update(answer_meta)
+                elif decision.intent == "search.general" and direct_result.success:
                     synthesized = await self._synthesize_search_evidence(request, decision, plan, meter, direct_result)
                     if synthesized is not None:
                         text, answer_meta = synthesized
@@ -2393,9 +2400,20 @@ class ChatRuntime:
             structured["presentation"] = presentation
             _meta["structured_content"] = structured
 
+        answer = result.text
+        if result.success and decision.intent in {"search.weather", "time.current"}:
+            synthesized = await self._synthesize_direct_measurement(
+                request, decision, plan, meter, result
+            )
+            if synthesized is not None:
+                answer, answer_meta = synthesized
+                normalized.update(answer_meta)
+                if _meta is not None:
+                    _meta.update(answer_meta)
+
         yield ChatStreamChunk(
             type=ChatStreamEventType.CONTENT,
-            content=result.text,
+            content=answer,
             correlation_id=request.context.correlation_id,
             metadata={
                 "execution_mode": "direct_capability",
@@ -2415,6 +2433,105 @@ class ChatRuntime:
                     "presentation": presentation,
                 },
             )
+
+    async def _synthesize_direct_measurement(self, request, decision, plan, meter, retrieved):
+        """Compose verified weather/time observations via the canonical model gateway.
+
+        Tool output is evidence, never instructions. Model failure leaves the
+        direct capability result intact and never claims model attribution.
+        """
+        if not retrieved.success or retrieved.degraded:
+            return None
+        capability = decision.intent
+        payload = retrieved.payload if isinstance(retrieved.payload, dict) else {}
+        observation = payload.get("extractedData")
+        if not isinstance(observation, dict) or not observation:
+            observation = payload.get("current")
+        if capability == "search.weather":
+            if not isinstance(observation, dict) or not observation:
+                return None
+            allowed = (
+                "location", "observed_at", "temperature", "temperature_f",
+                "temperature_c", "high", "low", "humidity", "conditions",
+                "wind_speed", "timezone",
+            )
+        elif capability == "time.current":
+            allowed = ("value", "formatted", "time", "iso", "timezone",
+                       "resolved_timezone", "label", "query_location")
+            observation = payload
+            if not any(observation.get(key) for key in ("value", "formatted", "time", "iso")):
+                return None
+        else:
+            return None
+        evidence = {
+            key: observation[key] for key in allowed
+            if key in observation
+            and isinstance(observation[key], (str, int, float))
+            and not isinstance(observation[key], bool)
+        }
+        if not evidence or not await meter.consume_model_call():
+            return None
+        from ai_karen_engine.services.response.response_contracts import ResponseContract
+        from ai_karen_engine.services.response.response_prompt_builder import ResponsePromptBuilder
+        from ai_karen_engine.services.response.response_validator import ResponseValidator
+        from ai_karen_engine.core.expression.contracts import ExpressionTask
+
+        question = next(
+            (str(message.get("content") or "") for message in reversed(request.messages)
+             if message.get("role") == "user"), ""
+        )
+        contract = ResponseContract(
+            purpose="tool_synthesis", intent=capability,
+            latest_user_message=question, requires_live_data=True,
+            allow_llm_only=False,
+            tool_results=[{
+                "evidence_level": "verified_measurement",
+                "capability": capability, "observation": evidence,
+            }],
+        )
+        task = ExpressionTask(
+            task_id=f"grounded_measurement_{request.context.correlation_id}",
+            kind="chat",
+            messages=ResponsePromptBuilder().build_messages(contract),
+            response_mode="text",
+            required_capabilities=list(decision.required_capabilities),
+            forbidden_capabilities=list(decision.forbidden_capabilities),
+            preferred_provider=request.preferred_provider,
+            preferred_model=request.preferred_model,
+            max_tokens=self._resolve_chat_generation_max_tokens(request, plan),
+            temperature=request.temperature,
+            timeout_ms=decision.time_budget_ms,
+            correlation_id=request.context.correlation_id,
+            request_id=request.context.request_id,
+            metadata={"execution_mode": "grounded_measurement", "capability": capability},
+        )
+        try:
+            result = await self._composition.expression_gateway.generate(task)
+            if not await meter.check_duration():
+                return None
+            if not result.provider or not result.model or not result.text or result.degraded:
+                return None
+            answer = str(result.text).strip()
+            verdict = ResponseValidator().validate(answer, contract)
+            if not verdict.valid:
+                logger.warning("measurement_answer_rejected", extra={
+                    "correlation_id": request.context.correlation_id,
+                    "reason": verdict.reason,
+                })
+                return None
+            return answer, {
+                "actual_provider": result.provider,
+                "actual_model": result.model,
+                "runtime_engine": result.runtime_engine or result.engine_id,
+                "response_source": "grounded_measurement_model",
+                "degraded_mode": False,
+            }
+        except Exception as exc:
+            logger.warning("measurement_synthesis_failed", extra={
+                "correlation_id": request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            })
+            return None
 
     async def _synthesize_search_evidence(self, request, decision, plan, meter, retrieved):
         """Use the existing model gateway only for bounded fetched-page evidence."""
