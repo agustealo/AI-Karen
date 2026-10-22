@@ -451,14 +451,16 @@ async function readOwnedHistory(conversationId: string) {
   // Keep assistant-ui's canonical text conversion; augment only a confirmed
   // persisted, allowlisted read-only presentation. No local persistence.
   return imported.map((message) => {
-    const original = persistedById.get(message.id);
+    const original = message.id ? persistedById.get(message.id) : undefined;
     const envelope = original?.role === "assistant"
       ? presentationFromStructuredContent(original.structured_content) : null;
     if (!envelope) return message;
     return {
       ...message,
       content: [
-        ...message.content,
+        ...(typeof message.content === "string"
+          ? [{ type: "text" as const, text: message.content }]
+          : message.content),
         { type: "data" as const, name: "karen.presentation.v1", data: envelope },
       ],
     };
