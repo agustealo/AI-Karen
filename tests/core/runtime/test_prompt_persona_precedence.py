@@ -1,6 +1,4 @@
 """Registered prompt defaults must not erase authenticated presentation preferences."""
-import json
-
 import pytest
 
 from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
