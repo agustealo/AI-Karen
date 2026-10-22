@@ -1005,3 +1005,46 @@ async def test_historical_vault_write_rejects_constructible_policy_flags_before_
     )
     with pytest.raises(NeuroVaultAuthorizationError):
         await vault.persist(entry, context=context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source,custom", [
+    ("legacy_persona", {"consent_scope": "memory.write"}),
+    ("chat_user", {"source_type": "legacy_persona", "consent_scope": "memory.write"}),
+    ("legacy_persona", {}),
+])
+async def test_historical_source_cannot_bypass_disabled_writer_by_relabeling(
+    source, custom,
+):
+    import uuid
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    tenant, user = str(uuid.uuid4()), str(uuid.uuid4())
+
+    def forbidden_session():
+        raise AssertionError("historical source accessed database")
+
+    entry = MemoryEntry(
+        id=str(uuid.uuid4()), content="Historical import forbidden",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source=source, custom=custom,
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user, request_id="req",
+        correlation_id="corr", actor_id=user,
+        policy_context={"memory_write_authorized": True},
+    )
+    with pytest.raises(
+        NeuroVaultAuthorizationError, match="historical migration persistence is disabled",
+    ):
+        await PostgresNeuroVault(session_factory=forbidden_session).persist(
+            entry, context=context,
+        )
