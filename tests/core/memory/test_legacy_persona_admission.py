@@ -1,6 +1,7 @@
 """Migration preflight does not confer write authority."""
 from ai_karen_engine.core.memory.legacy_persona_admission import (
     LegacyMigrationWriteAuthority, admit_legacy_migration,
+    derive_legacy_migration_replay_identity,
 )
 from ai_karen_engine.core.memory.legacy_persona_preflight import LegacyMigrationPreflight
 
@@ -46,3 +47,33 @@ def test_separately_verified_conditions_only_admit_not_persist():
     result = admit_legacy_migration(LegacyMigrationPreflight(True, ()), authority())
     assert result.admitted
     assert result.reason_codes == ()
+
+
+def test_migration_replay_identity_is_stable_across_retries():
+    from uuid import uuid4
+    tenant, user = str(uuid4()), str(uuid4())
+    kwargs = dict(
+        admission=LegacyMigrationPreflight(True, ()),
+        tenant_id=tenant, user_id=user, source_record_id="legacy-row-42",
+    )
+    # The helper requires a separately admitted decision, not bare preflight.
+    kwargs["admission"] = admit_legacy_migration(LegacyMigrationPreflight(True, ()), authority())
+    first = derive_legacy_migration_replay_identity(**kwargs)
+    assert first == derive_legacy_migration_replay_identity(**kwargs)
+    assert first.memory_id != first.request_id
+    assert first != derive_legacy_migration_replay_identity(**{
+        **kwargs, "source_record_id": "legacy-row-43",
+    })
+
+
+def test_migration_replay_identity_denied_without_admission():
+    import pytest
+    from uuid import uuid4
+    rejected = admit_legacy_migration(
+        LegacyMigrationPreflight(False, ("consent_unverified",)), authority()
+    )
+    with pytest.raises(ValueError, match="admission"):
+        derive_legacy_migration_replay_identity(
+            admission=rejected, tenant_id=str(uuid4()),
+            user_id=str(uuid4()), source_record_id="legacy-row",
+        )
