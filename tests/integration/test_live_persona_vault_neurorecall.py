@@ -1146,6 +1146,15 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             ))).scalars().all()
             assert len(recorded) == 1
             assert recorded[0].event_id == winner_id
+            # The failed insert cannot leave its own event behind.
+            assert (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.event_id == loser_id,
+            ))).scalar_one_or_none() is None
+            # No matching assertion can turn a failed event into a replay
+            # receipt, even if the idempotency key collided.
+            assert (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.event_id == loser_id,
+            ))).scalar_one_or_none() is None
             await session.execute(
                 text("DELETE FROM public.memory_event WHERE event_id=:event"),
                 {"event": str(winner_id)},
