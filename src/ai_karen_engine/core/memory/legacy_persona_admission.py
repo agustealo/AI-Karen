@@ -27,6 +27,8 @@ class LegacyMigrationWriteAuthority:
 class LegacyMigrationAdmission:
     admitted: bool
     reason_codes: tuple[str, ...]
+    tenant_id: str | None = None
+    user_id: str | None = None
 
 
 def admit_legacy_migration(
@@ -49,7 +51,11 @@ def admit_legacy_migration(
         reasons.append("policy_decision_missing")
     if authority.explicitly_granted is not True:
         reasons.append("write_not_authorized")
-    return LegacyMigrationAdmission(not reasons, tuple(reasons))
+    return LegacyMigrationAdmission(
+        not reasons, tuple(reasons),
+        tenant_id=authority.tenant_id if not reasons else None,
+        user_id=authority.user_id if not reasons else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -79,6 +85,8 @@ def derive_legacy_migration_replay_identity(
         user = uuid.UUID(user_id)
     except (ValueError, TypeError, AttributeError) as exc:
         raise ValueError("canonical UUID migration identities required") from exc
+    if admission.tenant_id != str(tenant) or admission.user_id != str(user):
+        raise ValueError("migration principal does not match admitted scope")
     source = str(source_record_id or "").strip()
     if not source or len(source) > 255:
         raise ValueError("bounded source record identifier required")
