@@ -1244,3 +1244,31 @@ async def test_transaction_authority_rejects_missing_active_session():
             session=Mock(), tenant_id=str(uuid.uuid4()),
             user_id=str(uuid.uuid4()), policy_decision_id="verified-decision",
         )
+
+
+@pytest.mark.asyncio
+async def test_transaction_authority_rejects_scope_drift_during_verification():
+    from unittest.mock import AsyncMock, Mock, patch
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority,
+    )
+
+    tenant = "11111111-1111-4111-8111-111111111111"
+    user = "22222222-2222-4222-8222-222222222222"
+    first = (tenant, tenant, user, 901)
+    changed = (tenant, tenant, "33333333-3333-4333-8333-333333333333", 901)
+    session = Mock()
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock(side_effect=[
+        Mock(one=Mock(return_value=first)),
+        Mock(one=Mock(return_value=changed)),
+    ])
+    with patch(
+        "sqlalchemy.ext.asyncio.AsyncSession",
+        new=type(session),
+    ):
+        with pytest.raises(PermissionError, match="changed during verification"):
+            await LegacyMigrationTransactionAuthority.inspect(
+                session=session, tenant_id=tenant, user_id=user,
+                policy_decision_id="verified-decision",
+            )
