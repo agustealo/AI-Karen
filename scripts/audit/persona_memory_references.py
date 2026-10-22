@@ -40,6 +40,10 @@ EXCLUDED = {".git", "node_modules", ".venv", "venv", "dist", "build", ".next"}
 def audit(root: Path) -> list[dict[str, object]]:
     if not root.is_dir():
         raise ValueError("Audit root must be an existing directory")
+    # Refuse partial working directories mistaken for a complete repository.
+    required = ("src/ai_karen_engine", "supabase/migrations", "tests")
+    if not all((root / name).is_dir() for name in required):
+        raise ValueError("Audit requires a full AI-Karen checkout")
     matches: list[dict[str, object]] = []
     for path in sorted(root.rglob("*")):
         if path.is_symlink() or path.suffix not in SUFFIXES:
