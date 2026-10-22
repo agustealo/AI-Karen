@@ -334,6 +334,9 @@ class PostgresNeuroVault(VaultPort):
         # Historical source admission never grants execution by itself.
         # Preserve final denial after database-scoped principal validation.
         self._require_non_historical_write(entry)
+        # A typed inspection result or a caller-provided policy decision ID
+        # is never a transferable write grant. Runtime-only historical
+        # authorization must be implemented as a separate trusted contract.
         from dataclasses import replace
 
         receipt = await self._persist_with_session(
