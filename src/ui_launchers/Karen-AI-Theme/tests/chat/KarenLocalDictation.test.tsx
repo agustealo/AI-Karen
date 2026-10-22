@@ -28,8 +28,15 @@ class Recorder {
 }
 
 let stopTrack: ReturnType<typeof vi.fn>;
+const originalArrayBuffer = Object.getOwnPropertyDescriptor(Blob.prototype, "arrayBuffer");
 beforeEach(() => {
   Recorder.instances = [];
+  // jsdom does not consistently implement Blob.arrayBuffer across versions.
+  // The captured bytes are deliberately synthetic; decodeAudioData is mocked.
+  Object.defineProperty(Blob.prototype, "arrayBuffer", {
+    configurable: true,
+    value: async () => new Uint8Array([0, 1, 2, 3]).buffer,
+  });
   stopTrack = vi.fn();
   composer.getState.mockReturnValue({ text: "Existing" });
   vi.mocked(apiClient.get).mockResolvedValue({ status: "ready", transcription_available: true });
@@ -47,7 +54,13 @@ beforeEach(() => {
   });
 
 });
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  cleanup();
+  if (originalArrayBuffer) Object.defineProperty(Blob.prototype, "arrayBuffer", originalArrayBuffer);
+  else delete (Blob.prototype as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("local dictation composer acceptance with controlled browser devices", () => {
   it("records, sends WAV through authenticated API client, and edits draft without sending", async () => {
