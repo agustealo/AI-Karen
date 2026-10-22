@@ -777,3 +777,37 @@ async def test_history_restores_grounded_presentation_and_model_receipt() -> Non
     for key, value in metadata.items():
         assert assistant.metadata[key] == value
     assert assistant.metadata["request_id"] == context.request_id
+
+
+@pytest.mark.asyncio
+async def test_response_metadata_cannot_override_authorized_transcript_identity() -> None:
+    repository = _Repository()
+    context = _context(request_id="authorized-request")
+    gateway = ConversationRuntimeGateway(repository=repository)
+    result = await gateway.persist_completed_turn(
+        context,
+        user_text="Who owns this conversation?",
+        assistant_text="Ownership comes from authenticated context.",
+        response_metadata={
+            "request_id": "forged-request",
+            "correlation_id": "forged-correlation",
+            "session_id": "forged-session",
+            "conversation_id": "forged-conversation",
+            "authorized_user_id": "forged-user",
+            "source": "forged-source",
+            "transcript_actor": "user",
+            "actual_provider": "ollama",
+            "actual_model": "test-model",
+        },
+    )
+    assert result.status == "persisted"
+    assistant = next(row for row in repository.messages if row.role == "assistant")
+    assert assistant.metadata["request_id"] == context.request_id
+    assert assistant.metadata["correlation_id"] == context.correlation_id
+    assert assistant.metadata["session_id"] == context.session_id
+    assert assistant.metadata["conversation_id"] == result.conversation_id
+    assert assistant.metadata["authorized_user_id"] == context.user_id
+    assert assistant.metadata["source"] == "chat_runtime"
+    assert assistant.metadata["transcript_actor"] == "assistant"
+    assert assistant.metadata["actual_provider"] == "ollama"
+    assert assistant.metadata["actual_model"] == "test-model"
