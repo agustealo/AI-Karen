@@ -497,3 +497,60 @@ async def prepare_governed_legacy_migration_retry(
     if not requires_fresh_migration_authorization(recovery):
         raise ValueError("migration recovery does not allow retry")
     return replay
+
+
+async def migration_policy_request_from_authenticated_http(
+    *, request: "Request", request_id: str, correlation_id: str,
+) -> "PolicyEvaluationRequest":
+    """Fail-closed HTTP credential boundary; read-only, no migration execution.
+
+    Authenticate directly through the existing middleware instead of trusting
+    request.state.user or a caller-constructed ChatExecutionContext. Historical
+    operations require functioning revocation storage, even if ordinary chat
+    tolerates a degraded auth revocation backend.
+    """
+    from fastapi import Request
+    from ai_karen_engine.core.security.auth_config import auth_config
+    from ai_karen_engine.auth.auth_middleware import (
+        AuthenticationError, get_auth_middleware,
+    )
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    if not isinstance(request, Request):
+        raise TypeError("canonical HTTP request required")
+    if auth_config.should_bypass_auth():
+        raise PermissionError("historical migration forbidden with auth bypass")
+    middleware = get_auth_middleware()
+    store = middleware.redis_client
+    if store is None:
+        raise PermissionError("historical migration requires revocation store")
+    try:
+        store.ping()
+        token = middleware._extract_token_from_request(request)
+        if not token:
+            raise PermissionError("historical migration requires access token")
+        payload = middleware._decode_jwt(token)
+        token_id = str(payload.get("token_id") or "").strip()
+        if not token_id or middleware._is_token_revoked(token_id):
+            raise PermissionError("historical migration token invalid or revoked")
+        # Check the revocation store directly because the generic middleware
+        # intentionally degrades to not-revoked when its lookup fails.
+        if store.exists(middleware._get_redis_key("revoked", token_id)):
+            raise PermissionError("historical migration token revoked")
+        principal = middleware._get_user_from_payload(payload)
+        if not request_id or not request_id.strip() or not correlation_id or not correlation_id.strip():
+            raise ValueError("request and correlation identity required")
+        context = ChatExecutionContext(
+            tenant_id=principal["tenant_id"], user_id=principal["user_id"],
+            session_id=token_id, request_id=request_id,
+            correlation_id=correlation_id,
+            roles=list(principal.get("roles") or []),
+            permissions=list(principal.get("permissions") or []),
+        )
+        return migration_policy_request_from_runtime_context(context=context)
+    except (PermissionError, ValueError, TypeError):
+        raise
+    except AuthenticationError as exc:
+        raise PermissionError("historical migration authentication failed") from exc
+    except Exception as exc:
+        raise PermissionError("historical migration credential verification unavailable") from exc
