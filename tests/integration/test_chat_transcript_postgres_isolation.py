@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 
@@ -163,6 +164,67 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         "Tenant A durable context.",
         "Tenant A durable response.",
     ]
+
+    # Force an assistant insert to fail inside the pair transaction.
+    # The user half must not survive that failure.
+    async with engine.begin() as connection:
+        await connection.execute(text("""
+            CREATE FUNCTION reject_atomic_assistant() RETURNS trigger AS $
+            BEGIN
+                IF NEW.role = 'assistant' AND NEW.content = 'INJECTED_FAILURE' THEN
+                    RAISE EXCEPTION 'injected_assistant_failure';
+                END IF;
+                RETURN NEW;
+            END;
+            $ LANGUAGE plpgsql
+        """))
+        await connection.execute(text("""
+            CREATE TRIGGER reject_atomic_assistant_trigger
+            BEFORE INSERT ON messages
+            FOR EACH ROW EXECUTE FUNCTION reject_atomic_assistant()
+        """))
+
+    rollback_context = _context(
+        tenant_id=tenant_a, user_id=user_a,
+        session_id="rollback-session", request_id=str(uuid.uuid4()),
+    )
+    rollback_result = await owner_gateway.persist_completed_turn(
+        rollback_context, user_text="atomic rollback input",
+        assistant_text="INJECTED_FAILURE",
+    )
+    assert rollback_result.status == "failed"
+    rollback_rows = await repository.get_messages(
+        rollback_result.conversation_id, tenant_a, limit=20,
+    )
+    assert rollback_rows.success
+    assert rollback_rows.data == []
+
+    # Repeated identical calls must resolve under the same conversation row
+    # lock without creating duplicate user/assistant pairs.
+    concurrent_context = _context(
+        tenant_id=tenant_a, user_id=user_a,
+        session_id="concurrent-session", request_id=str(uuid.uuid4()),
+    )
+    concurrent = await asyncio.gather(*[
+        owner_gateway.persist_completed_turn(
+            concurrent_context, user_text="concurrent question",
+            assistant_text="concurrent answer",
+        )
+        for _ in range(4)
+    ])
+    assert sorted(result.status for result in concurrent) == [
+        "already_persisted", "already_persisted",
+        "already_persisted", "persisted",
+    ]
+    concurrent_rows = await repository.get_messages(
+        concurrent[0].conversation_id, tenant_a, limit=20,
+    )
+    assert concurrent_rows.success
+    assert len(concurrent_rows.data or []) == 2
+
+    async with engine.begin() as connection:
+        await connection.execute(text("DROP TRIGGER reject_atomic_assistant_trigger ON messages"))
+        await connection.execute(text("DROP FUNCTION reject_atomic_assistant()"))
 
     async with engine.begin() as connection:
         await connection.execute(text("DROP TABLE IF EXISTS messages CASCADE"))
