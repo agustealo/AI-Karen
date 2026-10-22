@@ -23,6 +23,19 @@ describe("local voice WAV encoding", () => {
     expect(view.getUint32(40, true)).toBe(32000);
   });
 
+  it("rejects decoded buffers whose declared duration exceeds channel data", () => {
+    const broken = audio(1);
+    broken.getChannelData = () => new Float32Array(1);
+    expect(() => encodeMonoPcmWav(broken)).toThrow("inconsistent channel lengths");
+  });
+
+  it("rejects nonfinite PCM samples instead of encoding them as silence", () => {
+    const broken = audio(0.5);
+    const samples = broken.getChannelData(0);
+    samples[0] = Number.NaN;
+    expect(() => encodeMonoPcmWav(broken)).toThrow("invalid samples");
+  });
+
   it("rejects zero-length and excessive recordings", () => {
     expect(() => encodeMonoPcmWav(audio(0))).toThrow();
     expect(() => encodeMonoPcmWav(audio(121))).toThrow();
