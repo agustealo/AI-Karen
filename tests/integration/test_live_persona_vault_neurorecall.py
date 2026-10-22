@@ -710,6 +710,33 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             consent.is_granted = False
         with pytest.raises(ValueError, match="explicit historical migration consent"):
             await prepare_governed_legacy_migration_retry(**base)
+        # A previously prepared replay ID is not consent or permission.
+        # NeuroVault must reject persistence after revocation, even when the
+        # caller still possesses the old policy context and replay identifiers.
+        from ai_karen_engine.platform.memory.postgres.vault import (
+            NeuroVaultAuthorizationError,
+        )
+        revoked_entry = MemoryEntry(
+            id=str(uuid.uuid4()), content="Never persist after revocation",
+            memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": "persona-memory-migration"},
+            ),
+        )
+        with pytest.raises(NeuroVaultAuthorizationError):
+            await PostgresNeuroVault().persist(
+                revoked_entry, context=VaultContext(
+                    tenant_id=str(tenant), user_id=str(user),
+                    request_id=replay.request_id,
+                    correlation_id=str(uuid.uuid4()), actor_id=str(user),
+                    policy_context={"memory_write_authorized": True},
+                ),
+            )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assert (await session.execute(select(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == uuid.UUID(revoked_entry.id)
+            ))).scalar_one_or_none() is None
         # The only assertion was created by the explicit synthetic vault write.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             result = await session.execute(select(MemoryAssertion).where(
