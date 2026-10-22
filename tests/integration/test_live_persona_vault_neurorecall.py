@@ -671,6 +671,22 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             ), {"id": str(source), "tenant": str(tenant), "user": str(user),
                 "content": "Synthetic read-only assembly proof"})
         replay = await prepare_governed_legacy_migration_retry(**base)
+        # A prepared replay identity is not valid after source deletion.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "DELETE FROM public.persona_memory_entries "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+        with pytest.raises(ValueError, match="verified historical retention metadata required"):
+            await prepare_governed_legacy_migration_retry(**base)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "INSERT INTO public.persona_memory_entries "
+                "(id, tenant_id, user_id, content, memory_type, created_at) "
+                "VALUES (:id, :tenant, :user, :content, :kind, :created)"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user),
+                "content": "Synthetic read-only assembly proof",
+                "kind": "semantic", "created": created.replace(tzinfo=None)})
         # Exercise authenticated ingress with an actual signed access JWT,
         # the existing middleware decoder, and real PostgreSQL evidence.
         import jwt
