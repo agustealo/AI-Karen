@@ -1230,3 +1230,17 @@ def test_inspection_receipt_rejects_noncanonical_principal_and_empty_decision():
     ):
         with pytest.raises(ValueError):
             LegacyMigrationInspectionReceipt(**{**valid, **override})
+
+
+@pytest.mark.asyncio
+async def test_transaction_authority_rejects_missing_active_session():
+    import uuid
+    from unittest.mock import Mock
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority,
+    )
+    with pytest.raises(PermissionError, match="active PostgreSQL transaction"):
+        await LegacyMigrationTransactionAuthority.inspect(
+            session=Mock(), tenant_id=str(uuid.uuid4()),
+            user_id=str(uuid.uuid4()), policy_decision_id="verified-decision",
+        )
