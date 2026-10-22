@@ -13,6 +13,7 @@ def evidence(**overrides):
         legacy_user_id=user, authorized_user_id=user,
         identity_verified=False, consent_verified=False,
         retention_verified=False, source_record_verified=False,
+        evidence_origin="authorized_runtime",
     )
     values.update(overrides)
     return LegacyMigrationEvidence(**values)
@@ -56,3 +57,14 @@ def test_invalid_identity_rejected():
     assert preflight_legacy_memory(evidence(legacy_user_id="legacy-user")).reason_codes == (
         "invalid_identity_format",
     )
+
+
+def test_untrusted_evidence_origin_blocks_forged_verified_flags():
+    original = evidence(
+        identity_verified=True, consent_verified=True,
+        retention_verified=True, source_record_verified=True,
+        evidence_origin="legacy_row",
+    )
+    result = preflight_legacy_memory(original)
+    assert not result.eligible
+    assert result.reason_codes == ("evidence_origin_untrusted",)
