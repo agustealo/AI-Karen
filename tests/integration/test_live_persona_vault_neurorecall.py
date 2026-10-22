@@ -653,6 +653,23 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         assert (await PostgresNeuroVault().persist(
             synthetic_entry, context=vault_context,
         )).persisted
+        # The same assertion with different operation provenance must never
+        # be accepted as a completed migration or as a safe retry.
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+            lookup_legacy_replay_receipt,
+        )
+        from ai_karen_engine.core.memory.legacy_persona_recovery import (
+            reconcile_legacy_replay,
+        )
+        mismatched = await lookup_legacy_replay_receipt(
+            tenant_id=str(tenant), user_id=str(user),
+            expected_memory_id=replay.memory_id,
+            expected_request_id=str(uuid.uuid4()),
+        )
+        mismatch_decision = reconcile_legacy_replay(mismatched)
+        assert not mismatch_decision.already_persisted
+        assert not mismatch_decision.safe_to_retry
+        assert mismatch_decision.reason == "receipt_not_persisted"
         with pytest.raises(ValueError, match="migration recovery does not allow retry"):
             await prepare_governed_legacy_migration_retry(**base)
         with pytest.raises(ValueError, match="migration recovery does not allow retry"):
