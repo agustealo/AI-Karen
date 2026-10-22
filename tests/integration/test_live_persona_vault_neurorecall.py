@@ -635,6 +635,26 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 scope_id=consent_id, tenant_id=tenant, user_id=user,
                 scope_name="persona-memory-migration", is_granted=True,
             ))
+        # Canonical source classification must remain valid independently of
+        # caller-provided source IDs or retention policy names.
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+            read_legacy_persona_source_retention_metadata,
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.persona_memory_entries SET memory_type=' ' "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
+        assert await read_legacy_persona_source_retention_metadata(
+            tenant_id=str(tenant), user_id=str(user), source_record_id=str(source),
+        ) is None
+        with pytest.raises(ValueError, match="verified historical retention metadata required"):
+            await prepare_governed_legacy_migration_retry(**base)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.persona_memory_entries SET memory_type='semantic' "
+                "WHERE id=:id AND tenant_id=:tenant AND user_id=:user"
+            ), {"id": str(source), "tenant": str(tenant), "user": str(user)})
         replay = await prepare_governed_legacy_migration_retry(**base)
         # Exercise authenticated ingress with an actual signed access JWT,
         # the existing middleware decoder, and real PostgreSQL evidence.
