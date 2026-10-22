@@ -771,6 +771,23 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             )
             assert integrated_replay == replay
             assert not integrated_receipt.persisted
+            from ai_karen_engine.core.memory.legacy_persona_admission import (
+                inspect_authenticated_legacy_migration_evidence,
+                LegacyMigrationInspectionReceipt,
+            )
+            typed_inspection = await inspect_authenticated_legacy_migration_evidence(
+                request=http_request, request_id=str(uuid.uuid4()),
+                correlation_id=str(uuid.uuid4()), source_record_id=str(source),
+                runtime_policy=RuntimePolicyEnforcer(),
+            )
+            assert isinstance(typed_inspection, LegacyMigrationInspectionReceipt)
+            assert typed_inspection.replay == integrated_replay
+            assert typed_inspection.receipt == integrated_receipt
+            assert typed_inspection.tenant_id == str(tenant)
+            assert typed_inspection.user_id == str(user)
+            assert typed_inspection.policy_decision_id
+            assert not hasattr(typed_inspection, "session")
+            assert not hasattr(typed_inspection, "write_capability")
             # The integrated runtime path binds the authenticated user into
             # the caller transaction; this must not change replay identity.
             # RuntimePolicy may be revoked after initial admission but
