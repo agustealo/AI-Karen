@@ -170,6 +170,46 @@ async def test_disabling_opt_in_removes_previously_healthy_engine(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_changed_local_model_configuration_replaces_existing_engine(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    seen = []
+    class Adapter:
+        engine_id = "faster-whisper-local"
+        def __init__(self, model_path, *, device, compute_type):
+            seen.append((model_path, device, compute_type))
+        async def load(self):
+            pass
+        async def is_ready(self):
+            return True
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/first")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        first = runtime.speech_engine
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        assert runtime.speech_engine is first
+        monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/second")
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        assert runtime.speech_engine is not first
+        monkeypatch.setenv("KAREN_LOCAL_STT_DEVICE", "cuda")
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        monkeypatch.setenv("KAREN_LOCAL_STT_COMPUTE_TYPE", "float16")
+        assert (await module.configure_local_voice_runtime()).transcription_available
+    assert seen == [
+        ("/local/first", "cpu", "int8"),
+        ("/local/second", "cpu", "int8"),
+        ("/local/second", "cuda", "int8"),
+        ("/local/second", "cuda", "float16"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_optional_bootstrap_loads_model_once(monkeypatch):
     from ai_karen_engine.services import voice_runtime as module
 
