@@ -2393,13 +2393,31 @@ class ChatRuntime:
             structured["presentation"] = presentation
             _meta["structured_content"] = structured
 
+        # Direct tool output is intermediate evidence, not necessarily the final
+        # assistant answer. Keep stream and ordinary search synthesis identical.
+        answer_text = result.text
+        if decision.intent == "search.general" and result.success:
+            synthesized = await self._synthesize_search_evidence(
+                request, decision, plan, meter, result
+            )
+            if synthesized is not None:
+                answer_text, answer_meta = synthesized
+                normalized.update(answer_meta)
+                if _meta is not None:
+                    _meta.update(answer_meta)
+
         yield ChatStreamChunk(
             type=ChatStreamEventType.CONTENT,
-            content=result.text,
+            content=answer_text,
             correlation_id=request.context.correlation_id,
             metadata={
-                "execution_mode": "direct_capability",
+                "execution_mode": (
+                    "grounded_search" if normalized.get("response_source") == "grounded_search_model"
+                    else "direct_capability"
+                ),
                 "actual_provider": normalized.get("actual_provider"),
+                "actual_model": normalized.get("actual_model"),
+                "runtime_engine": normalized.get("runtime_engine"),
                 "response_source": normalized.get("response_source"),
                 "degraded_mode": normalized.get("degraded_mode", False),
             },
