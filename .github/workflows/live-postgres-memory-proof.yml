@@ -26,6 +26,8 @@ on:
       - "tests/integration/test_live_persona_memory_provenance.py"
       - "tests/integration/test_live_persona_vault_neurorecall.py"
       - "src/ai_karen_engine/services/persona/**"
+      - "scripts/audit/persona_memory_references.py"
+      - "tests/architecture/test_persona_memory_reference_audit.py"
       - "src/ai_karen_engine/core/persona/**"
       - "src/ai_karen_engine/services/automation/**"
       - "tests/services/automation/**"
@@ -72,6 +74,12 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
               out.write("\\n".join(summary) + "\\n")
           PY
+      - name: Preserve legacy persona reference inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: persona-memory-reference-inventory
+          path: persona-memory-references.json
+          retention-days: 14
       - name: Start authenticated canonical PostgreSQL service
         env:
           KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
