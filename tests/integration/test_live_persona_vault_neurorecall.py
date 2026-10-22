@@ -188,7 +188,7 @@ async def test_admitted_migration_replay_identity_is_idempotent_in_real_vault():
         assert not reconcile_legacy_replay(mismatch).already_persisted
         unrelated = await lookup_legacy_replay_receipt(
             tenant_id=str(uuid.uuid4()), user_id=str(user),
-            expected_memory_id=replay.memory_id,
+            expected_memory_id=replay.memory_id, expected_request_id=replay.request_id,
         )
         assert not reconcile_legacy_replay(unrelated).already_persisted
         # Consent is checked before the idempotency lookup. A retry after
