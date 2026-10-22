@@ -177,10 +177,15 @@ async def test_admitted_migration_replay_identity_is_idempotent_in_real_vault():
         )
         evidence = await lookup_legacy_replay_receipt(
             tenant_id=str(tenant), user_id=str(user),
-            expected_memory_id=replay.memory_id,
+            expected_memory_id=replay.memory_id, expected_request_id=replay.request_id,
         )
         decision = reconcile_legacy_replay(evidence)
         assert decision.already_persisted and not decision.safe_to_retry
+        mismatch = await lookup_legacy_replay_receipt(
+            tenant_id=str(tenant), user_id=str(user),
+            expected_memory_id=replay.memory_id, expected_request_id=str(uuid.uuid4()),
+        )
+        assert not reconcile_legacy_replay(mismatch).already_persisted
         unrelated = await lookup_legacy_replay_receipt(
             tenant_id=str(uuid.uuid4()), user_id=str(user),
             expected_memory_id=replay.memory_id,
