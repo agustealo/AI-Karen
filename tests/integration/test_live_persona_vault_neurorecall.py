@@ -531,3 +531,59 @@ async def test_retention_source_metadata_and_policy_from_disposable_postgres():
             await session.execute(delete(RetentionPolicy).where(
                 RetentionPolicy.policy_id == policy_id
             ))
+
+
+async def test_canonical_identity_requires_active_verified_same_tenant_user():
+    """Disposable auth fixture matches canonical baseline columns, no legacy import."""
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_identity import (
+        verify_legacy_persona_identity,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user = uuid.uuid4(), uuid.uuid4()
+    # The memory-only disposable schema lacks the unrelated application auth
+    # tables; create the minimal canonical columns strictly in disposable CI.
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        await session.execute(text(
+            "CREATE TABLE IF NOT EXISTS public.auth_users ("
+            "user_id UUID PRIMARY KEY, tenant_id TEXT, "
+            "is_active BOOLEAN DEFAULT TRUE, is_verified BOOLEAN DEFAULT FALSE)"
+        ))
+        await session.execute(text(
+            "INSERT INTO public.auth_users "
+            "(user_id, tenant_id, is_active, is_verified) "
+            "VALUES (:user_id, :tenant_id, TRUE, TRUE)"
+        ), {"user_id": str(user), "tenant_id": str(tenant)})
+    try:
+        assert await verify_legacy_persona_identity(
+            tenant_id=str(tenant), user_id=str(user),
+        )
+        assert not await verify_legacy_persona_identity(
+            tenant_id=str(uuid.uuid4()), user_id=str(user),
+        )
+        assert not await verify_legacy_persona_identity(
+            tenant_id=str(tenant), user_id=str(uuid.uuid4()),
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.auth_users SET is_active=FALSE "
+                "WHERE user_id=:user AND tenant_id=:tenant"
+            ), {"user": str(user), "tenant": str(tenant)})
+        assert not await verify_legacy_persona_identity(
+            tenant_id=str(tenant), user_id=str(user),
+        )
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "UPDATE public.auth_users SET is_active=TRUE, is_verified=FALSE "
+                "WHERE user_id=:user AND tenant_id=:tenant"
+            ), {"user": str(user), "tenant": str(tenant)})
+        assert not await verify_legacy_persona_identity(
+            tenant_id=str(tenant), user_id=str(user),
+        )
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(text(
+                "DELETE FROM public.auth_users "
+                "WHERE user_id=:user AND tenant_id=:tenant"
+            ), {"user": str(user), "tenant": str(tenant)})
