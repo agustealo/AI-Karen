@@ -170,6 +170,21 @@ describe("local dictation composer acceptance with controlled browser devices", 
     expect(composer.setText).not.toHaveBeenCalled();
   });
 
+  it("ignores late errors from a discarded recorder after a new session starts", async () => {
+    render(<KarenLocalDictation />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Discard local recording" });
+    const oldRecorder = Recorder.instances[0];
+    fireEvent.click(screen.getByRole("button", { name: "Discard local recording" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    oldRecorder.onerror?.();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop local dictation" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Discard local recording" }));
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+  });
+
   it("reports permission denial without uploading or changing the draft", async () => {
     vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(new Error("denied"));
     render(<KarenLocalDictation />);
