@@ -97,6 +97,32 @@ async def lock_legacy_migration_evidence(
     if source_id is None:
         return None
     async with async_transaction_scope(tenant_id=tenant) as session:
+        return await verify_locked_legacy_migration_evidence(
+            session=session, tenant_id=tenant, user_id=user,
+            source_record_id=source_id,
+        )
+
+
+async def verify_locked_legacy_migration_evidence(
+    *, session: "AsyncSession", tenant_id: str, user_id: str,
+    source_record_id: str,
+) -> tuple[datetime, str] | None:
+    """Check canonical evidence using a caller-owned active transaction.
+
+    No commit or rollback occurs here. Caller must hold this transaction
+    through any future governed write; this function never grants one.
+    """
+    from datetime import timedelta, timezone
+    from sqlalchemy import select
+    from ai_karen_engine.platform.memory.postgres.ledger_models import (
+        ConsentScope, RetentionPolicy,
+    )
+
+    tenant = str(uuid.UUID(tenant_id))
+    user = str(uuid.UUID(user_id))
+    source_id = _validated_source_id(source_record_id)
+    if source_id is None:
+        return None
         principal = await session.execute(text(
             "SELECT user_id FROM public.auth_users WHERE user_id=:user "
             "AND tenant_id=:tenant AND is_active IS TRUE "
