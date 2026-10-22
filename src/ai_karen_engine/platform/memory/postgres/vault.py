@@ -231,11 +231,28 @@ class PostgresNeuroVault(VaultPort):
         self._require_capability(context, self.WRITE_CAPABILITY)
         self._validate_entry_scope(entry, context)
 
+    @staticmethod
+    def _require_non_historical_write(entry: MemoryEntry) -> None:
+        """Fail closed before database access for every public write path."""
+        metadata = entry.metadata
+        custom = dict(metadata.custom or {}) if metadata else {}
+        if (
+            custom.get("consent_scope") == "persona-memory-migration"
+            or custom.get("source_type") == "legacy_persona"
+            or (metadata is not None and metadata.source == "legacy_persona")
+        ):
+            raise NeuroVaultAuthorizationError(
+                "historical migration persistence is disabled pending trusted runtime authorization"
+            )
+
     async def persist(
         self, entry: MemoryEntry, *, context: VaultContext,
     ) -> VaultWriteReceipt:
         """Canonical standalone write. Owns and commits its PostgreSQL session."""
         self._validate_persist_authority(entry, context)
+        # All write paths reject historical sources at the final NeuroVault
+        # boundary, before opening a database connection or inspecting consent.
+        self._require_non_historical_write(entry)
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
             return await self._persist_with_session(
@@ -254,6 +271,7 @@ class PostgresNeuroVault(VaultPort):
         # Validate policy capability and principal scope before any database
         # query, including transaction-local tenant introspection.
         self._validate_persist_authority(entry, context)
+        self._require_non_historical_write(entry)
         if session is None:
             raise ValueError("caller-owned active PostgreSQL session required")
         # Never accept a raw, unscoped session for a governed mutation.
@@ -321,13 +339,7 @@ class PostgresNeuroVault(VaultPort):
         custom = dict(metadata.custom or {})
         consent_scope = str(custom.get("consent_scope") or "memory.write")
         source_type = str(custom.get("source_type") or metadata.source or "runtime")
-        if consent_scope == "persona-memory-migration" or source_type == "legacy_persona":
-            # An ordinary memory.write capability is not a historical
-            # migration authorization. Until a runtime-owned signed admission
-            # contract is implemented, fail closed at this final write gate.
-            raise NeuroVaultAuthorizationError(
-                "historical migration persistence is disabled pending trusted runtime authorization"
-            )
+        self._require_non_historical_write(entry)
         sensitivity = str(custom.get("sensitivity_class") or "normal")
         source_ref = str(
             custom.get("source_ref")
