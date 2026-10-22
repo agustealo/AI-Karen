@@ -111,6 +111,40 @@ async def test_canceled_request_keeps_capacity_until_inference_completes():
 
 
 @pytest.mark.asyncio
+async def test_repeated_request_cancellation_never_releases_running_model():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def infer(audio, metadata):
+        entered.set()
+        await release.wait()
+        return TranscriptionResult(text="finished", engine="local-whisper")
+
+    engine = Engine()
+    engine.transcribe = AsyncMock(side_effect=infer)
+    runtime = VoiceRuntime(engine)
+    payload = b"pcm-data"
+    metadata = AudioInput("audio/wav", len(payload), 0.5)
+    first = asyncio.create_task(runtime.transcribe(payload, metadata))
+    await asyncio.wait_for(entered.wait(), 1)
+    first.cancel()
+    await asyncio.sleep(0)
+    first.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert runtime.transcription_busy()
+        with pytest.raises(RuntimeError, match="local_transcription_busy"):
+            await runtime.transcribe(payload, metadata)
+        engine.transcribe.assert_awaited_once()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first, 1)
+    assert not runtime.transcription_busy()
+    assert (await runtime.transcribe(payload, metadata)).text == "finished"
+
+
+@pytest.mark.asyncio
 async def test_mismatched_audio_metadata_is_contract_error_before_inference():
     engine = Engine()
     engine.transcribe = AsyncMock()
