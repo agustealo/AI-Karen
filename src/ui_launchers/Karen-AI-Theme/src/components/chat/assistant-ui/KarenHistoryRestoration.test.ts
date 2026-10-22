@@ -40,4 +40,29 @@ describe("canonical assistant-ui history restoration", () => {
         && "type" in part && part.type === "data")).toBe(false);
     }
   });
+
+  it("keeps one card per persisted assistant message after repeated conversation reopening", () => {
+    const history = [
+      { id: "user-1", role: "user", content: "List my tasks" },
+      { id: "assistant-1", role: "assistant", content: "Found 1 commitment",
+        structured_content: { presentation: envelope } },
+    ];
+    const first = restoreOwnedHistoryMessages("conversation-1", history);
+    const reopened = restoreOwnedHistoryMessages("conversation-1", history);
+    expect(reopened).toEqual(first);
+    expect(reopened).toHaveLength(history.length);
+    const assistantContent = reopened[1].content;
+    if (!Array.isArray(assistantContent)) throw new Error("Expected restored content parts");
+    expect(assistantContent.filter((part) =>
+      typeof part === "object" && part !== null && "type" in part && part.type === "data",
+    )).toHaveLength(1);
+  });
+
+  it("does not manufacture a planner card after a failed assistant write", () => {
+    const history = [{ id: "user-1", role: "user", content: "List my tasks" }];
+    const restored = restoreOwnedHistoryMessages("conversation-1", history);
+    expect(restored).toHaveLength(1);
+    expect(restored.some((message) => message.role === "assistant")).toBe(false);
+  });
+
 });
