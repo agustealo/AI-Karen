@@ -302,7 +302,15 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
             tenant_id=tenant_a,
             role="user",
             content="orphan question",
-            metadata={"request_id": orphan_context.request_id},
+            metadata={
+                "request_id": orphan_context.request_id,
+                "correlation_id": orphan_context.correlation_id,
+                "session_id": orphan_context.session_id,
+                "conversation_id": orphan_conversation_id,
+                "source": "chat_runtime",
+                "authorized_user_id": orphan_context.user_id,
+                "transcript_actor": "user",
+            },
         )
     )
     assert orphan_write.success
@@ -311,6 +319,7 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         assistant_text="must not complete legacy partial write",
     )
     assert refused.status == "failed"
+    assert refused.reason == "incomplete_turn_replay"
     assert refused.persisted_messages == 0
     orphan_rows = await repository.get_messages(
         orphan_conversation_id, tenant_a, limit=20,
