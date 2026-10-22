@@ -17,7 +17,7 @@ import wave
 
 import pytest
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from unittest.mock import AsyncMock, patch
 
 from ai_karen_engine.api_routes.voice import router as voice_router
@@ -124,3 +124,29 @@ async def test_real_whisper_through_authenticated_asgi_upload():
     transcript = response.json()
     assert transcript["engine"] == engine.engine_id
     assert expected.casefold() in transcript["text"].casefold()
+
+    # The same real model must remain inaccessible when the production
+    # authentication boundary rejects the request. No inference is mocked.
+    with (
+        patch(
+            "ai_karen_engine.auth.session._authenticate_request",
+            new_callable=AsyncMock,
+            side_effect=__import__("fastapi").HTTPException(
+                status_code=401, detail="Authentication required"
+            ),
+        ),
+        patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=runtime),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://acceptance",
+        ) as client:
+            rejected = await client.post(
+                "/api/voice/transcriptions",
+                content=payload,
+                headers={
+                    "Content-Type": "audio/wav",
+                    "X-Audio-Duration-Seconds": str(duration),
+                },
+            )
+    assert rejected.status_code == 401
