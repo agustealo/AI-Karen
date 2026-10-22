@@ -642,9 +642,16 @@ async def inspect_authenticated_legacy_migration_transaction(
     ):
         raise ValueError("valid historical source identifier required")
     tenant, user = policy_request.tenant_id, policy_request.user_id
-    admission = LegacyMigrationAdmission(
-        admitted=True, reason_codes=(), tenant_id=tenant, user_id=user,
+    # A policy response must match the authenticated principal and the exact
+    # migration capability; never construct an admitted=True result directly.
+    from ai_karen_engine.core.memory.legacy_persona_preflight import (
+        LegacyMigrationPreflight,
     )
+    admission = admit_legacy_migration(
+        LegacyMigrationPreflight(True, ()), authority,
+    )
+    if not admission.admitted or admission.tenant_id != tenant or admission.user_id != user:
+        raise PermissionError("historical migration policy principal mismatch")
     replay = derive_legacy_migration_replay_identity(
         admission=admission, tenant_id=tenant, user_id=user,
         source_record_id=source_record_id.strip(),
