@@ -73,6 +73,12 @@ async def transcribe_voice(
         result = await runtime.transcribe(b"".join(chunks), metadata)
     except VoiceContractError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    except RuntimeError:
+    except RuntimeError as exc:
+        if str(exc) == "local_transcription_busy":
+            raise HTTPException(
+                status_code=429,
+                detail="local_transcription_busy",
+                headers={"Retry-After": "1"},
+            ) from None
         raise HTTPException(status_code=503, detail="local_transcription_unavailable") from None
     return {"text": result.text, "engine": result.engine, "language": result.language}
