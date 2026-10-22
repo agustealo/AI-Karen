@@ -60,3 +60,7 @@ The preflight now rejects evidence whose origin is not explicitly marked `author
 ### Consent revocation versus idempotent replay
 
 The disposable PostgreSQL NeuroVault integration proof now writes one synthetic admitted migration record twice, revokes its consent scope, and asserts that a further retry with identical deterministic IDs is rejected. This ensures replay identifiers never function as a consent bypass. The existing canonical vault checks current consent before it looks up a duplicate idempotency key. This is a test of the current ordering, not an alternative migration writer, and no historical records are touched.
+
+### Interrupted-run receipt reconciliation
+
+`legacy_persona_recovery.py` now provides a pure, fail-closed classification of *already authenticated, tenant/user-scoped* persisted receipt evidence. A matching persisted memory receipt means do not retry; an absent receipt can permit **consideration** of retry only after new consent, retention and policy checks. Partial, failed or cross-principal receipts are blocked pending operator reconciliation. This helper does not fetch receipts or prove that a receipt is authentic, and `safe_to_retry` must not be interpreted as a write grant. Durable canonical ledger lookups and authenticated migration execution remain outstanding.
