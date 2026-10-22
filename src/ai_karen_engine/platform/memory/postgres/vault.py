@@ -387,7 +387,8 @@ class PostgresNeuroVault(VaultPort):
                 or existing_assertion.assertion_id != assertion_id
                 or existing_assertion.tenant_id != tenant_uuid
                 or existing_assertion.user_id != user_uuid
-                or existing_assertion.valid_to is not None
+                or (existing_assertion.valid_to is not None
+                    and existing_assertion.valid_to <= datetime.utcnow())
             ):
                 raise NeuroVaultAuthorizationError(
                     "idempotency collision does not match canonical memory write"
