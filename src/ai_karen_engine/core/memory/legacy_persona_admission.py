@@ -247,3 +247,35 @@ async def prepare_runtime_authorized_legacy_migration_retry(
         recovery=recovery,
         source_record_id=source_record_id,
     )
+
+
+async def prepare_source_verified_legacy_migration_retry(
+    *,
+    authenticated_request: "PolicyEvaluationRequest",
+    runtime_policy: "RuntimePolicyEnforcer",
+    preflight: "LegacyMigrationPreflight",
+    recovery: "LegacyReplayRecoveryDecision",
+    source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Read-only source presence check before live policy and consent gates.
+
+    Authenticated request and preflight must be assembled by the canonical
+    runtime from trustworthy identity, retention, and provenance evidence.
+    Presence alone never grants import permissions or access to record content.
+    """
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        verify_legacy_persona_source,
+    )
+    if not await verify_legacy_persona_source(
+        tenant_id=authenticated_request.tenant_id,
+        user_id=authenticated_request.user_id,
+        source_record_id=source_record_id,
+    ):
+        raise ValueError("matching nonempty legacy source not verified")
+    return await prepare_runtime_authorized_legacy_migration_retry(
+        authenticated_request=authenticated_request,
+        runtime_policy=runtime_policy,
+        preflight=preflight,
+        recovery=recovery,
+        source_record_id=source_record_id,
+    )
