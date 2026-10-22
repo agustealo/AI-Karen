@@ -781,3 +781,55 @@ async def test_migration_http_credential_authority_scenarios(monkeypatch, scenar
             await migration_policy_request_from_authenticated_http(
                 request=request, request_id="req", correlation_id="corr",
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_claims", [
+    {"permissions": "memory.write"},
+    {"permissions": {"memory.write": True}},
+    {"roles": "admin"},
+    {"roles": [1]},
+])
+async def test_migration_http_rejects_malformed_signed_claim_shapes(monkeypatch, bad_claims):
+    """A signed token must not turn string membership into an authorization."""
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+    import jwt
+    from starlette.requests import Request
+    from ai_karen_engine.auth import auth_middleware
+    from ai_karen_engine.core.security.auth_config import auth_config
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_policy_request_from_authenticated_http,
+    )
+
+    class Store:
+        def ping(self):
+            return True
+        def exists(self, key):
+            return 0
+
+    middleware = auth_middleware.SecureAuthMiddleware.__new__(
+        auth_middleware.SecureAuthMiddleware
+    )
+    middleware.jwt_secret = "kp03-disposable-test-secret"
+    middleware.jwt_algorithm = "HS256"
+    middleware.redis_client = Store()
+    payload = {
+        "sub": str(uuid4()), "tenant_id": str(uuid4()),
+        "token_id": "kp03-token", "permissions": ["memory.write"],
+        "roles": ["admin"], "iss": "ai-karen", "aud": "ai-karen-users",
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
+    payload.update(bad_claims)
+    token = jwt.encode(payload, middleware.jwt_secret, algorithm="HS256")
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+    monkeypatch.setattr(auth_middleware, "get_auth_middleware", lambda: middleware)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [(b"authorization", ("Bearer " + token).encode())],
+        "query_string": b"",
+    })
+    with pytest.raises(PermissionError, match="credential claims invalid"):
+        await migration_policy_request_from_authenticated_http(
+            request=request, request_id="request-1", correlation_id="trace-1",
+        )
