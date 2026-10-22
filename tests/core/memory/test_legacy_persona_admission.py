@@ -387,3 +387,39 @@ async def test_unauthorized_migration_denied_before_identity_database_lookup(mon
             recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
             source_record_id="source-1",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", [
+    "prepare_source_verified_legacy_migration_retry",
+    "prepare_retention_verified_legacy_migration_retry",
+])
+async def test_migration_policy_precedes_all_historical_reads(monkeypatch, entrypoint):
+    from ai_karen_engine.core.memory import legacy_persona_admission as admission
+    from ai_karen_engine.core.memory.legacy_persona_recovery import LegacyReplayRecoveryDecision
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.platform.memory.postgres import (
+        legacy_persona_source, legacy_persona_retention,
+    )
+
+    async def forbidden_read(**kwargs):
+        raise AssertionError("unauthorized migration performed database read")
+
+    monkeypatch.setattr(legacy_persona_source, "verify_legacy_persona_source", forbidden_read)
+    monkeypatch.setattr(legacy_persona_source, "read_legacy_persona_source_retention_metadata", forbidden_read)
+    monkeypatch.setattr(legacy_persona_retention, "verify_legacy_migration_retention", forbidden_read)
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a",
+        action="legacy_persona_memory_migration",
+        permissions=[], requested_capabilities=["memory.write"],
+    )
+    with pytest.raises(ValueError, match="current migration authorization"):
+        await getattr(admission, entrypoint)(
+            authenticated_request=request,
+            runtime_policy=RuntimePolicyEnforcer(),
+            preflight=LegacyMigrationPreflight(True, ()),
+            recovery=LegacyReplayRecoveryDecision(False, True, "no_prior_receipt"),
+            source_record_id="source-1",
+        )
