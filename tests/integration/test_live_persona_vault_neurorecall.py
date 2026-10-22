@@ -2401,3 +2401,41 @@ async def test_vault_rejects_scope_drift_during_ledger_staging():
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == memory_id,
         ))).scalar_one_or_none() is None
+
+
+async def test_vault_staging_exception_rolls_back_even_if_caller_swallows_it():
+    """Failed canonical ledger staging must invalidate the caller transaction."""
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, memory_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    entry = MemoryEntry(
+        id=str(memory_id), content="Must never survive staging failure",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(tenant), user_id=str(user),
+            source="chat_user", custom={"consent_scope": "memory.write"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=str(tenant), user_id=str(user),
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        actor_id=str(user), policy_context={"memory_write_authorized": True},
+    )
+    vault = PostgresNeuroVault()
+
+    async def fail_after_flush(*args, **kwargs):
+        result = await PostgresNeuroVault._persist_with_session(vault, *args, **kwargs)
+        raise RuntimeError("synthetic failure after canonical staging")
+
+    vault._persist_with_session = fail_after_flush
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        with pytest.raises(RuntimeError, match="synthetic failure"):
+            await vault.persist_in_transaction(
+                entry, context=context, session=session,
+            )
+        # Even an explicit commit after swallowing the staging error cannot
+        # commit the previously flushed event and assertion.
+        await session.commit()
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        assert (await session.execute(select(MemoryAssertion).where(
+            MemoryAssertion.assertion_id == memory_id,
+        ))).scalar_one_or_none() is None
