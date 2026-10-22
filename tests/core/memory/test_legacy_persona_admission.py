@@ -1,7 +1,7 @@
 """Migration preflight does not confer write authority."""
 from ai_karen_engine.core.memory.legacy_persona_admission import (
     LegacyMigrationWriteAuthority, admit_legacy_migration,
-    derive_legacy_migration_replay_identity,
+    derive_legacy_migration_replay_identity, prepare_legacy_migration_retry,
 )
 from ai_karen_engine.core.memory.legacy_persona_preflight import LegacyMigrationPreflight
 
@@ -92,3 +92,36 @@ def test_migration_replay_cannot_reuse_admission_for_another_principal():
             admission=approved, tenant_id=str(uuid4()),
             user_id=user, source_record_id="row-1",
         )
+
+
+def test_retry_preparation_requires_all_three_gates():
+    import pytest
+    from uuid import uuid4
+    from ai_karen_engine.core.memory.legacy_persona_recovery import (
+        LegacyReplayRecoveryDecision,
+    )
+    tenant, user = str(uuid4()), str(uuid4())
+    scoped = authority(tenant_id=tenant, authorized_tenant_id=tenant,
+                       user_id=user, authorized_user_id=user)
+    missing = LegacyReplayRecoveryDecision(False, True, "no_prior_receipt")
+    kwargs = dict(
+        preflight=LegacyMigrationPreflight(True, ()),
+        authority=scoped, recovery=missing, source_record_id="row-1",
+    )
+    prepared = prepare_legacy_migration_retry(**kwargs)
+    assert prepared == prepare_legacy_migration_retry(**kwargs)
+    with pytest.raises(ValueError, match="recovery"):
+        prepare_legacy_migration_retry(**{
+            **kwargs, "recovery": LegacyReplayRecoveryDecision(True, False, "already_persisted"),
+        })
+    with pytest.raises(ValueError, match="authorization"):
+        prepare_legacy_migration_retry(**{
+            **kwargs, "preflight": LegacyMigrationPreflight(False, ("consent_unverified",)),
+        })
+    with pytest.raises(ValueError, match="authorization"):
+        prepare_legacy_migration_retry(**{
+            **kwargs, "authority": authority(
+                tenant_id=tenant, authorized_tenant_id=tenant,
+                user_id=user, authorized_user_id=user, explicitly_granted=False,
+            ),
+        })
