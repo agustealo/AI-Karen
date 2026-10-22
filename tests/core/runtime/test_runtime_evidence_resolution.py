@@ -24,6 +24,19 @@ from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolv
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
 
+class AvailablePersonaPreferences:
+    active_persona_id = "assistant"
+    enable_persona_memory_filtering = True
+    cross_persona_memory_sharing = False
+
+
+class RecordingPersonaService:
+    async def get_user_preferences(self, *, user_id: str, tenant_id: str):
+        assert user_id == "user-1"
+        assert tenant_id in {"tenant-1", "tenant-weather"}
+        return AvailablePersonaPreferences()
+
+
 class RecordingMemoryManager:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -107,7 +120,7 @@ async def test_runtime_evidence_resolver_calls_memory_authority_once_and_types_r
     request = _request()
     cognitive_context = _authorized_context(request)
     memory_manager = RecordingMemoryManager()
-    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager)
+    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager, persona_service=RecordingPersonaService())
 
     resolved = await resolver.resolve(request, cognitive_context)
 
@@ -142,7 +155,7 @@ async def test_runtime_evidence_resolver_calls_memory_authority_once_and_types_r
 async def test_failed_memory_scope_remains_unresolved_and_degraded() -> None:
     request = _request(tenant_id="default")
     cognitive_context = _authorized_context(request)
-    resolver = RuntimeEvidenceResolver(memory_manager=RejectingMemoryManager())
+    resolver = RuntimeEvidenceResolver(memory_manager=RejectingMemoryManager(), persona_service=RecordingPersonaService())
 
     resolved = await resolver.resolve(request, cognitive_context)
 
