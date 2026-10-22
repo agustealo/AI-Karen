@@ -1213,10 +1213,11 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             second_lookup = asyncio.create_task(inspect_same_missing_slot())
             # An unrelated tenant must not contend on this replay slot.
             # The lookup is still tenant-scoped and returns no foreign data.
-            async with async_transaction_scope(tenant_id=str(uuid.uuid4())) as separate:
+            unrelated_tenant = str(uuid.uuid4())
+            async with async_transaction_scope(tenant_id=unrelated_tenant) as separate:
                 unrelated = await asyncio.wait_for(
                     lookup_locked_legacy_replay_receipt(
-                        session=separate, tenant_id=str(uuid.uuid4()),
+                        session=separate, tenant_id=unrelated_tenant,
                         user_id=str(user), expected_memory_id=absent_memory_id,
                         expected_request_id=absent_request_id,
                     ), timeout=5,
