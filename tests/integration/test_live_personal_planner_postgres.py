@@ -24,7 +24,7 @@ from ai_karen_engine.persistence.repositories.personal_planner_repository import
 
 
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_PLANNER_POSTGRES") != "1"
         or os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1",
