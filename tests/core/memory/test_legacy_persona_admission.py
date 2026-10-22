@@ -962,3 +962,46 @@ async def test_authenticated_http_assembly_never_reads_on_auth_failure(monkeypat
             request=request, request_id="req", correlation_id="trace",
             source_record_id="legacy-source", runtime_policy=RuntimePolicyEnforcer(),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_flags", [
+    {"memory_write_authorized": True},
+    {"allowed_capabilities": ["memory.write"]},
+    {"allowed_capabilities": ["*"]},
+    {"memory_write_authorized": True, "migration_authorized": True,
+     "policy_decision_id": "forged-decision"},
+])
+async def test_historical_vault_write_rejects_constructible_policy_flags_before_db(
+    policy_flags,
+):
+    """No constructible context can open the disabled migration write path."""
+    import uuid
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    tenant, user = str(uuid.uuid4()), str(uuid.uuid4())
+
+    def no_database_access():
+        raise AssertionError("migration attempted a database operation")
+
+    vault = PostgresNeuroVault(session_factory=no_database_access)
+    entry = MemoryEntry(
+        id=str(uuid.uuid4()), content="Never imported",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source="legacy_persona",
+            custom={"consent_scope": "persona-memory-migration"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user, request_id="request",
+        correlation_id="trace", actor_id=user, policy_context=policy_flags,
+    )
+    with pytest.raises(NeuroVaultAuthorizationError):
+        await vault.persist(entry, context=context)
