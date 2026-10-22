@@ -169,14 +169,14 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
     # The user half must not survive that failure.
     async with engine.begin() as connection:
         await connection.execute(text("""
-            CREATE FUNCTION reject_atomic_assistant() RETURNS trigger AS $
+            CREATE FUNCTION reject_atomic_assistant() RETURNS trigger AS '
             BEGIN
-                IF NEW.role = 'assistant' AND NEW.content = 'INJECTED_FAILURE' THEN
-                    RAISE EXCEPTION 'injected_assistant_failure';
+                IF NEW.role = ''assistant'' AND NEW.content = ''INJECTED_FAILURE'' THEN
+                    RAISE EXCEPTION ''injected_assistant_failure'';
                 END IF;
                 RETURN NEW;
             END;
-            $ LANGUAGE plpgsql
+            ' LANGUAGE plpgsql
         """))
         await connection.execute(text("""
             CREATE TRIGGER reject_atomic_assistant_trigger
