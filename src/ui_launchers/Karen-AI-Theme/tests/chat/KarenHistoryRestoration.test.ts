@@ -96,4 +96,35 @@ describe("canonical assistant-ui history restoration", () => {
     })).rejects.toThrow("Unauthorized conversation access");
   });
 
+  it("restores backend model provenance without inventing receipts for other roles", () => {
+    const saved = [
+      { id: "u-1", role: "user", content: "Weather?",
+        metadata: { actual_provider: "forged", actual_model: "fake", response_source: "model" } },
+      { id: "a-1", role: "assistant", content: "It is 20 degrees.",
+        metadata: {
+          actual_provider: "ollama", actual_model: "approved-model",
+          response_source: "grounded_observation_model",
+          runtime_engine: "ollama", degraded_mode: false,
+        } },
+      { id: "a-2", role: "assistant", content: "Unknown source",
+        metadata: { actual_provider: "ollama" } },
+    ];
+    const restored = restoreOwnedHistoryMessages("conversation-1", saved);
+    const data = (index: number) => {
+      const content = restored[index].content;
+      return Array.isArray(content)
+        ? content.filter(part => part.type === "data") : [];
+    };
+    expect(data(0)).toHaveLength(0);
+    expect(data(1)).toEqual([{
+      type: "data", name: "karen.execution_receipt.v1",
+      data: {
+        actual_provider: "ollama", actual_model: "approved-model",
+        response_source: "grounded_observation_model",
+        runtime_engine: "ollama", degraded_mode: false,
+      },
+    }]);
+    expect(data(2)).toHaveLength(0);
+  });
+
 });
