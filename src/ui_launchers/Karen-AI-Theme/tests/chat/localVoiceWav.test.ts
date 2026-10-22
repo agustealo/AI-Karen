@@ -26,5 +26,6 @@ describe("local voice WAV encoding", () => {
   it("rejects zero-length and excessive recordings", () => {
     expect(() => encodeMonoPcmWav(audio(0))).toThrow();
     expect(() => encodeMonoPcmWav(audio(121))).toThrow();
+    expect(() => encodeMonoPcmWav(audio(0.00001))).toThrow("Audio contains no PCM frames");
   });
 });
