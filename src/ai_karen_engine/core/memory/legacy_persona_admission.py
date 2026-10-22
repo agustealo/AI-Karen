@@ -443,6 +443,30 @@ async def prepare_governed_legacy_migration_retry(
     )
 
     request = migration_policy_request_from_runtime_context(context=context)
+    return await _prepare_governed_legacy_migration_from_policy_request(
+        request=request, runtime_policy=runtime_policy, source_record_id=source_record_id,
+    )
+
+
+async def _prepare_governed_legacy_migration_from_policy_request(
+    *, request: "PolicyEvaluationRequest",
+    runtime_policy: "RuntimePolicyEnforcer", source_record_id: str,
+) -> LegacyMigrationReplayIdentity:
+    """Canonical read-only assembly from a trusted policy request.
+
+    This internal function never authenticates its inputs. External callers must
+    use verified HTTP ingress; existing runtime context callers remain read-only.
+    """
+    from ai_karen_engine.core.memory.legacy_persona_preflight import (
+        LegacyMigrationEvidence, preflight_legacy_memory,
+    )
+    from ai_karen_engine.core.memory.legacy_persona_recovery import reconcile_legacy_replay
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_identity import verify_legacy_persona_identity
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import read_legacy_persona_source_retention_metadata
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_retention import verify_legacy_migration_retention
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_consent import verify_legacy_migration_consent
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import lookup_legacy_replay_receipt
+
     authority = await evaluate_migration_write_authority(
         authenticated_request=request, runtime_policy=runtime_policy,
     )
@@ -565,3 +589,22 @@ async def migration_policy_request_from_authenticated_http(
         raise PermissionError("historical migration authentication failed") from exc
     except Exception as exc:
         raise PermissionError("historical migration credential verification unavailable") from exc
+
+
+async def prepare_authenticated_http_legacy_migration_retry(
+    *, request: "Request", request_id: str, correlation_id: str,
+    source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
+) -> LegacyMigrationReplayIdentity:
+    """Authenticated, read-only ingress into the canonical evidence assembler.
+
+    Credentials are verified directly against the existing auth middleware.
+    No client-provided principal, permission, preflight or replay IDs accepted.
+    This function never persists historical content.
+    """
+    policy_request = await migration_policy_request_from_authenticated_http(
+        request=request, request_id=request_id, correlation_id=correlation_id,
+    )
+    return await _prepare_governed_legacy_migration_from_policy_request(
+        request=policy_request, runtime_policy=runtime_policy,
+        source_record_id=source_record_id,
+    )
