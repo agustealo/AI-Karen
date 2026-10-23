@@ -2494,3 +2494,56 @@ async def test_migration_inspection_transaction_identity_expires_after_commit():
         )
         with pytest.raises(PermissionError, match="transaction identity expired"):
             await inspection.verify_active(session=session)
+
+
+async def test_vault_rejects_historical_inspection_from_prior_transaction():
+    """NeuroVault rejects expired transaction evidence before staging."""
+    from sqlalchemy import text
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, memory_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    entry = MemoryEntry(
+        id=memory_id, content="Historical record must remain disabled",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source="legacy_persona",
+            custom={"consent_scope": "persona-memory-migration"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user, request_id=str(uuid.uuid4()),
+        correlation_id=str(uuid.uuid4()), actor_id=user,
+        policy_context={"memory_write_authorized": True},
+    )
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        await session.execute(
+            text("SELECT set_config('app.current_user_id', :user, true)"),
+            {"user": user},
+        )
+        evidence = await LegacyMigrationTransactionAuthority.inspect(
+            session=session, tenant_id=tenant, user_id=user,
+            policy_decision_id="inspection-only",
+        )
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        await session.execute(
+            text("SELECT set_config('app.current_user_id', :user, true)"),
+            {"user": user},
+        )
+        with pytest.raises(
+            NeuroVaultAuthorizationError,
+            match="migration inspection transaction is not active",
+        ):
+            await PostgresNeuroVault().persist_in_transaction(
+                entry, context=context, session=session,
+                historical_inspection=evidence,
+            )
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        assert (await session.execute(select(MemoryAssertion).where(
+            MemoryAssertion.assertion_id == uuid.UUID(memory_id),
+        ))).scalar_one_or_none() is None
