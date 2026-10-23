@@ -35,16 +35,22 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const data = value as Record<string, unknown>;
-    if (Object.keys(data).sort().join(",") !== "items,layout") return null;
+    const keys = Object.keys(data).sort().join(",");
+    if (keys !== "items,layout" && keys !== "evidence_refs,items,layout") return null;
+    const manifest = data.evidence_refs;
+    if (manifest !== undefined && (!Array.isArray(manifest) || manifest.length < 1 ||
+        manifest.length > 6 || manifest.some((ref) => typeof ref !== "string" || !ref.length || ref.length > 160) ||
+        new Set(manifest).size !== manifest.length)) return null;
     if (data.layout !== "stack" && data.layout !== "grid") return null;
     if (!Array.isArray(data.items) || data.items.length < 1 || data.items.length > 6) return null;
     for (const item of data.items) {
       if (!item || typeof item !== "object" || Array.isArray(item)) return null;
       const child = item as Record<string, unknown>;
       if (child.component_type === "surface.composition" ||
-          child.evidence_ref !== result.data.evidence_ref ||
+          (manifest === undefined ? child.evidence_ref !== result.data.evidence_ref : !manifest.includes(child.evidence_ref)) ||
           !parseKarenPresentation(child)) return null;
     }
+    if (Array.isArray(manifest) && new Set(data.items.map((item: Record<string, unknown>) => item.evidence_ref)).size !== manifest.length) return null;
   } else if (result.data.component_type === "time.observation") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
