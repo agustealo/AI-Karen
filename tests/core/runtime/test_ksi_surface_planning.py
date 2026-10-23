@@ -227,3 +227,26 @@ async def test_single_part_skips_model_budget_and_gateway():
     assert await ChatRuntime._plan_verified_surface(runtime, request, decision, None, meter, part) is None
     assert meter.calls == 0
     assert gateway.tasks == []
+
+
+@pytest.mark.asyncio
+async def test_layout_provenance_records_actual_model_only_after_valid_admission():
+    gateway = Gateway(JSON_LAYOUT_TWO_PARTS)
+    runtime, request, decision, first = context(gateway)
+    parts = [first, {**first, "presentation_id": "clock-2"}]
+    receipt = {}
+    result = await ChatRuntime._plan_verified_surface(
+        runtime, request, decision, None, Meter(), parts, provenance=receipt
+    )
+    assert result is not None
+    assert receipt == {
+        "provider": "verified-local", "model": "model-1",
+        "response_source": "surface_layout_model",
+        "part_ids": ["clock-1", "clock-2"],
+    }
+    gateway.text = '{"layout":"grid","part_ids":["forged"]}'
+    failed_receipt = {}
+    assert await ChatRuntime._plan_verified_surface(
+        runtime, request, decision, None, Meter(), parts, provenance=failed_receipt
+    ) is None
+    assert failed_receipt == {}
