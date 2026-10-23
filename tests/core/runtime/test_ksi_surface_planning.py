@@ -26,7 +26,7 @@ class Gateway:
         self.tasks.append(task)
         if self.error:
             raise self.error
-        return SimpleNamespace(text=self.text, degraded=self.degraded)
+        return SimpleNamespace(text=self.text, degraded=self.degraded, provider="verified-local", model="model-1")
 
 
 def context(gateway):
@@ -125,3 +125,20 @@ async def test_runtime_refuses_duplicate_ids_or_unvalidated_candidate():
         [first, {**first, "data": {"formatted": {"injected": True}}}]
     ) is None
     assert gateway.tasks == []
+
+
+@pytest.mark.asyncio
+async def test_model_layout_rejects_unattributed_execution():
+    class UnattributedGateway(Gateway):
+        async def generate(self, task):
+            self.tasks.append(task)
+            return SimpleNamespace(
+                text='{"layout":"grid","part_ids":["clock-1"]}',
+                degraded=False, provider=None, model=None,
+            )
+
+    gateway = UnattributedGateway()
+    runtime, request, decision, part = context(gateway)
+    assert await ChatRuntime._plan_verified_surface(
+        runtime, request, decision, None, Meter(), part
+    ) is None
