@@ -32,7 +32,7 @@ test("reopening an owned conversation preserves its saved answer and execution r
   const stored = await response.json() as {
     id: string;
     title?: string;
-    messages?: Array<{ role: string; content: string; metadata?: Record<string, unknown> }>;
+    messages?: Array<{ role: string; content: string; metadata?: Record<string, unknown>; structured_content?: { presentation?: { component_type?: string } } }>;
   };
   expect(stored.id).toBe(conversationId);
   expect(Array.isArray(stored.messages)).toBe(true);
@@ -44,6 +44,15 @@ test("reopening an owned conversation preserves its saved answer and execution r
   );
   expect(assistant, "Fixture must include an actual persisted execution receipt").toBeDefined();
   if (!assistant) return;
+  const kind = assistant.structured_content?.presentation?.component_type;
+  const presentationTestId: Record<string, string> = {
+    "planner.task_list": "karen-planner-task-list",
+    "weather.observation": "karen-weather-presentation",
+    "weather.comparison": "karen-weather-comparison",
+  };
+  expect(kind && presentationTestId[kind],
+    "Acceptance fixture must contain a persisted allowlisted presentation").toBeTruthy();
+  if (!kind || !presentationTestId[kind]) return;
 
   const chat = page.getByTestId("karen-assistant-ui-chat");
   await expect(chat).toBeVisible({ timeout: 30_000 });
@@ -56,6 +65,7 @@ test("reopening an owned conversation preserves its saved answer and execution r
   await expect(chat.getByText(assistant.content, { exact: true })).toBeVisible();
   const receipt = chat.getByTestId("karen-restored-execution-receipt");
   await expect(receipt.first()).toBeVisible();
+  await expect(chat.getByTestId(presentationTestId[kind]).first()).toBeVisible();
   await receipt.first().locator("summary").click();
   await expect(receipt.first()).toContainText(String(assistant.metadata?.actual_model));
 
@@ -72,6 +82,7 @@ test("reopening an owned conversation preserves its saved answer and execution r
     .toBeVisible({ timeout: 30_000 });
   const restoredReceipt = reopened.getByTestId("karen-restored-execution-receipt").first();
   await expect(restoredReceipt).toBeVisible();
+  await expect(reopened.getByTestId(presentationTestId[kind]).first()).toBeVisible();
   await restoredReceipt.locator("summary").click();
   await expect(restoredReceipt).toContainText(String(assistant.metadata?.actual_model));
 });
