@@ -151,27 +151,37 @@ def test_historical_transaction_capability_rejects_forgery_and_reuse():
     session.in_transaction.return_value = True
     context = SimpleNamespace(tenant_id=tenant, user_id=user)
     entry = SimpleNamespace(id=memory_id)
-    args = dict(session=session, context=context, entry=entry)
+    args = dict(session=session, context=context, entry=entry,
+                transaction_id=42, policy_decision_id="allowed")
     forged = _HistoricalTransactionCapability(
         nonce=object(), session=session, tenant=tenant,
         user=user, memory_id=memory_id,
+        transaction_id=42, policy_decision_id="allowed",
     )
     assert not _verify_historical_transaction_capability(forged, **args)
     witness = _HistoricalTransactionCapability(
         nonce=_HISTORICAL_CAPABILITY_WITNESS, session=session,
         tenant=tenant, user=user, memory_id=memory_id,
+        transaction_id=42, policy_decision_id="allowed",
     )
     assert not _verify_historical_transaction_capability(
-        witness, session=MagicMock(), context=context, entry=entry,
+        witness, session=MagicMock(), context=context, entry=entry, transaction_id=42, policy_decision_id="allowed",
     )
     assert not _verify_historical_transaction_capability(
         witness, session=session,
         context=SimpleNamespace(tenant_id=str(uuid.uuid4()), user_id=user),
-        entry=entry,
+        entry=entry, transaction_id=42, policy_decision_id="allowed",
     )
     assert not _verify_historical_transaction_capability(
         witness, session=session, context=context,
         entry=SimpleNamespace(id=str(uuid.uuid4())),
+        transaction_id=42, policy_decision_id="allowed",
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, **{**args, "transaction_id": 43},
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, **{**args, "policy_decision_id": "revoked"},
     )
     assert _verify_historical_transaction_capability(witness, consume=True, **args)
     assert not _verify_historical_transaction_capability(witness, **args)
