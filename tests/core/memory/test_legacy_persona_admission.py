@@ -1503,11 +1503,6 @@ async def test_unified_inspection_rechecks_evidence_after_final_policy(monkeypat
     monkeypatch.setattr(
         legacy_persona_source, "inspect_locked_legacy_migration_preparation", inspect,
     )
-    monkeypatch.setattr(
-        module, "reconcile_legacy_replay",
-        getattr(module, "reconcile_legacy_replay", None),
-        raising=False,
-    )
     from ai_karen_engine.core.memory import legacy_persona_recovery
     monkeypatch.setattr(
         legacy_persona_recovery, "reconcile_legacy_replay",
