@@ -23,7 +23,7 @@ describe("authenticated persona selector", () => {
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(
       "/api/personas/preferences/switch", { persona_id: "persona-1" },
     ));
-    await waitFor(() => expect((select as HTMLSelectElement).value).toBe("persona-1");
+    await waitFor(() => expect((select as HTMLSelectElement).value).toBe("persona-1"));
   });
 
   it("keeps the previous choice when the authenticated switch fails", async () => {
