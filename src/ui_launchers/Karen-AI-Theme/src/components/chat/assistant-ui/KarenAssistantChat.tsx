@@ -630,7 +630,7 @@ export default function KarenAssistantChat() {
             {matchingSessions.length === 0 ? (
               <p className="py-3 text-sm text-muted-foreground">No matching conversations.</p>
             ) : matchingSessions.map((session) => (
-              <button key={session.id} type="button"
+              <button key={session.id} data-conversation-id={session.id} type="button"
                 aria-current={session.id === currentSession.id ? "page" : undefined}
                 onClick={() => void switchConversation(session.id)}
                 className="block min-h-11 w-full truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-[current=page]:bg-muted aria-[current=page]:font-semibold">
