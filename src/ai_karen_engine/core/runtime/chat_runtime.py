@@ -2411,7 +2411,21 @@ class ChatRuntime:
             )
             presentation = validate_presentation(candidate)
 
-        if decision.intent == "time.current" and verified_tool and isinstance(result.payload, dict):
+        verified_time_plugin = (
+            decision.intent == "time.current"
+            and result.success and not result.degraded
+            and result.source == "plugin"
+            and isinstance(result.source_id, str)
+            and result.source_id in plan.allowed_plugins
+            and any(
+                isinstance(attempt, dict)
+                and attempt.get("type") == "plugin"
+                and attempt.get("id") == result.source_id
+                and attempt.get("status") == "success"
+                for attempt in attempts
+            )
+        )
+        if decision.intent == "time.current" and (verified_tool or verified_time_plugin) and isinstance(result.payload, dict):
             payload = result.payload
             candidate = {
                 "schema_version": 1,
