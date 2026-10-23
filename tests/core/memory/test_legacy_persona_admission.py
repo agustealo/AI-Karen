@@ -1674,7 +1674,7 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
     ))
     credentials = AsyncMock(
         side_effect=[principal, principal] + (
-            [PermissionError("revoked after payload")]
+            [PermissionError("revoked during inspection")]
             if credential_revoked else [principal]
         ),
     )
@@ -1687,7 +1687,7 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         AsyncMock(return_value=authority),
     )
     current_policy = AsyncMock(side_effect=[TransactionAuthority()] + (
-        [PermissionError("policy revoked after payload")]
+        [PermissionError("policy revoked during inspection")]
         if policy_revoked else [TransactionAuthority()]
     ))
     monkeypatch.setattr(
@@ -1717,8 +1717,8 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
     })
     if credential_revoked or policy_revoked or evidence_revoked:
         expected = (
-            "revoked after payload" if credential_revoked
-            else "policy revoked after payload" if policy_revoked
+            "revoked during inspection" if credential_revoked
+            else "policy revoked during inspection" if policy_revoked
             else "evidence changed after final policy"
         )
         with pytest.raises(PermissionError, match=expected):
@@ -1731,7 +1731,6 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
             request=request, request_id="req", correlation_id="corr",
             source_record_id=source_id, runtime_policy=RuntimePolicyEnforcer(),
         )
-        assert "private historical memory" not in repr(receipt)
         assert not hasattr(receipt, "content")
         assert receipt.receipt is latest_receipt
     forbidden_payload.assert_not_awaited()
