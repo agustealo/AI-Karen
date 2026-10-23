@@ -41,7 +41,31 @@ import RuntimeMetadataPanel from './RuntimeMetadataPanel';
 import RichResultWorkspace from './RichResultWorkspace';
 import CircuitBreakerWarning from './CircuitBreakerWarning';
 
-import { useSession } from "./SessionProvider";
+import { useSession, fetchConversationBootstrap } from "./SessionProvider";
+import type { Session } from "./SessionProvider";
+
+type ModelSettingsResponse = RuntimeProviderCatalogResponse;
+
+interface ChatInterfaceProps {
+  isActive?: boolean;
+}
+
+interface ActionableApproval {
+  approval_id: string;
+  conversation_id?: string | null;
+  policy_decision_id?: string | null;
+  intent: string;
+  risk_level: string;
+  reason_codes: string[];
+  status: string;
+  decision_reason?: string | null;
+  created_at: string;
+  expires_at: string;
+  decided_at?: string | null;
+  consumed_at?: string | null;
+}
+
+
 
 interface SpeechRecognitionConstructor {
   new(): SpeechRecognition;
