@@ -88,3 +88,23 @@ def test_weather_fahrenheit_strings_parse_without_being_relabelled():
     assert validate_presentation({
         **base, "data": {"location": "Detroit", "temperature": "60.3"},
     }) is None
+
+
+def test_verified_time_presentation_is_bounded_and_minimized():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "time-request-1",
+        "component_type": "time.observation",
+        "evidence_ref": "request-1:clock",
+        "data": {
+            "formatted": "10:15 AM",
+            "timezone": "America/Detroit",
+            "secret_token": "do-not-project",
+        },
+    }
+    clean = validate_presentation(base)
+    assert clean is not None
+    assert clean["data"] == {"formatted": "10:15 AM", "timezone": "America/Detroit"}
+    assert validate_presentation({**base, "data": {"timezone": "America/Detroit"}}) is None
+    assert validate_presentation({**base, "data": {"formatted": "X" * 161}}) is None
+    assert validate_presentation({**base, "data": {"formatted": {"unsafe": True}}}) is None
