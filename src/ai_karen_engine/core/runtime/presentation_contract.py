@@ -182,3 +182,51 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         return None
     return safe
 
+
+
+def compose_authorized_surface(
+    *,
+    presentation_id: str,
+    evidence_ref: str,
+    authorized_parts: list[dict[str, Any]],
+    proposed_layout: Any,
+    correlation_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Admit a presentation plan using only runtime-verified parts.
+
+    An LLM may suggest a layout and ordered part identifiers, but is never
+    trusted to supply component props, evidence values, actions, or URLs.
+    """
+    if not isinstance(proposed_layout, Mapping) or set(proposed_layout) != {"layout", "part_ids"}:
+        return None
+    layout = proposed_layout["layout"]
+    ids = proposed_layout["part_ids"]
+    if layout not in ("stack", "grid") or not isinstance(ids, list):
+        return None
+    if not 1 <= len(ids) <= 6 or any(not isinstance(x, str) for x in ids):
+        return None
+    if len(set(ids)) != len(ids):
+        return None
+    parts: dict[str, dict[str, Any]] = {}
+    for raw in authorized_parts:
+        verified = validate_presentation(raw)
+        if verified is None or verified["component_type"] == "surface.composition":
+            return None
+        if verified["evidence_ref"] != evidence_ref:
+            return None
+        key = verified["presentation_id"]
+        if key in parts:
+            return None
+        parts[key] = verified
+    if any(key not in parts for key in ids):
+        return None
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": presentation_id,
+        "component_type": "surface.composition",
+        "evidence_ref": evidence_ref,
+        "data": {"layout": layout, "items": [parts[key] for key in ids]},
+    }
+    if correlation_id is not None:
+        envelope["correlation_id"] = correlation_id
+    return validate_presentation(envelope)
