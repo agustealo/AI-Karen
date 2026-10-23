@@ -137,3 +137,41 @@ def test_vault_rejects_noncanonical_historical_source_markers(field, value):
         match="historical migration persistence is disabled",
     ):
         PostgresNeuroVault._require_non_historical_write(entry)
+
+def test_historical_transaction_capability_rejects_forgery_and_reuse():
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        _HistoricalTransactionCapability,
+        _HISTORICAL_CAPABILITY_WITNESS,
+        _verify_historical_transaction_capability,
+    )
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    session = MagicMock()
+    session.in_transaction.return_value = True
+    context = SimpleNamespace(tenant_id=tenant, user_id=user)
+    entry = SimpleNamespace(id=memory_id)
+    args = dict(session=session, context=context, entry=entry)
+    forged = _HistoricalTransactionCapability(
+        nonce=object(), session=session, tenant=tenant,
+        user=user, memory_id=memory_id,
+    )
+    assert not _verify_historical_transaction_capability(forged, **args)
+    witness = _HistoricalTransactionCapability(
+        nonce=_HISTORICAL_CAPABILITY_WITNESS, session=session,
+        tenant=tenant, user=user, memory_id=memory_id,
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, session=MagicMock(), context=context, entry=entry,
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, session=session,
+        context=SimpleNamespace(tenant_id=str(uuid.uuid4()), user_id=user),
+        entry=entry,
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, session=session, context=context,
+        entry=SimpleNamespace(id=str(uuid.uuid4())),
+    )
+    assert _verify_historical_transaction_capability(witness, consume=True, **args)
+    assert not _verify_historical_transaction_capability(witness, **args)
