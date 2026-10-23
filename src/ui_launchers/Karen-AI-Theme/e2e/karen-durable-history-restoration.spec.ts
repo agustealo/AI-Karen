@@ -49,11 +49,9 @@ test("reopening an owned conversation preserves its saved answer and execution r
   await expect(chat).toBeVisible({ timeout: 30_000 });
   await chat.getByRole("button", { name: "Find conversations" }).click();
   await chat.getByPlaceholder("Search conversation titles").fill(stored.title || "");
-  const title = stored.title || "Untitled conversation";
-  const matches = chat.getByRole("group", { name: "Matching conversations" })
-    .getByRole("button", { name: title, exact: true });
-  expect(await matches.count(), "Fixture title must identify exactly one conversation").toBe(1);
-  await matches.click();
+  const ownedConversation = chat.locator('[data-conversation-id="' + conversationId + '"]');
+  await expect(ownedConversation).toHaveCount(1);
+  await ownedConversation.click();
 
   await expect(chat.getByText(assistant.content, { exact: true })).toBeVisible();
   const receipt = chat.getByTestId("karen-restored-execution-receipt");
@@ -67,10 +65,9 @@ test("reopening an owned conversation preserves its saved answer and execution r
   await expect(reopened).toBeVisible({ timeout: 30_000 });
   await reopened.getByRole("button", { name: "Find conversations" }).click();
   await reopened.getByPlaceholder("Search conversation titles").fill(stored.title || "");
-  const reopenedMatches = reopened.getByRole("group", { name: "Matching conversations" })
-    .getByRole("button", { name: title, exact: true });
-  expect(await reopenedMatches.count(), "Reloaded fixture title must remain unambiguous").toBe(1);
-  await reopenedMatches.click();
+  const reopenedOwnedConversation = reopened.locator('[data-conversation-id="' + conversationId + '"]');
+  await expect(reopenedOwnedConversation).toHaveCount(1);
+  await reopenedOwnedConversation.click();
   await expect(reopened.getByText(assistant.content, { exact: true }))
     .toBeVisible({ timeout: 30_000 });
   const restoredReceipt = reopened.getByTestId("karen-restored-execution-receipt").first();
