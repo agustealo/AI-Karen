@@ -34,9 +34,11 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     // Opt in only on an approved sanitized test installation. Full-session
     // recordings may contain sensitive conversation text or browser state.
-    video: process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'
-      ? 'on'
-      : 'retain-on-failure',
+    video: process.env.KAREN_UX_IDENTITY_REPLAY === 'true'
+      ? 'off'
+      : process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'
+        ? 'on'
+        : 'retain-on-failure',
     // This opt-in suite types a real credential during sign-in.
     // Playwright traces retain fill action parameters, including passwords.
     // Never record such traces or include them in uploaded artifacts.
