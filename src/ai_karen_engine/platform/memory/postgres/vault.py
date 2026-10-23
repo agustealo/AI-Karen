@@ -107,6 +107,38 @@ def _verify_historical_transaction_capability(
     return True
 
 
+async def _verify_historical_capability_against_database(
+    capability: Any, *, session: Any, context: VaultContext,
+    entry: MemoryEntry, policy_decision_id: str,
+) -> bool:
+    """Read actual transaction identity; never trust a claimed transaction ID.
+
+    Deliberately does not issue authority or enable historical writes.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    if not isinstance(session, AsyncSession) or not session.in_transaction():
+        return False
+    if (
+        type(capability) is not _HistoricalTransactionCapability
+        or capability._used
+        or capability._session is not session
+    ):
+        return False
+    actual = (await session.execute(text(
+        "SELECT current_setting('app.current_tenant_id', true), "
+        "current_setting('app.tenant_id', true), "
+        "current_setting('app.current_user_id', true), txid_current()"
+    ))).one()
+    if actual[:3] != (context.tenant_id, context.tenant_id, context.user_id):
+        return False
+    return _verify_historical_transaction_capability(
+        capability, session=session, context=context, entry=entry,
+        transaction_id=actual[3], policy_decision_id=policy_decision_id,
+    )
+
+
 class PostgresNeuroVault(VaultPort):
     """Governed PostgreSQL durable-memory adapter."""
 
