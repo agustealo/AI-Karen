@@ -1622,16 +1622,14 @@ def test_migration_policy_requires_explicit_bound_session():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload_changed", "credential_revoked", "policy_revoked", "evidence_revoked"),
-    [(False, False, False, False), (True, False, False, False),
-     (False, True, False, False), (False, False, True, False),
-     (False, False, False, True)],
+    ("credential_revoked", "policy_revoked", "evidence_revoked"),
+    [(False, False, False), (True, False, False),
+     (False, True, False), (False, False, True)],
 )
 async def test_authenticated_inspection_keeps_locked_payload_internal(
-    monkeypatch, payload_changed, credential_revoked, policy_revoked,
-    evidence_revoked,
+    monkeypatch, credential_revoked, policy_revoked, evidence_revoked,
 ):
-    """A final payload read cannot leak content or authorize changed metadata."""
+    """Read-only inspection never loads content and rejects late revocations."""
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
@@ -1674,10 +1672,6 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
     inspected = AsyncMock(side_effect=[eligible, eligible] + (
         [None] if evidence_revoked else [(eligible[0], latest_receipt)]
     ))
-    payload = AsyncMock(return_value=(
-        "private historical memory", "created",
-        "episodic" if payload_changed else "semantic",
-    ))
     credentials = AsyncMock(
         side_effect=[principal, principal] + (
             [PermissionError("revoked after payload")]
@@ -1705,9 +1699,10 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         legacy_persona_source, "inspect_locked_legacy_migration_preparation",
         inspected,
     )
+    forbidden_payload = AsyncMock(side_effect=AssertionError("payload was read"))
     monkeypatch.setattr(
         legacy_persona_source, "read_locked_legacy_migration_source_content",
-        payload,
+        forbidden_payload,
     )
     monkeypatch.setattr(
         legacy_persona_recovery, "reconcile_legacy_replay", lambda evidence: evidence,
@@ -1720,10 +1715,9 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         "type": "http", "method": "POST", "path": "/internal",
         "headers": [], "query_string": b"",
     })
-    if payload_changed or credential_revoked or policy_revoked or evidence_revoked:
+    if credential_revoked or policy_revoked or evidence_revoked:
         expected = (
-            "payload no longer eligible" if payload_changed
-            else "revoked after payload" if credential_revoked
+            "revoked after payload" if credential_revoked
             else "policy revoked after payload" if policy_revoked
             else "evidence changed after final policy"
         )
@@ -1740,7 +1734,7 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         assert "private historical memory" not in repr(receipt)
         assert not hasattr(receipt, "content")
         assert receipt.receipt is latest_receipt
-    payload.assert_awaited_once()
+    forbidden_payload.assert_not_awaited()
 
 @pytest.mark.parametrize(
     ("change", "value"),
