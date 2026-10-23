@@ -1349,3 +1349,22 @@ async def test_transaction_authority_does_not_inspect_database_after_final_polic
                 runtime_policy=Mock(),
             )
         inspect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transaction_authorization_rejects_detached_session_before_policy():
+    """Invalid session cannot cause RuntimePolicy evaluation or DB reads."""
+    from unittest.mock import AsyncMock, Mock, patch
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority,
+    )
+
+    with patch(
+        "ai_karen_engine.core.memory.legacy_persona_admission.evaluate_migration_write_authority",
+        new_callable=AsyncMock,
+    ) as evaluate:
+        with pytest.raises(PermissionError, match="active PostgreSQL transaction"):
+            await LegacyMigrationTransactionAuthority.authorize_current(
+                session=Mock(), authenticated_request=Mock(), runtime_policy=Mock(),
+            )
+        evaluate.assert_not_awaited()
