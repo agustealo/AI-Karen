@@ -110,6 +110,7 @@ def _verify_historical_transaction_capability(
 async def _verify_historical_capability_against_database(
     capability: Any, *, session: Any, context: VaultContext,
     entry: MemoryEntry, policy_decision_id: str,
+    consume: bool = False,
 ) -> bool:
     """Read actual transaction identity; never trust a claimed transaction ID.
 
@@ -136,6 +137,7 @@ async def _verify_historical_capability_against_database(
     return _verify_historical_transaction_capability(
         capability, session=session, context=context, entry=entry,
         transaction_id=actual[3], policy_decision_id=policy_decision_id,
+        consume=consume,
     )
 
 
