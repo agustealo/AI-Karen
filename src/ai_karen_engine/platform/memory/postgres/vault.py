@@ -266,6 +266,7 @@ class PostgresNeuroVault(VaultPort):
 
     async def persist_in_transaction(
         self, entry: MemoryEntry, *, context: VaultContext, session: Any,
+        historical_inspection: Any = None,
     ) -> VaultWriteReceipt:
         """Stage a governed write in a caller-owned transaction.
 
@@ -287,6 +288,34 @@ class PostgresNeuroVault(VaultPort):
             raise NeuroVaultAuthorizationError(
                 "active caller-owned PostgreSQL transaction required"
             )
+        if historical_inspection is not None:
+            # Inspection is not a write grant. Never trust duck-typed,
+            # serialized or caller-forged authority objects.
+            from ai_karen_engine.core.memory.legacy_persona_admission import (
+                LegacyMigrationTransactionAuthority,
+            )
+            if type(historical_inspection) is not LegacyMigrationTransactionAuthority:
+                raise NeuroVaultAuthorizationError(
+                    "canonical migration transaction inspection required"
+                )
+            if (
+                not self._is_historical_write(entry)
+                or historical_inspection.tenant_id != context.tenant_id
+                or historical_inspection.user_id != context.user_id
+            ):
+                raise NeuroVaultAuthorizationError(
+                    "migration inspection scope does not match historical write"
+                )
+            try:
+                await historical_inspection.verify_active(session=session)
+            except PermissionError as exc:
+                raise NeuroVaultAuthorizationError(
+                    "migration inspection transaction is not active"
+                ) from exc
+            # Keep historical writes disabled, including when inspection
+            # provenance appears valid. A verified snapshot is forgeable and
+            # cannot replace a runtime-issued executable capability.
+            self._require_non_historical_write(entry)
         # Verify the database-local RLS scope, not just caller-supplied
         # VaultContext claims. Both canonical and compatibility settings
         # are established by the existing transaction manager.
