@@ -762,6 +762,26 @@ class LegacyMigrationTransactionAuthority:
         return authority
 
 
+def require_migration_principal_continuity(
+    *, initial: "PolicyEvaluationRequest", refreshed: "PolicyEvaluationRequest",
+) -> None:
+    """Enforce a single fail-closed credential continuity contract.
+
+    Both values must originate from independent authenticated ingress checks;
+    this function is a comparison, not authentication or a persistence grant.
+    """
+    if (
+        refreshed.tenant_id != initial.tenant_id
+        or refreshed.user_id != initial.user_id
+        or not refreshed.session_id
+        or refreshed.session_id != initial.session_id
+        or "memory.write" not in refreshed.permissions
+        or not set(refreshed.permissions).issuperset(set(initial.permissions))
+        or not set(refreshed.roles).issuperset(set(initial.roles))
+    ):
+        raise PermissionError("historical migration authenticated principal changed")
+
+
 async def inspect_authenticated_legacy_migration_evidence(
     *, request: "Request", request_id: str, correlation_id: str,
     source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
@@ -834,19 +854,9 @@ async def inspect_authenticated_legacy_migration_evidence(
             request=request, request_id=request_id,
             correlation_id=correlation_id,
         )
-        if (
-            refreshed.tenant_id != tenant
-            or refreshed.user_id != user
-            or refreshed.session_id != policy_request.session_id
-            or "memory.write" not in refreshed.permissions
-            or not set(refreshed.permissions).issuperset(
-                set(policy_request.permissions)
-            )
-            or not set(refreshed.roles).issuperset(set(policy_request.roles))
-        ):
-            raise PermissionError(
-                "historical migration authenticated principal changed during inspection"
-            )
+        require_migration_principal_continuity(
+            initial=policy_request, refreshed=refreshed,
+        )
         # A refreshed credential must still be valid at the moment of the
         # final policy decision. This remains a read-only migration boundary.
         # The final policy evaluation uses exactly this refreshed principal.
@@ -914,19 +924,9 @@ async def inspect_authenticated_legacy_migration_evidence(
             request=request, request_id=request_id,
             correlation_id=correlation_id,
         )
-        if (
-            final_principal.tenant_id != tenant
-            or final_principal.user_id != user
-            or final_principal.session_id != refreshed.session_id
-            or "memory.write" not in final_principal.permissions
-            or not set(final_principal.permissions).issuperset(
-                set(refreshed.permissions)
-            )
-            or not set(final_principal.roles).issuperset(set(refreshed.roles))
-        ):
-            raise PermissionError(
-                "historical migration credentials changed after payload verification"
-            )
+        require_migration_principal_continuity(
+            initial=refreshed, refreshed=final_principal,
+        )
         # A policy grant can be withdrawn during the awaited payload read.
         # Re-evaluate against the last authenticated principal while holding
         # the same source/consent/replay locks. The final decision, not an
