@@ -907,6 +907,26 @@ async def inspect_authenticated_legacy_migration_evidence(
         )
         if source_payload is None or source_payload[1:] != final_evidence:
             raise PermissionError("historical migration payload no longer eligible")
+        # Authentication can change while payload eligibility is being read.
+        # Recheck the credential and principal after that final awaited read;
+        # RuntimePolicy approval is never a substitute for live session state.
+        final_principal = await migration_policy_request_from_authenticated_http(
+            request=request, request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        if (
+            final_principal.tenant_id != tenant
+            or final_principal.user_id != user
+            or final_principal.session_id != refreshed.session_id
+            or "memory.write" not in final_principal.permissions
+            or not set(final_principal.permissions).issuperset(
+                set(refreshed.permissions)
+            )
+            or not set(final_principal.roles).issuperset(set(refreshed.roles))
+        ):
+            raise PermissionError(
+                "historical migration credentials changed after payload verification"
+            )
         # No persistence, content export, logging or transferable grant here.
         del source_payload
         await transaction_authority.verify_active(session=session)
