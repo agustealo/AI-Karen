@@ -1487,6 +1487,7 @@ async def test_unified_inspection_rechecks_evidence_after_final_policy(monkeypat
 
     @asynccontextmanager
     async def transaction_scope(**kwargs):
+        assert kwargs == {"tenant_id": tenant, "user_id": user}
         yield session
 
     monkeypatch.setattr(
@@ -1665,6 +1666,7 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
 
     @asynccontextmanager
     async def transaction_scope(**kwargs):
+        assert kwargs == {"tenant_id": tenant, "user_id": user}
         yield session
 
     eligible = (("created", "semantic"), Mock())
