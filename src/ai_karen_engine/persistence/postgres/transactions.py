@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from contextlib import asynccontextmanager, contextmanager
 from typing import AsyncGenerator, Generator, Optional
 
@@ -77,9 +78,12 @@ async def async_transaction_scope(
             if tenant_id is not None:
                 await _apply_tenant_context_async(session, tenant_id)
             if user_id is not None:
-                principal = str(user_id).strip()
-                if not principal:
-                    raise ValueError("authenticated transaction principal required")
+                try:
+                    principal = str(uuid.UUID(str(user_id).strip()))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "authenticated transaction principal must be a UUID"
+                    ) from exc
                 await session.execute(
                     text("SELECT set_config('app.current_user_id', :user, true)"),
                     {"user": principal},
