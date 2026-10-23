@@ -328,3 +328,40 @@ async def test_historical_authority_inspection_denies_invalid_grant_without_writ
             entry=SimpleNamespace(id=memory_id), policy_decision_id="current",
         )
     blocked.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_vault_transaction_rejects_provisional_capability_before_sql():
+    """No caller-supplied capability may bypass the disabled writer."""
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    entry = MemoryEntry(
+        id=memory_id, content="locked historical memory",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source="legacy_persona",
+            custom={"consent_scope": "persona-memory-migration"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user,
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        policy_context={"memory_write_authorized": True},
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=AssertionError("unauthorized SQL"))
+    with pytest.raises(
+        NeuroVaultAuthorizationError,
+        match="historical execution capability is not yet enabled",
+    ):
+        await PostgresNeuroVault().persist_in_transaction(
+            entry, context=context, session=session,
+            historical_capability=object(),
+        )
+    session.execute.assert_not_awaited()
