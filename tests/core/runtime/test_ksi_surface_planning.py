@@ -165,3 +165,45 @@ def test_authorized_surface_collection_reuses_each_execution_gate():
     ))]) == []
     assert collect(request, [(decision, plan, result)] * 2) == []
     assert collect(request, [(decision, plan, result)] * 7) == []
+
+
+def test_shared_collector_preserves_authorized_planner_presentation():
+    request = SimpleNamespace(context=SimpleNamespace(
+        request_id="request-1", correlation_id="corr-1"
+    ))
+    decision = SimpleNamespace(intent="planner.read")
+    plan = SimpleNamespace(allowed_capabilities=("planner.read",))
+    envelope = {
+        "schema_version": 1, "presentation_id": "planner-1",
+        "component_type": "planner.task_list",
+        "evidence_ref": "planner-owned-read:1",
+        "data": {"tasks": [{"id": "1", "title": "Review project", "status": "todo"}]},
+    }
+    result = SimpleNamespace(
+        success=True, degraded=False, source="planner",
+        source_id="planner.read", payload={"presentation": envelope},
+    )
+    assert ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, plan, result)]
+    ) == [envelope]
+    assert ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, SimpleNamespace(allowed_capabilities=()), result)]
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_shared_answer_composition_preserves_original_presentation_on_invalid_plan():
+    gateway = Gateway('{"layout":"iframe","part_ids":["clock-1"]}')
+    runtime, request, decision, verified = context(gateway)
+    runtime._synthesize_search_evidence = None
+    # Planner intent avoids answer synthesis, exercising the same shared
+    # composition entry point used for streaming and nonstreaming transports.
+    decision.intent = "planner.read"
+    original = {"presentation": verified, "other": "preserved"}
+    answer, metadata = await ChatRuntime._compose_direct_capability_answer(
+        runtime, request, decision, None, Meter(),
+        SimpleNamespace(text="Authorized result", success=True),
+        {"structured_content": original},
+    )
+    assert answer == "Authorized result"
+    assert metadata["structured_content"] == original
