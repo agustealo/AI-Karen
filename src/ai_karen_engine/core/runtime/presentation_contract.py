@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -38,6 +38,26 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     data = raw.get("data")
     if not isinstance(data, (dict, list)):
         return None
+    if component_type == "time.observation":
+        if not isinstance(data, dict):
+            return None
+        # Render only verified, already formatted observation values. Never infer
+        # a timezone, convert clocks, or synthesize a live time in the UI.
+        value = data.get("formatted") or data.get("value") or data.get("time")
+        timezone = data.get("timezone") or data.get("resolved_timezone")
+        if not isinstance(value, str) or not 1 <= len(value.strip()) <= 160:
+            return None
+        if timezone is not None and (not isinstance(timezone, str) or len(timezone) > 100):
+            return None
+        safe = {key: val for key, val in raw.items() if key != "data"}
+        safe["data"] = {"formatted": value.strip()}
+        if timezone:
+            safe["data"]["timezone"] = timezone
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
     if component_type == "planner.task_list":
         if not isinstance(data, dict):
             return None
