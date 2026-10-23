@@ -142,3 +142,26 @@ async def test_model_layout_rejects_unattributed_execution():
     assert await ChatRuntime._plan_verified_surface(
         runtime, request, decision, None, Meter(), part
     ) is None
+
+
+def test_authorized_surface_collection_reuses_each_execution_gate():
+    request = SimpleNamespace(context=SimpleNamespace(
+        request_id="request-1", correlation_id="corr-1"
+    ))
+    decision = SimpleNamespace(intent="time.current")
+    plan = SimpleNamespace(allowed_tools=["clock.lookup"])
+    result = SimpleNamespace(
+        success=True, degraded=False, source="tool", source_id="clock.lookup",
+        attempts=[{"id": "clock.lookup", "type": "tool", "status": "success"}],
+        payload={"formatted": "10:15 AM", "timezone": "America/Detroit"},
+    )
+    collect = ChatRuntime._collect_authorized_surface_parts
+    parts = collect(request, [(decision, plan, result)])
+    assert len(parts) == 1
+    assert parts[0]["data"] == {"formatted": "10:15 AM", "timezone": "America/Detroit"}
+    assert collect(request, [(decision, SimpleNamespace(allowed_tools=[]), result)]) == []
+    assert collect(request, [(decision, plan, SimpleNamespace(
+        **{**vars(result), "attempts": []}
+    ))]) == []
+    assert collect(request, [(decision, plan, result)] * 2) == []
+    assert collect(request, [(decision, plan, result)] * 7) == []
