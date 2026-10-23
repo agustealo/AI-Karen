@@ -56,6 +56,17 @@ test("reopening an owned conversation preserves its saved answer and execution r
     | { component_type?: string; data?: { layout?: string; items?: Array<{ component_type?: string; presentation_id?: string; evidence_ref?: string }>; evidence_refs?: string[] } }
     | undefined;
   const kind = surface?.component_type;
+  const layoutReceipt = assistant.metadata?.presentation_layout_provenance as
+    | { provider?: string; model?: string; response_source?: string; part_ids?: string[] }
+    | undefined;
+  if (kind === "surface.composition" && layoutReceipt) {
+    expect(layoutReceipt.provider?.trim()).toBeTruthy();
+    expect(layoutReceipt.model?.trim()).toBeTruthy();
+    expect(layoutReceipt.response_source).toBe("surface_layout_model");
+    expect(layoutReceipt.part_ids).toEqual(
+      surface?.data?.items?.map(item => item.presentation_id),
+    );
+  }
   if (kind === "surface.composition") {
     const parts = surface?.data?.items || [];
     expect(["stack", "grid"]).toContain(surface?.data?.layout);
