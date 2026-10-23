@@ -73,7 +73,11 @@ async def test_verified_layout_uses_existing_component_without_exposing_measurem
 async def test_model_cannot_inject_components_actions_or_layout(output):
     gateway = Gateway(output)
     runtime, request, decision, part = context(gateway)
-    assert await ChatRuntime._plan_verified_surface(runtime, request, decision, None, Meter(), part) is None
+    assert await ChatRuntime._plan_verified_surface(
+        runtime, request, decision, None, Meter(),
+        [part, {**part, "presentation_id": "clock-2"}],
+    ) is None
+    assert len(gateway.tasks) == 1
 
 
 @pytest.mark.asyncio
@@ -89,7 +93,8 @@ async def test_layout_failure_leaves_original_presentation_unchanged(
     gateway = Gateway(output, degraded=degraded, error=error)
     runtime, request, decision, part = context(gateway)
     assert await ChatRuntime._plan_verified_surface(
-        runtime, request, decision, None, Meter(permitted, timely), part
+        runtime, request, decision, None, Meter(permitted, timely),
+        [part, {**part, "presentation_id": "clock-2"}],
     ) is None
     assert part["data"]["formatted"] == "10:15 AM"
 
