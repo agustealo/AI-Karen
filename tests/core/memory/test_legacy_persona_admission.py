@@ -1741,3 +1741,55 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         assert not hasattr(receipt, "content")
         assert receipt.receipt is latest_receipt
     payload.assert_awaited_once()
+
+@pytest.mark.parametrize(
+    ("change", "value"),
+    [
+        ("tenant_id", "other-tenant"),
+        ("user_id", "other-user"),
+        ("session_id", "other-session"),
+        ("session_id", None),
+        ("permissions", []),
+        ("permissions", ["memory.write"]),
+        ("roles", []),
+    ],
+)
+def test_migration_principal_continuity_rejects_credential_drift(change, value):
+    from types import SimpleNamespace
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        require_migration_principal_continuity,
+    )
+
+    initial = SimpleNamespace(
+        tenant_id="tenant", user_id="user", session_id="session",
+        permissions=["memory.write", "memory.read"], roles=["admin"],
+    )
+    refreshed = SimpleNamespace(
+        tenant_id=initial.tenant_id, user_id=initial.user_id,
+        session_id=initial.session_id,
+        permissions=list(initial.permissions), roles=list(initial.roles),
+    )
+    setattr(refreshed, change, value)
+    with pytest.raises(PermissionError, match="authenticated principal changed"):
+        require_migration_principal_continuity(
+            initial=initial, refreshed=refreshed,
+        )
+
+
+def test_migration_principal_continuity_accepts_verified_superset():
+    from types import SimpleNamespace
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        require_migration_principal_continuity,
+    )
+
+    initial = SimpleNamespace(
+        tenant_id="tenant", user_id="user", session_id="session",
+        permissions=["memory.write"], roles=["admin"],
+    )
+    refreshed = SimpleNamespace(
+        tenant_id="tenant", user_id="user", session_id="session",
+        permissions=["memory.write", "memory.read"], roles=["admin", "user"],
+    )
+    require_migration_principal_continuity(
+        initial=initial, refreshed=refreshed,
+    )
