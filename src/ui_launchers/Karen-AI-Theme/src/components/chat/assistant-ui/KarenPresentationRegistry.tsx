@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "surface.composition"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -31,7 +31,21 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     return null;
   }
   // Validate each data record; the model may select layout, never invent measurements.
-  if (result.data.component_type === "time.observation") {
+  if (result.data.component_type === "surface.composition") {
+    const value = result.data.data;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const data = value as Record<string, unknown>;
+    if (Object.keys(data).sort().join(",") !== "items,layout") return null;
+    if (data.layout !== "stack" && data.layout !== "grid") return null;
+    if (!Array.isArray(data.items) || data.items.length < 1 || data.items.length > 6) return null;
+    for (const item of data.items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const child = item as Record<string, unknown>;
+      if (child.component_type === "surface.composition" ||
+          child.evidence_ref !== result.data.evidence_ref ||
+          !parseKarenPresentation(child)) return null;
+    }
+  } else if (result.data.component_type === "time.observation") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const clock = (value as Record<string, unknown>).formatted;
@@ -70,6 +84,14 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
     );
   }
   switch (envelope.component_type) {
+    case "surface.composition": {
+      const composite = envelope.data as { layout: "stack" | "grid"; items: KarenPresentationEnvelope[] };
+      return <section aria-label="Generated information surface" data-testid="karen-composed-surface"
+        className={composite.layout === "grid" ? "my-3 grid grid-cols-1 gap-3 lg:grid-cols-2" : "my-3 flex flex-col gap-3"}>
+        {composite.items.map((item) =>
+          <KarenPresentationRegistry key={item.presentation_id} data={item} />)}
+      </section>;
+    }
     case "time.observation": {
       const clock = envelope.data as { formatted: string; timezone?: string };
       return <section aria-label="Verified time observation" data-testid="karen-time-presentation"
