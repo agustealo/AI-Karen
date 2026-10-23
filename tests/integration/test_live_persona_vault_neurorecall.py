@@ -2729,3 +2729,51 @@ async def test_vault_cancellation_during_final_scope_rolls_back_staged_ledger():
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == memory_id,
         ))).scalar_one_or_none() is None
+
+
+async def test_locked_historical_source_read_rejects_cross_tenant_transaction():
+    """A forged target tenant cannot use the caller's live tenant transaction."""
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        verify_locked_legacy_migration_evidence,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    transaction_tenant = str(uuid.uuid4())
+    requested_tenant = str(uuid.uuid4())
+    user = str(uuid.uuid4())
+
+    async with async_transaction_scope(tenant_id=transaction_tenant) as session:
+        await session.execute(
+            text("SELECT set_config('app.current_user_id', :user, true)"),
+            {"user": user},
+        )
+        with pytest.raises(PermissionError, match="transaction principal mismatch"):
+            await verify_locked_legacy_migration_evidence(
+                session=session,
+                tenant_id=requested_tenant,
+                user_id=user,
+                source_record_id=str(uuid.uuid4()),
+            )
+
+
+async def test_locked_historical_source_read_rejects_missing_transaction_user():
+    """Tenant-only scoping cannot authorize historical source inspection."""
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        verify_locked_legacy_migration_evidence,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user = str(uuid.uuid4()), str(uuid.uuid4())
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        await session.execute(
+            text("SELECT set_config('app.current_user_id', '', true)")
+        )
+        with pytest.raises(PermissionError, match="transaction principal mismatch"):
+            await verify_locked_legacy_migration_evidence(
+                session=session,
+                tenant_id=tenant,
+                user_id=user,
+                source_record_id=str(uuid.uuid4()),
+            )
