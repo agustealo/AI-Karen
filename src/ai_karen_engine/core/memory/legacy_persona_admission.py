@@ -927,6 +927,14 @@ async def inspect_authenticated_legacy_migration_evidence(
             raise PermissionError(
                 "historical migration credentials changed after payload verification"
             )
+        # A policy grant can be withdrawn during the awaited payload read.
+        # Re-evaluate against the last authenticated principal while holding
+        # the same source/consent/replay locks. The final decision, not an
+        # earlier admission, is the provenance recorded on the receipt.
+        transaction_authority = await LegacyMigrationTransactionAuthority.authorize_current(
+            session=session, authenticated_request=final_principal,
+            runtime_policy=runtime_policy,
+        )
         # No persistence, content export, logging or transferable grant here.
         del source_payload
         await transaction_authority.verify_active(session=session)
