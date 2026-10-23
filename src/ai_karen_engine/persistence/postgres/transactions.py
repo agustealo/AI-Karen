@@ -51,7 +51,10 @@ async def async_transaction_scope(
                 await _apply_tenant_context_async(session, tenant_id)
             yield session
             await session.commit()
-        except Exception:
+        except BaseException:
+            # Cancellation must not escape while a caller-owned transaction
+            # remains active. SQLAlchemy's session context also closes it,
+            # but explicit rollback keeps the transaction boundary reliable.
             await session.rollback()
             raise
 
