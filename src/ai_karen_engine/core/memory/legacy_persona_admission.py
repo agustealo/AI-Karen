@@ -935,6 +935,25 @@ async def inspect_authenticated_legacy_migration_evidence(
             session=session, authenticated_request=final_principal,
             runtime_policy=runtime_policy,
         )
+        # The last RuntimePolicy callback may await external services.
+        # Require a final replay and eligibility decision under the same
+        # locks, and make sure it matches the content already inspected.
+        commit_evidence = await inspect_locked_legacy_migration_preparation(
+            session=session, tenant_id=tenant, user_id=user,
+            source_record_id=source_record_id.strip(),
+            expected_memory_id=replay.memory_id,
+            expected_request_id=replay.request_id,
+        )
+        if (
+            commit_evidence is None
+            or commit_evidence[0] != final_evidence
+            or not requires_fresh_migration_authorization(
+                reconcile_legacy_replay(commit_evidence[1])
+            )
+        ):
+            raise PermissionError(
+                "historical migration evidence changed after final policy"
+            )
         # No persistence, content export, logging or transferable grant here.
         del source_payload
         await transaction_authority.verify_active(session=session)
