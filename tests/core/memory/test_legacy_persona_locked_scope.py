@@ -365,3 +365,42 @@ async def test_vault_transaction_rejects_provisional_capability_before_sql():
             historical_capability=object(),
         )
     session.execute.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_inner_vault_ledger_denies_historical_capability_before_sql():
+    """Bypassing the outer gate must not let a candidate grant stage an event."""
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    entry = MemoryEntry(
+        id=memory_id, content="sensitive historical content",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source="legacy_persona",
+            custom={"consent_scope": "persona-memory-migration"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user,
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        policy_context={"memory_write_authorized": True},
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=AssertionError("ledger SQL executed"))
+    vault = PostgresNeuroVault()
+    with pytest.raises(NeuroVaultAuthorizationError, match="capability is not yet enabled"):
+        await vault._persist_with_session(
+            entry, context=context, session=session, commit=False,
+            historical_capability=object(),
+        )
+    with pytest.raises(NeuroVaultAuthorizationError, match="historical migration persistence is disabled"):
+        await vault._persist_with_session(
+            entry, context=context, session=session, commit=False,
+        )
+    session.execute.assert_not_awaited()
