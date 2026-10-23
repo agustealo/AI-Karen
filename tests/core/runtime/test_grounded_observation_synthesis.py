@@ -123,3 +123,53 @@ async def test_unobserved_numeric_claims_never_leave_model_gateway(intent, answe
         )
     assert composed is None
     gateway.generate.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent,answer", [
+    ("search.weather", "It's 54.3 degrees in NYC. https://example.org/fake"),
+    ("time.current", "It is 10:30 AM. https://example.org/fake"),
+])
+async def test_fabricated_measurement_citations_fail_at_canonical_runtime_boundary(intent, answer):
+    runtime, gateway, request, decision, plan, meter, result = _fixture(intent, answer)
+    with patch.object(ChatRuntime, "_resolve_chat_generation_max_tokens", return_value=160):
+        composed = await runtime._synthesize_search_evidence(
+            request, decision, plan, meter, result
+        )
+    assert composed is None
+    gateway.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_change", [
+    {"source_id": "unexpected_tool"},
+    {"source": "plugin"},
+    {"success": False},
+    {"degraded": True},
+    {"attempts": [{"type": "tool", "id": "weather_tool", "status": "failed"}]},
+])
+async def test_forged_or_failed_receipt_cannot_reach_generation(receipt_change):
+    runtime, gateway, request, decision, plan, meter, result = _fixture(
+        "search.weather", "It's 54.3 degrees in NYC."
+    )
+    for key, value in receipt_change.items():
+        setattr(result, key, value)
+    assert await runtime._synthesize_search_evidence(
+        request, decision, plan, meter, result
+    ) is None
+    gateway.generate.assert_not_called()
+    meter.consume_model_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_degradation_never_receives_grounded_model_attribution():
+    runtime, gateway, request, decision, plan, meter, result = _fixture(
+        "time.current", "It is 10:30 AM."
+    )
+    gateway.generate.return_value.degraded = True
+    with patch.object(ChatRuntime, "_resolve_chat_generation_max_tokens", return_value=160):
+        assert await runtime._synthesize_search_evidence(
+            request, decision, plan, meter, result
+        ) is None
+    gateway.generate.assert_awaited_once()
