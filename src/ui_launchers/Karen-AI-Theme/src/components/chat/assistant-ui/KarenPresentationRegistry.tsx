@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -31,7 +31,15 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     return null;
   }
   // Validate each data record; the model may select layout, never invent measurements.
-  if (result.data.component_type === "planner.task_list") {
+  if (result.data.component_type === "time.observation") {
+    const value = result.data.data;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const clock = (value as Record<string, unknown>).formatted;
+    const timezone = (value as Record<string, unknown>).timezone;
+    if (typeof clock !== "string" || !clock.trim() || clock.length > 160) return null;
+    if (timezone !== undefined && (typeof timezone !== "string" || timezone.length > 100)) return null;
+    if (Object.keys(value).some((key) => !["formatted", "timezone"].includes(key))) return null;
+  } else if (result.data.component_type === "planner.task_list") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const tasks = (value as Record<string, unknown>).tasks;
@@ -62,6 +70,15 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
     );
   }
   switch (envelope.component_type) {
+    case "time.observation": {
+      const clock = envelope.data as { formatted: string; timezone?: string };
+      return <section aria-label="Verified time observation" data-testid="karen-time-presentation"
+        className="my-3 rounded-xl border border-border/70 p-4">
+        <p className="text-xs font-medium text-muted-foreground">Verified local time</p>
+        <p className="mt-1 text-2xl font-semibold tabular-nums">{clock.formatted}</p>
+        {clock.timezone && <p className="mt-1 text-xs text-muted-foreground">{clock.timezone}</p>}
+      </section>;
+    }
     case "planner.task_list": {
       const tasks = (envelope.data as { tasks: { id: string; title: string; status: string }[] }).tasks;
       return <section aria-label="Planner tasks" data-testid="karen-planner-task-list" className="my-3 rounded-xl border border-border/70 p-4">
