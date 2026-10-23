@@ -31,7 +31,7 @@ export default defineConfig({
     baseURL: process.env.KAREN_BASE_URL || 'http://localhost:8010',
     headless: !!process.env.CI,
     viewport: { width: 1280, height: 720 },
-    screenshot: 'only-on-failure',
+    screenshot: process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ? 'off' : 'only-on-failure',
     // Opt in only on an approved sanitized test installation. Full-session
     // recordings may contain sensitive conversation text or browser state.
     video: process.env.KAREN_UX_IDENTITY_REPLAY === 'true'
