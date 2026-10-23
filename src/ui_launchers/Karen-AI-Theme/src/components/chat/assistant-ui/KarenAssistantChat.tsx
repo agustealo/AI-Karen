@@ -33,7 +33,7 @@ import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
 import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
-import { useSession } from "@/components/chat/ChatInterface";
+import { useSession } from "@/components/chat/SessionProvider";
 
 type Activity = {
   stepId?: string;

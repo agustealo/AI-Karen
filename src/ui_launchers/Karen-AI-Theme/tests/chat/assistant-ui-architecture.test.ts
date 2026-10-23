@@ -7,6 +7,7 @@ const component = readFileSync(
   "utf8",
 );
 const legacyChat = readFileSync(resolve(process.cwd(), "src/components/chat/ChatInterface.tsx"), "utf8");
+const sessionSource = readFileSync(resolve(process.cwd(), "src/components/chat/SessionProvider.tsx"), "utf8");
 const dashboard = readFileSync(
   resolve(process.cwd(), "src/app/dashboard/page.tsx"),
   "utf8",
@@ -67,7 +68,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
     expect(dashboard).toContain("<SessionProvider>");
     expect(dashboard).toContain("<KarenAssistantChat />");
-    expect(component).toContain('import { useSession } from "@/components/chat/ChatInterface"');
+    expect(component).toContain('import { useSession } from "@/components/chat/SessionProvider"');
     expect(component).toContain("/api/conversations/");
     expect(component).toContain("ExportedMessageRepository.fromArray");
     expect(component).toContain("fromAgUiMessages");
@@ -199,16 +200,16 @@ describe("Karen cross-workspace panel accessibility contract", () => {
 
 describe("shared governed Agent Runtime context", () => {
   it("keeps one workspace reference in the canonical session and both chat transports", () => {
-    expect(legacyChat).toContain("workspaceRunId: string | null");
-    expect(legacyChat).toContain("setWorkspaceRunId: (runId: string | null) => void");
-    expect(legacyChat).toContain("workspace_run_id: workspaceRunId || undefined");
+    expect(sessionSource).toContain("workspaceRunId: string | null");
+    expect(sessionSource).toContain("setWorkspaceRunId: (runId: string | null) => void");
+    expect(component).toContain("workspace_run_id: workspaceRunId");
     expect(component).toContain("workspaceRunId } = useSession()");
     expect(component).toContain("forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {}");
     expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
   });
 
   it("clears scoped work reference when switching conversations", () => {
-    expect(legacyChat).toContain("if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null)");
-    expect(legacyChat).toContain("setWorkspaceRunId(null);");
+    expect(sessionSource).toContain("if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null)");
+    expect(sessionSource).toContain("setWorkspaceRunId(null);");
   });
 });

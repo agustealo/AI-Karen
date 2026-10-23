@@ -39,7 +39,7 @@ import JobsPage from "@/components/automation/JobsPage";
 import CronJobsPage from "@/components/automation/CronJobsPage";
 import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
-import { SessionProvider, useSession } from "@/components/chat/ChatInterface";
+import { SessionProvider, useSession } from "@/components/chat/SessionProvider";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
 import { Button } from "@/components/ui/button";
