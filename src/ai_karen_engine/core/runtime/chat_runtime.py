@@ -2550,6 +2550,10 @@ class ChatRuntime:
         evidence_refs = list(dict.fromkeys(part["evidence_ref"] for part in approved))
         if len(set(part_ids)) != len(part_ids):
             return None
+        # A single approved part needs no model-generated arrangement.
+        # Preserve the original verified envelope and avoid extra latency/cost.
+        if len(approved) == 1:
+            return None
         if not await meter.consume_model_call():
             return None
         task = ExpressionTask(
