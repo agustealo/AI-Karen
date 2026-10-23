@@ -118,8 +118,19 @@ async def verify_locked_legacy_migration_evidence(
         ConsentScope, RetentionPolicy,
     )
 
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    if not isinstance(session, AsyncSession) or not session.in_transaction():
+        raise PermissionError("active canonical migration transaction required")
     tenant = str(uuid.UUID(tenant_id))
     user = str(uuid.UUID(user_id))
+    scope = (await session.execute(text(
+        "SELECT current_setting('app.current_tenant_id', true), "
+        "current_setting('app.tenant_id', true), "
+        "current_setting('app.current_user_id', true)"
+    ))).one()
+    if tuple(scope) != (tenant, tenant, user):
+        raise PermissionError("historical source transaction principal mismatch")
     source_id = _validated_source_id(source_record_id)
     if source_id is None:
         return None
