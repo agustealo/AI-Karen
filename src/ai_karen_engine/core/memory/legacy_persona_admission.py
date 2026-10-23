@@ -689,6 +689,21 @@ class LegacyMigrationTransactionAuthority:
         # potentially expensive or side-effecting policy callback.
         if not isinstance(session, AsyncSession) or not session.in_transaction():
             raise PermissionError("active PostgreSQL transaction required")
+        # The active transaction must already carry the authenticated
+        # principal before invoking RuntimePolicy. A forged policy request
+        # cannot authorize inspection in another tenant's session.
+        from sqlalchemy import text
+        principal_scope = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true), "
+            "current_setting('app.current_user_id', true)"
+        ))).one()
+        if principal_scope != (
+            authenticated_request.tenant_id,
+            authenticated_request.tenant_id,
+            authenticated_request.user_id,
+        ):
+            raise PermissionError("historical migration transaction identity mismatch")
         authority = await evaluate_migration_write_authority(
             authenticated_request=authenticated_request,
             runtime_policy=runtime_policy,
