@@ -276,3 +276,55 @@ async def test_forged_historical_capability_rejected_before_database_access():
     assert not accepted
     assert capability._used is False
     session.execute.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_historical_authority_inspection_never_opens_write_gate(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    entry = SimpleNamespace(id=memory_id)
+    context = SimpleNamespace(tenant_id=tenant, user_id=user)
+    session = MagicMock(spec=AsyncSession)
+    validated = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        module, "_verify_historical_capability_against_database", validated,
+    )
+    blocked = MagicMock(side_effect=module.NeuroVaultAuthorizationError(
+        "historical migration persistence is disabled"
+    ))
+    monkeypatch.setattr(module.PostgresNeuroVault, "_require_non_historical_write", blocked)
+    with pytest.raises(
+        module.NeuroVaultAuthorizationError,
+        match="historical migration persistence is disabled",
+    ):
+        await module._inspect_historical_migration_write_authority(
+            capability=object(), session=session, context=context,
+            entry=entry, policy_decision_id="current",
+        )
+    validated.assert_awaited_once()
+    blocked.assert_called_once_with(entry)
+
+
+@pytest.mark.asyncio
+async def test_historical_authority_inspection_denies_invalid_grant_without_write_gate(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    rejected = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        module, "_verify_historical_capability_against_database", rejected,
+    )
+    blocked = MagicMock(side_effect=AssertionError("writer gate should not be reached"))
+    monkeypatch.setattr(module.PostgresNeuroVault, "_require_non_historical_write", blocked)
+    with pytest.raises(
+        module.NeuroVaultAuthorizationError,
+        match="valid transaction-bound historical migration authority required",
+    ):
+        await module._inspect_historical_migration_write_authority(
+            capability=object(), session=MagicMock(),
+            context=SimpleNamespace(tenant_id=tenant, user_id=user),
+            entry=SimpleNamespace(id=memory_id), policy_decision_id="current",
+        )
+    blocked.assert_not_called()
