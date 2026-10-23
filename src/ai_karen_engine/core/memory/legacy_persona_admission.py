@@ -549,7 +549,10 @@ async def migration_policy_request_from_authenticated_http(
     if store is None:
         raise PermissionError("historical migration requires revocation store")
     try:
-        store.ping()
+        # Redis may report failure as a false result rather than raising.
+        # A missing revocation guarantee must never authorize inspection.
+        if store.ping() is not True:
+            raise PermissionError("historical migration revocation store unavailable")
         token = middleware._extract_token_from_request(request)
         if not token:
             raise PermissionError("historical migration requires access token")
