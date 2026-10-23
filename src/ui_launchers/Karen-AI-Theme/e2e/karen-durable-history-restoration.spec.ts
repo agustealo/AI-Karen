@@ -57,6 +57,8 @@ test("reopening an owned conversation preserves its saved answer and execution r
     "planner.task_list": "karen-planner-task-list",
     "weather.observation": "karen-weather-presentation",
     "weather.comparison": "karen-weather-comparison",
+    "time.observation": "karen-time-presentation",
+    "surface.composition": "karen-composed-surface",
   };
   expect(kind && presentationTestId[kind],
     "Acceptance fixture must contain a persisted allowlisted presentation").toBeTruthy();
