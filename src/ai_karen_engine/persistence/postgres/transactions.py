@@ -66,13 +66,24 @@ async def rollback_async_transaction(session: AsyncSession) -> None:
 @asynccontextmanager
 async def async_transaction_scope(
     tenant_id: Optional[str] = None,
+    *, user_id: Optional[str] = None,
 ) -> AsyncGenerator[AsyncSession, None]:
-    """Provide an async transactional scope with optional tenant RLS context."""
+    """Provide tenant and authenticated-principal scoped async transaction."""
     engine = get_postgres_engine()
     async with engine.async_session_factory() as session:
         try:
+            if user_id is not None and tenant_id is None:
+                raise ValueError("tenant_id required when binding transaction principal")
             if tenant_id is not None:
                 await _apply_tenant_context_async(session, tenant_id)
+            if user_id is not None:
+                principal = str(user_id).strip()
+                if not principal:
+                    raise ValueError("authenticated transaction principal required")
+                await session.execute(
+                    text("SELECT set_config('app.current_user_id', :user, true)"),
+                    {"user": principal},
+                )
             yield session
             await session.commit()
         except BaseException:
