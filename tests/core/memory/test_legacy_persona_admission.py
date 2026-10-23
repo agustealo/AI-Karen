@@ -1795,12 +1795,12 @@ def test_migration_principal_continuity_accepts_verified_superset():
     )
 
 @pytest.mark.asyncio
-async def test_authenticated_migration_execution_fails_closed_after_inspection(monkeypatch):
-    """A successful read-only inspection cannot masquerade as a committed write."""
+async def test_authenticated_migration_execution_fails_closed_without_inspection(monkeypatch):
+    """Disabled mutation ingress must not read source evidence or open a transaction."""
     from unittest.mock import AsyncMock, Mock
     from ai_karen_engine.core.memory import legacy_persona_admission as module
 
-    inspection = AsyncMock(return_value=Mock())
+    inspection = AsyncMock(side_effect=AssertionError("sensitive inspection executed"))
     monkeypatch.setattr(
         module, "inspect_authenticated_legacy_migration_evidence", inspection,
     )
@@ -1809,8 +1809,7 @@ async def test_authenticated_migration_execution_fails_closed_after_inspection(m
             request=Mock(), request_id="request", correlation_id="trace",
             source_record_id="source", runtime_policy=Mock(),
         )
-    inspection.assert_awaited_once()
-
+    inspection.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_authenticated_migration_execution_preserves_inspection_denial(monkeypatch):
