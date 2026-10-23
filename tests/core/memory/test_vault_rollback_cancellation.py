@@ -37,8 +37,40 @@ async def test_rollback_waits_for_completion_after_repeated_cancellation():
 @pytest.mark.asyncio
 async def test_rollback_failure_is_not_reported_as_success():
     class Transaction:
+        invalidated = False
+
         async def rollback(self):
             raise RuntimeError("database rollback failed")
 
+        async def invalidate(self):
+            self.invalidated = True
+
+    session = Transaction()
     with pytest.raises(RuntimeError, match="database rollback failed"):
-        await PostgresNeuroVault._rollback_caller_transaction(Transaction())
+        await PostgresNeuroVault._rollback_caller_transaction(session)
+    assert session.invalidated
+
+
+@pytest.mark.asyncio
+async def test_invalidation_waits_through_repeated_cancellation():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Transaction:
+        async def rollback(self):
+            raise RuntimeError("rollback unavailable")
+
+        async def invalidate(self):
+            started.set()
+            await release.wait()
+
+    task = asyncio.create_task(
+        PostgresNeuroVault._rollback_caller_transaction(Transaction())
+    )
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(RuntimeError, match="rollback unavailable"):
+        await asyncio.wait_for(task, timeout=2)
