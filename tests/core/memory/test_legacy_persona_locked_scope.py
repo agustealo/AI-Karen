@@ -58,3 +58,44 @@ async def test_locked_legacy_evidence_denies_missing_authenticated_user_before_s
             source_record_id="source",
         )
     assert session.execute.await_count == 1
+
+@pytest.mark.asyncio
+async def test_locked_payload_reader_denies_ineligible_source_before_content_query(monkeypatch):
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source as source
+
+    eligibility = AsyncMock(return_value=None)
+    monkeypatch.setattr(source, "verify_locked_legacy_migration_evidence", eligibility)
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=AssertionError("unauthorized content read"))
+    result = await source.read_locked_legacy_migration_source_content(
+        session=session, tenant_id=str(uuid.uuid4()),
+        user_id=str(uuid.uuid4()), source_record_id=str(uuid.uuid4()),
+    )
+    assert result is None
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_locked_payload_reader_rejects_source_drift(monkeypatch):
+    from datetime import datetime, timezone
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source as source
+
+    tenant, user, source_id = (str(uuid.uuid4()) for _ in range(3))
+    created = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        source, "verify_locked_legacy_migration_evidence",
+        AsyncMock(return_value=(created, "semantic")),
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=MagicMock(
+        one_or_none=MagicMock(return_value=MagicMock(
+            content="sensitive historical content",
+            created_at=created, memory_type="episodic",
+        ))
+    ))
+    with pytest.raises(PermissionError, match="source changed"):
+        await source.read_locked_legacy_migration_source_content(
+            session=session, tenant_id=tenant,
+            user_id=user, source_record_id=source_id,
+        )
+    assert session.execute.await_count == 1
