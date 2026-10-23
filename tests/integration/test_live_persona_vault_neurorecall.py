@@ -2787,3 +2787,34 @@ async def test_locked_historical_source_read_rejects_missing_transaction_user():
                 user_id=user,
                 source_record_id=str(uuid.uuid4()),
             )
+
+async def test_locked_replay_slot_excludes_concurrent_missing_receipt_inspection():
+    """A missing assertion must still serialize competing migration attempts."""
+    import asyncio
+    from sqlalchemy import text
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
+        lookup_locked_legacy_replay_receipt,
+    )
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, memory_id, request_id = (str(uuid.uuid4()) for _ in range(4))
+    slot = f"persona-migration-replay:{tenant}:{user}:{memory_id}"
+    async with async_transaction_scope(tenant_id=tenant) as first:
+        evidence = await lookup_locked_legacy_replay_receipt(
+            session=first, tenant_id=tenant, user_id=user,
+            expected_memory_id=memory_id, expected_request_id=request_id,
+        )
+        assert evidence.persisted is False
+        assert evidence.persisted_memory_id is None
+
+        async with async_transaction_scope(tenant_id=tenant) as second:
+            acquired = (await second.execute(text(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(:slot, 0))"
+            ), {"slot": slot})).scalar_one()
+            assert acquired is False
+        # The transaction manager releases the advisory lock on exit.
+    async with async_transaction_scope(tenant_id=tenant) as third:
+        acquired = (await third.execute(text(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended(:slot, 0))"
+        ), {"slot": slot})).scalar_one()
+        assert acquired is True
