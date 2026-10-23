@@ -674,6 +674,37 @@ class LegacyMigrationTransactionAuthority:
             raise PermissionError("historical inspection transaction identity expired")
 
     @classmethod
+    async def authorize_current(
+        cls, *, session: "AsyncSession",
+        authenticated_request: "PolicyEvaluationRequest",
+        runtime_policy: "RuntimePolicyEnforcer",
+    ) -> "LegacyMigrationTransactionAuthority":
+        """Evaluate fresh RuntimePolicy inside the already-locked transaction.
+
+        The result establishes read-only identity/provenance continuity;
+        it never authorizes NeuroVault to persist historical memory.
+        """
+        authority = await evaluate_migration_write_authority(
+            authenticated_request=authenticated_request,
+            runtime_policy=runtime_policy,
+        )
+        admission = admit_legacy_migration(LegacyMigrationPreflight(True, ()), authority)
+        if (
+            not admission.admitted
+            or admission.reason_codes
+            or admission.tenant_id != authenticated_request.tenant_id
+            or admission.user_id != authenticated_request.user_id
+        ):
+            raise PermissionError(
+                "historical migration authorization revoked during inspection"
+            )
+        return await cls.inspect(
+            session=session, tenant_id=authenticated_request.tenant_id,
+            user_id=authenticated_request.user_id,
+            policy_decision_id=authority.policy_decision_id,
+        )
+
+    @classmethod
     async def inspect(
         cls, *, session: "AsyncSession", tenant_id: str,
         user_id: str, policy_decision_id: str,
@@ -788,19 +819,10 @@ async def inspect_authenticated_legacy_migration_evidence(
         # The final policy evaluation uses exactly this refreshed principal.
         # Refresh RuntimePolicy while source, consent, retention and replay
         # locks remain held. Initial admission is not a durable write grant.
-        final_authority = await evaluate_migration_write_authority(
-            authenticated_request=refreshed, runtime_policy=runtime_policy,
+        transaction_authority = await LegacyMigrationTransactionAuthority.authorize_current(
+            session=session, authenticated_request=refreshed,
+            runtime_policy=runtime_policy,
         )
-        final_admission = admit_legacy_migration(
-            LegacyMigrationPreflight(True, ()), final_authority,
-        )
-        if (
-            not final_admission.admitted
-            or final_admission.tenant_id != tenant
-            or final_admission.user_id != user
-            or final_admission.reason_codes
-        ):
-            raise PermissionError("historical migration authorization revoked during inspection")
         # A read-only admission never creates or carries a database write
         # capability. Recheck transaction-local principal and tenant after
         # all policy callbacks and before returning the inspection evidence.
@@ -817,10 +839,6 @@ async def inspect_authenticated_legacy_migration_evidence(
             raise PermissionError(
                 "historical migration transaction tenant changed during inspection"
             )
-        transaction_authority = await LegacyMigrationTransactionAuthority.inspect(
-            session=session, tenant_id=tenant, user_id=user,
-            policy_decision_id=final_authority.policy_decision_id,
-        )
         if transaction_authority.transaction_id <= 0:
             raise PermissionError("valid migration inspection transaction required")
         # Verify transaction continuity after all source/replay and policy
@@ -833,7 +851,7 @@ async def inspect_authenticated_legacy_migration_evidence(
             receipt=receipt,
             tenant_id=tenant,
             user_id=user,
-            policy_decision_id=final_authority.policy_decision_id,
+            policy_decision_id=transaction_authority.policy_decision_id,
         )
         return inspection
 
