@@ -2348,7 +2348,15 @@ class ChatRuntime:
                 return []
             evidence_ref = part["evidence_ref"]
             if not evidence_ref.startswith(f"{request.context.request_id}:"):
-                return []
+                # Planner presentations originate in the governed planner
+                # service with its own evidence reference. Its original
+                # capability gate above is authoritative for that source.
+                if not (
+                    decision.intent == "planner.read"
+                    and result.source == "planner"
+                    and result.source_id == "planner.read"
+                ):
+                    return []
             key = part["presentation_id"]
             if key in seen:
                 return []
