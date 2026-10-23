@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "surface.composition"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -38,6 +38,67 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     data = raw.get("data")
     if not isinstance(data, (dict, list)):
         return None
+    if component_type == "surface.composition":
+        # First compositional slice: arrange existing trusted presentation
+        # envelopes without creating another source of data or action authority.
+        if not isinstance(data, dict) or set(data) not in ({"layout", "items"}, {"layout", "items", "evidence_refs"}):
+            return None
+        if data["layout"] not in ("stack", "grid"):
+            return None
+        items = data["items"]
+        if not isinstance(items, list) or not 1 <= len(items) <= 6:
+            return None
+        manifest = data.get("evidence_refs")
+        if manifest is not None and (
+            not isinstance(manifest, list) or not 1 <= len(manifest) <= 6
+            or any(not isinstance(ref, str) or not 1 <= len(ref) <= 160 for ref in manifest)
+            or len(set(manifest)) != len(manifest)
+        ):
+            return None
+        safe_items = []
+        for item in items:
+            if not isinstance(item, Mapping) or item.get("component_type") == "surface.composition":
+                return None
+            # Children must share the parent's authorized evidence reference.
+            if manifest is None and item.get("evidence_ref") != raw["evidence_ref"]:
+                return None
+            if manifest is not None and item.get("evidence_ref") not in manifest:
+                return None
+            child = validate_presentation(item)
+            if child is None:
+                return None
+            safe_items.append(child)
+        if manifest is not None and set(manifest) != {part["evidence_ref"] for part in safe_items}:
+            return None
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe["data"] = {"layout": data["layout"], "items": safe_items}
+        if manifest is not None:
+            safe["data"]["evidence_refs"] = manifest
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "time.observation":
+        if not isinstance(data, dict):
+            return None
+        # Render only verified, already formatted observation values. Never infer
+        # a timezone, convert clocks, or synthesize a live time in the UI.
+        value = data.get("formatted") or data.get("value") or data.get("time")
+        timezone = data.get("timezone") or data.get("resolved_timezone")
+        if not isinstance(value, str) or not 1 <= len(value.strip()) <= 160:
+            return None
+        if timezone is not None and (not isinstance(timezone, str) or len(timezone) > 100):
+            return None
+        safe = {key: val for key, val in raw.items() if key != "data"}
+        safe["data"] = {"formatted": value.strip()}
+        if timezone:
+            safe["data"]["timezone"] = timezone
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
     if component_type == "planner.task_list":
         if not isinstance(data, dict):
             return None
@@ -134,3 +195,61 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         return None
     return safe
 
+
+
+def compose_authorized_surface(
+    *,
+    presentation_id: str,
+    evidence_ref: str,
+    authorized_parts: list[dict[str, Any]],
+    proposed_layout: Any,
+    correlation_id: str | None = None,
+    authorized_evidence_refs: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Admit a presentation plan using only runtime-verified parts.
+
+    An LLM may suggest a layout and ordered part identifiers, but is never
+    trusted to supply component props, evidence values, actions, or URLs.
+    """
+    if not isinstance(proposed_layout, Mapping) or set(proposed_layout) != {"layout", "part_ids"}:
+        return None
+    layout = proposed_layout["layout"]
+    ids = proposed_layout["part_ids"]
+    if layout not in ("stack", "grid") or not isinstance(ids, list):
+        return None
+    if not 1 <= len(ids) <= 6 or any(not isinstance(x, str) for x in ids):
+        return None
+    if len(set(ids)) != len(ids):
+        return None
+    permitted_refs = {evidence_ref} if authorized_evidence_refs is None else set(authorized_evidence_refs)
+    if not permitted_refs or len(permitted_refs) > 6 or any(
+        not isinstance(ref, str) or not 1 <= len(ref) <= 160 for ref in permitted_refs
+    ):
+        return None
+    parts: dict[str, dict[str, Any]] = {}
+    for raw in authorized_parts:
+        verified = validate_presentation(raw)
+        if verified is None or verified["component_type"] == "surface.composition":
+            return None
+        if verified["evidence_ref"] not in permitted_refs:
+            return None
+        key = verified["presentation_id"]
+        if key in parts:
+            return None
+        parts[key] = verified
+    if any(key not in parts for key in ids):
+        return None
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": presentation_id,
+        "component_type": "surface.composition",
+        "evidence_ref": evidence_ref,
+        "data": {"layout": layout, "items": [parts[key] for key in ids]},
+    }
+    if authorized_evidence_refs is not None:
+        envelope["data"]["evidence_refs"] = list(dict.fromkeys(
+            parts[key]["evidence_ref"] for key in ids
+        ))
+    if correlation_id is not None:
+        envelope["correlation_id"] = correlation_id
+    return validate_presentation(envelope)
