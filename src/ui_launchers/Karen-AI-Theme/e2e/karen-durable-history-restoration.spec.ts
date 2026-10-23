@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 
+// This test enters real credentials and reads persisted user content.
+// Never record its browser state, regardless of the runner configuration.
+test.use({ trace: "off", screenshot: "off", video: "off" });
+
 /**
  * Opt-in, live authenticated acceptance against a sanitized deployment.
  * Reads an existing canonical conversation. Never intercepts APIs, fabricates
