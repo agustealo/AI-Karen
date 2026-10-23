@@ -190,6 +190,16 @@ class AGUIRunRequest(BaseModel):
     state: Dict[str, Any] = Field(default_factory=dict)
     forwardedProps: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("state", mode="before")
+    @classmethod
+    def normalize_empty_ag_ui_state(cls, value: Any) -> Any:
+        """AG-UI clients may send null when no shared state is initialized.
+
+        Only null is normalized; nonempty dictionaries and all other types
+        remain subject to the existing strict schema and authorization gate.
+        """
+        return {} if value is None else value
+
     def latest_user_message(self) -> str:
         last = self.messages[-1]
         if last.get("role") != "user":
