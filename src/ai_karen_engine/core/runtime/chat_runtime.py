@@ -2363,6 +2363,22 @@ class ChatRuntime:
             )
             presentation = validate_presentation(candidate)
 
+        if decision.intent == "time.current" and verified_tool and isinstance(result.payload, dict):
+            payload = result.payload
+            candidate = {
+                "schema_version": 1,
+                "presentation_id": f"time-{request.context.request_id}",
+                "component_type": "time.observation",
+                "data": {
+                    "formatted": payload.get("formatted") or payload.get("value") or payload.get("time"),
+                    "timezone": payload.get("timezone") or payload.get("resolved_timezone"),
+                },
+                "evidence_ref": f"{request.context.request_id}:{result.source_id}",
+                "correlation_id": request.context.correlation_id,
+            }
+            from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+            presentation = validate_presentation(candidate)
+
         return presentation
 
     async def _run_direct_capability_stream(
