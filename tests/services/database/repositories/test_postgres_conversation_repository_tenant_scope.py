@@ -229,6 +229,7 @@ async def test_composed_surface_and_receipt_survive_canonical_repository_roundtr
         "actual_provider": "local-provider",
         "actual_model": "authorized-model",
         "response_source": "grounded_observation_model",
+        "presentation_layout_provenance": {"provider": "layout-local", "model": "layout-model", "response_source": "surface_layout_model", "part_ids": ["time-1"]},
         "structured_content": {"presentation": surface},
     }
     message = _message()
@@ -251,6 +252,7 @@ async def test_composed_surface_and_receipt_survive_canonical_repository_roundtr
     restored = retrieved.data[0].metadata
     assert restored["actual_provider"] == "local-provider"
     assert restored["actual_model"] == "authorized-model"
+    assert restored["presentation_layout_provenance"] == metadata["presentation_layout_provenance"]
     assert restored["structured_content"]["presentation"] == surface
     assert validate_presentation(restored["structured_content"]["presentation"]) == surface
     assert session.executions[1][1]["tenant_id"] == message.tenant_id
