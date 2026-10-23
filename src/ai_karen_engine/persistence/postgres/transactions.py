@@ -100,9 +100,10 @@ async def async_transaction_scope(
 
 def _apply_tenant_context_sync(session: Session, tenant_id: str) -> None:
     """Set canonical and compatibility tenant settings for RLS-aware SQL."""
-    tenant = str(tenant_id).strip()
-    if not tenant:
-        raise ValueError("tenant_id is required when applying tenant context")
+    try:
+        tenant = str(uuid.UUID(str(tenant_id).strip()))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("tenant_id must be a UUID") from exc
     session.execute(
         text("SELECT set_config(:setting, :tid, true)"),
         {"setting": _TENANT_SETTING, "tid": tenant},
@@ -115,9 +116,10 @@ def _apply_tenant_context_sync(session: Session, tenant_id: str) -> None:
 
 async def _apply_tenant_context_async(session: AsyncSession, tenant_id: str) -> None:
     """Set canonical and compatibility tenant settings for async RLS-aware SQL."""
-    tenant = str(tenant_id).strip()
-    if not tenant:
-        raise ValueError("tenant_id is required when applying tenant context")
+    try:
+        tenant = str(uuid.UUID(str(tenant_id).strip()))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("tenant_id must be a UUID") from exc
     await session.execute(
         text("SELECT set_config(:setting, :tid, true)"),
         {"setting": _TENANT_SETTING, "tid": tenant},
