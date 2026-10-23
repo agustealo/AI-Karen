@@ -2591,10 +2591,16 @@ async def test_vault_rejects_historical_write_with_live_inspection():
                 entry, context=context, session=session,
                 historical_inspection=inspection,
             )
+        # The caller may swallow the denial and try to commit. The canonical
+        # writer must not have staged any durable artifact beforehand.
+        await session.commit()
     async with async_transaction_scope(tenant_id=tenant) as session:
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == uuid.UUID(memory_id),
         ))).scalar_one_or_none() is None
+        assert (await session.execute(select(MemoryEvent).where(
+            MemoryEvent.assertion_id == uuid.UUID(memory_id),
+        ))).scalars().all() == []
 
 
 async def test_vault_final_scope_query_failure_rolls_back_staged_ledger():
