@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
 import type { ReactNode } from "react";
-import type { ConversationResponse } from "@/lib/types";
+import type { ChatMessage, ConversationResponse } from "@/lib/types";
+import type { SuggestedAction } from "@/lib/agent-ui/service";
 import { ApiError, apiClient } from "@/lib/api";
 
 const createSessionId = (): string => {
@@ -101,7 +102,7 @@ const takeConversationBootstrap = (sessionId: string): ConversationResponse | nu
   return cached.response;
 };
 
-const fetchConversationBootstrap = async (conversationId: string): Promise<ConversationResponse> => {
+export const fetchConversationBootstrap = async (conversationId: string): Promise<ConversationResponse> => {
   const cached = takeConversationBootstrap(conversationId);
   if (cached) {
     return cached;
