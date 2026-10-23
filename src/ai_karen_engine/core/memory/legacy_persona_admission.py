@@ -922,19 +922,10 @@ async def inspect_authenticated_legacy_migration_evidence(
         # Verify transaction continuity after all source/replay and policy
         # checks, immediately before returning read-only evidence.
         await transaction_authority.verify_active(session=session)
-        # The internal payload reader shares this authenticated, locked
-        # transaction. Never return its content from this inspection API.
-        from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
-            read_locked_legacy_migration_source_content,
-        )
-        source_payload = await read_locked_legacy_migration_source_content(
-            session=session, tenant_id=tenant, user_id=user,
-            source_record_id=source_record_id.strip(),
-        )
-        if source_payload is None or source_payload[1:] != final_evidence:
-            raise PermissionError("historical migration payload no longer eligible")
-        # Authentication can change while payload eligibility is being read.
-        # Recheck the credential and principal after that final awaited read;
+        # Inspection returns metadata only. Keep historical content unread
+        # until an executable writer owns the same locked transaction.
+        # Authentication can change during locked database inspection.
+        # Recheck the credential and principal after the awaited reads;
         # RuntimePolicy approval is never a substitute for live session state.
         final_principal = await migration_policy_request_from_authenticated_http(
             request=request, request_id=request_id,
@@ -943,7 +934,7 @@ async def inspect_authenticated_legacy_migration_evidence(
         require_migration_principal_continuity(
             initial=refreshed, refreshed=final_principal,
         )
-        # A policy grant can be withdrawn during the awaited payload read.
+        # A policy grant can be withdrawn during awaited database inspection.
         # Re-evaluate against the last authenticated principal while holding
         # the same source/consent/replay locks. The final decision, not an
         # earlier admission, is the provenance recorded on the receipt.
@@ -971,7 +962,6 @@ async def inspect_authenticated_legacy_migration_evidence(
                 "historical migration evidence changed after final policy"
             )
         # No persistence, content export, logging or transferable grant here.
-        del source_payload
         await transaction_authority.verify_active(session=session)
         # Keep the read-only evidence tied to the final validated identity
         # and policy decision; do not convert it into a write capability.
