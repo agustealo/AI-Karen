@@ -109,7 +109,8 @@ async def test_transaction_scope_binds_principal_after_tenant_context(monkeypatc
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("11111111-1111-4111-8111-111111111111", "principal"),
-    [(None, str(uuid.uuid4())), ("11111111-1111-4111-8111-111111111111", ""), ("11111111-1111-4111-8111-111111111111", "   "),
+    [(None, str(uuid.uuid4())), ("invalid-tenant", str(uuid.uuid4())),
+     ("11111111-1111-4111-8111-111111111111", ""), ("11111111-1111-4111-8111-111111111111", "   "),
      ("11111111-1111-4111-8111-111111111111", "not-a-uuid")],
 )
 async def test_transaction_scope_rejects_unscoped_principal(monkeypatch, tenant, principal):
