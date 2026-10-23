@@ -2533,7 +2533,8 @@ class ChatRuntime:
         )
         try:
             generated = await self._composition.expression_gateway.generate(task)
-            if not await meter.check_duration() or generated.degraded or not generated.text:
+            if (not await meter.check_duration() or generated.degraded or not generated.text
+                    or not generated.provider or not generated.model):
                 return None
             proposal = json.loads(generated.text.strip())
             return compose_authorized_surface(
