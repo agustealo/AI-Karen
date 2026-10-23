@@ -146,6 +146,27 @@ async def _verify_historical_capability_against_database(
     )
 
 
+async def _inspect_historical_migration_write_authority(
+    *, capability: Any, session: Any, context: VaultContext,
+    entry: MemoryEntry, policy_decision_id: str,
+) -> None:
+    """Verify candidate authority while keeping both historical gates closed.
+
+    This function cannot issue or consume write authority. The runtime must
+    prove eligible source, active consent, current policy and replay under
+    the same transaction before a future executor can use it.
+    """
+    if not await _verify_historical_capability_against_database(
+        capability, session=session, context=context, entry=entry,
+        policy_decision_id=policy_decision_id,
+    ):
+        raise NeuroVaultAuthorizationError(
+            "valid transaction-bound historical migration authority required"
+        )
+    # Verified inspection alone never licenses a historical write.
+    PostgresNeuroVault._require_non_historical_write(entry)
+
+
 class PostgresNeuroVault(VaultPort):
     """Governed PostgreSQL durable-memory adapter."""
 
