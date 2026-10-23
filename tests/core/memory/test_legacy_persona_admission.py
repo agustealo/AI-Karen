@@ -1438,3 +1438,92 @@ async def test_final_policy_cannot_rebind_transaction_principal_before_inspectio
                 authenticated_request=Mock(tenant_id=tenant, user_id=user),
                 runtime_policy=Mock(),
             )
+
+@pytest.mark.asyncio
+async def test_unified_inspection_rechecks_evidence_after_final_policy(monkeypatch):
+    """A final policy allow cannot reuse evidence revoked during its callback."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from uuid import uuid4
+
+    from starlette.requests import Request
+    from ai_karen_engine.core.memory import legacy_persona_admission as module
+    from ai_karen_engine.persistence.postgres import transactions
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+
+    tenant, user = str(uuid4()), str(uuid4())
+    credential = SimpleNamespace(
+        tenant_id=tenant, user_id=user, session_id="authenticated-session",
+        permissions=["memory.write"], roles=["admin"],
+    )
+    granted = module.LegacyMigrationWriteAuthority(
+        tenant_id=tenant, user_id=user, authorized_tenant_id=tenant,
+        authorized_user_id=user, capability="memory.write",
+        policy_decision_id="final-policy", explicitly_granted=True,
+    )
+    reads = []
+    async def inspect(**kwargs):
+        reads.append(kwargs["source_record_id"])
+        if len(reads) == 2:
+            return None
+        return (("source-created", "semantic"), SimpleNamespace())
+
+    class Authority:
+        policy_decision_id = "final-policy"
+        transaction_id = 42
+
+        async def verify_active(self, **kwargs):
+            return None
+
+    async def authorize(**kwargs):
+        return Authority()
+
+    session = Mock()
+    session.execute = AsyncMock()
+    session.execute.return_value.one.return_value = (user, tenant, tenant)
+
+    @asynccontextmanager
+    async def transaction_scope(**kwargs):
+        yield session
+
+    monkeypatch.setattr(
+        module, "migration_policy_request_from_authenticated_http",
+        AsyncMock(return_value=credential),
+    )
+    monkeypatch.setattr(
+        module, "evaluate_migration_write_authority",
+        AsyncMock(return_value=granted),
+    )
+    monkeypatch.setattr(
+        module.LegacyMigrationTransactionAuthority, "authorize_current", authorize,
+    )
+    monkeypatch.setattr(transactions, "async_transaction_scope", transaction_scope)
+    monkeypatch.setattr(
+        legacy_persona_source, "inspect_locked_legacy_migration_preparation", inspect,
+    )
+    monkeypatch.setattr(
+        module, "reconcile_legacy_replay",
+        getattr(module, "reconcile_legacy_replay", None),
+        raising=False,
+    )
+    from ai_karen_engine.core.memory import legacy_persona_recovery
+    monkeypatch.setattr(
+        legacy_persona_recovery, "reconcile_legacy_replay",
+        lambda receipt: receipt,
+    )
+    monkeypatch.setattr(
+        legacy_persona_recovery, "requires_fresh_migration_authorization",
+        lambda decision: True,
+    )
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [], "query_string": b"",
+    })
+    with pytest.raises(PermissionError, match="evidence changed during authorization"):
+        await module.inspect_authenticated_legacy_migration_evidence(
+            request=request, request_id="request", correlation_id="trace",
+            source_record_id=str(uuid4()), runtime_policy=RuntimePolicyEnforcer(),
+        )
+    assert len(reads) == 2
