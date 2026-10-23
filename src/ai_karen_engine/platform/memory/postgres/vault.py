@@ -373,7 +373,9 @@ class PostgresNeuroVault(VaultPort):
             receipt = await self._persist_with_session(
                 entry, context=context, session=session, commit=False,
             )
-        except Exception:
+        except BaseException:
+            # Including asyncio.CancelledError: a cancelled ledger write
+            # must not leave a caller-owned transaction committable.
             # A failed ledger/consent write invalidates the caller's entire
             # transaction. Do not rely on the caller to propagate the error:
             # a swallowed IntegrityError must never permit a partial commit.
@@ -388,7 +390,9 @@ class PostgresNeuroVault(VaultPort):
                 "current_setting('app.tenant_id', true), "
                 "current_setting('app.current_user_id', true)"
             ))).one()
-        except Exception:
+        except BaseException:
+            # Cancellation during the final scope read also invalidates the
+            # caller-owned transaction after the ledger has been staged.
             # The ledger is already staged. An unavailable final scope read
             # must invalidate the transaction even if the caller swallows
             # the database exception and tries to commit.
