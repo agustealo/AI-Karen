@@ -123,8 +123,13 @@ async def _verify_historical_capability_against_database(
         return False
     if (
         type(capability) is not _HistoricalTransactionCapability
+        or capability._nonce is not _HISTORICAL_CAPABILITY_WITNESS
         or capability._used
         or capability._session is not session
+        or capability._tenant != context.tenant_id
+        or capability._user != context.user_id
+        or capability._memory_id != str(entry.id)
+        or capability._policy_decision_id != policy_decision_id
     ):
         return False
     actual = (await session.execute(text(
