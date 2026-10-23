@@ -108,3 +108,36 @@ def test_verified_time_presentation_is_bounded_and_minimized():
     assert validate_presentation({**base, "data": {"timezone": "America/Detroit"}}) is None
     assert validate_presentation({**base, "data": {"formatted": "X" * 161}}) is None
     assert validate_presentation({**base, "data": {"formatted": {"unsafe": True}}}) is None
+
+
+def test_composed_surface_reuses_validated_evidence_bound_children():
+    child = {
+        "schema_version": 1,
+        "presentation_id": "clock-1",
+        "component_type": "time.observation",
+        "evidence_ref": "request-1:clock",
+        "data": {"formatted": "10:15 AM", "secret": "discard"},
+    }
+    composite = {
+        "schema_version": 1,
+        "presentation_id": "surface-1",
+        "component_type": "surface.composition",
+        "evidence_ref": "request-1:clock",
+        "data": {"layout": "grid", "items": [child]},
+    }
+    safe = validate_presentation(composite)
+    assert safe is not None
+    assert safe["data"]["items"][0]["data"] == {"formatted": "10:15 AM"}
+    assert validate_presentation({
+        **composite, "data": {"layout": "grid", "items": [
+            {**child, "evidence_ref": "different-tenant:clock"}]},
+    }) is None
+    assert validate_presentation({
+        **composite, "data": {"layout": "grid", "items": [composite]},
+    }) is None
+    assert validate_presentation({
+        **composite, "data": {"layout": "grid", "items": [child] * 7},
+    }) is None
+    assert validate_presentation({
+        **composite, "data": {"layout": "iframe", "items": [child]},
+    }) is None
