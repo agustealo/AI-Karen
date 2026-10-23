@@ -74,3 +74,24 @@ async def test_invalidation_waits_through_repeated_cancellation():
     release.set()
     with pytest.raises(RuntimeError, match="rollback unavailable"):
         await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_failed_rollback_and_invalidation_propagate_uncertain_outcome():
+    """Never return success when neither transaction cleanup operation succeeds."""
+    calls = []
+
+    class Transaction:
+        async def rollback(self):
+            calls.append("rollback")
+            raise RuntimeError("rollback failed")
+
+        async def invalidate(self):
+            calls.append("invalidate")
+            raise OSError("connection invalidation failed")
+
+    with pytest.raises(OSError, match="connection invalidation failed") as caught:
+        await PostgresNeuroVault._rollback_caller_transaction(Transaction())
+    assert calls == ["rollback", "invalidate"]
+    assert isinstance(caught.value.__context__, RuntimeError)
+    assert str(caught.value.__context__) == "rollback failed"
