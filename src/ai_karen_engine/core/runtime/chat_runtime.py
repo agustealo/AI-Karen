@@ -2491,12 +2491,18 @@ class ChatRuntime:
         )
         from ai_karen_engine.core.expression.contracts import ExpressionTask
 
-        verified = validate_presentation(presentation)
-        if verified is None or verified["component_type"] == "surface.composition":
+        candidates = presentation if isinstance(presentation, list) else [presentation]
+        if not 1 <= len(candidates) <= 6:
+            return None
+        approved = [validate_presentation(candidate) for candidate in candidates]
+        if any(part is None or part["component_type"] == "surface.composition" for part in approved):
+            return None
+        part_ids = [part["presentation_id"] for part in approved]
+        evidence_refs = list(dict.fromkeys(part["evidence_ref"] for part in approved))
+        if len(set(part_ids)) != len(part_ids):
             return None
         if not await meter.consume_model_call():
             return None
-        part_id = verified["presentation_id"]
         task = ExpressionTask(
             task_id=f"surface_plan_{request.context.correlation_id}",
             kind="chat",
@@ -2509,7 +2515,7 @@ class ChatRuntime:
                 )},
                 {"role": "user", "content": json.dumps({
                     "allowed_layouts": ["stack", "grid"],
-                    "allowed_part_ids": [part_id],
+                    "allowed_part_ids": part_ids,
                     "task_intent": decision.intent,
                 })},
             ],
@@ -2532,8 +2538,9 @@ class ChatRuntime:
             proposal = json.loads(generated.text.strip())
             return compose_authorized_surface(
                 presentation_id=f"surface-{request.context.request_id}",
-                evidence_ref=verified["evidence_ref"],
-                authorized_parts=[verified],
+                evidence_ref=evidence_refs[0] if len(evidence_refs) == 1 else f"bundle:{request.context.request_id}",
+                authorized_parts=approved,
+                authorized_evidence_refs=evidence_refs if len(evidence_refs) > 1 else None,
                 proposed_layout=proposal,
                 correlation_id=request.context.correlation_id,
             )
