@@ -312,6 +312,11 @@ class PostgresNeuroVault(VaultPort):
         # Validate policy capability and principal scope before any database
         # query, including transaction-local tenant introspection.
         self._validate_persist_authority(entry, context)
+        # Ordinary caller-owned transactions must never probe database scope
+        # with a historical payload. A read-only inspection can be validated
+        # separately, but it remains incapable of granting persistence.
+        if historical_inspection is None:
+            self._require_non_historical_write(entry)
         if session is None:
             raise ValueError("caller-owned active PostgreSQL session required")
         # Never accept a raw, unscoped session for a governed mutation.
