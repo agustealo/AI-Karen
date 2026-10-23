@@ -49,6 +49,54 @@ class NeuroVaultScopeError(ValueError):
     """Raised when durable memory scope or identity is invalid."""
 
 
+class _HistoricalTransactionCapability:
+    """Opaque, one-use transaction authority, not a policy decision.
+
+    Only the trusted runtime executor may eventually request issuance. Issuance
+    remains disabled until the complete authenticated write path is integrated.
+    """
+
+    __slots__ = ("_nonce", "_session", "_tenant", "_user", "_memory_id", "_used")
+
+    def __init__(self, *, nonce: object, session: Any, tenant: str,
+                 user: str, memory_id: str) -> None:
+        self._nonce = nonce
+        self._session = session
+        self._tenant = tenant
+        self._user = user
+        self._memory_id = memory_id
+        self._used = False
+
+
+# Private witness is deliberately not exported as a runtime permission.
+_HISTORICAL_CAPABILITY_WITNESS = object()
+
+
+def _verify_historical_transaction_capability(
+    capability: Any, *, session: Any, context: VaultContext,
+    entry: MemoryEntry, consume: bool = False,
+) -> bool:
+    """Fail closed for forged, reused, detached or mismatched authorities.
+
+    Validation alone never permits persistence: the canonical Vault historical
+    gates stay closed until runtime issuance and end-to-end tests are complete.
+    """
+    if (
+        type(capability) is not _HistoricalTransactionCapability
+        or capability._nonce is not _HISTORICAL_CAPABILITY_WITNESS
+        or capability._used
+        or capability._session is not session
+        or capability._tenant != context.tenant_id
+        or capability._user != context.user_id
+        or capability._memory_id != str(entry.id)
+        or not getattr(session, "in_transaction", lambda: False)()
+    ):
+        return False
+    if consume:
+        capability._used = True
+    return True
+
+
 class PostgresNeuroVault(VaultPort):
     """Governed PostgreSQL durable-memory adapter."""
 
