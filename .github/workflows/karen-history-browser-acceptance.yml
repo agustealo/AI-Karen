@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   authenticated-history-restoration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
     env:
@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Check out exact requested head
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 
@@ -49,7 +49,7 @@ jobs:
             *) echo "::error::Acceptance URL must use HTTPS"; exit 1 ;;
           esac
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
