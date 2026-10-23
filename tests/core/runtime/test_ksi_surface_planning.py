@@ -6,6 +6,9 @@ import pytest
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 
 
+JSON_LAYOUT_TWO_PARTS = '{"layout":"grid","part_ids":["clock-1","clock-2"]}'
+
+
 class Meter:
     def __init__(self, permitted=True, timely=True):
         self.permitted, self.timely, self.calls = permitted, timely, 0
@@ -51,7 +54,8 @@ def context(gateway):
 async def test_verified_layout_uses_existing_component_without_exposing_measurement():
     gateway = Gateway('{"layout":"grid","part_ids":["clock-1"]}')
     runtime, request, decision, part = context(gateway)
-    result = await ChatRuntime._plan_verified_surface(runtime, request, decision, None, Meter(), part)
+    gateway.text = JSON_LAYOUT_TWO_PARTS
+    result = await ChatRuntime._plan_verified_surface(runtime, request, decision, None, Meter(), [part, {**part, "presentation_id": "clock-2"}])
     assert result["data"]["items"][0] == part
     assert len(gateway.tasks) == 1
     assert gateway.tasks[0].metadata["execution_mode"] == "surface_layout_plan"
@@ -140,7 +144,7 @@ async def test_model_layout_rejects_unattributed_execution():
     gateway = UnattributedGateway()
     runtime, request, decision, part = context(gateway)
     assert await ChatRuntime._plan_verified_surface(
-        runtime, request, decision, None, Meter(), part
+        runtime, request, decision, None, Meter(), [part, {**part, "presentation_id": "clock-2"}]
     ) is None
 
 
@@ -208,3 +212,13 @@ async def test_shared_answer_composition_preserves_original_presentation_on_inva
     )
     assert answer == "Authorized result"
     assert metadata["structured_content"] == original
+
+
+@pytest.mark.asyncio
+async def test_single_part_skips_model_budget_and_gateway():
+    gateway = Gateway(error=RuntimeError("must not call"))
+    runtime, request, decision, part = context(gateway)
+    meter = Meter()
+    assert await ChatRuntime._plan_verified_surface(runtime, request, decision, None, meter, part) is None
+    assert meter.calls == 0
+    assert gateway.tasks == []
