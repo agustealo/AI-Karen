@@ -141,3 +141,36 @@ def test_composed_surface_reuses_validated_evidence_bound_children():
     assert validate_presentation({
         **composite, "data": {"layout": "iframe", "items": [child]},
     }) is None
+
+
+def test_layout_proposal_may_only_reorder_authorized_parts():
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+
+    verified = {
+        "schema_version": 1, "presentation_id": "clock-1",
+        "component_type": "time.observation", "evidence_ref": "tenant-request:clock",
+        "data": {"formatted": "10:15 AM", "timezone": "America/Detroit"},
+    }
+    kwargs = dict(
+        presentation_id="surface-1",
+        evidence_ref="tenant-request:clock",
+        authorized_parts=[verified],
+    )
+    safe = compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-1"]}
+    )
+    assert safe is not None
+    assert safe["data"]["items"][0]["data"]["formatted"] == "10:15 AM"
+    assert compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-other"]}
+    ) is None
+    assert compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-1", "clock-1"]}
+    ) is None
+    assert compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-1"], "data": {"formatted": "faked"}}
+    ) is None
+    assert compose_authorized_surface(
+        **{**kwargs, "evidence_ref": "another-tenant:clock"},
+        proposed_layout={"layout": "grid", "part_ids": ["clock-1"]},
+    ) is None
