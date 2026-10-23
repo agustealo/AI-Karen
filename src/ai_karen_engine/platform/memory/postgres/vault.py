@@ -556,8 +556,15 @@ class PostgresNeuroVault(VaultPort):
 
     async def _persist_with_session(
         self, entry: MemoryEntry, *, context: VaultContext,
-        session: Any, commit: bool,
+        session: Any, commit: bool, historical_capability: Any = None,
     ) -> VaultWriteReceipt:
+        # This independent ledger gate must never trust an outer writer's
+        # validation or a caller-provided candidate execution capability.
+        if historical_capability is not None:
+            raise NeuroVaultAuthorizationError(
+                "historical execution capability is not yet enabled"
+            )
+        self._require_non_historical_write(entry)
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
         metadata = entry.metadata
