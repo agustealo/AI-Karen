@@ -1670,8 +1670,9 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         yield session
 
     eligible = (("created", "semantic"), Mock())
+    latest_receipt = Mock()
     inspected = AsyncMock(side_effect=[eligible, eligible] + (
-        [None] if evidence_revoked else [eligible]
+        [None] if evidence_revoked else [(eligible[0], latest_receipt)]
     ))
     payload = AsyncMock(return_value=(
         "private historical memory", "created",
@@ -1738,4 +1739,5 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         )
         assert "private historical memory" not in repr(receipt)
         assert not hasattr(receipt, "content")
+        assert receipt.receipt is latest_receipt
     payload.assert_awaited_once()
