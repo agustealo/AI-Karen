@@ -2595,3 +2595,51 @@ async def test_vault_rejects_historical_write_with_live_inspection():
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == uuid.UUID(memory_id),
         ))).scalar_one_or_none() is None
+
+
+async def test_vault_final_scope_query_failure_rolls_back_staged_ledger():
+    """A swallowed final-scope read failure must not commit staged assertions."""
+    from sqlalchemy import text
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, memory_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    entry = MemoryEntry(
+        id=str(memory_id), content="Final scope query failure rollback",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(tenant), user_id=str(user),
+            source="chat_user", custom={"consent_scope": "memory.write"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=str(tenant), user_id=str(user),
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        actor_id=str(user), policy_context={"memory_write_authorized": True},
+    )
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        original_execute = session.execute
+        scope_reads = 0
+
+        async def fail_final_scope(statement, *args, **kwargs):
+            nonlocal scope_reads
+            sql = str(statement)
+            if (
+                "current_setting('app.current_tenant_id', true)" in sql
+                and "current_setting('app.current_user_id', true)" in sql
+            ):
+                scope_reads += 1
+                if scope_reads == 2:
+                    raise RuntimeError("final transaction scope unavailable")
+            return await original_execute(statement, *args, **kwargs)
+
+        session.execute = fail_final_scope
+        with pytest.raises(RuntimeError, match="final transaction scope unavailable"):
+            await PostgresNeuroVault().persist_in_transaction(
+                entry, context=context, session=session,
+            )
+        await session.commit()
+        assert scope_reads == 2
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        assert (await session.execute(select(MemoryAssertion).where(
+            MemoryAssertion.assertion_id == memory_id,
+        ))).scalar_one_or_none() is None
