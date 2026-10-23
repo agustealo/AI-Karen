@@ -33,11 +33,9 @@ function readLayout(): { order: WorkspaceCard[]; hidden: WorkspaceCard[] } {
   try {
     const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
     const order: WorkspaceCard[] = Array.isArray(saved.order)
-      ? (saved.order as unknown[]).filter(isWorkspaceCard)
-      : [];
+      ? (saved.order as unknown[]).filter(isWorkspaceCard) : [];
     const hidden: WorkspaceCard[] = Array.isArray(saved.hidden)
-      ? (saved.hidden as unknown[]).filter(isWorkspaceCard)
-      : [];
+      ? (saved.hidden as unknown[]).filter(isWorkspaceCard) : [];
     return { order: [...new Set([...order, ...DEFAULT_ORDER])], hidden: [...new Set(hidden)] };
   } catch {
     return { order: [...DEFAULT_ORDER], hidden: [] };

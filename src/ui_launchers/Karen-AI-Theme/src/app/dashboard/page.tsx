@@ -39,10 +39,7 @@ import JobsPage from "@/components/automation/JobsPage";
 import CronJobsPage from "@/components/automation/CronJobsPage";
 import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
-import ChatInterface, {
-  SessionProvider,
-  useSession,
-} from "@/components/chat/ChatInterface";
+import { SessionProvider, useSession } from "@/components/chat/ChatInterface";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
 import { Button } from "@/components/ui/button";
@@ -73,8 +70,6 @@ import { Separator } from "@/components/ui/separator";
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
 
-// Keep legacy chat as the default until full assistant-ui/AG-UI proof passes.
-const USE_ASSISTANT_UI_CHAT = process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED === "true";
 const KarenAssistantChat = dynamic(
   () => import("@/components/chat/assistant-ui/KarenAssistantChat"),
   { ssr: false },
@@ -692,7 +687,7 @@ export default function DashboardPage() {
                       : "hidden"}
                     aria-hidden={backendStatus !== "ready" || (activeMainView !== "chat" && !karenPanelOpen)}
                   >
-                    {USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />}
+                    <KarenAssistantChat />
                   </div>
                   <div
                     key={activeMainView}

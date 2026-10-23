@@ -88,3 +88,127 @@ def test_weather_fahrenheit_strings_parse_without_being_relabelled():
     assert validate_presentation({
         **base, "data": {"location": "Detroit", "temperature": "60.3"},
     }) is None
+
+
+def test_verified_time_presentation_is_bounded_and_minimized():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "time-request-1",
+        "component_type": "time.observation",
+        "evidence_ref": "request-1:clock",
+        "data": {
+            "formatted": "10:15 AM",
+            "timezone": "America/Detroit",
+            "secret_token": "do-not-project",
+        },
+    }
+    clean = validate_presentation(base)
+    assert clean is not None
+    assert clean["data"] == {"formatted": "10:15 AM", "timezone": "America/Detroit"}
+    assert validate_presentation({**base, "data": {"timezone": "America/Detroit"}}) is None
+    assert validate_presentation({**base, "data": {"formatted": "X" * 161}}) is None
+    assert validate_presentation({**base, "data": {"formatted": {"unsafe": True}}}) is None
+
+
+def test_composed_surface_reuses_validated_evidence_bound_children():
+    child = {
+        "schema_version": 1,
+        "presentation_id": "clock-1",
+        "component_type": "time.observation",
+        "evidence_ref": "request-1:clock",
+        "data": {"formatted": "10:15 AM", "secret": "discard"},
+    }
+    composite = {
+        "schema_version": 1,
+        "presentation_id": "surface-1",
+        "component_type": "surface.composition",
+        "evidence_ref": "request-1:clock",
+        "data": {"layout": "grid", "items": [child]},
+    }
+    safe = validate_presentation(composite)
+    assert safe is not None
+    assert safe["data"]["items"][0]["data"] == {"formatted": "10:15 AM"}
+    assert validate_presentation({
+        **composite, "data": {"layout": "grid", "items": [
+            {**child, "evidence_ref": "different-tenant:clock"}]},
+    }) is None
+    assert validate_presentation({
+        **composite, "data": {"layout": "grid", "items": [composite]},
+    }) is None
+    assert validate_presentation({
+        **composite, "data": {"layout": "grid", "items": [child] * 7},
+    }) is None
+    assert validate_presentation({
+        **composite, "data": {"layout": "iframe", "items": [child]},
+    }) is None
+
+
+def test_layout_proposal_may_only_reorder_authorized_parts():
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+
+    verified = {
+        "schema_version": 1, "presentation_id": "clock-1",
+        "component_type": "time.observation", "evidence_ref": "tenant-request:clock",
+        "data": {"formatted": "10:15 AM", "timezone": "America/Detroit"},
+    }
+    kwargs = dict(
+        presentation_id="surface-1",
+        evidence_ref="tenant-request:clock",
+        authorized_parts=[verified],
+    )
+    safe = compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-1"]}
+    )
+    assert safe is not None
+    assert safe["data"]["items"][0]["data"]["formatted"] == "10:15 AM"
+    assert compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-other"]}
+    ) is None
+    assert compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-1", "clock-1"]}
+    ) is None
+    assert compose_authorized_surface(
+        **kwargs, proposed_layout={"layout": "grid", "part_ids": ["clock-1"], "data": {"formatted": "faked"}}
+    ) is None
+    assert compose_authorized_surface(
+        **{**kwargs, "evidence_ref": "another-tenant:clock"},
+        proposed_layout={"layout": "grid", "part_ids": ["clock-1"]},
+    ) is None
+
+
+def test_multi_evidence_surface_requires_explicit_authorized_manifest():
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+
+    def clock(name, evidence):
+        return {
+            "schema_version": 1, "presentation_id": name,
+            "component_type": "time.observation", "evidence_ref": evidence,
+            "data": {"formatted": "10:15 AM"},
+        }
+
+    parts = [clock("a", "receipt-a"), clock("b", "receipt-b")]
+    kwargs = {
+        "presentation_id": "surface", "evidence_ref": "request-bundle",
+        "authorized_parts": parts,
+        "proposed_layout": {"layout": "grid", "part_ids": ["b", "a"]},
+    }
+    assert compose_authorized_surface(**kwargs) is None
+    rendered = compose_authorized_surface(
+        **kwargs, authorized_evidence_refs=["receipt-a", "receipt-b"]
+    )
+    assert rendered is not None
+    assert rendered["data"]["evidence_refs"] == ["receipt-b", "receipt-a"]
+    assert [part["presentation_id"] for part in rendered["data"]["items"]] == ["b", "a"]
+    assert compose_authorized_surface(
+        **kwargs, authorized_evidence_refs=["receipt-a"]
+    ) is None
+    assert validate_presentation({
+        **rendered, "data": {
+            **rendered["data"], "evidence_refs": ["receipt-a", "injected"],
+        },
+    }) is None
+    assert validate_presentation({
+        **rendered, "data": {
+            **rendered["data"], "evidence_refs": ["receipt-a", "receipt-a"],
+        },
+    }) is None

@@ -20,7 +20,7 @@ type BrowserRecognition = {
   start: () => void;
   stop: () => void;
 };
-type SpeechWindow = Window & {
+type SpeechWindow = {
   SpeechRecognition?: new () => BrowserRecognition;
   webkitSpeechRecognition?: new () => BrowserRecognition;
 };
@@ -67,10 +67,8 @@ export function KarenBrowserDictation() {
       catch { setError("Could not stop browser dictation."); }
       return;
     }
-    const browser = window as SpeechWindow;
-    const Recognition = (browser.SpeechRecognition ?? browser.webkitSpeechRecognition) as
-      | (new () => BrowserRecognition)
-      | undefined;
+    const browser = window as unknown as SpeechWindow;
+    const Recognition = browser.SpeechRecognition || browser.webkitSpeechRecognition;
     if (!Recognition) {
       setError("Browser dictation is unavailable. Use the text input.");
       return;

@@ -11,6 +11,37 @@ const valid = {
 } as const;
 
 describe("versioned presentation registry", () => {
+
+  it("restores a bounded composed surface with independently referenced evidence", () => {
+    const clock = {
+      schema_version: 1, presentation_id: "clock-1",
+      evidence_ref: "receipt-clock", component_type: "time.observation",
+      data: { formatted: "10:15 AM", timezone: "America/Detroit" },
+    };
+    const weather = { ...valid, evidence_ref: "receipt-weather" };
+    const composed = {
+      schema_version: 1, presentation_id: "surface-1",
+      evidence_ref: "conversation-surface",
+      component_type: "surface.composition",
+      data: {
+        layout: "grid",
+        evidence_refs: ["receipt-clock", "receipt-weather"],
+        items: [clock, weather],
+      },
+    };
+    const persisted = JSON.parse(JSON.stringify({ presentation: composed }));
+    const restored = presentationFromStructuredContent(persisted);
+    expect(restored?.presentation_id).toBe("surface-1");
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={restored} />);
+    expect(html).toContain("10:15 AM");
+    expect(html).toContain("Detroit");
+    expect(html).toContain("karen-composed-surface");
+    expect(parseKarenPresentation({
+      ...composed,
+      data: { ...composed.data, evidence_refs: ["receipt-clock", "forged"] },
+    })).toBeNull();
+  });
+
   it("renders only validated read-only planner tasks", () => {
     const envelope = {
       ...valid,
@@ -71,6 +102,16 @@ describe("versioned presentation registry", () => {
     const { evidence_ref: _discard, ...withoutEvidence } = valid;
     expect(parseKarenPresentation(withoutEvidence)).toBeNull();
     expect(parseKarenPresentation({ ...valid, data: { ...valid.data, notes: "x".repeat(40_000) } })).toBeNull();
+  });
+
+  it("enforces the backend UTF-8 byte limit for multibyte weather location data", () => {
+    const envelope = {
+      ...valid,
+      data: { ...valid.data, location: "🌤".repeat(9_000) },
+    };
+    expect(JSON.stringify(envelope).length).toBeLessThan(32_768);
+    expect(new TextEncoder().encode(JSON.stringify(envelope)).byteLength).toBeGreaterThan(32_768);
+    expect(parseKarenPresentation(envelope)).toBeNull();
   });
 
   it("rejects mismatched or malformed data", () => {

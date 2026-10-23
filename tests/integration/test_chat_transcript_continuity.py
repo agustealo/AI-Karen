@@ -163,6 +163,36 @@ class _DurableConversationRepository(ConversationRepository):
             metadata={"idempotent_replay": False},
         )
 
+    async def add_completed_turn(
+        self, user_message: Message, assistant_message: Message
+    ) -> RepositoryResult[int]:
+        conversation = self.conversations.get(user_message.conversation_id)
+        if (
+            conversation is None
+            or conversation.tenant_id != user_message.tenant_id
+            or conversation.user_id != user_message.metadata.get("authorized_user_id")
+            or assistant_message.conversation_id != user_message.conversation_id
+            or assistant_message.tenant_id != user_message.tenant_id
+            or assistant_message.metadata.get("authorized_user_id") != conversation.user_id
+        ):
+            return RepositoryResult(success=False, error="conversation_not_found_or_tenant_mismatch")
+        messages = (user_message, assistant_message)
+        existing = [self.messages.get(message.id) for message in messages]
+        if any(row is not None and (
+            row.conversation_id != message.conversation_id
+            or row.tenant_id != message.tenant_id
+            or row.role != message.role
+            or row.content != message.content
+            or row.metadata != message.metadata
+        ) for row, message in zip(existing, messages)):
+            return RepositoryResult(success=False, error="message_idempotency_conflict")
+        if sum(row is not None for row in existing) == 1:
+            return RepositoryResult(success=False, error="incomplete_turn_replay")
+        if all(row is not None for row in existing):
+            return RepositoryResult(success=True, data=0)
+        self.messages.update({message.id: message for message in messages})
+        return RepositoryResult(success=True, data=2)
+
     async def get_messages(
         self,
         conversation_id: str,

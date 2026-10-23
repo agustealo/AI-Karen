@@ -119,6 +119,40 @@ class _Repository(ConversationRepository):
             metadata={"idempotent_replay": False},
         )
 
+    async def add_completed_turn(
+        self, user_message: Message, assistant_message: Message
+    ) -> RepositoryResult[int]:
+        if self.fail_add_role in {"user", "assistant"}:
+            return RepositoryResult(
+                success=False, error=f"{self.fail_add_role}_write_failed"
+            )
+        for candidate in (user_message, assistant_message):
+            for prior in self.messages:
+                if prior.id == candidate.id and (
+                    prior.tenant_id != candidate.tenant_id
+                    or prior.conversation_id != candidate.conversation_id
+                    or prior.role != candidate.role
+                    or prior.content != candidate.content
+                ):
+                    return RepositoryResult(
+                        success=False, error="message_idempotency_conflict"
+                    )
+        replays = [
+            any(prior.id == msg.id for prior in self.messages)
+            for msg in (user_message, assistant_message)
+        ]
+        if sum(replays) == 1:
+            return RepositoryResult(
+                success=False, error="incomplete_turn_replay"
+            )
+        if all(replays):
+            return RepositoryResult(
+                success=True, data=0,
+                metadata={"idempotent_replay": True},
+            )
+        self.messages.extend((user_message, assistant_message))
+        return RepositoryResult(success=True, data=2)
+
     async def get_messages(
         self,
         conversation_id: str,
@@ -394,7 +428,7 @@ async def test_same_conversation_id_is_isolated_by_tenant_lookup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assistant_failure_reports_partial_transcript_truth() -> None:
+async def test_assistant_failure_rolls_back_both_messages() -> None:
     repository = _Repository()
     repository.fail_add_role = "assistant"
     gateway = ConversationRuntimeGateway(repository=repository)
@@ -406,9 +440,9 @@ async def test_assistant_failure_reports_partial_transcript_truth() -> None:
     )
 
     assert result.status == "failed"
-    assert result.persisted_messages == 1
+    assert result.persisted_messages == 0
     assert result.reason == "assistant_write_failed"
-    assert [message.role for message in repository.messages] == ["user"]
+    assert repository.messages == []
 
 
 @pytest.mark.asyncio
@@ -708,3 +742,72 @@ async def test_planner_presentation_write_failure_is_not_reported_as_saved():
     assert (await gateway.get_owned_snapshot(context)).messages[-1].metadata[
         "structured_content"
     ]["presentation"] == envelope
+
+
+
+@pytest.mark.asyncio
+async def test_history_restores_grounded_presentation_and_model_receipt() -> None:
+    repository = _Repository()
+    context = _context(request_id="grounded-receipt")
+    gateway = ConversationRuntimeGateway(repository=repository)
+    metadata = {
+        "actual_provider": "ollama",
+        "actual_model": "authorized-model",
+        "response_source": "grounded_observation_model",
+        "structured_content": {
+            "presentation": {
+                "type": "weather",
+                "data": {"temperature": 20, "unit": "celsius"},
+            }
+        },
+    }
+    committed = await gateway.persist_completed_turn(
+        context,
+        user_text="What is the weather?",
+        assistant_text="The verified temperature is 20 degrees Celsius.",
+        response_metadata=metadata,
+    )
+    assert committed.success
+    history = await gateway.load_history(
+        _context(request_id="subsequent-request"), limit=10
+    )
+    assert history.status == "loaded"
+    assistant = next(message for message in history.messages if message.role == "assistant")
+    assert assistant.content == "The verified temperature is 20 degrees Celsius."
+    for key, value in metadata.items():
+        assert assistant.metadata[key] == value
+    assert assistant.metadata["request_id"] == context.request_id
+
+
+@pytest.mark.asyncio
+async def test_response_metadata_cannot_override_authorized_transcript_identity() -> None:
+    repository = _Repository()
+    context = _context(request_id="authorized-request")
+    gateway = ConversationRuntimeGateway(repository=repository)
+    result = await gateway.persist_completed_turn(
+        context,
+        user_text="Who owns this conversation?",
+        assistant_text="Ownership comes from authenticated context.",
+        response_metadata={
+            "request_id": "forged-request",
+            "correlation_id": "forged-correlation",
+            "session_id": "forged-session",
+            "conversation_id": "forged-conversation",
+            "authorized_user_id": "forged-user",
+            "source": "forged-source",
+            "transcript_actor": "user",
+            "actual_provider": "ollama",
+            "actual_model": "test-model",
+        },
+    )
+    assert result.status == "persisted"
+    assistant = next(row for row in repository.messages if row.role == "assistant")
+    assert assistant.metadata["request_id"] == context.request_id
+    assert assistant.metadata["correlation_id"] == context.correlation_id
+    assert assistant.metadata["session_id"] == context.session_id
+    assert assistant.metadata["conversation_id"] == result.conversation_id
+    assert assistant.metadata["authorized_user_id"] == context.user_id
+    assert assistant.metadata["source"] == "chat_runtime"
+    assert assistant.metadata["transcript_actor"] == "assistant"
+    assert assistant.metadata["actual_provider"] == "ollama"
+    assert assistant.metadata["actual_model"] == "test-model"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 
@@ -106,6 +107,12 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         owner_context,
         user_text="Tenant A durable context.",
         assistant_text="Tenant A durable response.",
+        response_metadata={
+            "actual_provider": "ollama",
+            "actual_model": "local-model",
+            "response_source": "grounded_observation_model",
+            "structured_content": {"presentation": {"type": "weather", "temperature": 20}},
+        },
     )
 
     assert persisted.status == "persisted"
@@ -163,6 +170,190 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
         "Tenant A durable context.",
         "Tenant A durable response.",
     ]
+
+    # Read through a fresh gateway instance using durable PostgreSQL state.
+    restored = await ConversationRuntimeGateway(
+        repository=PostgresConversationRepository(session_factory=session_factory)
+    ).load_history(
+        _context(
+            tenant_id=tenant_a, user_id=user_a, session_id="shared-session",
+            request_id=str(uuid.uuid4()), conversation_id=attacked_conversation_id,
+        ),
+        limit=20,
+    )
+    assert restored.status == "loaded"
+    saved_assistant = next(row for row in restored.messages if row.role == "assistant")
+    assert saved_assistant.metadata["actual_provider"] == "ollama"
+    assert saved_assistant.metadata["actual_model"] == "local-model"
+    assert saved_assistant.metadata["response_source"] == "grounded_observation_model"
+    assert saved_assistant.metadata["structured_content"]["presentation"]["temperature"] == 20
+
+    conflict = await owner_gateway.persist_completed_turn(
+        owner_context,
+        user_text="Tenant A durable context.",
+        assistant_text="Conflicting assistant response.",
+    )
+    assert conflict.status == "failed"
+    after_conflict = await repository.get_messages(attacked_conversation_id, tenant_a, limit=20)
+    assert after_conflict.success
+    assert len(after_conflict.data or []) == 2
+    assert next(row for row in after_conflict.data if row.role == "assistant").content == (
+        "Tenant A durable response."
+    )
+
+    # Equal text with a changed model receipt is not an identical replay.
+    # The stored provider and presentation must remain the original evidence.
+    receipt_conflict = await owner_gateway.persist_completed_turn(
+        owner_context,
+        user_text="Tenant A durable context.",
+        assistant_text="Tenant A durable response.",
+        response_metadata={
+            "actual_provider": "external",
+            "actual_model": "substituted-model",
+            "response_source": "grounded_observation_model",
+            "structured_content": {"presentation": {"type": "weather", "temperature": 99}},
+        },
+    )
+    assert receipt_conflict.status == "failed"
+    assert receipt_conflict.reason == "message_idempotency_conflict"
+    preserved = await repository.get_messages(attacked_conversation_id, tenant_a, limit=20)
+    assert preserved.success
+    assert len(preserved.data or []) == 2
+    unchanged = next(row for row in preserved.data if row.role == "assistant")
+    assert unchanged.metadata["actual_model"] == "local-model"
+    assert unchanged.metadata["structured_content"]["presentation"]["temperature"] == 20
+
+    # Ownership may be revoked after an earlier successful turn. The
+    # transaction must check the current database owner, not cached ingress.
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE conversations SET user_id = :new_owner WHERE conversation_id = :id"),
+            {"new_owner": user_b, "id": attacked_conversation_id},
+        )
+    revoked = await owner_gateway.persist_completed_turn(
+        _context(
+            tenant_id=tenant_a, user_id=user_a, session_id="shared-session",
+            request_id=str(uuid.uuid4()), conversation_id=attacked_conversation_id,
+        ),
+        user_text="Should be denied after owner change.",
+        assistant_text="This response must not be persisted.",
+    )
+    assert revoked.status == "rejected"
+    revoked_rows = await repository.get_messages(attacked_conversation_id, tenant_a, limit=20)
+    assert revoked_rows.success and len(revoked_rows.data or []) == 2
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE conversations SET user_id = :old_owner WHERE conversation_id = :id"),
+            {"old_owner": user_a, "id": attacked_conversation_id},
+        )
+
+    # Force an assistant insert to fail inside the pair transaction.
+    # The user half must not survive that failure.
+    async with engine.begin() as connection:
+        await connection.execute(text("""
+            CREATE FUNCTION reject_atomic_assistant() RETURNS trigger AS '
+            BEGIN
+                IF NEW.role = ''assistant'' AND NEW.content = ''INJECTED_FAILURE'' THEN
+                    RAISE EXCEPTION ''injected_assistant_failure'';
+                END IF;
+                RETURN NEW;
+            END;
+            ' LANGUAGE plpgsql
+        """))
+        await connection.execute(text("""
+            CREATE TRIGGER reject_atomic_assistant_trigger
+            BEFORE INSERT ON messages
+            FOR EACH ROW EXECUTE FUNCTION reject_atomic_assistant()
+        """))
+
+    rollback_context = _context(
+        tenant_id=tenant_a, user_id=user_a,
+        session_id="rollback-session", request_id=str(uuid.uuid4()),
+    )
+    rollback_result = await owner_gateway.persist_completed_turn(
+        rollback_context, user_text="atomic rollback input",
+        assistant_text="INJECTED_FAILURE",
+    )
+    assert rollback_result.status == "failed"
+    rollback_rows = await repository.get_messages(
+        rollback_result.conversation_id, tenant_a, limit=20,
+    )
+    assert rollback_rows.success
+    assert rollback_rows.data == []
+
+    # A legacy one-message partial write must not be silently repaired by
+    # a completed-turn replay. It needs explicit migration/reconciliation.
+    orphan_context = _context(
+        tenant_id=tenant_a, user_id=user_a,
+        session_id="orphan-session", request_id=str(uuid.uuid4()),
+    )
+    orphan_conversation_id = await owner_gateway.ensure_conversation(
+        orphan_context, first_user_message="orphan question",
+    )
+    orphan_user_id = ConversationRuntimeGateway._message_id(
+        context=orphan_context,
+        conversation_id=orphan_conversation_id,
+        role="user",
+    )
+    orphan_write = await repository.add_message(
+        Message(
+            id=orphan_user_id,
+            conversation_id=orphan_conversation_id,
+            tenant_id=tenant_a,
+            role="user",
+            content="orphan question",
+            metadata={
+                "request_id": orphan_context.request_id,
+                "correlation_id": orphan_context.correlation_id,
+                "session_id": orphan_context.session_id,
+                "conversation_id": orphan_conversation_id,
+                "source": "chat_runtime",
+                "authorized_user_id": orphan_context.user_id,
+                "transcript_actor": "user",
+            },
+        )
+    )
+    assert orphan_write.success
+    refused = await owner_gateway.persist_completed_turn(
+        orphan_context, user_text="orphan question",
+        assistant_text="must not complete legacy partial write",
+    )
+    assert refused.status == "failed"
+    assert refused.reason == "incomplete_turn_replay"
+    assert refused.persisted_messages == 0
+    orphan_rows = await repository.get_messages(
+        orphan_conversation_id, tenant_a, limit=20,
+    )
+    assert orphan_rows.success
+    assert len(orphan_rows.data or []) == 1
+    assert orphan_rows.data[0].role == "user"
+
+    # Repeated identical calls must resolve under the same conversation row
+    # lock without creating duplicate user/assistant pairs.
+    concurrent_context = _context(
+        tenant_id=tenant_a, user_id=user_a,
+        session_id="concurrent-session", request_id=str(uuid.uuid4()),
+    )
+    concurrent = await asyncio.gather(*[
+        owner_gateway.persist_completed_turn(
+            concurrent_context, user_text="concurrent question",
+            assistant_text="concurrent answer",
+        )
+        for _ in range(4)
+    ])
+    assert sorted(result.status for result in concurrent) == [
+        "already_persisted", "already_persisted",
+        "already_persisted", "persisted",
+    ]
+    concurrent_rows = await repository.get_messages(
+        concurrent[0].conversation_id, tenant_a, limit=20,
+    )
+    assert concurrent_rows.success
+    assert len(concurrent_rows.data or []) == 2
+
+    async with engine.begin() as connection:
+        await connection.execute(text("DROP TRIGGER reject_atomic_assistant_trigger ON messages"))
+        await connection.execute(text("DROP FUNCTION reject_atomic_assistant()"))
 
     async with engine.begin() as connection:
         await connection.execute(text("DROP TABLE IF EXISTS messages CASCADE"))

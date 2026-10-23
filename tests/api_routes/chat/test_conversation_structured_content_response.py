@@ -66,7 +66,14 @@ async def test_authorized_conversation_api_exposes_persisted_presentation():
         "evidence_ref": "request-1:weather-tool",
         "data": {"location": "Detroit", "temperature_f": 60.3},
     }
-    stored = message_with_metadata({"structured_content": {"presentation": envelope}})
+    stored = message_with_metadata({
+        "structured_content": {"presentation": envelope},
+        "actual_provider": "ollama",
+        "actual_model": "verified-local-model",
+        "runtime_engine": "ollama",
+        "response_source": "grounded_observation_model",
+        "degraded_mode": False,
+    })
     now = datetime(2026, 10, 21, tzinfo=timezone.utc)
     conversation = SimpleNamespace(
         id=conversation_id, user_id="owner", tenant_id="tenant-a",
@@ -83,6 +90,13 @@ async def test_authorized_conversation_api_exposes_persisted_presentation():
         tenant_id="tenant-a", user_ctx={"user_id": "owner"},
     )
     assert result.messages[0].structured_content == {"presentation": envelope}
+    restored = result.messages[0]
+    assert restored.content == "Detroit is 60.3°F."
+    assert restored.metadata["actual_provider"] == "ollama"
+    assert restored.metadata["actual_model"] == "verified-local-model"
+    assert restored.metadata["runtime_engine"] == "ollama"
+    assert restored.metadata["response_source"] == "grounded_observation_model"
+    assert restored.metadata["degraded_mode"] is False
 
     with pytest.raises(HTTPException) as exc:
         await get_conversation(

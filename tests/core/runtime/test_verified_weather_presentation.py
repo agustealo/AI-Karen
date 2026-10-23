@@ -55,3 +55,29 @@ def test_planner_presentations_require_authorized_service_result():
     ) is None
     result.source = "model"
     assert ChatRuntime._verified_planner_presentation(decision, plan, result) is None
+
+
+def test_time_plugin_presentation_requires_authorized_success_receipt():
+    from types import SimpleNamespace
+
+    request = SimpleNamespace(context=SimpleNamespace(request_id="req-1", correlation_id="corr-1"))
+    decision = SimpleNamespace(intent="time.current")
+    plugin = "time-query"
+    plan = SimpleNamespace(allowed_tools=(), allowed_plugins=(plugin,))
+    result = SimpleNamespace(
+        success=True, degraded=False, source="plugin", source_id=plugin,
+        attempts=[{"type": "plugin", "id": plugin, "status": "success"}],
+        payload={"formatted": "10:15 AM", "timezone": "America/Detroit"},
+    )
+    projected = ChatRuntime._verified_weather_presentation(request, decision, plan, result)
+    assert projected is not None
+    assert projected["component_type"] == "time.observation"
+    assert projected["evidence_ref"] == "req-1:time-query"
+    assert ChatRuntime._verified_weather_presentation(
+        request, decision, SimpleNamespace(allowed_tools=(), allowed_plugins=()), result
+    ) is None
+    result.attempts = [{"type": "plugin", "id": plugin, "status": "failed"}]
+    assert ChatRuntime._verified_weather_presentation(request, decision, plan, result) is None
+    result.attempts = [{"type": "plugin", "id": plugin, "status": "success"}]
+    result.source = "model"
+    assert ChatRuntime._verified_weather_presentation(request, decision, plan, result) is None

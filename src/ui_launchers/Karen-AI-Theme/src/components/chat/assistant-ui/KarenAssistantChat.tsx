@@ -178,10 +178,33 @@ function KarenSubagent({ data }: { data: unknown }) {
   return <KarenActivity data={data} category="Subagent" />;
 }
 
+function KarenRestoredExecutionReceipt({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const receipt = data as Record<string, unknown>;
+  if (
+    typeof receipt.actual_provider !== "string" || !receipt.actual_provider ||
+    typeof receipt.actual_model !== "string" || !receipt.actual_model ||
+    typeof receipt.response_source !== "string" || !receipt.response_source
+  ) return null;
+  return (
+    <details data-testid="karen-restored-execution-receipt"
+      className="my-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
+      <summary className="cursor-pointer font-medium">Saved execution details</summary>
+      <p className="mt-2">Provider: {receipt.actual_provider}</p>
+      <p>Model: {receipt.actual_model}</p>
+      <p>Response source: {receipt.response_source}</p>
+      {typeof receipt.runtime_engine === "string" && receipt.runtime_engine &&
+        <p>Engine: {receipt.runtime_engine}</p>}
+      {receipt.degraded_mode === true && <p>Degraded execution reported</p>}
+    </details>
+  );
+}
+
 const agentParts = {
   data: {
     by_name: {
       "karen.learning_decision": KarenLearningDecision,
+      "karen.execution_receipt.v1": KarenRestoredExecutionReceipt,
       "karen.presentation.v1": KarenPresentationRegistry,
       "karen.weather": KarenWeatherPresentation,
       "karen.weather_observation": KarenWeatherPresentation,
@@ -607,7 +630,7 @@ export default function KarenAssistantChat() {
             {matchingSessions.length === 0 ? (
               <p className="py-3 text-sm text-muted-foreground">No matching conversations.</p>
             ) : matchingSessions.map((session) => (
-              <button key={session.id} type="button"
+              <button key={session.id} data-conversation-id={session.id} type="button"
                 aria-current={session.id === currentSession.id ? "page" : undefined}
                 onClick={() => void switchConversation(session.id)}
                 className="block min-h-11 w-full truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-[current=page]:bg-muted aria-[current=page]:font-semibold">

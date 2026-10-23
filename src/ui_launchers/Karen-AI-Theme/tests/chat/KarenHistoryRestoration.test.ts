@@ -87,6 +87,59 @@ describe("canonical assistant-ui history restoration", () => {
       && "type" in part && part.type === "data")).toHaveLength(1);
   });
 
+  it("rejects malformed authenticated history rather than displaying false empty state", async () => {
+    await expect(readOwnedConversationHistory("owned-thread", async () => ({
+      id: "owned-thread",
+    }))).rejects.toThrow("Conversation history response missing messages");
+    await expect(readOwnedConversationHistory("owned-thread", async () => ({
+      id: "owned-thread",
+      messages: null,
+    }))).rejects.toThrow("Conversation history response missing messages");
+    const empty = await readOwnedConversationHistory("owned-thread", async () => ({
+      id: "owned-thread",
+      messages: [],
+    }));
+    expect(empty).toEqual([]);
+  });
+
+  it("reopens an authenticated response with exactly one presentation and one execution receipt", async () => {
+    const saved = {
+      id: "owned-thread",
+      messages: [
+        { id: "u-1", role: "user", content: "What is scheduled?" },
+        { id: "a-1", role: "assistant", content: "One commitment is scheduled.",
+          structured_content: { presentation: envelope },
+          metadata: {
+            actual_provider: "ollama",
+            actual_model: "registered-local-model",
+            runtime_engine: "ollama",
+            response_source: "grounded_observation_model",
+            degraded_mode: false,
+          },
+        },
+      ],
+    };
+    const first = await readOwnedConversationHistory(saved.id, async () => saved);
+    const second = await readOwnedConversationHistory(saved.id, async () => saved);
+    expect(second).toEqual(first);
+    expect(second).toHaveLength(2);
+    const content = second[1].content;
+    if (!Array.isArray(content)) throw new Error("Expected saved assistant message parts");
+    const data = content.filter(part => part.type === "data");
+    expect(data).toHaveLength(2);
+    expect(data.map(part => "name" in part ? part.name : null)).toEqual([
+      "karen.presentation.v1", "karen.execution_receipt.v1",
+    ]);
+    expect(data[0]).toMatchObject({ data: envelope });
+    expect(data[1]).toMatchObject({ data: {
+      actual_provider: "ollama",
+      actual_model: "registered-local-model",
+      response_source: "grounded_observation_model",
+    } });
+    const user = second[0].content;
+    expect(Array.isArray(user) && user.some(part => part.type === "data")).toBe(false);
+  });
+
   it("refuses mismatched conversation IDs and propagates history read failure", async () => {
     await expect(readOwnedConversationHistory("owned-thread", async () => ({
       id: "foreign-thread", messages: [],
@@ -94,6 +147,37 @@ describe("canonical assistant-ui history restoration", () => {
     await expect(readOwnedConversationHistory("owned-thread", async () => {
       throw new Error("Unauthorized conversation access");
     })).rejects.toThrow("Unauthorized conversation access");
+  });
+
+  it("restores backend model provenance without inventing receipts for other roles", () => {
+    const saved = [
+      { id: "u-1", role: "user", content: "Weather?",
+        metadata: { actual_provider: "forged", actual_model: "fake", response_source: "model" } },
+      { id: "a-1", role: "assistant", content: "It is 20 degrees.",
+        metadata: {
+          actual_provider: "ollama", actual_model: "approved-model",
+          response_source: "grounded_observation_model",
+          runtime_engine: "ollama", degraded_mode: false,
+        } },
+      { id: "a-2", role: "assistant", content: "Unknown source",
+        metadata: { actual_provider: "ollama" } },
+    ];
+    const restored = restoreOwnedHistoryMessages("conversation-1", saved);
+    const data = (index: number) => {
+      const content = restored[index].content;
+      return Array.isArray(content)
+        ? content.filter(part => part.type === "data") : [];
+    };
+    expect(data(0)).toHaveLength(0);
+    expect(data(1)).toEqual([{
+      type: "data", name: "karen.execution_receipt.v1",
+      data: {
+        actual_provider: "ollama", actual_model: "approved-model",
+        response_source: "grounded_observation_model",
+        runtime_engine: "ollama", degraded_mode: false,
+      },
+    }]);
+    expect(data(2)).toHaveLength(0);
   });
 
 });

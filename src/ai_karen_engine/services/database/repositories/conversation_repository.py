@@ -103,6 +103,14 @@ class ConversationRepository(Repository):
     async def add_message(self, message: Message) -> RepositoryResult[str]:
         """Append a message to a conversation."""
 
+    async def add_completed_turn(
+        self, user_message: Message, assistant_message: Message
+    ) -> RepositoryResult[int]:
+        """Atomically persist a pair; unsupported repositories fail closed."""
+        return RepositoryResult(
+            success=False, error="atomic_completed_turn_not_supported"
+        )
+
     @abstractmethod
     async def get_messages(
         self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0
