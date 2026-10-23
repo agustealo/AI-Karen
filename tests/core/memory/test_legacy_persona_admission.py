@@ -1333,6 +1333,9 @@ async def test_transaction_authority_does_not_inspect_database_after_final_polic
         authorized_user_id=user, capability="memory.write",
         policy_decision_id="revoked", explicitly_granted=False,
     )
+    from sqlalchemy.ext.asyncio import AsyncSession
+    session = Mock(spec=AsyncSession)
+    session.in_transaction.return_value = True
     with patch(
         "ai_karen_engine.core.memory.legacy_persona_admission.evaluate_migration_write_authority",
         new=AsyncMock(return_value=denied),
@@ -1341,7 +1344,7 @@ async def test_transaction_authority_does_not_inspect_database_after_final_polic
     ) as inspect:
         with pytest.raises(PermissionError, match="authorization revoked"):
             await LegacyMigrationTransactionAuthority.authorize_current(
-                session=Mock(),
+                session=session,
                 authenticated_request=Mock(tenant_id=tenant, user_id=user),
                 runtime_policy=Mock(),
             )
