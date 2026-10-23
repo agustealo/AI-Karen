@@ -155,7 +155,7 @@ def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scop
         PolicyDecision, PolicyEvaluationRequest,
     )
     request = PolicyEvaluationRequest(
-        tenant_id="tenant-a", user_id="user-a",
+        tenant_id="tenant-a", user_id="user-a", session_id="session-a",
         action="legacy_persona_memory_migration",
         requested_capabilities=["memory.write"], permissions=["memory.write"],
     )
@@ -163,7 +163,8 @@ def test_runtime_policy_conversion_requires_trusted_permission_and_matching_scop
         decision_id="decision-1", policy_version="v2", allowed=True,
         allowed_capabilities=["memory.write"],
         runtime_constraints={"authorized_tenant_id": "tenant-a",
-                             "authorized_user_id": "user-a"},
+                             "authorized_user_id": "user-a",
+                             "authorized_session_id": "session-a"},
     )
     assert migration_write_authority_from_policy(
         request=request, decision=decision
@@ -215,7 +216,7 @@ async def test_live_runtime_policy_gate_requires_trusted_permission():
     )
     policy = RuntimePolicyEnforcer()
     base = dict(tenant_id="tenant-a", user_id="user-a",
-                action="legacy_persona_memory_migration",
+                session_id="session-a", action="legacy_persona_memory_migration",
                 requested_capabilities=["memory.write"])
     allowed = await evaluate_migration_write_authority(
         authenticated_request=PolicyEvaluationRequest(
@@ -1585,5 +1586,36 @@ def test_migration_policy_decision_rejects_explicit_foreign_session_constraint()
     ).explicitly_granted
     decision.runtime_constraints["authorized_session_id"] = "session-a"
     assert migration_write_authority_from_policy(
+        request=request, decision=decision,
+    ).explicitly_granted
+
+
+def test_migration_policy_requires_explicit_bound_session():
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_write_authority_from_policy,
+    )
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyDecision, PolicyEvaluationRequest,
+    )
+
+    decision = PolicyDecision(
+        decision_id="decision", policy_version="v2", allowed=True,
+        allowed_capabilities=["memory.write"],
+        runtime_constraints={
+            "authorized_tenant_id": "tenant-a",
+            "authorized_user_id": "user-a",
+        },
+    )
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a", session_id="session-a",
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    assert not migration_write_authority_from_policy(
+        request=request, decision=decision,
+    ).explicitly_granted
+    decision.runtime_constraints["authorized_session_id"] = "session-a"
+    request.session_id = None
+    assert not migration_write_authority_from_policy(
         request=request, decision=decision,
     ).explicitly_granted
