@@ -73,8 +73,13 @@ async def async_transaction_scope(
     engine = get_postgres_engine()
     async with engine.async_session_factory() as session:
         try:
-            if user_id is not None and tenant_id is None:
-                raise ValueError("tenant_id required when binding transaction principal")
+            if user_id is not None:
+                try:
+                    tenant_id = str(uuid.UUID(str(tenant_id).strip()))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "authenticated transaction tenant must be a UUID"
+                    ) from exc
             if tenant_id is not None:
                 await _apply_tenant_context_async(session, tenant_id)
             if user_id is not None:
@@ -100,10 +105,9 @@ async def async_transaction_scope(
 
 def _apply_tenant_context_sync(session: Session, tenant_id: str) -> None:
     """Set canonical and compatibility tenant settings for RLS-aware SQL."""
-    try:
-        tenant = str(uuid.UUID(str(tenant_id).strip()))
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise ValueError("tenant_id must be a UUID") from exc
+    tenant = str(tenant_id).strip()
+    if not tenant:
+        raise ValueError("tenant_id is required when applying tenant context")
     session.execute(
         text("SELECT set_config(:setting, :tid, true)"),
         {"setting": _TENANT_SETTING, "tid": tenant},
@@ -116,10 +120,9 @@ def _apply_tenant_context_sync(session: Session, tenant_id: str) -> None:
 
 async def _apply_tenant_context_async(session: AsyncSession, tenant_id: str) -> None:
     """Set canonical and compatibility tenant settings for async RLS-aware SQL."""
-    try:
-        tenant = str(uuid.UUID(str(tenant_id).strip()))
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise ValueError("tenant_id must be a UUID") from exc
+    tenant = str(tenant_id).strip()
+    if not tenant:
+        raise ValueError("tenant_id is required when applying tenant context")
     await session.execute(
         text("SELECT set_config(:setting, :tid, true)"),
         {"setting": _TENANT_SETTING, "tid": tenant},
