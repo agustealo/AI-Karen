@@ -1619,3 +1619,98 @@ def test_migration_policy_requires_explicit_bound_session():
     assert not migration_write_authority_from_policy(
         request=request, decision=decision,
     ).explicitly_granted
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload_changed", [False, True])
+async def test_authenticated_inspection_keeps_locked_payload_internal(
+    monkeypatch, payload_changed,
+):
+    """A final payload read cannot leak content or authorize changed metadata."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from uuid import uuid4
+
+    from starlette.requests import Request
+    from ai_karen_engine.core.memory import legacy_persona_admission as module
+    from ai_karen_engine.core.memory import legacy_persona_recovery
+    from ai_karen_engine.persistence.postgres import transactions
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+
+    tenant, user, source_id = str(uuid4()), str(uuid4()), str(uuid4())
+    principal = SimpleNamespace(
+        tenant_id=tenant, user_id=user, session_id="verified-session",
+        permissions=["memory.write"], roles=["admin"],
+    )
+    authority = module.LegacyMigrationWriteAuthority(
+        tenant_id=tenant, user_id=user, authorized_tenant_id=tenant,
+        authorized_user_id=user, capability="memory.write",
+        policy_decision_id="current", explicitly_granted=True,
+    )
+    class TransactionAuthority:
+        transaction_id = 42
+        policy_decision_id = "current"
+
+        async def verify_active(self, **kwargs):
+            return None
+
+    session = Mock()
+    session.execute = AsyncMock()
+    session.execute.return_value.one.return_value = (user, tenant, tenant)
+
+    @asynccontextmanager
+    async def transaction_scope(**kwargs):
+        yield session
+
+    inspected = AsyncMock(return_value=(("created", "semantic"), Mock()))
+    payload = AsyncMock(return_value=(
+        "private historical memory", "created",
+        "episodic" if payload_changed else "semantic",
+    ))
+    monkeypatch.setattr(
+        module, "migration_policy_request_from_authenticated_http",
+        AsyncMock(return_value=principal),
+    )
+    monkeypatch.setattr(
+        module, "evaluate_migration_write_authority",
+        AsyncMock(return_value=authority),
+    )
+    monkeypatch.setattr(
+        module.LegacyMigrationTransactionAuthority, "authorize_current",
+        AsyncMock(return_value=TransactionAuthority()),
+    )
+    monkeypatch.setattr(transactions, "async_transaction_scope", transaction_scope)
+    monkeypatch.setattr(
+        legacy_persona_source, "inspect_locked_legacy_migration_preparation",
+        inspected,
+    )
+    monkeypatch.setattr(
+        legacy_persona_source, "read_locked_legacy_migration_source_content",
+        payload,
+    )
+    monkeypatch.setattr(
+        legacy_persona_recovery, "reconcile_legacy_replay", lambda evidence: evidence,
+    )
+    monkeypatch.setattr(
+        legacy_persona_recovery,
+        "requires_fresh_migration_authorization", lambda decision: True,
+    )
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal",
+        "headers": [], "query_string": b"",
+    })
+    if payload_changed:
+        with pytest.raises(PermissionError, match="payload no longer eligible"):
+            await module.inspect_authenticated_legacy_migration_evidence(
+                request=request, request_id="req", correlation_id="corr",
+                source_record_id=source_id, runtime_policy=RuntimePolicyEnforcer(),
+            )
+    else:
+        receipt = await module.inspect_authenticated_legacy_migration_evidence(
+            request=request, request_id="req", correlation_id="corr",
+            source_record_id=source_id, runtime_policy=RuntimePolicyEnforcer(),
+        )
+        assert "private historical memory" not in repr(receipt)
+        assert not hasattr(receipt, "content")
+    payload.assert_awaited_once()
