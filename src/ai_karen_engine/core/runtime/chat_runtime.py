@@ -372,8 +372,7 @@ class ChatRuntime:
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
-                presentation = (self._verified_planner_presentation(decision, plan, direct_result)
-                                or self._verified_weather_presentation(request, decision, plan, direct_result))
+                presentation = (self._collect_authorized_surface_parts(request, [(decision, plan, direct_result)]) or [None])[0]
                 if presentation is not None:
                     structured = provider_meta.get("structured_content")
                     structured = dict(structured) if isinstance(structured, dict) else {}
@@ -2457,13 +2456,14 @@ class ChatRuntime:
         if _meta is not None:
             _meta.update(normalized)
 
-        presentation = (self._verified_planner_presentation(decision, plan, result)
-                        or self._verified_weather_presentation(request, decision, plan, result))
-        if presentation is not None and _meta is not None:
-            structured = _meta.get("structured_content")
+        presentation = (self._collect_authorized_surface_parts(request, [(decision, plan, result)]) or [None])[0]
+        if presentation is not None:
+            structured = normalized.get("structured_content")
             structured = dict(structured) if isinstance(structured, dict) else {}
             structured["presentation"] = presentation
-            _meta["structured_content"] = structured
+            normalized["structured_content"] = structured
+            if _meta is not None:
+                _meta["structured_content"] = structured
 
         # The same answer acceptance policy governs ordinary and streamed chat.
         answer_text, normalized = await self._compose_direct_capability_answer(
