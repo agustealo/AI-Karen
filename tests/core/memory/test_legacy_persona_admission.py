@@ -1622,11 +1622,12 @@ def test_migration_policy_requires_explicit_bound_session():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload_changed", "credential_revoked"),
-    [(False, False), (True, False), (False, True)],
+    ("payload_changed", "credential_revoked", "policy_revoked"),
+    [(False, False, False), (True, False, False),
+     (False, True, False), (False, False, True)],
 )
 async def test_authenticated_inspection_keeps_locked_payload_internal(
-    monkeypatch, payload_changed, credential_revoked,
+    monkeypatch, payload_changed, credential_revoked, policy_revoked,
 ):
     """A final payload read cannot leak content or authorize changed metadata."""
     from contextlib import asynccontextmanager
@@ -1685,9 +1686,13 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         module, "evaluate_migration_write_authority",
         AsyncMock(return_value=authority),
     )
+    current_policy = AsyncMock(side_effect=[TransactionAuthority()] + (
+        [PermissionError("policy revoked after payload")]
+        if policy_revoked else [TransactionAuthority()]
+    ))
     monkeypatch.setattr(
         module.LegacyMigrationTransactionAuthority, "authorize_current",
-        AsyncMock(return_value=TransactionAuthority()),
+        current_policy,
     )
     monkeypatch.setattr(transactions, "async_transaction_scope", transaction_scope)
     monkeypatch.setattr(
@@ -1709,10 +1714,11 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         "type": "http", "method": "POST", "path": "/internal",
         "headers": [], "query_string": b"",
     })
-    if payload_changed or credential_revoked:
+    if payload_changed or credential_revoked or policy_revoked:
         expected = (
             "payload no longer eligible" if payload_changed
-            else "revoked after payload"
+            else "revoked after payload" if credential_revoked
+            else "policy revoked after payload"
         )
         with pytest.raises(PermissionError, match=expected):
             await module.inspect_authenticated_legacy_migration_evidence(
