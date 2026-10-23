@@ -851,6 +851,25 @@ async def inspect_authenticated_legacy_migration_evidence(
             session=session, authenticated_request=refreshed,
             runtime_policy=runtime_policy,
         )
+        # RuntimePolicy may await external policy sources. Refresh canonical
+        # identity, source, consent and retention under the same locks after
+        # that callback: an earlier eligible preflight cannot stand in for
+        # the final database evidence. This is still read-only inspection.
+        final_inspected = await inspect_locked_legacy_migration_preparation(
+            session=session, tenant_id=tenant, user_id=user,
+            source_record_id=source_record_id.strip(),
+            expected_memory_id=replay.memory_id,
+            expected_request_id=replay.request_id,
+        )
+        if final_inspected is None:
+            raise PermissionError("historical migration evidence changed during authorization")
+        final_evidence, final_receipt = final_inspected
+        if final_evidence != inspected[0]:
+            raise PermissionError("historical migration source changed during authorization")
+        if not requires_fresh_migration_authorization(
+            reconcile_legacy_replay(final_receipt)
+        ):
+            raise PermissionError("historical migration replay changed during authorization")
         # A read-only admission never creates or carries a database write
         # capability. Recheck transaction-local principal and tenant after
         # all policy callbacks and before returning the inspection evidence.
@@ -876,7 +895,7 @@ async def inspect_authenticated_legacy_migration_evidence(
         # and policy decision; do not convert it into a write capability.
         inspection = LegacyMigrationInspectionReceipt(
             replay=replay,
-            receipt=receipt,
+            receipt=final_receipt,
             tenant_id=tenant,
             user_id=user,
             policy_decision_id=transaction_authority.policy_decision_id,
