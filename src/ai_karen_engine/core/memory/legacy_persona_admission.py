@@ -153,15 +153,11 @@ def migration_write_authority_from_policy(
         and "memory.write" not in decision.denied_capabilities
         and scope.get("authorized_tenant_id") == request.tenant_id
         and scope.get("authorized_user_id") == request.user_id
-        # An explicit session constraint must never be laundered into
-        # authorization for a different authenticated session.
-        and (
-            scope.get("authorized_session_id") is None
-            or (
-                bool(request.session_id)
-                and scope.get("authorized_session_id") == request.session_id
-            )
-        )
+        # Historical import requires an authenticated, session-bound decision.
+        # A missing session constraint must not silently expand policy scope.
+        and isinstance(request.session_id, str)
+        and bool(request.session_id.strip())
+        and scope.get("authorized_session_id") == request.session_id
         and bool(decision.decision_id)
         and not decision.requires_human_gate
     )
