@@ -1,0 +1,75 @@
+name: KAREN History Browser Acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: karen-history-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authenticated-history-restoration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: karen-sanitized-browser-acceptance
+    env:
+      KAREN_BASE_URL: ${{ vars.KAREN_HISTORY_ACCEPTANCE_URL }}
+      KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+      KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+      KAREN_HISTORY_CONVERSATION_ID: ${{ vars.KAREN_HISTORY_CONVERSATION_ID }}
+      KAREN_HISTORY_ACCEPTANCE_REQUIRED: "true"
+      KAREN_UX_IDENTITY_REPLAY: "true"
+      KAREN_E2E_CAPTURE_VIDEO: "false"
+      CI: "true"
+
+    defaults:
+      run:
+        working-directory: src/ui_launchers/Karen-AI-Theme
+
+    steps:
+      - name: Check out exact requested head
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate approved acceptance configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved deployment URL"; exit 1; }
+          test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing acceptance identity"; exit 1; }
+          test -n "$KAREN_UX_PASSWORD" || { echo "::error::Missing acceptance credential"; exit 1; }
+          test -n "$KAREN_HISTORY_CONVERSATION_ID" || { echo "::error::Missing persisted conversation ID"; exit 1; }
+          case "$KAREN_BASE_URL" in
+            https://*) ;;
+            *) echo "::error::Acceptance URL must use HTTPS"; exit 1 ;;
+          esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - name: Install pinned dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove live authenticated conversation restoration
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright test e2e/karen-durable-history-restoration.spec.ts \
+            --config=e2e/playwright.config.ts \
+            --project=chromium \
+            --reporter=list \
+            --retries=0
+
+      # Intentionally no trace, video, screenshot, JSON/HTML artifact upload:
+      # authenticated test credentials and user conversation content are sensitive.
