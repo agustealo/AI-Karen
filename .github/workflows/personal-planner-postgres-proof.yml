@@ -229,6 +229,10 @@ jobs:
                       "SELECT count(*) FROM conversations WHERE conversation_id=$1", conversation
                   ) == 0, "Refusing pre-existing conversation"
                   await db.execute(
+                      "INSERT INTO tenants (id, name, slug) VALUES ($1, 'Surface CI Tenant', 'surface-ci-proof')",
+                      tenant,
+                  )
+                  await db.execute(
                       "INSERT INTO auth_users (user_id, email, tenant_id, roles) VALUES ($1,$2,$3,$4::jsonb)",
                       owner, "surface-ci@example.invalid", str(tenant), '["user"]',
                   )
