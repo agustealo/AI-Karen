@@ -47,6 +47,7 @@ async def test_composed_surface_commits_reopens_and_is_tenant_scoped():
     metadata = {
         "actual_provider": "test-provider", "actual_model": "test-model",
         "response_source": "grounded_observation_model",
+        "presentation_layout_provenance": {"provider": "local-layout", "model": "layout-v1", "response_source": "surface_layout_model", "part_ids": ["clock-proof"]},
         "structured_content": {"presentation": composite},
     }
     import json
@@ -73,6 +74,7 @@ async def test_composed_surface_commits_reopens_and_is_tenant_scoped():
             if isinstance(restored, str):
                 restored = json.loads(restored)
             assert restored == metadata
+            assert restored["presentation_layout_provenance"]["model"] == "layout-v1"
             assert validate_presentation(restored["structured_content"]["presentation"]) == composite
             rows = await session.execute(text(
                 "SELECT m.message_id FROM messages m "
