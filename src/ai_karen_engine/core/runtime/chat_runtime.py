@@ -2462,8 +2462,9 @@ class ChatRuntime:
     async def _compose_direct_capability_answer(
         self, request, decision, plan, meter, result, metadata
     ):
-        """Own final direct-capability answer composition for every transport."""
+        """One answer and presentation composition path for both transports."""
         accepted = dict(metadata)
+        answer = result.text
         if result.success and decision.intent in {
             "search.general", "search.weather", "time.current"
         }:
@@ -2471,10 +2472,83 @@ class ChatRuntime:
                 request, decision, plan, meter, result
             )
             if synthesized is not None:
-                text, attribution = synthesized
+                answer, attribution = synthesized
                 accepted.update(attribution)
-                return text, accepted
-        return result.text, accepted
+        structured = accepted.get("structured_content")
+        presentation = structured.get("presentation") if isinstance(structured, dict) else None
+        planned = await self._plan_verified_surface(request, decision, plan, meter, presentation)
+        if planned is not None:
+            structured = dict(structured)
+            structured["presentation"] = planned
+            accepted["structured_content"] = structured
+        return answer, accepted
+
+    async def _plan_verified_surface(self, request, decision, plan, meter, presentation):
+        """The model can choose a layout and part IDs, never supply actual data."""
+        import json
+        from ai_karen_engine.core.runtime.presentation_contract import (
+            compose_authorized_surface, validate_presentation,
+        )
+        from ai_karen_engine.core.expression.contracts import ExpressionTask
+
+        verified = validate_presentation(presentation)
+        if verified is None or verified["component_type"] == "surface.composition":
+            return None
+        if not await meter.consume_model_call():
+            return None
+        part_id = verified["presentation_id"]
+        task = ExpressionTask(
+            task_id=f"surface_plan_{request.context.correlation_id}",
+            kind="chat",
+            messages=[
+                {"role": "system", "content": (
+                    "Return only a JSON object with exactly two keys: layout and part_ids. "
+                    "layout must be stack or grid; part_ids is an array of allowed IDs. "
+                    "Never include facts, actions, URL, code, markdown or explanations. "
+                    "This is a presentation decision, not an instruction to perform work."
+                )},
+                {"role": "user", "content": json.dumps({
+                    "allowed_layouts": ["stack", "grid"],
+                    "allowed_part_ids": [part_id],
+                    "task_intent": decision.intent,
+                })},
+            ],
+            response_mode="text",
+            required_capabilities=list(decision.required_capabilities),
+            forbidden_capabilities=list(decision.forbidden_capabilities),
+            preferred_provider=request.preferred_provider,
+            preferred_model=request.preferred_model,
+            max_tokens=120,
+            temperature=0,
+            timeout_ms=decision.time_budget_ms,
+            correlation_id=request.context.correlation_id,
+            request_id=request.context.request_id,
+            metadata={"execution_mode": "surface_layout_plan"},
+        )
+        try:
+            generated = await self._composition.expression_gateway.generate(task)
+            if not await meter.check_duration() or generated.degraded or not generated.text:
+                return None
+            proposal = json.loads(generated.text.strip())
+            return compose_authorized_surface(
+                presentation_id=f"surface-{request.context.request_id}",
+                evidence_ref=verified["evidence_ref"],
+                authorized_parts=[verified],
+                proposed_layout=proposal,
+                correlation_id=request.context.correlation_id,
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            logger.info("surface_layout_proposal_rejected", extra={
+                "correlation_id": request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            })
+            return None
+        except Exception as exc:
+            logger.warning("surface_layout_planning_failed", extra={
+                "correlation_id": request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            })
+            return None
 
     async def _synthesize_search_evidence(self, request, decision, plan, meter, retrieved):
         """Compose verified search and direct observations through the model gateway."""
