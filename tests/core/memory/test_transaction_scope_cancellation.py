@@ -22,7 +22,7 @@ async def test_async_transaction_scope_rolls_back_when_caller_cancelled(monkeypa
     monkeypatch.setattr(transactions, "get_postgres_engine", lambda: engine)
 
     with pytest.raises(asyncio.CancelledError):
-        async with transactions.async_transaction_scope(tenant_id="tenant"):
+        async with transactions.async_transaction_scope(tenant_id="11111111-1111-4111-8111-111111111111"):
             raise asyncio.CancelledError()
 
     session.rollback.assert_awaited_once()
@@ -43,7 +43,7 @@ async def test_async_transaction_scope_rolls_back_when_commit_cancelled(monkeypa
     monkeypatch.setattr(transactions, "get_postgres_engine", lambda: engine)
 
     with pytest.raises(asyncio.CancelledError):
-        async with transactions.async_transaction_scope(tenant_id="tenant"):
+        async with transactions.async_transaction_scope(tenant_id="11111111-1111-4111-8111-111111111111"):
             pass
 
     session.rollback.assert_awaited_once()
@@ -95,7 +95,7 @@ async def test_transaction_scope_binds_principal_after_tenant_context(monkeypatc
 
     principal = str(uuid.uuid4())
     async with transactions.async_transaction_scope(
-        tenant_id="tenant", user_id=principal,
+        tenant_id="11111111-1111-4111-8111-111111111111", user_id=principal,
     ):
         pass
 
@@ -108,9 +108,9 @@ async def test_transaction_scope_binds_principal_after_tenant_context(monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("tenant", "principal"),
-    [(None, str(uuid.uuid4())), ("tenant", ""), ("tenant", "   "),
-     ("tenant", "not-a-uuid")],
+    ("11111111-1111-4111-8111-111111111111", "principal"),
+    [(None, str(uuid.uuid4())), ("11111111-1111-4111-8111-111111111111", ""), ("11111111-1111-4111-8111-111111111111", "   "),
+     ("11111111-1111-4111-8111-111111111111", "not-a-uuid")],
 )
 async def test_transaction_scope_rejects_unscoped_principal(monkeypatch, tenant, principal):
     session = MagicMock()
