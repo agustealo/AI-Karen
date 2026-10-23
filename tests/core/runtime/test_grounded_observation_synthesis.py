@@ -173,3 +173,48 @@ async def test_model_degradation_never_receives_grounded_model_attribution():
             request, decision, plan, meter, result
         ) is None
     gateway.generate.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generated,expected_model", [
+    ("It is 10:30 AM.", "local-model"),
+    ("The time is 99:99.", None),
+])
+async def test_stream_transport_uses_shared_composer_and_honest_attribution(
+    generated, expected_model
+):
+    """The streamed content must match the canonical answer composition."""
+    runtime, gateway, request, decision, plan, meter, result = _fixture(
+        "time.current", generated
+    )
+    request.context.tenant_id = "tenant-test"
+    request.context.user_id = "user-test"
+    decision.cognitive_context = {}
+    result.text = "Verified observation"
+    runtime._collect_authorized_surface_parts = lambda *_: []
+    runtime._pending_clarification_from_result = lambda *_: None
+    runtime._plan_verified_surface = AsyncMock(return_value=None)
+    executor = SimpleNamespace(execute=AsyncMock(return_value=result))
+    with (
+        patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+              return_value=executor),
+        patch.object(ChatRuntime, "_resolve_chat_generation_max_tokens",
+                     return_value=160),
+    ):
+        original_text, original_meta = await runtime._compose_direct_capability_answer(
+            request, decision, plan, meter, result, result.normalized_metadata()
+        )
+        streamed_meta = {}
+        chunks = [
+            chunk async for chunk in runtime._run_direct_capability_stream(
+                request, decision, plan, meter, _meta=streamed_meta
+            )
+        ]
+    contents = [chunk for chunk in chunks if chunk.type == "content"]
+    assert len(contents) == 1
+    assert contents[0].content == original_text
+    assert contents[0].metadata["actual_model"] == expected_model
+    assert streamed_meta.get("actual_model") == original_meta.get("actual_model")
+    assert streamed_meta.get("response_source") == original_meta.get("response_source")
+    assert executor.execute.await_count == 1
