@@ -961,7 +961,7 @@ async def inspect_authenticated_legacy_migration_evidence(
         # and policy decision; do not convert it into a write capability.
         inspection = LegacyMigrationInspectionReceipt(
             replay=replay,
-            receipt=final_receipt,
+            receipt=commit_evidence[1],
             tenant_id=tenant,
             user_id=user,
             policy_decision_id=transaction_authority.policy_decision_id,
