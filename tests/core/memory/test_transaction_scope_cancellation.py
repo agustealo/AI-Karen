@@ -1,6 +1,7 @@
 """Cancellation must not strand an active canonical PostgreSQL transaction."""
 
 import asyncio
+import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -92,14 +93,15 @@ async def test_transaction_scope_binds_principal_after_tenant_context(monkeypatc
     engine.async_session_factory.return_value = session
     monkeypatch.setattr(transactions, "get_postgres_engine", lambda: engine)
 
+    principal = str(uuid.uuid4())
     async with transactions.async_transaction_scope(
-        tenant_id="tenant", user_id="verified-user",
+        tenant_id="tenant", user_id=principal,
     ):
         pass
 
     statements = [str(call.args[0]) for call in session.execute.await_args_list]
     assert "app.current_user_id" in statements[-1]
-    assert session.execute.await_args_list[-1].args[1] == {"user": "verified-user"}
+    assert session.execute.await_args_list[-1].args[1] == {"user": principal}
     assert len(statements) == 3
     session.commit.assert_awaited_once()
 
@@ -107,7 +109,8 @@ async def test_transaction_scope_binds_principal_after_tenant_context(monkeypatc
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tenant", "principal"),
-    [(None, "user"), ("tenant", ""), ("tenant", "   ")],
+    [(None, str(uuid.uuid4())), ("tenant", ""), ("tenant", "   "),
+     ("tenant", "not-a-uuid")],
 )
 async def test_transaction_scope_rejects_unscoped_principal(monkeypatch, tenant, principal):
     session = MagicMock()
