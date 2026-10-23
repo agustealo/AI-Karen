@@ -1621,9 +1621,12 @@ def test_migration_policy_requires_explicit_bound_session():
     ).explicitly_granted
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("payload_changed", [False, True])
+@pytest.mark.parametrize(
+    ("payload_changed", "credential_revoked"),
+    [(False, False), (True, False), (False, True)],
+)
 async def test_authenticated_inspection_keeps_locked_payload_internal(
-    monkeypatch, payload_changed,
+    monkeypatch, payload_changed, credential_revoked,
 ):
     """A final payload read cannot leak content or authorize changed metadata."""
     from contextlib import asynccontextmanager
@@ -1668,9 +1671,15 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         "private historical memory", "created",
         "episodic" if payload_changed else "semantic",
     ))
+    credentials = AsyncMock(
+        side_effect=[principal, principal] + (
+            [PermissionError("revoked after payload")]
+            if credential_revoked else [principal]
+        ),
+    )
     monkeypatch.setattr(
         module, "migration_policy_request_from_authenticated_http",
-        AsyncMock(return_value=principal),
+        credentials,
     )
     monkeypatch.setattr(
         module, "evaluate_migration_write_authority",
@@ -1700,8 +1709,12 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         "type": "http", "method": "POST", "path": "/internal",
         "headers": [], "query_string": b"",
     })
-    if payload_changed:
-        with pytest.raises(PermissionError, match="payload no longer eligible"):
+    if payload_changed or credential_revoked:
+        expected = (
+            "payload no longer eligible" if payload_changed
+            else "revoked after payload"
+        )
+        with pytest.raises(PermissionError, match=expected):
             await module.inspect_authenticated_legacy_migration_evidence(
                 request=request, request_id="req", correlation_id="corr",
                 source_record_id=source_id, runtime_policy=RuntimePolicyEnforcer(),
