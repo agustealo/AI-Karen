@@ -43,8 +43,12 @@ test("reopening an owned conversation preserves its saved answer and execution r
   const assistant = stored.messages?.find(message =>
     message.role === "assistant" &&
     typeof message.metadata?.actual_provider === "string" &&
+    message.metadata.actual_provider.trim().length > 0 &&
     typeof message.metadata?.actual_model === "string" &&
-    typeof message.metadata?.response_source === "string",
+    message.metadata.actual_model.trim().length > 0 &&
+    typeof message.metadata?.response_source === "string" &&
+    message.metadata.response_source.trim().length > 0 &&
+    typeof message.structured_content?.presentation?.component_type === "string",
   );
   expect(assistant, "Fixture must include an actual persisted execution receipt").toBeDefined();
   if (!assistant) return;
@@ -72,6 +76,8 @@ test("reopening an owned conversation preserves its saved answer and execution r
   await expect(chat.getByTestId(presentationTestId[kind]).first()).toBeVisible();
   await receipt.first().locator("summary").click();
   await expect(receipt.first()).toContainText(String(assistant.metadata?.actual_model));
+  await expect(receipt.first()).toContainText(String(assistant.metadata?.actual_provider));
+  await expect(receipt.first()).toContainText(String(assistant.metadata?.response_source));
 
   // Reload verifies API-backed restoration, not only in-memory thread state.
   await page.reload();
@@ -89,4 +95,6 @@ test("reopening an owned conversation preserves its saved answer and execution r
   await expect(reopened.getByTestId(presentationTestId[kind]).first()).toBeVisible();
   await restoredReceipt.locator("summary").click();
   await expect(restoredReceipt).toContainText(String(assistant.metadata?.actual_model));
+  await expect(restoredReceipt).toContainText(String(assistant.metadata?.actual_provider));
+  await expect(restoredReceipt).toContainText(String(assistant.metadata?.response_source));
 });
