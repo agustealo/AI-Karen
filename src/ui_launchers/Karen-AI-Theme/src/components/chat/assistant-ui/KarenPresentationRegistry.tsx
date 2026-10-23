@@ -26,7 +26,7 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
   // Bound renderer payload size; Zod validates the allowlisted envelope.
   try {
     const serialized = JSON.stringify(value);
-    if (!serialized || serialized.length > MAX_PRESENTATION_BYTES) return null;
+    if (!serialized || new TextEncoder().encode(serialized).byteLength > MAX_PRESENTATION_BYTES) return null;
   } catch {
     return null;
   }

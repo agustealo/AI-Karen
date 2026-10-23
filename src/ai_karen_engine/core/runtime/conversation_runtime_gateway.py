@@ -620,70 +620,48 @@ class ConversationRuntimeGateway:
                 "session_id": context.session_id,
                 "conversation_id": conversation_id,
                 "source": "chat_runtime",
+                "authorized_user_id": context.user_id,
             }
 
-            user_write = await self._repository.add_message(
-                Message(
-                    id=user_message_id,
-                    conversation_id=conversation_id,
-                    tenant_id=context.tenant_id,
-                    role="user",
-                    content=user_text,
-                    metadata={**common_metadata, "transcript_actor": "user"},
-                )
+            user_message = Message(
+                id=user_message_id,
+                conversation_id=conversation_id,
+                tenant_id=context.tenant_id,
+                role="user",
+                content=user_text,
+                metadata={**common_metadata, "transcript_actor": "user"},
             )
-            if not user_write.success:
-                return TranscriptPersistenceResult(
-                    status="failed",
-                    conversation_id=conversation_id,
-                    user_message_id=user_message_id,
-                    persisted_messages=0,
-                    reason=user_write.error or "user_message_persistence_failed",
-                )
-            user_replay = bool(user_write.metadata.get("idempotent_replay", False))
-
-            assistant_write = await self._repository.add_message(
-                Message(
-                    id=assistant_message_id,
-                    conversation_id=conversation_id,
-                    tenant_id=context.tenant_id,
-                    role="assistant",
-                    content=assistant_text,
-                    metadata={
-                        **common_metadata,
-                        "transcript_actor": "assistant",
-                        **dict(response_metadata or {}),
-                    },
-                )
+            assistant_message = Message(
+                id=assistant_message_id,
+                conversation_id=conversation_id,
+                tenant_id=context.tenant_id,
+                role="assistant",
+                content=assistant_text,
+                metadata={
+                    **dict(response_metadata or {}),
+                    **common_metadata,
+                    "transcript_actor": "assistant",
+                },
             )
-            if not assistant_write.success:
+            write_result = await self._repository.add_completed_turn(
+                user_message, assistant_message
+            )
+            if not write_result.success:
                 return TranscriptPersistenceResult(
                     status="failed",
                     conversation_id=conversation_id,
                     user_message_id=user_message_id,
                     assistant_message_id=assistant_message_id,
-                    persisted_messages=0 if user_replay else 1,
-                    reason=(
-                        assistant_write.error
-                        or "assistant_message_persistence_failed"
-                    ),
+                    persisted_messages=0,
+                    reason=write_result.error or "completed_turn_write_failed",
                 )
-            assistant_replay = bool(
-                assistant_write.metadata.get("idempotent_replay", False)
-            )
-
-            newly_persisted = int(not user_replay) + int(not assistant_replay)
-            status = (
-                "already_persisted"
-                if user_replay and assistant_replay
-                else "persisted"
-            )
+            persisted_count = int(write_result.data or 0)
             return TranscriptPersistenceResult(
-                status=status,
+                status="already_persisted" if persisted_count == 0 else "persisted",
                 conversation_id=conversation_id,
                 user_message_id=user_message_id,
                 assistant_message_id=assistant_message_id,
-                persisted_messages=newly_persisted,
+                persisted_messages=persisted_count,
             )
         except PermissionError as exc:
             logger.warning(

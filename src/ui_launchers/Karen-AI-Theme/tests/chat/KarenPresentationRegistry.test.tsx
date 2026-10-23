@@ -73,6 +73,16 @@ describe("versioned presentation registry", () => {
     expect(parseKarenPresentation({ ...valid, data: { ...valid.data, notes: "x".repeat(40_000) } })).toBeNull();
   });
 
+  it("enforces the backend UTF-8 byte limit for multibyte weather location data", () => {
+    const envelope = {
+      ...valid,
+      data: { ...valid.data, location: "🌤".repeat(9_000) },
+    };
+    expect(JSON.stringify(envelope).length).toBeLessThan(32_768);
+    expect(new TextEncoder().encode(JSON.stringify(envelope)).byteLength).toBeGreaterThan(32_768);
+    expect(parseKarenPresentation(envelope)).toBeNull();
+  });
+
   it("rejects mismatched or malformed data", () => {
     expect(parseKarenPresentation({ ...valid, data: { temperature_f: 60 } })).toBeNull();
     expect(parseKarenPresentation({ ...valid, data: { location: "NYC", temperature_f: 999 } })).toBeNull();

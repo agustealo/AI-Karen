@@ -13,6 +13,7 @@ async def test_no_fetched_pages_never_calls_model():
     runtime = object.__new__(ChatRuntime)
     gateway = SimpleNamespace(generate=AsyncMock())
     runtime._composition = SimpleNamespace(expression_gateway=gateway)
+    runtime._resolve_chat_generation_max_tokens = lambda request, plan: 160
     meter = SimpleNamespace(consume_model_call=AsyncMock(return_value=True))
     request = SimpleNamespace(
         messages=[{"role": "user", "content": "Jamaica history"}],
@@ -21,7 +22,7 @@ async def test_no_fetched_pages_never_calls_model():
     retrieved = SimpleNamespace(sources=[
         {"url": "https://example.org/history", "evidence_level": "search_snippet", "content": "Unfetched"}
     ])
-    result = await runtime._synthesize_search_evidence(request, SimpleNamespace(), meter, retrieved)
+    result = await runtime._synthesize_search_evidence(request, SimpleNamespace(intent='search.general'), SimpleNamespace(), meter, retrieved)
     assert result is None
     gateway.generate.assert_not_called()
     meter.consume_model_call.assert_not_called()
@@ -60,7 +61,7 @@ async def test_fetched_source_can_generate_cited_model_answer():
     runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
         model_text="Jamaica became independent in 1962 (https://example.org/history)."
     )
-    output = await runtime._synthesize_search_evidence(request, decision, meter, retrieved)
+    output = await runtime._synthesize_search_evidence(request, decision, SimpleNamespace(), meter, retrieved)
     assert output is not None
     answer, metadata = output
     assert "https://example.org/history" in answer
@@ -74,7 +75,7 @@ async def test_unverified_url_does_not_escape_model_synthesis():
     runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
         model_text="Invented claim (https://unverified.example/facts)."
     )
-    assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
+    assert await runtime._synthesize_search_evidence(request, decision, SimpleNamespace(), meter, retrieved) is None
     gateway.generate.assert_awaited_once()
 
 
@@ -83,7 +84,7 @@ async def test_model_budget_failure_does_not_call_gateway():
     runtime, gateway, meter, request, decision, retrieved = _synthesis_inputs(
         model_text="Unused", budget=False
     )
-    assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
+    assert await runtime._synthesize_search_evidence(request, decision, SimpleNamespace(), meter, retrieved) is None
     gateway.generate.assert_not_called()
 
 
@@ -93,7 +94,7 @@ async def test_missing_model_identity_never_claims_grounded_synthesis():
         model_text="Jamaica became independent in 1962 (https://example.org/history)."
     )
     gateway.generate.return_value.provider = None
-    assert await runtime._synthesize_search_evidence(request, decision, meter, retrieved) is None
+    assert await runtime._synthesize_search_evidence(request, decision, SimpleNamespace(), meter, retrieved) is None
     gateway.generate.assert_awaited_once()
 
 
