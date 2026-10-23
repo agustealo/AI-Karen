@@ -750,7 +750,7 @@ async def test_migration_http_requires_live_revocation_store(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["valid", "revoked", "store_failed", "expired", "no_permission"])
+@pytest.mark.parametrize("scenario", ["valid", "revoked", "store_failed", "store_unhealthy", "expired", "no_permission"])
 async def test_migration_http_credential_authority_scenarios(monkeypatch, scenario):
     from uuid import uuid4
     from starlette.requests import Request
@@ -763,7 +763,7 @@ async def test_migration_http_credential_authority_scenarios(monkeypatch, scenar
     tenant, user = str(uuid4()), str(uuid4())
     class Store:
         def ping(self):
-            return True
+            return scenario != "store_unhealthy"
         def exists(self, key):
             if scenario == "store_failed":
                 raise ConnectionError("revocation backend offline")
