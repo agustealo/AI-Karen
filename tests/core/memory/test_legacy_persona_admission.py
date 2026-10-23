@@ -1556,3 +1556,34 @@ async def test_historical_transaction_write_denied_before_any_database_scope_loo
             entry, context=context, session=session,
         )
     session.assert_not_called()
+
+def test_migration_policy_decision_rejects_explicit_foreign_session_constraint():
+    """An allowed policy result scoped to another session is never a grant."""
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        migration_write_authority_from_policy,
+    )
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyDecision, PolicyEvaluationRequest,
+    )
+
+    request = PolicyEvaluationRequest(
+        tenant_id="tenant-a", user_id="user-a", session_id="session-a",
+        action="legacy_persona_memory_migration",
+        permissions=["memory.write"], requested_capabilities=["memory.write"],
+    )
+    decision = PolicyDecision(
+        decision_id="policy-decision", policy_version="v2", allowed=True,
+        allowed_capabilities=["memory.write"],
+        runtime_constraints={
+            "authorized_tenant_id": "tenant-a",
+            "authorized_user_id": "user-a",
+            "authorized_session_id": "session-b",
+        },
+    )
+    assert not migration_write_authority_from_policy(
+        request=request, decision=decision,
+    ).explicitly_granted
+    decision.runtime_constraints["authorized_session_id"] = "session-a"
+    assert migration_write_authority_from_policy(
+        request=request, decision=decision,
+    ).explicitly_granted
