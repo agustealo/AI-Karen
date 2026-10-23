@@ -2525,14 +2525,21 @@ class ChatRuntime:
                 accepted.update(attribution)
         structured = accepted.get("structured_content")
         presentation = structured.get("presentation") if isinstance(structured, dict) else None
-        planned = await self._plan_verified_surface(request, decision, plan, meter, presentation)
+        layout_provenance = {}
+        planned = await self._plan_verified_surface(
+            request, decision, plan, meter, presentation,
+            provenance=layout_provenance,
+        )
         if planned is not None:
+            accepted["presentation_layout_provenance"] = layout_provenance
             structured = dict(structured)
             structured["presentation"] = planned
             accepted["structured_content"] = structured
         return answer, accepted
 
-    async def _plan_verified_surface(self, request, decision, plan, meter, presentation):
+    async def _plan_verified_surface(
+        self, request, decision, plan, meter, presentation, provenance=None
+    ):
         """The model can choose a layout and part IDs, never supply actual data."""
         import json
         from ai_karen_engine.core.runtime.presentation_contract import (
@@ -2590,7 +2597,7 @@ class ChatRuntime:
                     or not generated.provider or not generated.model):
                 return None
             proposal = json.loads(generated.text.strip())
-            return compose_authorized_surface(
+            surface = compose_authorized_surface(
                 presentation_id=f"surface-{request.context.request_id}",
                 evidence_ref=evidence_refs[0] if len(evidence_refs) == 1 else f"bundle:{request.context.request_id}",
                 authorized_parts=approved,
@@ -2598,6 +2605,14 @@ class ChatRuntime:
                 proposed_layout=proposal,
                 correlation_id=request.context.correlation_id,
             )
+            if surface is not None and isinstance(provenance, dict):
+                provenance.update({
+                    "provider": generated.provider,
+                    "model": generated.model,
+                    "response_source": "surface_layout_model",
+                    "part_ids": [item["presentation_id"] for item in surface["data"]["items"]],
+                })
+            return surface
         except (ValueError, TypeError, KeyError) as exc:
             logger.info("surface_layout_proposal_rejected", extra={
                 "correlation_id": request.context.correlation_id,
