@@ -896,6 +896,20 @@ async def inspect_authenticated_legacy_migration_evidence(
         # Verify transaction continuity after all source/replay and policy
         # checks, immediately before returning read-only evidence.
         await transaction_authority.verify_active(session=session)
+        # The internal payload reader shares this authenticated, locked
+        # transaction. Never return its content from this inspection API.
+        from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+            read_locked_legacy_migration_source_content,
+        )
+        source_payload = await read_locked_legacy_migration_source_content(
+            session=session, tenant_id=tenant, user_id=user,
+            source_record_id=source_record_id.strip(),
+        )
+        if source_payload is None or source_payload[1:] != final_evidence:
+            raise PermissionError("historical migration payload no longer eligible")
+        # No persistence, content export, logging or transferable grant here.
+        del source_payload
+        await transaction_authority.verify_active(session=session)
         # Keep the read-only evidence tied to the final validated identity
         # and policy decision; do not convert it into a write capability.
         inspection = LegacyMigrationInspectionReceipt(
