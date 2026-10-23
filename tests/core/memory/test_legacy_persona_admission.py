@@ -1522,3 +1522,37 @@ async def test_unified_inspection_rechecks_evidence_after_final_policy(monkeypat
             source_record_id=str(uuid4()), runtime_policy=RuntimePolicyEnforcer(),
         )
     assert len(reads) == 2
+
+@pytest.mark.asyncio
+async def test_historical_transaction_write_denied_before_any_database_scope_lookup():
+    """Historical payloads without inspection cannot use a forged VaultContext."""
+    from unittest.mock import Mock
+    from uuid import uuid4
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    tenant, user = str(uuid4()), str(uuid4())
+    entry = MemoryEntry(
+        id=str(uuid4()), content="Historical write must not touch database",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source="legacy_persona",
+            custom={"consent_scope": "persona-memory-migration"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user, actor_id=user,
+        request_id=str(uuid4()), correlation_id=str(uuid4()),
+        policy_context={"memory_write_authorized": True},
+    )
+    session = Mock()
+    with pytest.raises(NeuroVaultAuthorizationError, match="historical migration persistence is disabled"):
+        await PostgresNeuroVault().persist_in_transaction(
+            entry, context=context, session=session,
+        )
+    session.assert_not_called()
