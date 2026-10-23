@@ -1316,3 +1316,33 @@ async def test_transaction_inspection_uses_canonical_verifier_once():
     )
     assert evidence.transaction_id == 901
     assert session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_transaction_authority_does_not_inspect_database_after_final_policy_denial():
+    """A denied final RuntimePolicy decision cannot reach the transaction reader."""
+    from unittest.mock import AsyncMock, Mock, patch
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority, LegacyMigrationWriteAuthority,
+    )
+
+    tenant = "11111111-1111-4111-8111-111111111111"
+    user = "22222222-2222-4222-8222-222222222222"
+    denied = LegacyMigrationWriteAuthority(
+        tenant_id=tenant, user_id=user, authorized_tenant_id=tenant,
+        authorized_user_id=user, capability="memory.write",
+        policy_decision_id="revoked", explicitly_granted=False,
+    )
+    with patch(
+        "ai_karen_engine.core.memory.legacy_persona_admission.evaluate_migration_write_authority",
+        new=AsyncMock(return_value=denied),
+    ), patch.object(
+        LegacyMigrationTransactionAuthority, "inspect", new_callable=AsyncMock,
+    ) as inspect:
+        with pytest.raises(PermissionError, match="authorization revoked"):
+            await LegacyMigrationTransactionAuthority.authorize_current(
+                session=Mock(),
+                authenticated_request=Mock(tenant_id=tenant, user_id=user),
+                runtime_policy=Mock(),
+            )
+        inspect.assert_not_awaited()
