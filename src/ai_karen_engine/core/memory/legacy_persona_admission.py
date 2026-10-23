@@ -786,17 +786,13 @@ async def execute_authenticated_legacy_migration(
     *, request: "Request", request_id: str, correlation_id: str,
     source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
 ) -> "LegacyMigrationInspectionReceipt":
-    """Runtime-owned migration ingress, held closed pending executable authority.
+    """Disabled mutation ingress; never perform a speculative historical read.
 
-    Perform canonical authenticated, locked source and replay inspection first.
-    A successful inspection is intentionally insufficient to write, and its
-    receipt contains no historical payload or transferable grant. The runtime
-    may not claim successful migration until NeuroVault has committed one.
+    Read-only eligibility inspection remains available through the separate
+    canonical inspection operation. An executable migration must hold the
+    authenticated PostgreSQL transaction through NeuroVault staging and commit;
+    an already-closed inspection transaction cannot authorize persistence.
     """
-    await inspect_authenticated_legacy_migration_evidence(
-        request=request, request_id=request_id, correlation_id=correlation_id,
-        source_record_id=source_record_id, runtime_policy=runtime_policy,
-    )
     raise PermissionError(
         "historical migration execution disabled pending trusted NeuroVault authority"
     )
