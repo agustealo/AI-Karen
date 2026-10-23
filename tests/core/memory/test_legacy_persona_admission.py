@@ -1812,16 +1812,18 @@ async def test_authenticated_migration_execution_fails_closed_without_inspection
     inspection.assert_not_awaited()
 
 @pytest.mark.asyncio
-async def test_authenticated_migration_execution_preserves_inspection_denial(monkeypatch):
+async def test_authenticated_migration_execution_ignores_untrusted_inspection_result(monkeypatch):
+    """No read-only receipt or mocked approval may open the disabled writer."""
     from unittest.mock import AsyncMock, Mock
     from ai_karen_engine.core.memory import legacy_persona_admission as module
 
-    inspection = AsyncMock(side_effect=PermissionError("consent revoked"))
+    inspection = AsyncMock(return_value=Mock())
     monkeypatch.setattr(
         module, "inspect_authenticated_legacy_migration_evidence", inspection,
     )
-    with pytest.raises(PermissionError, match="consent revoked"):
+    with pytest.raises(PermissionError, match="execution disabled"):
         await module.execute_authenticated_legacy_migration(
             request=Mock(), request_id="request", correlation_id="trace",
             source_record_id="source", runtime_policy=Mock(),
         )
+    inspection.assert_not_awaited()
