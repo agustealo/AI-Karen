@@ -174,3 +174,41 @@ def test_layout_proposal_may_only_reorder_authorized_parts():
         **{**kwargs, "evidence_ref": "another-tenant:clock"},
         proposed_layout={"layout": "grid", "part_ids": ["clock-1"]},
     ) is None
+
+
+def test_multi_evidence_surface_requires_explicit_authorized_manifest():
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+
+    def clock(name, evidence):
+        return {
+            "schema_version": 1, "presentation_id": name,
+            "component_type": "time.observation", "evidence_ref": evidence,
+            "data": {"formatted": "10:15 AM"},
+        }
+
+    parts = [clock("a", "receipt-a"), clock("b", "receipt-b")]
+    kwargs = {
+        "presentation_id": "surface", "evidence_ref": "request-bundle",
+        "authorized_parts": parts,
+        "proposed_layout": {"layout": "grid", "part_ids": ["b", "a"]},
+    }
+    assert compose_authorized_surface(**kwargs) is None
+    rendered = compose_authorized_surface(
+        **kwargs, authorized_evidence_refs=["receipt-a", "receipt-b"]
+    )
+    assert rendered is not None
+    assert rendered["data"]["evidence_refs"] == ["receipt-b", "receipt-a"]
+    assert [part["presentation_id"] for part in rendered["data"]["items"]] == ["b", "a"]
+    assert compose_authorized_surface(
+        **kwargs, authorized_evidence_refs=["receipt-a"]
+    ) is None
+    assert validate_presentation({
+        **rendered, "data": {
+            **rendered["data"], "evidence_refs": ["receipt-a", "injected"],
+        },
+    }) is None
+    assert validate_presentation({
+        **rendered, "data": {
+            **rendered["data"], "evidence_refs": ["receipt-a", "receipt-a"],
+        },
+    }) is None
