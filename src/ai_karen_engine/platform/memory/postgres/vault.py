@@ -283,8 +283,21 @@ class PostgresNeuroVault(VaultPort):
                 # transaction while a shielded rollback is still running.
                 if rollback_task.done():
                     break
-        # Preserve rollback failure instead of claiming safe invalidation.
-        await rollback_task
+        # A failed rollback leaves transaction outcome uncertain. Invalidate
+        # the SQLAlchemy session's connection before returning control.
+        try:
+            await rollback_task
+        except BaseException:
+            invalidate_task = asyncio.create_task(session.invalidate())
+            while not invalidate_task.done():
+                try:
+                    await asyncio.shield(invalidate_task)
+                except asyncio.CancelledError:
+                    if invalidate_task.done():
+                        break
+            # Surface invalidation failure rather than claiming safe cleanup.
+            await invalidate_task
+            raise
 
     async def persist_in_transaction(
         self, entry: MemoryEntry, *, context: VaultContext, session: Any,
