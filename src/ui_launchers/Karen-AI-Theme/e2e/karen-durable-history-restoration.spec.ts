@@ -52,7 +52,20 @@ test("reopening an owned conversation preserves its saved answer and execution r
   );
   expect(assistant, "Fixture must include an actual persisted execution receipt").toBeDefined();
   if (!assistant) return;
-  const kind = assistant.structured_content?.presentation?.component_type;
+  const surface = assistant.structured_content?.presentation as
+    | { component_type?: string; data?: { layout?: string; items?: Array<{ component_type?: string; presentation_id?: string; evidence_ref?: string }>; evidence_refs?: string[] } }
+    | undefined;
+  const kind = surface?.component_type;
+  if (kind === "surface.composition") {
+    const parts = surface?.data?.items || [];
+    expect(["stack", "grid"]).toContain(surface?.data?.layout);
+    expect(parts.length).toBeGreaterThan(0);
+    expect(new Set(parts.map(part => part.presentation_id)).size).toBe(parts.length);
+    expect(parts.every(part => typeof part.evidence_ref === "string" && !!part.evidence_ref)).toBe(true);
+    if (surface?.data?.evidence_refs) {
+      expect(new Set(surface.data.evidence_refs)).toEqual(new Set(parts.map(part => part.evidence_ref)));
+    }
+  }
   const presentationTestId: Record<string, string> = {
     "planner.task_list": "karen-planner-task-list",
     "weather.observation": "karen-weather-presentation",
@@ -76,6 +89,19 @@ test("reopening an owned conversation preserves its saved answer and execution r
   const receipt = chat.getByTestId("karen-restored-execution-receipt");
   await expect(receipt.first()).toBeVisible();
   await expect(chat.getByTestId(presentationTestId[kind]).first()).toBeVisible();
+  if (kind === "surface.composition") {
+    const rendered = chat.getByTestId("karen-composed-surface").first();
+    const childTestId: Record<string, string> = {
+      "planner.task_list": "karen-planner-task-list",
+      "weather.observation": "karen-weather-presentation",
+      "weather.comparison": "karen-weather-comparison",
+      "time.observation": "karen-time-presentation",
+    };
+    for (const item of surface?.data?.items || []) {
+      expect(childTestId[item.component_type || ""]).toBeTruthy();
+      await expect(rendered.getByTestId(childTestId[item.component_type || ""]).first()).toBeVisible();
+    }
+  }
   await receipt.first().locator("summary").click();
   await expect(receipt.first()).toContainText(String(assistant.metadata?.actual_model));
   await expect(receipt.first()).toContainText(String(assistant.metadata?.actual_provider));
