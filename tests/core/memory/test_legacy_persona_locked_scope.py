@@ -185,3 +185,42 @@ def test_historical_transaction_capability_rejects_forgery_and_reuse():
     )
     assert _verify_historical_transaction_capability(witness, consume=True, **args)
     assert not _verify_historical_transaction_capability(witness, **args)
+
+@pytest.mark.asyncio
+async def test_historical_capability_database_identity_rejects_drift(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock()
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, user, 42,
+    )
+    capability = module._HistoricalTransactionCapability(
+        nonce=module._HISTORICAL_CAPABILITY_WITNESS,
+        session=session, tenant=tenant, user=user, memory_id=memory_id,
+        transaction_id=42, policy_decision_id="current",
+    )
+    context = SimpleNamespace(tenant_id=tenant, user_id=user)
+    entry = SimpleNamespace(id=memory_id)
+    params = dict(
+        capability=capability, session=session, context=context,
+        entry=entry, policy_decision_id="current",
+    )
+    assert await module._verify_historical_capability_against_database(**params)
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, str(uuid.uuid4()), 42,
+    )
+    assert not await module._verify_historical_capability_against_database(**params)
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, user, 43,
+    )
+    assert not await module._verify_historical_capability_against_database(**params)
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, user, 42,
+    )
+    assert not await module._verify_historical_capability_against_database(
+        **{**params, "policy_decision_id": "revoked"},
+    )
