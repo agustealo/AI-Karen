@@ -99,3 +99,41 @@ async def test_locked_payload_reader_rejects_source_drift(monkeypatch):
             user_id=user, source_record_id=source_id,
         )
     assert session.execute.await_count == 1
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source", " LEGACY_PERSONA "),
+        ("source", "Legacy_Persona"),
+        ("source_type", " LEGACY_PERSONA "),
+        ("consent_scope", " PERSONA-MEMORY-MIGRATION "),
+    ],
+)
+def test_vault_rejects_noncanonical_historical_source_markers(field, value):
+    """Formatting differences must not turn historical entries into ordinary writes."""
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    custom = {"consent_scope": "memory.write"}
+    source = "chat_user"
+    if field == "source":
+        source = value
+    else:
+        custom[field] = value
+    entry = MemoryEntry(
+        id=str(uuid.uuid4()), content="historical content",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(uuid.uuid4()), user_id=str(uuid.uuid4()),
+            source=source, custom=custom,
+        ),
+    )
+    with pytest.raises(
+        NeuroVaultAuthorizationError,
+        match="historical migration persistence is disabled",
+    ):
+        PostgresNeuroVault._require_non_historical_write(entry)
