@@ -266,38 +266,11 @@ class PostgresNeuroVault(VaultPort):
 
     @staticmethod
     async def _rollback_caller_transaction(session: Any) -> None:
-        """Finish rollback even if the calling task is cancelled repeatedly.
-
-        Shielding alone is insufficient: an interrupted shield can return
-        control to a caller while rollback is still running. Do not return
-        until the rollback task has finished or failed.
-        """
-        import asyncio
-
-        rollback_task = asyncio.create_task(session.rollback())
-        while not rollback_task.done():
-            try:
-                await asyncio.shield(rollback_task)
-            except asyncio.CancelledError:
-                # An interrupted caller must never regain a committable
-                # transaction while a shielded rollback is still running.
-                if rollback_task.done():
-                    break
-        # A failed rollback leaves transaction outcome uncertain. Invalidate
-        # the SQLAlchemy session's connection before returning control.
-        try:
-            await rollback_task
-        except BaseException:
-            invalidate_task = asyncio.create_task(session.invalidate())
-            while not invalidate_task.done():
-                try:
-                    await asyncio.shield(invalidate_task)
-                except asyncio.CancelledError:
-                    if invalidate_task.done():
-                        break
-            # Surface invalidation failure rather than claiming safe cleanup.
-            await invalidate_task
-            raise
+        """Reuse the canonical PostgreSQL cancellation-safe rollback owner."""
+        from ai_karen_engine.persistence.postgres.transactions import (
+            rollback_async_transaction,
+        )
+        await rollback_async_transaction(session)
 
     async def persist_in_transaction(
         self, entry: MemoryEntry, *, context: VaultContext, session: Any,
