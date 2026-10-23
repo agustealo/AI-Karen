@@ -236,10 +236,14 @@ class PostgresNeuroVault(VaultPort):
         """Canonical historical source classification, shared by both gates."""
         metadata = entry.metadata
         custom = dict(metadata.custom or {}) if metadata else {}
+        def canonical(value: Any) -> str:
+            return value.strip().lower() if isinstance(value, str) else ""
+
         return (
-            custom.get("consent_scope") == "persona-memory-migration"
-            or custom.get("source_type") == "legacy_persona"
-            or (metadata is not None and metadata.source == "legacy_persona")
+            canonical(custom.get("consent_scope")) == "persona-memory-migration"
+            or canonical(custom.get("source_type")) == "legacy_persona"
+            or canonical(metadata.source if metadata is not None else None)
+            == "legacy_persona"
         )
 
     @classmethod
