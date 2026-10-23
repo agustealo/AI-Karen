@@ -382,11 +382,18 @@ class PostgresNeuroVault(VaultPort):
         # A caller-owned transaction may have executed additional SQL inside
         # the writer. Never return staged success if its authenticated scope
         # drifted during ledger/consent writes.
-        post_write_scope = (await session.execute(text(
-            "SELECT current_setting('app.current_tenant_id', true), "
-            "current_setting('app.tenant_id', true), "
-            "current_setting('app.current_user_id', true)"
-        ))).one()
+        try:
+            post_write_scope = (await session.execute(text(
+                "SELECT current_setting('app.current_tenant_id', true), "
+                "current_setting('app.tenant_id', true), "
+                "current_setting('app.current_user_id', true)"
+            ))).one()
+        except Exception:
+            # The ledger is already staged. An unavailable final scope read
+            # must invalidate the transaction even if the caller swallows
+            # the database exception and tries to commit.
+            await session.rollback()
+            raise
         if post_write_scope != final_scope:
             # No staged ledger may survive a rejected principal/tenant.
             # The caller's entire transaction is invalid after this point.
