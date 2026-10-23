@@ -1401,3 +1401,38 @@ async def test_transaction_authorization_rejects_cross_tenant_scope_before_polic
                 runtime_policy=Mock(),
             )
         evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_final_policy_cannot_rebind_transaction_principal_before_inspection():
+    """RuntimePolicy side effects cannot switch the authenticated DB principal."""
+    from unittest.mock import AsyncMock, Mock, patch
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from ai_karen_engine.core.memory.legacy_persona_admission import (
+        LegacyMigrationTransactionAuthority, LegacyMigrationWriteAuthority,
+    )
+
+    tenant = "11111111-1111-4111-8111-111111111111"
+    user = "22222222-2222-4222-8222-222222222222"
+    other = "33333333-3333-4333-8333-333333333333"
+    granted = LegacyMigrationWriteAuthority(
+        tenant_id=tenant, user_id=user, authorized_tenant_id=tenant,
+        authorized_user_id=user, capability="memory.write",
+        policy_decision_id="allow-current", explicitly_granted=True,
+    )
+    session = Mock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock(side_effect=[
+        Mock(one=Mock(return_value=(tenant, tenant, user))),
+        Mock(one=Mock(return_value=(tenant, tenant, other, 42))),
+    ])
+    with patch(
+        "ai_karen_engine.core.memory.legacy_persona_admission.evaluate_migration_write_authority",
+        new=AsyncMock(return_value=granted),
+    ):
+        with pytest.raises(PermissionError, match="transaction identity mismatch"):
+            await LegacyMigrationTransactionAuthority.authorize_current(
+                session=session,
+                authenticated_request=Mock(tenant_id=tenant, user_id=user),
+                runtime_policy=Mock(),
+            )
