@@ -264,6 +264,28 @@ class PostgresNeuroVault(VaultPort):
                 entry, context=context, session=session, commit=True,
             )
 
+    @staticmethod
+    async def _rollback_caller_transaction(session: Any) -> None:
+        """Finish rollback even if the calling task is cancelled repeatedly.
+
+        Shielding alone is insufficient: an interrupted shield can return
+        control to a caller while rollback is still running. Do not return
+        until the rollback task has finished or failed.
+        """
+        import asyncio
+
+        rollback_task = asyncio.create_task(session.rollback())
+        while not rollback_task.done():
+            try:
+                await asyncio.shield(rollback_task)
+            except asyncio.CancelledError:
+                # An interrupted caller must never regain a committable
+                # transaction while a shielded rollback is still running.
+                if rollback_task.done():
+                    break
+        # Preserve rollback failure instead of claiming safe invalidation.
+        await rollback_task
+
     async def persist_in_transaction(
         self, entry: MemoryEntry, *, context: VaultContext, session: Any,
         historical_inspection: Any = None,
@@ -379,7 +401,7 @@ class PostgresNeuroVault(VaultPort):
             # A failed ledger/consent write invalidates the caller's entire
             # transaction. Do not rely on the caller to propagate the error:
             # a swallowed IntegrityError must never permit a partial commit.
-            await session.rollback()
+            await self._rollback_caller_transaction(session)
             raise
         # A caller-owned transaction may have executed additional SQL inside
         # the writer. Never return staged success if its authenticated scope
@@ -396,12 +418,12 @@ class PostgresNeuroVault(VaultPort):
             # The ledger is already staged. An unavailable final scope read
             # must invalidate the transaction even if the caller swallows
             # the database exception and tries to commit.
-            await session.rollback()
+            await self._rollback_caller_transaction(session)
             raise
         if post_write_scope != final_scope:
             # No staged ledger may survive a rejected principal/tenant.
             # The caller's entire transaction is invalid after this point.
-            await session.rollback()
+            await self._rollback_caller_transaction(session)
             raise NeuroVaultAuthorizationError(
                 "caller transaction scope changed during persistence"
             )
