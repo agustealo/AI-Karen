@@ -1,7 +1,7 @@
 """Fail-closed tenant and principal scoping for locked legacy evidence reads."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
