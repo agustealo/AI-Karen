@@ -54,12 +54,12 @@ async def test_composed_surface_commits_reopens_and_is_tenant_scoped():
         async with sessions() as session:
             parent = await session.execute(text(
                 "SELECT conversation_id FROM conversations "
-                "WHERE conversation_id = :conversation AND tenant_id = :tenant"
+                "WHERE conversation_id = CAST(:conversation AS uuid) AND tenant_id = CAST(:tenant AS uuid)"
             ), {"conversation": str(UUID(conversation)), "tenant": tenant})
             assert parent.scalar_one_or_none() is not None, "Fixture must be tenant-owned"
             await session.execute(text(
                 "INSERT INTO messages (message_id, conversation_id, role, content, message_metadata) "
-                "VALUES (:id, :conversation, 'assistant', 'verified surface', CAST(:metadata AS jsonb))"
+                "VALUES (CAST(:id AS uuid), CAST(:conversation AS uuid), 'assistant', 'verified surface', CAST(:metadata AS jsonb))"
             ), {"id": str(message_id), "conversation": conversation, "metadata": json.dumps(metadata)})
             await session.commit()
         # New session proves persistence across transaction/session boundaries.
@@ -67,7 +67,7 @@ async def test_composed_surface_commits_reopens_and_is_tenant_scoped():
             rows = await session.execute(text(
                 "SELECT m.message_metadata FROM messages m "
                 "JOIN conversations c ON m.conversation_id=c.conversation_id "
-                "WHERE m.message_id=:id AND c.tenant_id=:tenant"
+                "WHERE m.message_id=CAST(:id AS uuid) AND c.tenant_id=CAST(:tenant AS uuid)"
             ), {"id": str(message_id), "tenant": tenant})
             restored = rows.scalar_one()
             if isinstance(restored, str):
@@ -83,7 +83,7 @@ async def test_composed_surface_commits_reopens_and_is_tenant_scoped():
     finally:
         async with sessions() as session:
             await session.execute(text(
-                "DELETE FROM messages WHERE message_id=:id AND conversation_id=:conversation"
+                "DELETE FROM messages WHERE message_id=CAST(:id AS uuid) AND conversation_id=CAST(:conversation AS uuid)"
             ), {"id": str(message_id), "conversation": conversation})
             await session.commit()
         await engine.dispose()
