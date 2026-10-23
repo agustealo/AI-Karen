@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "surface.composition"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -38,6 +38,34 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     data = raw.get("data")
     if not isinstance(data, (dict, list)):
         return None
+    if component_type == "surface.composition":
+        # First compositional slice: arrange existing trusted presentation
+        # envelopes without creating another source of data or action authority.
+        if not isinstance(data, dict) or set(data) != {"layout", "items"}:
+            return None
+        if data["layout"] not in ("stack", "grid"):
+            return None
+        items = data["items"]
+        if not isinstance(items, list) or not 1 <= len(items) <= 6:
+            return None
+        safe_items = []
+        for item in items:
+            if not isinstance(item, Mapping) or item.get("component_type") == "surface.composition":
+                return None
+            # Children must share the parent's authorized evidence reference.
+            if item.get("evidence_ref") != raw["evidence_ref"]:
+                return None
+            child = validate_presentation(item)
+            if child is None:
+                return None
+            safe_items.append(child)
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe["data"] = {"layout": data["layout"], "items": safe_items}
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
     if component_type == "time.observation":
         if not isinstance(data, dict):
             return None
