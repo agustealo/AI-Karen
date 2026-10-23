@@ -56,15 +56,18 @@ class _HistoricalTransactionCapability:
     remains disabled until the complete authenticated write path is integrated.
     """
 
-    __slots__ = ("_nonce", "_session", "_tenant", "_user", "_memory_id", "_used")
+    __slots__ = ("_nonce", "_session", "_tenant", "_user", "_memory_id", "_transaction_id", "_policy_decision_id", "_used")
 
     def __init__(self, *, nonce: object, session: Any, tenant: str,
-                 user: str, memory_id: str) -> None:
+                 user: str, memory_id: str, transaction_id: int,
+                 policy_decision_id: str) -> None:
         self._nonce = nonce
         self._session = session
         self._tenant = tenant
         self._user = user
         self._memory_id = memory_id
+        self._transaction_id = transaction_id
+        self._policy_decision_id = policy_decision_id
         self._used = False
 
 
@@ -74,7 +77,8 @@ _HISTORICAL_CAPABILITY_WITNESS = object()
 
 def _verify_historical_transaction_capability(
     capability: Any, *, session: Any, context: VaultContext,
-    entry: MemoryEntry, consume: bool = False,
+    entry: MemoryEntry, transaction_id: int,
+    policy_decision_id: str, consume: bool = False,
 ) -> bool:
     """Fail closed for forged, reused, detached or mismatched authorities.
 
@@ -89,6 +93,12 @@ def _verify_historical_transaction_capability(
         or capability._tenant != context.tenant_id
         or capability._user != context.user_id
         or capability._memory_id != str(entry.id)
+        or not isinstance(transaction_id, int)
+        or transaction_id <= 0
+        or capability._transaction_id != transaction_id
+        or not isinstance(policy_decision_id, str)
+        or not policy_decision_id.strip()
+        or capability._policy_decision_id != policy_decision_id
         or not getattr(session, "in_transaction", lambda: False)()
     ):
         return False
