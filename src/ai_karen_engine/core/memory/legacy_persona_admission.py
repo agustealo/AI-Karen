@@ -844,15 +844,10 @@ async def inspect_authenticated_legacy_migration_evidence(
         admission=admission, tenant_id=tenant, user_id=user,
         source_record_id=source_record_id.strip(),
     )
-    async with async_transaction_scope(tenant_id=tenant) as session:
-        # Bind the verified HTTP principal to this same PostgreSQL
-        # transaction. NeuroVault's final write gate checks this setting
-        # against its canonical context when caller-owned persistence is used.
+    async with async_transaction_scope(tenant_id=tenant, user_id=user) as session:
+        # The canonical transaction owner binds both tenant and authenticated
+        # principal before any historical evidence can be read.
         from sqlalchemy import text
-        await session.execute(
-            text("SELECT set_config('app.current_user_id', :user, true)"),
-            {"user": user},
-        )
         inspected = await inspect_locked_legacy_migration_preparation(
             session=session, tenant_id=tenant, user_id=user,
             source_record_id=source_record_id.strip(),
