@@ -1622,12 +1622,14 @@ def test_migration_policy_requires_explicit_bound_session():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload_changed", "credential_revoked", "policy_revoked"),
-    [(False, False, False), (True, False, False),
-     (False, True, False), (False, False, True)],
+    ("payload_changed", "credential_revoked", "policy_revoked", "evidence_revoked"),
+    [(False, False, False, False), (True, False, False, False),
+     (False, True, False, False), (False, False, True, False),
+     (False, False, False, True)],
 )
 async def test_authenticated_inspection_keeps_locked_payload_internal(
     monkeypatch, payload_changed, credential_revoked, policy_revoked,
+    evidence_revoked,
 ):
     """A final payload read cannot leak content or authorize changed metadata."""
     from contextlib import asynccontextmanager
@@ -1667,7 +1669,10 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
     async def transaction_scope(**kwargs):
         yield session
 
-    inspected = AsyncMock(return_value=(("created", "semantic"), Mock()))
+    eligible = (("created", "semantic"), Mock())
+    inspected = AsyncMock(side_effect=[eligible, eligible] + (
+        [None] if evidence_revoked else [eligible]
+    ))
     payload = AsyncMock(return_value=(
         "private historical memory", "created",
         "episodic" if payload_changed else "semantic",
@@ -1714,11 +1719,12 @@ async def test_authenticated_inspection_keeps_locked_payload_internal(
         "type": "http", "method": "POST", "path": "/internal",
         "headers": [], "query_string": b"",
     })
-    if payload_changed or credential_revoked or policy_revoked:
+    if payload_changed or credential_revoked or policy_revoked or evidence_revoked:
         expected = (
             "payload no longer eligible" if payload_changed
             else "revoked after payload" if credential_revoked
-            else "policy revoked after payload"
+            else "policy revoked after payload" if policy_revoked
+            else "evidence changed after final policy"
         )
         with pytest.raises(PermissionError, match=expected):
             await module.inspect_authenticated_legacy_migration_evidence(
