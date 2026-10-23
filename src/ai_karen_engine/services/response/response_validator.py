@@ -103,7 +103,7 @@ class ResponseValidator:
         """
         if not evidence or intent not in {"search.weather", "time.current"}:
             return ValidationResult(valid=False, reason="missing_observation_evidence")
-        number_pattern = r"(?<![\\w])\\d+(?:[.,]\\d+)*(?![\\w])"
+        number_pattern = r"(?<!\w)\d+(?:[.,]\d+)*(?!\w)"
         authorized = set(re.findall(number_pattern, " ".join(map(str, evidence.values()))))
         reported = set(re.findall(number_pattern, text))
         if not reported.issubset(authorized):
@@ -112,7 +112,7 @@ class ResponseValidator:
         lowered = text.casefold()
         if intent == "search.weather":
             # Never let a current observation silently become a future forecast.
-            forecast_words = r"\\b(?:tomorrow|next week|next month|will rain|will snow|forecast)\\b"
+            forecast_words = r"\b(?:tomorrow|next week|next month|will rain|will snow|forecast)\b"
             if re.search(forecast_words, lowered) and not evidence.get("forecast"):
                 return ValidationResult(valid=False, reason="unsupported_forecast")
             allowed_conditions = " ".join(
@@ -122,14 +122,14 @@ class ResponseValidator:
                 "sunny", "cloudy", "rainy", "raining", "snowy", "snowing",
                 "stormy", "foggy", "clear", "overcast", "windy",
             )
-            stated = {term for term in condition_terms if re.search(r"\\b" + term + r"\\b", lowered)}
+            stated = {term for term in condition_terms if re.search(r"\b" + term + r"\b", lowered)}
             if stated and not all(term in allowed_conditions for term in stated):
                 return ValidationResult(valid=False, reason="unsupported_weather_condition")
             # Explicit temperature-unit claims must be supported by the same
             # field or a declared unit. Do not infer units from country.
             unit = str(evidence.get("unit") or evidence.get("units") or "").casefold()
-            celsius = bool(re.search(r"\\b(?:celsius|degrees c|°c)\\b", lowered))
-            fahrenheit = bool(re.search(r"\\b(?:fahrenheit|degrees f|°f)\\b", lowered))
+            celsius = bool(re.search(r"\b(?:celsius|degrees c|°c)\b", lowered))
+            fahrenheit = bool(re.search(r"\b(?:fahrenheit|degrees f|°f)\b", lowered))
             if celsius and "temperature_c" not in evidence and unit not in {"c", "°c", "celsius"}:
                 return ValidationResult(valid=False, reason="unsupported_temperature_unit")
             if fahrenheit and "temperature_f" not in evidence and unit not in {"f", "°f", "fahrenheit"}:
@@ -139,7 +139,7 @@ class ResponseValidator:
                 str(evidence[k]).casefold() for k in ("timezone", "resolved_timezone")
                 if evidence.get(k)
             ]
-            claimed = re.findall(r"\\b(?:America|Europe|Asia|Africa|Australia|Pacific)/[A-Za-z_]+\\b", text)
+            claimed = re.findall(r"\b(?:America|Europe|Asia|Africa|Australia|Pacific)/[A-Za-z_]+\b", text)
             if any(zone.casefold() not in zones for zone in claimed):
                 return ValidationResult(valid=False, reason="unsupported_timezone")
         return ValidationResult(valid=True)
