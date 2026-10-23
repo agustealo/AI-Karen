@@ -2599,7 +2599,11 @@ async def test_vault_rejects_historical_write_with_live_inspection():
             MemoryAssertion.assertion_id == uuid.UUID(memory_id),
         ))).scalar_one_or_none() is None
         assert (await session.execute(select(MemoryEvent).where(
-            MemoryEvent.assertion_id == uuid.UUID(memory_id),
+            MemoryEvent.idempotency_key == PostgresNeuroVault._idempotency_key(
+                entry, context,
+            ),
+            MemoryEvent.tenant_id == uuid.UUID(tenant),
+            MemoryEvent.user_id == uuid.UUID(user),
         ))).scalars().all() == []
 
 
