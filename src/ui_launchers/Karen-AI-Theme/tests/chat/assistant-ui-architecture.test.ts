@@ -66,7 +66,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
 
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
     expect(dashboard).toContain("<SessionProvider>");
-    expect(dashboard).toContain("USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />");
+    expect(dashboard).toContain("<KarenAssistantChat />");
     expect(component).toContain('import { useSession } from "@/components/chat/ChatInterface"');
     expect(component).toContain("/api/conversations/");
     expect(component).toContain("ExportedMessageRepository.fromArray");
@@ -157,7 +157,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
 
   it("keeps the adapter opt-in until backend and npm dependency proof pass", () => {
     expect(dashboard).toContain(
-      'process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED === "true"',
+      '<KarenAssistantChat />',
     );
     expect(dashboard).toContain('{ ssr: false }');
     expect(component).toContain("showThinking: false");
@@ -181,7 +181,7 @@ describe("persistent Karen workspace panel", () => {
     expect(dashboard).toContain('aria-label="Collapse Karen conversation"');
     expect(dashboard).toContain('aria-controls="persistent-karen-panel"');
     expect(dashboard.match(/<KarenAssistantChat \/>/g)?.length).toBe(1);
-    expect(dashboard.match(/<ChatInterface \/>/g)?.length).toBe(1);
+    expect(dashboard.match(/<ChatInterface \/>/g)?.length ?? 0).toBe(0);
     expect(dashboard).toContain("backendStatus === \"ready\" && (activeMainView === \"chat\" || karenPanelOpen)");
   });
 });
