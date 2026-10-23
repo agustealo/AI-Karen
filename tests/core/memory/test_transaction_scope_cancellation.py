@@ -79,3 +79,52 @@ async def test_canonical_rollback_invalidates_failed_session():
     with pytest.raises(RuntimeError, match="rollback failed"):
         await transactions.rollback_async_transaction(session)
     session.invalidate.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_transaction_scope_binds_principal_after_tenant_context(monkeypatch):
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    engine = MagicMock()
+    engine.async_session_factory.return_value = session
+    monkeypatch.setattr(transactions, "get_postgres_engine", lambda: engine)
+
+    async with transactions.async_transaction_scope(
+        tenant_id="tenant", user_id="verified-user",
+    ):
+        pass
+
+    statements = [str(call.args[0]) for call in session.execute.await_args_list]
+    assert "app.current_user_id" in statements[-1]
+    assert session.execute.await_args_list[-1].args[1] == {"user": "verified-user"}
+    assert len(statements) == 3
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tenant", "principal"),
+    [(None, "user"), ("tenant", ""), ("tenant", "   ")],
+)
+async def test_transaction_scope_rejects_unscoped_principal(monkeypatch, tenant, principal):
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    engine = MagicMock()
+    engine.async_session_factory.return_value = session
+    monkeypatch.setattr(transactions, "get_postgres_engine", lambda: engine)
+
+    with pytest.raises(ValueError):
+        async with transactions.async_transaction_scope(
+            tenant_id=tenant, user_id=principal,
+        ):
+            pass
+
+    session.rollback.assert_awaited_once()
+    session.commit.assert_not_awaited()
