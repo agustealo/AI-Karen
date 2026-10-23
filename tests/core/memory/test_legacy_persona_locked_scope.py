@@ -253,3 +253,26 @@ async def test_historical_capability_consumed_only_after_matching_database_ident
     assert await module._verify_historical_capability_against_database(**params)
     assert capability._used is True
     assert not await module._verify_historical_capability_against_database(**params)
+
+@pytest.mark.asyncio
+async def test_forged_historical_capability_rejected_before_database_access():
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock(side_effect=AssertionError("unauthorized SQL"))
+    capability = module._HistoricalTransactionCapability(
+        nonce=object(), session=session, tenant=tenant, user=user,
+        memory_id=memory_id, transaction_id=42, policy_decision_id="current",
+    )
+    accepted = await module._verify_historical_capability_against_database(
+        capability, session=session,
+        context=SimpleNamespace(tenant_id=tenant, user_id=user),
+        entry=SimpleNamespace(id=memory_id), policy_decision_id="current",
+        consume=True,
+    )
+    assert not accepted
+    assert capability._used is False
+    session.execute.assert_not_awaited()
