@@ -782,6 +782,26 @@ def require_migration_principal_continuity(
         raise PermissionError("historical migration authenticated principal changed")
 
 
+async def execute_authenticated_legacy_migration(
+    *, request: "Request", request_id: str, correlation_id: str,
+    source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
+) -> "LegacyMigrationInspectionReceipt":
+    """Runtime-owned migration ingress, held closed pending executable authority.
+
+    Perform canonical authenticated, locked source and replay inspection first.
+    A successful inspection is intentionally insufficient to write, and its
+    receipt contains no historical payload or transferable grant. The runtime
+    may not claim successful migration until NeuroVault has committed one.
+    """
+    await inspect_authenticated_legacy_migration_evidence(
+        request=request, request_id=request_id, correlation_id=correlation_id,
+        source_record_id=source_record_id, runtime_policy=runtime_policy,
+    )
+    raise PermissionError(
+        "historical migration execution disabled pending trusted NeuroVault authority"
+    )
+
+
 async def inspect_authenticated_legacy_migration_evidence(
     *, request: "Request", request_id: str, correlation_id: str,
     source_record_id: str, runtime_policy: "RuntimePolicyEnforcer",
