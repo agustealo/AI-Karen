@@ -562,7 +562,12 @@ async def migration_policy_request_from_authenticated_http(
             raise PermissionError("historical migration token invalid or revoked")
         # Check the revocation store directly because the generic middleware
         # intentionally degrades to not-revoked when its lookup fails.
-        if store.exists(middleware._get_redis_key("revoked", token_id)):
+        revoked = store.exists(middleware._get_redis_key("revoked", token_id))
+        # Redis EXISTS returns an integer. None or an unexpected value must
+        # not be interpreted as proof of a valid, non-revoked session.
+        if type(revoked) is not int or revoked < 0:
+            raise PermissionError("historical migration revocation lookup unavailable")
+        if revoked != 0:
             raise PermissionError("historical migration token revoked")
         principal = middleware._get_user_from_payload(payload)
         permissions = principal.get("permissions")
