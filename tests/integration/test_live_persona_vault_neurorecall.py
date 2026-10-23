@@ -2790,7 +2790,6 @@ async def test_locked_historical_source_read_rejects_missing_transaction_user():
 
 async def test_locked_replay_slot_excludes_concurrent_missing_receipt_inspection():
     """A missing assertion must still serialize competing migration attempts."""
-    import asyncio
     from sqlalchemy import text
     from ai_karen_engine.platform.memory.postgres.legacy_persona_receipts import (
         lookup_locked_legacy_replay_receipt,
