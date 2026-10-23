@@ -88,3 +88,40 @@ async def test_layout_failure_leaves_original_presentation_unchanged(
         runtime, request, decision, None, Meter(permitted, timely), part
     ) is None
     assert part["data"]["formatted"] == "10:15 AM"
+
+
+@pytest.mark.asyncio
+async def test_runtime_plans_two_independently_approved_evidence_parts():
+    gateway = Gateway('{"layout":"grid","part_ids":["other-clock","clock-1"]}')
+    runtime, request, decision, first = context(gateway)
+    second = {
+        **first,
+        "presentation_id": "other-clock",
+        "evidence_ref": "request-2:clock",
+        "data": {"formatted": "11:15 AM", "timezone": "America/New_York"},
+    }
+    rendered = await ChatRuntime._plan_verified_surface(
+        runtime, request, decision, None, Meter(), [first, second]
+    )
+    assert rendered is not None
+    assert [item["presentation_id"] for item in rendered["data"]["items"]] == [
+        "other-clock", "clock-1"
+    ]
+    assert rendered["data"]["evidence_refs"] == [
+        "request-2:clock", "request-1:clock"
+    ]
+    assert "11:15 AM" not in str(gateway.tasks[0].messages)
+
+
+@pytest.mark.asyncio
+async def test_runtime_refuses_duplicate_ids_or_unvalidated_candidate():
+    gateway = Gateway('{"layout":"grid","part_ids":["clock-1"]}')
+    runtime, request, decision, first = context(gateway)
+    assert await ChatRuntime._plan_verified_surface(
+        runtime, request, decision, None, Meter(), [first, first]
+    ) is None
+    assert await ChatRuntime._plan_verified_surface(
+        runtime, request, decision, None, Meter(),
+        [first, {**first, "data": {"formatted": {"injected": True}}}]
+    ) is None
+    assert gateway.tasks == []
