@@ -195,7 +195,8 @@ def test_shared_collector_preserves_authorized_planner_presentation():
 async def test_shared_answer_composition_preserves_original_presentation_on_invalid_plan():
     gateway = Gateway('{"layout":"iframe","part_ids":["clock-1"]}')
     runtime, request, decision, verified = context(gateway)
-    runtime._synthesize_search_evidence = None
+    from types import MethodType
+    runtime._plan_verified_surface = MethodType(ChatRuntime._plan_verified_surface, runtime)
     # Planner intent avoids answer synthesis, exercising the same shared
     # composition entry point used for streaming and nonstreaming transports.
     decision.intent = "planner.read"
