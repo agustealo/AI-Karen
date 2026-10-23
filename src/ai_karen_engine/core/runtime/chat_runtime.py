@@ -2317,6 +2317,47 @@ class ChatRuntime:
         )
 
     @staticmethod
+    def _collect_authorized_surface_parts(request, executions):
+        """Collect independent governed results; never elevate raw payloads.
+
+        Each tuple is (decision, authorized_plan, direct_result) from the same
+        authenticated runtime request. Every part is reprojected using its
+        original execution gate; no arbitrary presenter-supplied evidence.
+        """
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+        if not isinstance(executions, (list, tuple)) or not 1 <= len(executions) <= 6:
+            return []
+        collected = []
+        seen = set()
+        for execution in executions:
+            if not isinstance(execution, (list, tuple)) or len(execution) != 3:
+                return []
+            decision, plan, result = execution
+            if not result.success or result.degraded:
+                return []
+            part = (
+                ChatRuntime._verified_planner_presentation(decision, plan, result)
+                or ChatRuntime._verified_weather_presentation(request, decision, plan, result)
+            )
+            part = validate_presentation(part)
+            if not part or part.get("component_type") == "surface.composition":
+                return []
+            # All contributions must belong to this request, even if a caller
+            # accidentally supplies a valid receipt from another conversation.
+            if part.get("correlation_id") not in (None, request.context.correlation_id):
+                return []
+            evidence_ref = part["evidence_ref"]
+            if not evidence_ref.startswith(f"{request.context.request_id}:"):
+                return []
+            key = part["presentation_id"]
+            if key in seen:
+                return []
+            seen.add(key)
+            collected.append(part)
+        return collected
+
+    @staticmethod
     def _verified_planner_presentation(decision, plan, result):
         """Only previously authorized planner-service output may become a UI part."""
         if (decision.intent != "planner.read" or not result.success or result.degraded
