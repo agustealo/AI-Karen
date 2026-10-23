@@ -397,6 +397,7 @@ class PostgresNeuroVault(VaultPort):
     async def persist_in_transaction(
         self, entry: MemoryEntry, *, context: VaultContext, session: Any,
         historical_inspection: Any = None,
+        historical_capability: Any = None,
     ) -> VaultWriteReceipt:
         """Stage a governed write in a caller-owned transaction.
 
@@ -407,6 +408,14 @@ class PostgresNeuroVault(VaultPort):
         # Validate policy capability and principal scope before any database
         # query, including transaction-local tenant introspection.
         self._validate_persist_authority(entry, context)
+        # A proposed executable capability cannot become a write grant until
+        # trusted runtime issuance, final RuntimePolicy and locked replay are
+        # integrated. Reject it before querying the database or staging a
+        # ledger event. Read-only inspection remains a separate contract.
+        if historical_capability is not None:
+            raise NeuroVaultAuthorizationError(
+                "historical execution capability is not yet enabled"
+            )
         # Ordinary caller-owned transactions must never probe database scope
         # with a historical payload. A read-only inspection can be validated
         # separately, but it remains incapable of granting persistence.
