@@ -73,8 +73,9 @@ import { Separator } from "@/components/ui/separator";
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
 
-// Keep legacy chat as the default until full assistant-ui/AG-UI proof passes.
-const USE_ASSISTANT_UI_CHAT = process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED === "true";
+// Use the canonical assistant-ui/AG-UI chat by default. An explicit false
+// remains a temporary operator rollback for deployments needing legacy chat.
+const USE_ASSISTANT_UI_CHAT = process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED !== "false";
 const KarenAssistantChat = dynamic(
   () => import("@/components/chat/assistant-ui/KarenAssistantChat"),
   { ssr: false },
