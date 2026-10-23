@@ -1,7 +1,8 @@
 """Read-only legacy source-record verification scoped to a trusted principal.
 
-Returns no user content. A matching row is not proof of canonical identity,
-consent, retention, or authorization to migrate.
+Standalone source verifiers return no user content. The internal locked content
+adapter requires canonical transaction-scoped eligibility checks; its result is
+not authorization to persist.
 """
 from __future__ import annotations
 
@@ -216,3 +217,40 @@ async def inspect_locked_legacy_migration_preparation(
         expected_request_id=expected_request_id,
     )
     return evidence, receipt
+
+async def read_locked_legacy_migration_source_content(
+    *, session: "AsyncSession", tenant_id: str, user_id: str,
+    source_record_id: str,
+) -> tuple[str, datetime, str] | None:
+    """Read historical content only after canonical locked eligibility checks.
+
+    This is an internal, transaction-bound source adapter, NOT a write grant.
+    Callers must authenticate and obtain RuntimePolicy admission before access.
+    Consent, identity, source and retention are rechecked in the same session.
+    The transaction owner must retain its locks through final authorization,
+    NeuroVault persistence and commit. Never log or expose the content.
+    """
+    evidence = await verify_locked_legacy_migration_evidence(
+        session=session, tenant_id=tenant_id, user_id=user_id,
+        source_record_id=source_record_id,
+    )
+    if evidence is None:
+        return None
+    source_id = _validated_source_id(source_record_id)
+    if source_id is None:
+        return None
+    row = (await session.execute(text(
+        "SELECT content, created_at, memory_type "
+        "FROM public.persona_memory_entries "
+        "WHERE id=:source AND tenant_id=:tenant AND user_id=:user "
+        "AND length(btrim(content)) > 0 FOR UPDATE"
+    ), {
+        "source": source_id,
+        "tenant": str(uuid.UUID(tenant_id)),
+        "user": str(uuid.UUID(user_id)),
+    })).one_or_none()
+    if row is None or not isinstance(row.content, str) or not row.content.strip():
+        return None
+    if (row.created_at, row.memory_type) != evidence:
+        raise PermissionError("historical source changed during locked content read")
+    return row.content, row.created_at, row.memory_type
