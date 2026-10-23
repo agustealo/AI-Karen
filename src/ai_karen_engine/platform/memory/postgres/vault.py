@@ -572,7 +572,6 @@ class PostgresNeuroVault(VaultPort):
         custom = dict(metadata.custom or {})
         consent_scope = str(custom.get("consent_scope") or "memory.write")
         source_type = str(custom.get("source_type") or metadata.source or "runtime")
-        self._require_non_historical_write(entry)
         sensitivity = str(custom.get("sensitivity_class") or "normal")
         source_ref = str(
             custom.get("source_ref")
