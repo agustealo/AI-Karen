@@ -2643,3 +2643,40 @@ async def test_vault_final_scope_query_failure_rolls_back_staged_ledger():
         assert (await session.execute(select(MemoryAssertion).where(
             MemoryAssertion.assertion_id == memory_id,
         ))).scalar_one_or_none() is None
+
+
+async def test_vault_cancelled_after_staging_rolls_back_caller_transaction():
+    """Cancelled ledger staging must not survive a swallowed cancellation."""
+    import asyncio
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user, memory_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    entry = MemoryEntry(
+        id=str(memory_id), content="Cancelled ledger staging",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(tenant), user_id=str(user), source="chat_user",
+            custom={"consent_scope": "memory.write"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=str(tenant), user_id=str(user),
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        actor_id=str(user), policy_context={"memory_write_authorized": True},
+    )
+    vault = PostgresNeuroVault()
+    original_write = vault._persist_with_session
+
+    async def cancel_after_staging(*args, **kwargs):
+        await original_write(*args, **kwargs)
+        raise asyncio.CancelledError()
+
+    vault._persist_with_session = cancel_after_staging
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        with pytest.raises(asyncio.CancelledError):
+            await vault.persist_in_transaction(entry, context=context, session=session)
+        await session.commit()
+    async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        assert (await session.execute(select(MemoryAssertion).where(
+            MemoryAssertion.assertion_id == memory_id,
+        ))).scalar_one_or_none() is None
