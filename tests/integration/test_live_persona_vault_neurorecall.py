@@ -2817,3 +2817,22 @@ async def test_locked_replay_slot_excludes_concurrent_missing_receipt_inspection
             "SELECT pg_try_advisory_xact_lock(hashtextextended(:slot, 0))"
         ), {"slot": slot})).scalar_one()
         assert acquired is True
+
+async def test_canonical_transaction_binds_and_clears_authenticated_principal():
+    """Verify actual PostgreSQL transaction-local scope, not just mocked SQL."""
+    from sqlalchemy import text
+
+    assert os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") == "1"
+    tenant, user = str(uuid.uuid4()), str(uuid.uuid4())
+    async with async_transaction_scope(tenant_id=tenant, user_id=user) as session:
+        result = (await session.execute(text(
+            "SELECT current_setting('app.current_tenant_id', true), "
+            "current_setting('app.tenant_id', true), "
+            "current_setting('app.current_user_id', true)"
+        ))).one()
+        assert result == (tenant, tenant, user)
+    async with async_transaction_scope(tenant_id=tenant) as session:
+        principal = (await session.execute(text(
+            "SELECT current_setting('app.current_user_id', true)"
+        ))).scalar_one()
+        assert not principal
