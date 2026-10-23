@@ -684,6 +684,11 @@ class LegacyMigrationTransactionAuthority:
         The result establishes read-only identity/provenance continuity;
         it never authorizes NeuroVault to persist historical memory.
         """
+        from sqlalchemy.ext.asyncio import AsyncSession
+        # Reject a detached/fabricated transaction before evaluating a
+        # potentially expensive or side-effecting policy callback.
+        if not isinstance(session, AsyncSession) or not session.in_transaction():
+            raise PermissionError("active PostgreSQL transaction required")
         authority = await evaluate_migration_write_authority(
             authenticated_request=authenticated_request,
             runtime_policy=runtime_policy,
