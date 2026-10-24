@@ -93,6 +93,19 @@ class UserPersonaPreferences:
     created_at: str
     updated_at: str
     custom_instructions: Optional[str] = None
+    # Additive Persona Studio metadata. Existing positional constructors and
+    # dataclass-based consumers keep their original field order and behavior.
+    tenant_id: Optional[str] = None
+    revision: int = 0
+    enable_style_adaptation: bool = False
+    enable_persona_memory_filtering: bool = False
+    cross_persona_memory_sharing: bool = False
+
+    def __post_init__(self) -> None:
+        if isinstance(self.revision, bool) or not isinstance(self.revision, int) or self.revision < 0:
+            raise ValueError("persona preference revision must be a nonnegative integer")
+        if self.tenant_id is not None and not self.tenant_id.strip():
+            raise ValueError("persona preference tenant ID must not be blank")
 
 
 # System personas
