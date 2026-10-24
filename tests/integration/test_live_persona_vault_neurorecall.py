@@ -682,16 +682,19 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
             verify_locked_legacy_migration_evidence,
         )
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        async with async_transaction_scope(
+            tenant_id=str(tenant), user_id=str(user),
+        ) as session:
             inside = await verify_locked_legacy_migration_evidence(
                 session=session, tenant_id=str(tenant), user_id=str(user),
                 source_record_id=str(source),
             )
             assert inside == locked_evidence
-            assert await verify_locked_legacy_migration_evidence(
-                session=session, tenant_id=str(uuid.uuid4()), user_id=str(user),
-                source_record_id=str(source),
-            ) is None
+            with pytest.raises(PermissionError, match="transaction principal mismatch"):
+                await verify_locked_legacy_migration_evidence(
+                    session=session, tenant_id=str(uuid.uuid4()), user_id=str(user),
+                    source_record_id=str(source),
+                )
         assert await lock_legacy_migration_evidence(
             tenant_id=str(uuid.uuid4()), user_id=str(user),
             source_record_id=str(source),
