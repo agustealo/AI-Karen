@@ -254,3 +254,21 @@ async def read_locked_legacy_migration_source_content(
     if (row.created_at, row.memory_type) != evidence:
         raise PermissionError("historical source changed during locked content read")
     return row.content, row.created_at, row.memory_type
+
+
+async def read_migration_transaction_scope(
+    *, session: "AsyncSession", with_txid: bool = False,
+) -> tuple:
+    """Read bound tenant/principal and optional transaction ID, fail closed."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    if not isinstance(session, AsyncSession) or not session.in_transaction():
+        raise PermissionError("active PostgreSQL transaction required")
+    query = (
+        "SELECT current_setting('app.current_tenant_id', true), "
+        "current_setting('app.tenant_id', true), "
+        "current_setting('app.current_user_id', true)"
+    )
+    if with_txid:
+        query += ", txid_current()"
+    return tuple((await session.execute(text(query))).one())
