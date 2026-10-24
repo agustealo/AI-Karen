@@ -97,7 +97,7 @@ async def lock_legacy_migration_evidence(
     source_id = _validated_source_id(source_record_id)
     if source_id is None:
         return None
-    async with async_transaction_scope(tenant_id=tenant) as session:
+    async with async_transaction_scope(tenant_id=tenant, user_id=user) as session:
         return await verify_locked_legacy_migration_evidence(
             session=session, tenant_id=tenant, user_id=user,
             source_record_id=source_id,
