@@ -652,6 +652,14 @@ class LegacyMigrationInspectionReceipt:
             raise ValueError("inspection requires a final policy decision identifier")
 
 
+async def _read_migration_transaction_scope(*, session: "AsyncSession", with_txid: bool = False):
+    """Delegate PostgreSQL principal inspection to the persistence adapter."""
+    from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+        read_migration_transaction_scope,
+    )
+    return await read_migration_transaction_scope(session=session, with_txid=with_txid)
+
+
 @dataclass(frozen=True)
 class LegacyMigrationTransactionAuthority:
     """Non-transferable, read-only snapshot of a verified active transaction.
@@ -671,16 +679,7 @@ class LegacyMigrationTransactionAuthority:
         This method checks identity only. It does not provide permission for a
         historical write and must not substitute for fresh RuntimePolicy.
         """
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import AsyncSession
-
-        if not isinstance(session, AsyncSession) or not session.in_transaction():
-            raise PermissionError("active PostgreSQL transaction required")
-        actual = (await session.execute(text(
-            "SELECT current_setting('app.current_tenant_id', true), "
-            "current_setting('app.tenant_id', true), "
-            "current_setting('app.current_user_id', true), txid_current()"
-        ))).one()
+        actual = await _read_migration_transaction_scope(session=session, with_txid=True)
         if actual != (
             self.tenant_id, self.tenant_id, self.user_id, self.transaction_id
         ):
@@ -697,20 +696,8 @@ class LegacyMigrationTransactionAuthority:
         The result establishes read-only identity/provenance continuity;
         it never authorizes NeuroVault to persist historical memory.
         """
-        from sqlalchemy.ext.asyncio import AsyncSession
-        # Reject a detached/fabricated transaction before evaluating a
-        # potentially expensive or side-effecting policy callback.
-        if not isinstance(session, AsyncSession) or not session.in_transaction():
-            raise PermissionError("active PostgreSQL transaction required")
-        # The active transaction must already carry the authenticated
-        # principal before invoking RuntimePolicy. A forged policy request
-        # cannot authorize inspection in another tenant's session.
-        from sqlalchemy import text
-        principal_scope = (await session.execute(text(
-            "SELECT current_setting('app.current_tenant_id', true), "
-            "current_setting('app.tenant_id', true), "
-            "current_setting('app.current_user_id', true)"
-        ))).one()
+        # Check authenticated transaction identity before RuntimePolicy.
+        principal_scope = await _read_migration_transaction_scope(session=session)
         if principal_scope != (
             authenticated_request.tenant_id,
             authenticated_request.tenant_id,
@@ -742,15 +729,7 @@ class LegacyMigrationTransactionAuthority:
         cls, *, session: "AsyncSession", tenant_id: str,
         user_id: str, policy_decision_id: str,
     ) -> "LegacyMigrationTransactionAuthority":
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import AsyncSession
-        if not isinstance(session, AsyncSession) or not session.in_transaction():
-            raise PermissionError("active PostgreSQL transaction required")
-        scope = (await session.execute(text(
-            "SELECT current_setting('app.current_tenant_id', true), "
-            "current_setting('app.tenant_id', true), "
-            "current_setting('app.current_user_id', true), txid_current()"
-        ))).one()
+        scope = await _read_migration_transaction_scope(session=session, with_txid=True)
         if scope[:3] != (tenant_id, tenant_id, user_id):
             raise PermissionError("historical inspection transaction identity mismatch")
         if not isinstance(policy_decision_id, str) or not policy_decision_id.strip():
