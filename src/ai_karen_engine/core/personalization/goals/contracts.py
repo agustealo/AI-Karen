@@ -278,32 +278,10 @@ def goal_from_user_goal(ug: UserGoal) -> Goal:
 
 
 def _map_user_goal_status(status: Any) -> GoalState:
-    # Canonical lifecycle states must survive reading legacy UserGoal
-    # envelopes without being downgraded to PROPOSED.
-    if isinstance(status, GoalState):
-        return status
-    if isinstance(status, str):
-        try:
-            return GoalState(status)
-        except ValueError:
-            pass
-    mapping = {
-        UserGoalStatus.ACTIVE: GoalState.ACTIVE,
-        UserGoalStatus.PAUSED: GoalState.PAUSED,
-        UserGoalStatus.COMPLETED: GoalState.COMPLETED,
-        UserGoalStatus.ABANDONED: GoalState.ABANDONED,
-        UserGoalStatus.UNKNOWN: GoalState.PROPOSED,
-    }
-    if isinstance(status, str):
-        try:
-            status = UserGoalStatus(status)
-        except ValueError as exc:
-            raise ValueError("Unsupported persisted goal lifecycle state") from exc
-    try:
-        return mapping[status]
-    except (KeyError, TypeError) as exc:
-        raise ValueError("Unsupported persisted goal lifecycle state") from exc
+    """Use the canonical personalization decoding boundary, without duplicate maps."""
+    from ..contracts import canonical_goal_status
 
+    return canonical_goal_status(status)
 
 @dataclass
 class GoalSnapshot:
