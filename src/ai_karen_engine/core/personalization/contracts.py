@@ -95,6 +95,21 @@ class UserGoalStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+def canonical_goal_status(value: CanonicalGoalState | UserGoalStatus | str) -> CanonicalGoalState:
+    """Normalize historical goal statuses at the personalization boundary.
+
+    The legacy unknown value maps explicitly to proposed. Unsupported states
+    fail closed rather than silently becoming active.
+    """
+    raw = value.value if isinstance(value, Enum) else value
+    if raw == UserGoalStatus.UNKNOWN.value:
+        return CanonicalGoalState.PROPOSED
+    try:
+        return CanonicalGoalState(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Unsupported persisted goal lifecycle state") from exc
+
+
 class UserModelHealth(str, Enum):
     """Personalization subsystem health states."""
     READY = "ready"
@@ -307,6 +322,9 @@ class GoalState:
     evidence_refs: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.status = canonical_goal_status(self.status)
+
 
 @dataclass
 class UserModel:
@@ -373,6 +391,9 @@ class CommitmentState:
     target_date: Optional[datetime] = None
     status: CanonicalGoalState = CanonicalGoalState.ACTIVE
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.status = canonical_goal_status(self.status)
 
 
 @dataclass
@@ -523,6 +544,7 @@ class UserGoal:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
+        self.status = canonical_goal_status(self.status)
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
