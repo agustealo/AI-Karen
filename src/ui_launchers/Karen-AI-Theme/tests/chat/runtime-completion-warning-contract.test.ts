@@ -8,7 +8,7 @@ describe('Chat completion truth presentation', () => {
     'utf8',
   );
   const projectionSource = readFileSync(
-    resolve(process.cwd(), '../../../ai_karen_engine/core/runtime/ag_ui_event_projection.py'),
+    resolve(process.cwd(), '../../ai_karen_engine/core/runtime/ag_ui_event_projection.py'),
     'utf8',
   );
 
