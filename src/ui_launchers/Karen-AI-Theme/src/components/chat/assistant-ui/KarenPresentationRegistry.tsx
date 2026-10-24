@@ -19,6 +19,22 @@ const presentationSchema = z.object({
   display: z.object({ density: z.enum(["compact", "comfortable"]) }).strict().optional(),
 }).strict();
 
+/**
+ * Improve clock readability without changing the observed instant or
+ * assigning a timezone that the backend has not verified.
+ */
+export function displayClockObservation(formatted: string): { time: string; date?: string } {
+  const match = /^(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})(?::(\\d{2}))?$/.exec(formatted.trim());
+  if (!match) return { time: formatted };
+  const hour = Number(match[4]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (hour > 23 || month < 1 || month > 12 || day < 1 || day > 31 ||
+      Number(match[5]) > 59 || (match[6] && Number(match[6]) > 59)) return { time: formatted };
+  const displayHour = hour % 12 || 12;
+  return { time: `${displayHour}:${match[5]} ${hour < 12 ? "AM" : "PM"}`, date: `${match[1]}-${match[2]}-${match[3]}` };
+}
+
 export type KarenPresentationEnvelope = z.infer<typeof presentationSchema>;
 
 export function parseKarenPresentation(value: unknown): KarenPresentationEnvelope | null {
@@ -101,10 +117,12 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
     }
     case "time.observation": {
       const clock = envelope.data as { formatted: string; timezone?: string };
+      const display = displayClockObservation(clock.formatted);
       return <section aria-label="Verified time observation" data-testid="karen-time-presentation"
         className={envelope.display?.density === "compact" ? "my-2 rounded-lg border border-border/70 p-2" : "my-3 rounded-xl border border-border/70 p-4"}>
         <p className="text-xs font-medium text-muted-foreground">Reported time{clock.timezone ? ` (${clock.timezone})` : ""}</p>
-        <p className="mt-1 text-2xl font-semibold tabular-nums">{clock.formatted}</p>
+        <p className="mt-1 text-2xl font-semibold tabular-nums">{display.time}</p>
+        {display.date && <p className="mt-1 text-xs text-muted-foreground">{display.date}</p>}
         {clock.timezone && <p className="mt-1 text-xs text-muted-foreground">{clock.timezone}</p>}
       </section>;
     }
