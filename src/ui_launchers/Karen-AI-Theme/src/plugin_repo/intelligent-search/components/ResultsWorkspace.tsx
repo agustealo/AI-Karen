@@ -33,13 +33,6 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
     'No retrieved preview available.';
   const featuredHref = featuredItem?.url || '';
   const hasEvidence = sourceCount > 0 || resultCount > 0;
-  const statusLabel = response?.diagnostics?.degraded ? 'Degraded retrieval' : hasEvidence ? 'Sources available' : 'No evidence';
-  const capabilityTags = [
-    `Provider ${providerLabel}`,
-    `${sourceCount} sources`,
-    `${resultCount} passages`,
-    statusLabel,
-  ];
 
   useEffect(() => {
     if (activeSourceIndex > sources.length - 1) {
@@ -88,23 +81,21 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-[11px] uppercase tracking-[0.32em] text-muted-foreground shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Search evidence
+              Search results
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
                 {modeConfig.label}
               </h2>
               <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-                {response.summary || modeConfig.description}
+                {response.summary || 'Retrieved sources for your query. These excerpts are not a generated answer.'}
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <StatBadge label="Sources" value={sourceCount} />
-            <StatBadge label="Passages" value={resultCount} />
-            <StatBadge label="Latency" value={elapsed} />
-            <StatBadge label="Mode" value={state.mode.replace(/_/g, ' ')} />
+
           </div>
         </div>
 
@@ -120,7 +111,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>
         <section className="flex min-h-[55vh] min-w-0 flex-col gap-4">
           <div className="rounded-3xl border border-border/60 bg-card/70 p-2 shadow-sm backdrop-blur">
-            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Evidence and sources</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
+            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Explore sources</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
             <nav aria-label="Search result sections" className="flex flex-wrap gap-2">
               {validTabs.map((tabId) => {
                 const label = tabId.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase());
