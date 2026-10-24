@@ -193,14 +193,16 @@ class DirectCapabilityExecutor:
 
         if decision.intent == "search.weather":
             from ai_karen_engine.core.runtime.location_context import resolve_location
-            effective_context = dict(resolved_context or {})
-            # Explicit request/device-selected context is handled by the
-            # existing resolver; governed profile values fill missing roles.
+            # Preserve the existing explicit clarification-answer flow without
+            # treating arbitrary metadata location hints as authorized.
             selected = resolve_location(request.metadata, resolved_context, kind="weather")
             effective_context = (
                 {"weather_location": selected.value, "location_source": selected.source}
                 if selected else {}
             )
+            pending = (request.metadata or {}).get("pending_clarification")
+            if isinstance(pending, dict):
+                effective_context["pending_clarification"] = pending
             resolved = self._weather_query_with_location(query, effective_context)
             if resolved is None:
                 return DirectCapabilityResult(
