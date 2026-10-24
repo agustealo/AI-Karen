@@ -87,3 +87,43 @@ Mark each gate NOT RUN until actually executed; preserve unrelated baseline fail
 5. Bounded Medusa specialist topology and outcome evaluation.
 
 No deletions, new services, or integration claims are authorized solely by this document. Before deleting code: inspect references in runtime/UI/tests/docs/config/plugins; migrate to canonical owner; prove the replacement; document the risk.
+
+
+## P0 inspection continuation: verified frontend ingress chain (2026-10-24)
+
+These files were read from `main` using the connected GitHub repository. This is a **partial, source-backed chain**, not an assertion about the unseen backend wiring.
+
+| Stage | Concrete owner/symbol | Observed behavior | Assessment |
+| --- | --- | --- | --- |
+| Search state and request initiation | `plugin_repo/intelligent-search/hooks/useIntelligentSearch.ts`, `useIntelligentSearch().executeSearch` | Keeps React query/mode/options/response/error state. Builds payload, awaits `IntelligentSearchApi.executeSearch` and guards against stale state updates using sequence counter | Active independent request hook. No visible AG-UI event subscription or canonical chat thread state in the inspected hook |
+| Payload transformation | `plugin_repo/intelligent-search/hooks/useSearchPayload.ts`, `buildPayload` | Converts `mode, query, options` into `{mode,query,context,crawl?}`, separating crawler flags | UI-side serializing adapter; verify backend schema parity and policy validation. Not evidence of orchestration by itself |
+| Plugin API ingress | `plugin_repo/intelligent-search/services/IntelligentSearchApi.ts`, `executeSearch` | POSTs to `/api/plugins/execute` with `plugin_name:'intelligent-search'` and parameters. Unwraps result/data/payload/response into search result shape | **Confirmed direct plugin execution ingress**, rather than explicit chat/AG-UI ingress in this client. Whether backend calls ChatRuntime must be traced |
+| Article retrieval | Same API module, `fetchArticle` | GETs `/api/plugins/search/articles/{articleId}` and checks article identity | Must verify article ownership, permission, tenant and retention in backend route/store |
+| User-visible result projection | `plugin_repo/intelligent-search/components/ResultsWorkspace.tsx` | Renders local tabs, excerpts, sources, and diagnostics using `IntelligentSearchState` | Useful typed presentation, but not demonstrated as assistant-ui tool renderer or AG-UI projection |
+| Provider defaults | `src/ai_karen_engine/config/web_search.py` | `DEFAULT_PROVIDER_CONFIGS` with `build_provider_configs`; Wikipedia enabled in main pending #531 | Canonical config likely. Verify downstream registry and capability routing |
+
+### Concrete contract vulnerabilities requiring tests
+
+1. `IntelligentSearchApi.executeSearch` examines `envelope.error` but does **not** check `envelope.success === false`. An error-shaped response with a nested `result` could be projected as success. The backend envelope contract must be checked before selecting the precise repair; don't invent error semantics.
+2. `normalizeSearchResponse` accepts any object containing a string summary OR any of several object fields as an apparently valid search response. It performs no verification of citation/source truth or terminal execution state. This is not necessarily wrong for a presentation adapter, but it must not serve as an authoritative success/verification gate.
+3. `useIntelligentSearch` invalidates the local request sequence on query/mode change and unmount, yet the inspected code does not abort the network request. The backend job may continue and consume resources; cancellation ownership and transport semantics must be verified before wiring abort.
+4. `useSearchPayload` is locally defined inside a hook and returns a freshly allocated callback each render. This can force changing dependencies; prioritize contract unification over a micro-optimization.
+5. The frontend offers `deep_research`, `weather`, and `stock_market` modes in `configs/modeConfig.ts`. That proves mode availability in the UI but does not prove each mode routes through an appropriate capability, data provider, or policy gate. Explicitly test all three with actual backend provenance.
+6. Frontend search response types include optional `can_execute`, `reason`, `diagnostics`, and `metadata`, but there is no required explicit terminal status, persistence receipt, or AG-UI cursor in the inspected `IntelligentSearchResponse`. These must be reconciled against canonical backend schemas rather than casually added to the plugin type.
+
+### Immediate owner discovery still required
+
+Locate the actual server handler for `POST /api/plugins/execute` and `GET /api/plugins/search/articles/{articleId}`, then trace `intelligent-search` plugin manifest and dispatch into RuntimePolicy, ChatRuntime, CORTEX, provider registry and any Deep Agents or Medusa specialist. Confirm from code and tests whether the plugin execution path delegates to canonical runtime or bypasses it. There is not enough inspected backend evidence yet to claim either outcome.
+
+### Revised implementation boundary
+
+Do not replace `IntelligentSearchApi.executeSearch` with a new unverified `/api/chat` transport. First identify an existing canonical client event/AG-UI adapter and server conversation ingress that supports tools. Then preserve the search-specific typed evidence renderer as a **tool presentation** while moving responsibility for orchestration, authorization, cancellation and persistence to the canonical runtime. A compatibility bridge is permissible only with explicit ownership, deprecation condition and parity tests.
+
+### Verification status
+
+- Read-only inspections of the listed frontend files: COMPLETE.
+- Frontend search-to-plugin dispatch: VERIFIED by source.
+- Backend plugin-to-runtime delegation: NOT VERIFIED.
+- AG-UI event and replay parity: NOT VERIFIED.
+- Authenticated browser journeys and test executions: NOT RUN.
+- Production integration changes: NOT STARTED.
