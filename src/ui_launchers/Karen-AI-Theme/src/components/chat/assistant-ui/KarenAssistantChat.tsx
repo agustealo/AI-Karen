@@ -500,7 +500,10 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const agent = useMemo(
     () => {
-      const connected = new HttpAgent({ url: "/api/chat/ag-ui" });
+      // The backend resolves threadId as Karen's durable conversation UUID.
+      // Without it the AG-UI client invents a local UUIDv4 that no persisted
+      // conversation can ever match, so every run would fail ownership lookup.
+      const connected = new HttpAgent({ url: "/api/chat/ag-ui", threadId });
       const canonicalRun = connected.run.bind(connected);
       // One allowlisted lookup hint; the backend resolves ownership for every
       // request. This never passes client policy, tools, or agent state.
@@ -511,7 +514,7 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
         })) as HttpAgent["run"];
       return connected;
     },
-    [workspaceRunId],
+    [threadId, workspaceRunId],
   );
   const historyLoad = useCallback(
     async () => ExportedMessageRepository.fromArray(
