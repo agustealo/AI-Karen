@@ -1058,7 +1058,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 )
                 with pytest.raises(
                     PermissionError,
-                    match="transaction principal changed during inspection",
+                    match="transaction identity mismatch",
                 ):
                     await inspect_authenticated_legacy_migration_transaction(
                         request=http_request, request_id=str(uuid.uuid4()),
@@ -1083,7 +1083,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 )
                 with pytest.raises(
                     PermissionError,
-                    match="transaction tenant changed during inspection",
+                    match="transaction identity mismatch",
                 ):
                     await inspect_authenticated_legacy_migration_transaction(
                         request=http_request, request_id=str(uuid.uuid4()),
