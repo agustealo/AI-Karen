@@ -58,10 +58,10 @@ function numeric(value: unknown, unit: "fahrenheit" | "percentage" | "mph" | "pl
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
   const pattern = {
-    fahrenheit: /^(-?\\d+(?:\\.\\d+)?)\\s*(?:°\\s*F)?$/i,
-    percentage: /^(-?\\d+(?:\\.\\d+)?)\\s*%?$/,
-    mph: /^(-?\\d+(?:\\.\\d+)?)\\s*(?:mph)?$/i,
-    plain: /^(-?\\d+(?:\\.\\d+)?)$/,
+    fahrenheit: /^(-?\d+(?:\\.\d+)?)\s*(?:°\s*F)?$/i,
+    percentage: /^(-?\d+(?:\\.\d+)?)\s*%?$/,
+    mph: /^(-?\d+(?:\\.\d+)?)\s*(?:mph)?$/i,
+    plain: /^(-?\d+(?:\\.\d+)?)$/,
   }[unit];
   const match = value.trim().match(pattern);
   if (!match) return null;
@@ -106,7 +106,7 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   const hasFahrenheit = numeric(data.temperature_f, "fahrenheit") !== null || numeric(data.temperatureF, "fahrenheit") !== null || (typeof data.temperature === "string" && /°?\s*F\s*$/i.test(data.temperature));
   if (!hasFahrenheit) return null;
   // Do not choose one of two contradictory measurements silently.
-  const reportedTemperature = typeof data.temperature === "string" && /°?\\s*F\\s*$/i.test(data.temperature)
+  const reportedTemperature = typeof data.temperature === "string" && /°?\s*F\s*$/i.test(data.temperature)
     ? numeric(data.temperature, "fahrenheit") : null;
   if (reportedTemperature !== null && temperatureF !== null && Math.abs(reportedTemperature - temperatureF) > 0.15) return null;
   const alternateTemperature = numeric(data.temperatureF, "fahrenheit");
@@ -124,7 +124,7 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   const wind = numberFrom(data, "mph", "wind_speed_mph", "windMph");
   const weatherCode = numberFrom(data, "plain", "weather_code", "weatherCode");
   const observedAt = optionalString(data.observed_at);
-  if (observedAt && (observedAt.length > 64 || !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:\\d{2})?$/.test(observedAt) || Number.isNaN(Date.parse(observedAt)))) return null;
+  if (observedAt && (observedAt.length > 64 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?$/.test(observedAt) || Number.isNaN(Date.parse(observedAt)))) return null;
   const source = optionalString(data.source_url);
   let sourceUrl: string | null = null;
   if (source) {

@@ -19,6 +19,26 @@ const observation = {
 };
 
 describe("governed weather presentation", () => {
+  it("renders observed NYC weather fields as a card instead of losing a verified observation", () => {
+    const nyc = {
+      location: "New York, New York, US",
+      observed_at: "2026-10-24T12:30",
+      temperature: "58.5 °F",
+      temperature_f: 58.5,
+      humidity: 49,
+      high: "62.4 °F",
+      low: "40.2 °F",
+    };
+    const normalized = normalizeWeatherObservation(nyc);
+    expect(normalized).not.toBeNull();
+    expect(normalized?.highF).toBe(62.4);
+    expect(normalized?.lowF).toBe(40.2);
+    const html = renderToStaticMarkup(<KarenWeatherPresentation data={nyc} />);
+    for (const label of ["New York", "58.5°F", "62.4°F", "40.2°F", "49%"]) {
+      expect(html).toContain(label);
+    }
+  });
+
   it("preserves all relevant measurements, condition, source and observation timestamp", () => {
     const html = renderToStaticMarkup(<KarenWeatherPresentation data={{ extractedData: observation }} />);
     for (const required of ["Detroit", "60.3°F", "66.4°F", "41.1°F", "70%", "0.3", "mph", "0%", "Mainly clear", "America/Detroit", "open_meteo"]) {
