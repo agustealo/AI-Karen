@@ -38,7 +38,7 @@ describe("Persona Studio canonical integration", () => {
 
   it("refuses a persona save before its first backend write if revision is unavailable", () => {
     const guard = editor.indexOf("if (personaRevision === null || isSwitchingPersona)");
-    const write = editor.indexOf("const updatedPersona = await apiClient.put<PersonaRecord>(");
+    const write = editor.indexOf("selected = await apiClient.post<PersonaPreferences>(");
     expect(guard).toBeGreaterThan(-1);
     expect(write).toBeGreaterThan(guard);
     expect(editor).toContain("Reload Persona Studio before saving. Your draft remains unchanged.");
