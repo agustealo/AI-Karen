@@ -98,15 +98,20 @@ class SpacyAnalyzer:
                     self.nlp = spacy.load(path, disable=self.config.disabled_components)
                     logger.info("Loaded spaCy model from local path: %s", path)
                     return True
-                except (OSError, ValueError) as exc:
-                    logger.warning("Failed to load local spaCy model from %s: %s", path, exc)
+                except (OSError, ValueError, OverflowError) as exc:
+                    self._last_error = f"{type(exc).__name__}: {exc}"
+                    self._error_count += 1
+                    logger.warning("Failed to load local spaCy model from %s: %s", path, type(exc).__name__)
             return False
 
         if not _try_load_local(local_model_path):
             try:
                 self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
-            except OSError:
-                if self.config.download_missing:
+            except (OSError, ValueError, OverflowError) as exc:
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._error_count += 1
+                logger.warning("spaCy model initialization failed: %s", type(exc).__name__)
+                if isinstance(exc, OSError) and self.config.download_missing:
                     try:
                         from spacy.cli import download
                         download(self.config.model_name)
