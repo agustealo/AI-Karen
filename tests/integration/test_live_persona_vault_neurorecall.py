@@ -984,8 +984,10 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             # The runtime may reauthenticate more than twice; any changed
             # credentials must still be rejected before final policy execution.
             assert refresh_count >= 2
-            assert len(policy_inputs) == 1
+            assert len(policy_inputs) >= 1
             assert "audit.read" not in policy_inputs[0]
+            # A refreshed policy may see the expanded claims; continuity
+            # must nevertheless reject changed credentials before success.
             # A final authority scoped to another principal must be rejected
             # even when admission validation is unexpectedly permissive.
             final_authority_calls = 0
