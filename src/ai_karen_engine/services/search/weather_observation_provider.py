@@ -63,13 +63,35 @@ async def fetch_weather_observation(query: str) -> dict[str, Any]:
         "https://api.open-meteo.com/v1/forecast",
         "api.open-meteo.com",
     )
+    # The geocoder searches settlement names, not free-form "city state" text.
+    # Keep a supplied US state qualifier as an exact candidate constraint.
+    state_code = None
+    lookup_name = location
+    state_match = re.fullmatch(r"([A-Za-z][A-Za-z .'-]{0,99})[, ]+([A-Za-z]{2})", location)
+    if state_match:
+        state_codes = {"MI": "Michigan", "NY": "New York", "CA": "California",
+                       "TX": "Texas", "IL": "Illinois", "OH": "Ohio",
+                       "PA": "Pennsylvania", "FL": "Florida", "GA": "Georgia",
+                       "WA": "Washington"}
+        code = state_match.group(2).upper()
+        if code in state_codes:
+            lookup_name = state_match.group(1).strip()
+            state_code = state_codes[code]
     timeout = max(3.0, min(float(get_config_value("weather.open_meteo.timeout_seconds", 12)), 30.0))
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-        geo = await client.get(geocode_url, params={"name": location, "count": 5, "language": "en", "format": "json"})
+        geo = await client.get(geocode_url, params={"name": lookup_name, "count": 10, "language": "en", "format": "json"})
         geo.raise_for_status()
         candidates = geo.json().get("results") or []
         if not candidates:
             raise ValueError("No matching weather location found")
+        if state_code:
+            candidates = [
+                candidate for candidate in candidates
+                if str(candidate.get("admin1", "")).casefold() == state_code.casefold()
+                and str(candidate.get("country_code", "")).upper() == "US"
+            ]
+            if not candidates:
+                raise ValueError("No weather location matched the requested city and state")
         first = candidates[0]
         latitude, longitude = first["latitude"], first["longitude"]
         if not (-90 <= float(latitude) <= 90 and -180 <= float(longitude) <= 180):
