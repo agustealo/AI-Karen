@@ -11,6 +11,7 @@ import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { ReactNode } from "react";
 import {
   AssistantRuntimeProvider,
+  useAssistantRuntime,
   ActionBarPrimitive,
   AuiIf,
   ComposerPrimitive,
@@ -407,6 +408,19 @@ function AssistantMessage() {
 
 function KarenThread() {
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
+  const { searchDraft, setSearchDraft } = useSession();
+  const assistantRuntime = useAssistantRuntime();
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const applySearchDraft = useCallback(() => {
+    if (!searchDraft) return;
+    try {
+      assistantRuntime.composer.setText(searchDraft);
+      setSearchDraft(null);
+      setDraftError(null);
+    } catch {
+      setDraftError("Could not populate the composer. Your search evidence is still available.");
+    }
+  }, [assistantRuntime, searchDraft, setSearchDraft]);
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
       <ThreadPrimitive.Viewport
@@ -432,6 +446,17 @@ function KarenThread() {
         </div>
         <ThreadPrimitive.ViewportFooter className="sticky bottom-0 z-10 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
           <div className="mx-auto max-w-3xl">
+            {searchDraft && (
+              <section role="status" className="mb-3 rounded-xl border border-border bg-card p-3">
+                <p className="text-xs font-semibold">Search evidence ready</p>
+                <p className="mt-1 text-xs text-muted-foreground">Review this draft before sending it to Karen. No request has been submitted.</p>
+                <div className="mt-2 flex gap-2">
+                  <button type="button" onClick={applySearchDraft} className="rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground">Use in composer</button>
+                  <button type="button" onClick={() => setSearchDraft(null)} className="rounded-lg border px-3 py-2 text-xs">Dismiss</button>
+                </div>
+                {draftError && <p role="alert" className="mt-2 text-xs text-destructive">{draftError}</p>}
+              </section>
+            )}
             <AuiIf condition={(s) => s.thread.isRunning}>
               <p role="status" aria-live="polite" className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
