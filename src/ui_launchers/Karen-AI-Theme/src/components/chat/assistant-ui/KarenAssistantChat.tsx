@@ -178,6 +178,28 @@ function KarenSubagent({ data }: { data: unknown }) {
   return <KarenActivity data={data} category="Subagent" />;
 }
 
+function KarenResponseIntegrity({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const receipt = data as Record<string, unknown>;
+  const truncated = receipt.output_truncated === true;
+  const recall = receipt.cortex_intent === "memory.recall" &&
+    typeof receipt.personal_recall_grounded === "boolean";
+  if (!truncated && !recall) return null;
+  return (
+    <section data-testid="karen-response-integrity" role="status" aria-live="polite"
+      className="my-2 rounded-xl border border-border/60 px-3 py-2 text-xs">
+      {truncated && <p data-testid="karen-output-truncated">
+        This answer stopped at the model&apos;s output-token limit. It may be incomplete.
+      </p>}
+      {recall && <p data-testid="karen-recall-provenance">
+        {receipt.personal_recall_grounded === true
+          ? "Personal recall grounded in authorized evidence."
+          : "Personal recall was not verified against authorized evidence."}
+      </p>}
+    </section>
+  );
+}
+
 function KarenRestoredExecutionReceipt({ data }: { data: unknown }) {
   if (!data || typeof data !== "object") return null;
   const receipt = data as Record<string, unknown>;
@@ -205,6 +227,7 @@ const agentParts = {
     by_name: {
       "karen.learning_decision": KarenLearningDecision,
       "karen.execution_receipt.v1": KarenRestoredExecutionReceipt,
+      "karen.response_integrity.v1": KarenResponseIntegrity,
       "karen.presentation.v1": KarenPresentationRegistry,
       "karen.weather": KarenWeatherPresentation,
       "karen.weather_observation": KarenWeatherPresentation,
