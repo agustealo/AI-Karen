@@ -9,7 +9,7 @@ const apiSource = readFileSync(
 );
 
 const chatSource = readFileSync(
-  resolve(process.cwd(), "src/components/chat/ChatInterface.tsx"),
+  resolve(process.cwd(), "src/components/chat/assistant-ui/KarenAssistantChat.tsx"),
   "utf8",
 );
 
@@ -24,8 +24,8 @@ describe("canonical agent stream surface", () => {
   });
 
   it("renders agent activity in the canonical chat surface", () => {
-    expect(chatSource).toContain("import AgentActivityPanel from './AgentActivityPanel';");
-    expect(chatSource).toContain("<AgentActivityPanel steps={agentSteps} />");
-    expect(chatSource).not.toContain("Legacy AgentActivityPanel removed to simplify UI");
+    expect(chatSource).toContain("function KarenActivity(");
+    expect(chatSource).toContain('<KarenActivity data={data} category="Agent step" />');
+    expect(chatSource).toContain("MessagePrimitive.Parts");
   });
 });
