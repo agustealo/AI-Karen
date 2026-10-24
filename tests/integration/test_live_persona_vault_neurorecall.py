@@ -1312,14 +1312,14 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         policy_context={"memory_write_authorized": True},
                     ), session=session,
                 )
-        # A detached session object with no active transaction cannot stage
-        # writes, even if the caller provides an apparent write capability.
+        # Historical writes are rejected before an inactive session can
+        # influence persistence authority; the earlier denial is intentional.
         from ai_karen_engine.persistence.postgres import get_postgres_engine
         inactive_session = get_postgres_engine().async_session_factory()
         try:
             with pytest.raises(
                 NeuroVaultAuthorizationError,
-                match="active caller-owned PostgreSQL transaction required",
+                match="historical migration persistence is disabled",
             ):
                 await PostgresNeuroVault().persist_in_transaction(
                     blocked_with_session,
@@ -1333,12 +1333,12 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 )
         finally:
             await inactive_session.close()
-        # A transaction belonging to another tenant must be denied before
-        # any ledger rows are staged, even with a scoped VaultContext.
+        # The historical-write gate denies persistence before a wrong-tenant
+        # transaction can affect ledger rows or authorize the operation.
         async with async_transaction_scope(tenant_id=str(uuid.uuid4())) as wrong_tenant_session:
             with pytest.raises(
                 NeuroVaultAuthorizationError,
-                match="caller transaction tenant scope does not match",
+                match="historical migration persistence is disabled",
             ):
                 await PostgresNeuroVault().persist_in_transaction(
                     blocked_with_session,
