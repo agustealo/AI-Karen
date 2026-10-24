@@ -847,7 +847,6 @@ async def inspect_authenticated_legacy_migration_evidence(
     async with async_transaction_scope(tenant_id=tenant, user_id=user) as session:
         # The canonical transaction owner binds both tenant and authenticated
         # principal before any historical evidence can be read.
-        from sqlalchemy import text
         inspected = await inspect_locked_legacy_migration_preparation(
             session=session, tenant_id=tenant, user_id=user,
             source_record_id=source_record_id.strip(),
