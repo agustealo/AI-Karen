@@ -221,7 +221,7 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
         # A trailing request to remember the assertion is an instruction,
         # not part of the person's name.
         raw_name = re.sub(
-            r"(?i)\\s+(?:please\\s+)?remember\\s+(?:it|this|that)\\s*$",
+            r"(?i)\s+(?:please\s+)?remember\s+(?:it|this|that)\s*$",
             "",
             name_match.group(1),
         )
