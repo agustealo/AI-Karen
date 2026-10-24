@@ -3,7 +3,6 @@
 import pytest
 
 from ai_karen_engine.core.memory.contracts import GoalState
-from ai_karen_engine.core.personalization.contracts import UserGoalStatus
 from ai_karen_engine.core.personalization.goals.contracts import _map_user_goal_status
 
 
@@ -16,11 +15,11 @@ def test_canonical_goal_state_survives_legacy_adapter(state: GoalState) -> None:
 @pytest.mark.parametrize(
     ("status", "state"),
     [
-        (UserGoalStatus.ACTIVE, GoalState.ACTIVE),
-        (UserGoalStatus.PAUSED, GoalState.PAUSED),
-        (UserGoalStatus.COMPLETED, GoalState.COMPLETED),
-        (UserGoalStatus.ABANDONED, GoalState.ABANDONED),
-        (UserGoalStatus.UNKNOWN, GoalState.PROPOSED),
+        ("active", GoalState.ACTIVE),
+        ("paused", GoalState.PAUSED),
+        ("completed", GoalState.COMPLETED),
+        ("abandoned", GoalState.ABANDONED),
+        ("unknown", GoalState.PROPOSED),
     ],
 )
 def test_historical_goal_status_semantics_are_preserved(status, state) -> None:
