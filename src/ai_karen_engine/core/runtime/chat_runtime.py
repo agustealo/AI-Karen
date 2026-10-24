@@ -3761,6 +3761,7 @@ class ChatRuntime:
             "protocol": provider_meta.get("protocol"),
             "locality": provider_meta.get("locality"),
             "response_source": provider_meta.get("response_source"),
+            "cortex_intent": decision.intent if decision.intent == "memory.recall" else None,
             "finish_reason": provider_meta.get("finish_reason"),
             "output_truncated": provider_meta.get("output_truncated") is True,
             "fallback_level": provider_meta.get("fallback_level", 0),

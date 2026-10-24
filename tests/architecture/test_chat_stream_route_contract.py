@@ -8,7 +8,7 @@ RUNTIME = ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py"
 ROUTERS = ROOT / "src/ai_karen_engine/server/routers.py"
 CHAT_UI = (
     ROOT
-    / "src/ui_launchers/Karen-AI-Theme/src/components/chat/ChatInterface.tsx"
+    / "src/ui_launchers/Karen-AI-Theme/src/components/chat/assistant-ui/KarenAssistantChat.tsx"
 )
 
 
@@ -19,8 +19,8 @@ def test_chat_stream_frontend_and_backend_share_one_canonical_route() -> None:
 
     assert '@router.post("/chat/stream")' in runtime
     assert 'RouterSpec(chat_runtime_router, "/api", ("chat-runtime",))' in routers
-    assert "apiClient.postStream(" in chat_ui
-    assert ": '/api/chat/stream'" in chat_ui
+    assert 'new HttpAgent({ url: "/api/chat/ag-ui" })' in chat_ui
+    assert '@router.post("/chat/ag-ui")' in runtime
     assert '@router.post("/stream")' not in runtime
 
 

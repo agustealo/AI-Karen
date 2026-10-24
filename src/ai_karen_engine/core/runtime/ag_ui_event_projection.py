@@ -308,8 +308,25 @@ class AGUIEventProjection:
             })]
 
         if kind == "complete":
+            # Explicit terminal receipt, not an unrestricted metadata dump.
+            # Recall grounding requires a runtime-authorized evidence source.
+            receipt: dict[str, Any] = {
+                "output_truncated": meta.get("output_truncated") is True,
+            }
+            if meta.get("cortex_intent") == "memory.recall":
+                receipt["cortex_intent"] = "memory.recall"
+                source = meta.get("response_source")
+                receipt["personal_recall_grounded"] = source in {
+                    "authorized_memory_evidence",
+                    "authorized_conversation_evidence",
+                }
+                if receipt["personal_recall_grounded"]:
+                    receipt["evidence_source"] = source
+            events = self._finish_message()
+            if receipt["output_truncated"] or "personal_recall_grounded" in receipt:
+                events.append(self._custom("karen.response_integrity.v1", receipt))
             self._terminal = True
-            return self._finish_message() + [{
+            return events + [{
                 "type": "RUN_FINISHED",
                 "threadId": self.thread_id,
                 "runId": self.run_id,
