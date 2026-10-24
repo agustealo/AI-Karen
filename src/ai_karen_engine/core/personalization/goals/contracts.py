@@ -297,9 +297,12 @@ def _map_user_goal_status(status: Any) -> GoalState:
     if isinstance(status, str):
         try:
             status = UserGoalStatus(status)
-        except ValueError:
-            return GoalState.PROPOSED
-    return mapping.get(status, GoalState.PROPOSED)
+        except ValueError as exc:
+            raise ValueError("Unsupported persisted goal lifecycle state") from exc
+    try:
+        return mapping[status]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("Unsupported persisted goal lifecycle state") from exc
 
 
 @dataclass
