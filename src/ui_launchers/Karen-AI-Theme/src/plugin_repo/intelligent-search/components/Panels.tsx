@@ -86,8 +86,8 @@ export function ResultsPanel({ response }: PanelProps) {
     <div className="space-y-6">
       {results.length > 0 && (
         <section aria-label="Relevant search passages" className="rounded-3xl border border-border/60 bg-card/90 p-5">
-          <h3 className="mb-2 text-xl font-semibold text-foreground">Relevant passages</h3>
-          <p className="mb-4 text-sm text-muted-foreground">Excerpts from retrieved pages, not an AI-generated answer. Open the sources to check context.</p>
+          <h3 className="mb-2 text-xl font-semibold text-foreground">Sources worth exploring</h3>
+          <p className="mb-4 text-sm text-muted-foreground">Search excerpts are supporting material, not Karen's verified answer. Open an original page or ask Karen to analyze a source.</p>
           <div className="space-y-4">
             {results.slice(0, 5).map((result, index) => (
               <article key={result.id || result.url + index} className="rounded-2xl border border-border/50 p-4">
@@ -445,7 +445,7 @@ function ResultCard({ result, index, onSend }: { result: SearchResultItem; index
         </div>
         {typeof result.score === 'number' && (
           <div className="rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[10px] font-bold text-primary">
-            {(result.score * 100).toFixed(0)}%
+            Score {result.score.toFixed(2)}
           </div>
         )}
       </div>
