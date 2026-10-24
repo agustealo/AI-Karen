@@ -973,19 +973,17 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                     "evaluate_migration_write_authority",
                     record_policy_input,
                 )
-                fresh_replay, fresh_receipt = (
+                # Permission changes after lock must fail closed rather than
+                # authorizing a historical inspection with changed claims.
+                with pytest.raises(PermissionError, match="principal changed"):
                     await inspect_authenticated_legacy_migration_transaction(
                         request=http_request, request_id=str(uuid.uuid4()),
                         correlation_id=str(uuid.uuid4()), source_record_id=str(source),
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
-                )
-            assert fresh_replay == replay
-            assert not fresh_receipt.persisted
             assert refresh_count == 2
-            assert len(policy_inputs) == 2
+            assert len(policy_inputs) == 1
             assert "audit.read" not in policy_inputs[0]
-            assert "audit.read" in policy_inputs[1]
             # A final authority scoped to another principal must be rejected
             # even when admission validation is unexpectedly permissive.
             final_authority_calls = 0
