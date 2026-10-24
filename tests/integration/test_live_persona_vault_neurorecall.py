@@ -1282,7 +1282,9 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 custom={"consent_scope": "persona-memory-migration"},
             ),
         )
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        async with async_transaction_scope(
+            tenant_id=str(tenant), user_id=str(user),
+        ) as session:
             from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
                 inspect_locked_legacy_migration_preparation,
             )
