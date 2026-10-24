@@ -60,7 +60,8 @@ DEFAULT_PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
         "priority": 88,
     },
     "wikipedia": {
-        "enabled": True,
+        # Encyclopedia retrieval is opt-in, not a broad live-web fallback.
+        "enabled": False,
         "priority": 85,
     },
     "startpage": {
