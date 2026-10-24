@@ -180,21 +180,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
               </div>
             </div>
 
-            <div className="rounded-3xl border border-border/60 bg-background/70 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted-foreground">
-                Capability strip
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {capabilityTags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs text-muted-foreground"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            </div>
+
           </div>
         </aside>}
       </div>
