@@ -24,7 +24,7 @@ const presentationSchema = z.object({
  * assigning a timezone that the backend has not verified.
  */
 export function displayClockObservation(formatted: string): { time: string; date?: string } {
-  const match = /^(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})(?::(\\d{2}))?$/.exec(formatted.trim());
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/.exec(formatted.trim());
   if (!match) return { time: formatted };
   const hour = Number(match[4]);
   const month = Number(match[2]);
