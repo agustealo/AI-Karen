@@ -332,6 +332,7 @@ async def test_runtime_policy_and_explicit_consent_both_required_for_retry():
     request = PolicyEvaluationRequest(
         tenant_id=str(tenant), user_id=str(user),
         action="legacy_persona_memory_migration",
+        session_id="disposable-persona-migration-proof",
         permissions=["memory.write"], requested_capabilities=["memory.write"],
     )
     options = dict(
@@ -426,6 +427,7 @@ async def test_source_consent_and_runtime_policy_joint_preparation():
     request = PolicyEvaluationRequest(
         tenant_id=str(tenant), user_id=str(user),
         action="legacy_persona_memory_migration",
+        session_id="disposable-persona-migration-proof",
         permissions=["memory.write"], requested_capabilities=["memory.write"],
     )
     options = dict(
