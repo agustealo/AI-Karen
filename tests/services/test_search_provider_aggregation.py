@@ -45,7 +45,7 @@ async def test_general_search_aggregates_hosts_across_providers():
 
 @pytest.mark.asyncio
 async def test_explicit_provider_remains_pinned():
-    registry = WebSearchProviderRegistry()
+    registry = WebSearchProviderRegistry(settings={"search": {"wikipedia": {"enabled": True}}})
     client = WebSearchClient(registry=registry)
     client._search_with_provider = AsyncMock(return_value=SearchResponse(
         query="Jamaica", provider="wikipedia",
@@ -137,3 +137,11 @@ async def test_explicit_provider_failure_never_falls_through_to_other_providers(
     assert response.provider == "none"
     assert client._search_with_provider.await_count == 1
     assert client._search_with_provider.await_args.args[0] == "wikipedia"
+
+
+def test_default_general_search_does_not_enable_encyclopedia_only_fallback():
+    registry = WebSearchProviderRegistry()
+    assert not registry.is_enabled("wikipedia")
+    assert "wikipedia" not in registry.sorted_enabled()
+    configured = WebSearchProviderRegistry(settings={"search": {"wikipedia": {"enabled": True}}})
+    assert configured.is_enabled("wikipedia")
