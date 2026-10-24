@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from contextlib import asynccontextmanager, contextmanager
 from typing import AsyncGenerator, Generator, Optional
 
@@ -39,20 +41,65 @@ def transaction_scope(
         session.close()
 
 
+async def rollback_async_transaction(session: AsyncSession) -> None:
+    """Complete rollback despite repeated cancellation, invalidating on failure."""
+    rollback_task = asyncio.create_task(session.rollback())
+    while not rollback_task.done():
+        try:
+            await asyncio.shield(rollback_task)
+        except asyncio.CancelledError:
+            if rollback_task.done():
+                break
+    try:
+        await rollback_task
+    except BaseException:
+        invalidate_task = asyncio.create_task(session.invalidate())
+        while not invalidate_task.done():
+            try:
+                await asyncio.shield(invalidate_task)
+            except asyncio.CancelledError:
+                if invalidate_task.done():
+                    break
+        await invalidate_task
+        raise
+
+
 @asynccontextmanager
 async def async_transaction_scope(
     tenant_id: Optional[str] = None,
+    *, user_id: Optional[str] = None,
 ) -> AsyncGenerator[AsyncSession, None]:
-    """Provide an async transactional scope with optional tenant RLS context."""
+    """Provide tenant and authenticated-principal scoped async transaction."""
     engine = get_postgres_engine()
     async with engine.async_session_factory() as session:
         try:
+            if user_id is not None:
+                try:
+                    tenant_id = str(uuid.UUID(str(tenant_id).strip()))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "authenticated transaction tenant must be a UUID"
+                    ) from exc
             if tenant_id is not None:
                 await _apply_tenant_context_async(session, tenant_id)
+            if user_id is not None:
+                try:
+                    principal = str(uuid.UUID(str(user_id).strip()))
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "authenticated transaction principal must be a UUID"
+                    ) from exc
+                await session.execute(
+                    text("SELECT set_config('app.current_user_id', :user, true)"),
+                    {"user": principal},
+                )
             yield session
             await session.commit()
-        except Exception:
-            await session.rollback()
+        except BaseException:
+            # Cancellation must not escape while a caller-owned transaction
+            # remains active. SQLAlchemy's session context also closes it,
+            # but explicit rollback keeps the transaction boundary reliable.
+            await rollback_async_transaction(session)
             raise
 
 
@@ -89,4 +136,5 @@ async def _apply_tenant_context_async(session: AsyncSession, tenant_id: str) -> 
 __all__ = [
     "transaction_scope",
     "async_transaction_scope",
+    "rollback_async_transaction",
 ]
