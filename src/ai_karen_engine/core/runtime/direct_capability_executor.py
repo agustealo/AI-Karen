@@ -192,10 +192,15 @@ class DirectCapabilityExecutor:
         attempts: List[Dict[str, Any]] = []
 
         if decision.intent == "search.weather":
+            from ai_karen_engine.core.runtime.location_context import resolve_location
             effective_context = dict(resolved_context or {})
             # Explicit request/device-selected context is handled by the
             # existing resolver; governed profile values fill missing roles.
-            effective_context.update(dict(request.metadata or {}))
+            selected = resolve_location(request.metadata, resolved_context, kind="weather")
+            effective_context = (
+                {"weather_location": selected.value, "location_source": selected.source}
+                if selected else {}
+            )
             resolved = self._weather_query_with_location(query, effective_context)
             if resolved is None:
                 return DirectCapabilityResult(
@@ -704,9 +709,11 @@ class DirectCapabilityExecutor:
                     "context": dict(request.metadata or {}),
                 }
 
-            timezone_name = self._metadata_timezone(request.metadata)
-            if not timezone_name:
-                timezone_name = self._metadata_timezone(resolved_context or {})
+            from ai_karen_engine.core.runtime.location_context import resolve_location
+            selected_timezone = resolve_location(
+                request.metadata, resolved_context, kind="time"
+            )
+            timezone_name = selected_timezone.value if selected_timezone else None
             params: Dict[str, Any] = {
                 "mode": "time",
                 "context": dict(request.metadata or {}),
