@@ -21,7 +21,7 @@ from ai_karen_engine.core.memory.contracts import (
 )
 from ai_karen_engine.core.reasoning.belief.contracts import EvidenceType
 
-from ..contracts import PreferenceScope, UserGoal, UserGoalStatus
+from ..contracts import PreferenceScope, UserGoal
 
 GoalId = str
 
@@ -495,7 +495,6 @@ __all__ = [
     "ProspectiveState",
     "ProspectiveTrigger",
     "UserGoal",
-    "UserGoalStatus",
     "goal_from_user_goal",
     "to_snapshot",
 ]
