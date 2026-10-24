@@ -1,0 +1,61 @@
+"""Governed location context selection for direct capabilities.
+
+Request-provided location hints require an explicit recognized provenance.
+Tenant-scoped runtime evidence is trusted only after upstream authorization.
+This module never geolocates, accesses the network, or persists preferences.
+"""
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+
+TRUSTED_REQUEST_SOURCES = frozenset({
+    "user_selected", "user_profile", "device_with_consent",
+})
+
+
+@dataclass(frozen=True)
+class ResolvedLocation:
+    value: str
+    source: str
+
+
+def _bounded(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if 1 <= len(value) <= 120 else None
+
+
+def resolve_location(
+    request_metadata: Mapping[str, Any] | None,
+    authorized_context: Mapping[str, Any] | None,
+    *,
+    kind: str,
+) -> ResolvedLocation | None:
+    """Select an explicitly sourced request hint, then authorized evidence.
+
+    Explicitly mentioned places in the query remain the caller's responsibility.
+    No generic metadata location may override governed runtime evidence.
+    """
+    metadata = request_metadata or {}
+    authorized = authorized_context or {}
+    if kind == "weather":
+        provenance = metadata.get("location_source")
+        if provenance in TRUSTED_REQUEST_SOURCES:
+            for key in ("weather_location", "location", "city"):
+                value = _bounded(metadata.get(key))
+                if value:
+                    return ResolvedLocation(value, str(provenance))
+        value = _bounded(authorized.get("weather_location"))
+        return ResolvedLocation(value, "authorized_runtime") if value else None
+    if kind == "time":
+        for key in ("timezone", "user_timezone", "local_timezone"):
+            value = _bounded(metadata.get(key))
+            if value and metadata.get("timezone_source") in TRUSTED_REQUEST_SOURCES:
+                return ResolvedLocation(value, str(metadata["timezone_source"]))
+        value = _bounded(authorized.get("timezone"))
+        return ResolvedLocation(value, "authorized_runtime") if value else None
+    raise ValueError("Unsupported location context kind")

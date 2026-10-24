@@ -19,7 +19,7 @@ def test_chat_stream_frontend_and_backend_share_one_canonical_route() -> None:
 
     assert '@router.post("/chat/stream")' in runtime
     assert 'RouterSpec(chat_runtime_router, "/api", ("chat-runtime",))' in routers
-    assert 'new HttpAgent({ url: "/api/chat/ag-ui" })' in chat_ui
+    assert 'new HttpAgent({ url: "/api/chat/ag-ui", threadId })' in chat_ui
     assert '@router.post("/chat/ag-ui")' in runtime
     assert '@router.post("/stream")' not in runtime
 
