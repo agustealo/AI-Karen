@@ -16,6 +16,7 @@ const presentationSchema = z.object({
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
+  display: z.object({ density: z.enum(["compact", "comfortable"]) }).strict().optional(),
 }).strict();
 
 export type KarenPresentationEnvelope = z.infer<typeof presentationSchema>;
@@ -101,8 +102,8 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
     case "time.observation": {
       const clock = envelope.data as { formatted: string; timezone?: string };
       return <section aria-label="Verified time observation" data-testid="karen-time-presentation"
-        className="my-3 rounded-xl border border-border/70 p-4">
-        <p className="text-xs font-medium text-muted-foreground">Verified local time</p>
+        className={envelope.display?.density === "compact" ? "my-2 rounded-lg border border-border/70 p-2" : "my-3 rounded-xl border border-border/70 p-4"}>
+        <p className="text-xs font-medium text-muted-foreground">Reported time{clock.timezone ? ` (${clock.timezone})` : ""}</p>
         <p className="mt-1 text-2xl font-semibold tabular-nums">{clock.formatted}</p>
         {clock.timezone && <p className="mt-1 text-xs text-muted-foreground">{clock.timezone}</p>}
       </section>;
@@ -115,7 +116,7 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
       </section>;
     }
     case "weather.observation":
-      return <KarenWeatherPresentation data={envelope.data} />;
+      return <KarenWeatherPresentation data={envelope.data} density={envelope.display?.density} />;
     case "weather.comparison":
       return <section aria-label="Weather comparison" data-testid="karen-weather-comparison" className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {(envelope.data as unknown[]).map((item, index) => <KarenWeatherPresentation key={index} data={item} />)}
