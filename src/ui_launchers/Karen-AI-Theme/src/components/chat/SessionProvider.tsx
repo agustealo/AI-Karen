@@ -51,6 +51,8 @@ interface ConversationApiResponse {
 
 interface SessionContextType {
   currentSession: Session | null;
+  searchDraft: string | null;
+  setSearchDraft: (draft: string | null) => void;
   workspaceRunId: string | null;
   setWorkspaceRunId: (runId: string | null) => void;
   sessions: Session[];
@@ -167,6 +169,7 @@ interface SessionProviderProps {
 export function SessionProvider({ children, initialSessionId }: SessionProviderProps) {
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [workspaceRunId, setWorkspaceRunId] = useState<string | null>(null);
+  const [searchDraft, setSearchDraft] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -694,6 +697,8 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
   return (
     <SessionContext.Provider value={{
       currentSession,
+      searchDraft,
+      setSearchDraft,
       workspaceRunId,
       setWorkspaceRunId,
       sessions,
