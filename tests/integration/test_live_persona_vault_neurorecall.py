@@ -1378,7 +1378,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
 
         with pytest.raises(
             NeuroVaultAuthorizationError,
-            match="active caller-owned PostgreSQL transaction required",
+            match="historical migration persistence is disabled",
         ):
             await PostgresNeuroVault().persist_in_transaction(
                 blocked_with_session,
@@ -1399,7 +1399,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             )
             with pytest.raises(
                 NeuroVaultAuthorizationError,
-                match="caller transaction user scope does not match",
+                match="historical migration persistence is disabled",
             ):
                 await PostgresNeuroVault().persist_in_transaction(
                     blocked_with_session,
@@ -1416,7 +1416,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         async with async_transaction_scope(tenant_id=str(tenant)) as unbound_session:
             with pytest.raises(
                 NeuroVaultAuthorizationError,
-                match="historical migration requires authenticated transaction principal",
+                match="historical migration persistence is disabled",
             ):
                 await PostgresNeuroVault().persist_in_transaction(
                     blocked_with_session,
