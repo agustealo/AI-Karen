@@ -33,3 +33,9 @@ def test_trusted_timezone_is_selected_and_unknown_kind_rejected():
     )
     assert selected is not None and selected.value == "America/New_York"
     assert resolve_location({}, {}, kind="weather") is None
+
+
+def test_weather_clarification_is_preserved_by_capability_adapter():
+    from pathlib import Path
+    executor = (Path(__file__).resolve().parents[3] / "src/ai_karen_engine/core/runtime/direct_capability_executor.py").read_text()
+    assert 'effective_context["pending_clarification"] = pending' in executor
