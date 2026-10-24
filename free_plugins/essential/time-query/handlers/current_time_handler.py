@@ -189,7 +189,18 @@ async def handle_current_time(mode: str, params: Dict[str, Any]) -> Dict[str, An
             },
         }
 
+    # Explicit requested timezone has priority. An authenticated runtime may
+    # supply an already-authorized profile/device timezone as a fallback.
+    # Never interpret free-form conversation history or an IP guess here.
     timezone_input = TimeHandlerBase.normalize_string(params.get("timezone"))
+    timezone_source = "explicit_request" if timezone_input else "system"
+    if not timezone_input:
+        runtime_timezone = TimeHandlerBase.normalize_string(
+            context.get("authorized_timezone")
+        )
+        if runtime_timezone:
+            timezone_input = runtime_timezone
+            timezone_source = "authorized_context"
     resolution_meta = None
     timezone_name = None
 
@@ -209,6 +220,7 @@ async def handle_current_time(mode: str, params: Dict[str, Any]) -> Dict[str, An
             "label": tz_resolution.get("label"),
             "isAmbiguousDefault": tz_resolution.get("is_ambiguous_default", False),
             "resolutionType": tz_resolution.get("resolution_type", "alias"),
+            "timezoneSource": timezone_source,
         }
 
     local_now = TimeHandlerBase.get_system_now(timezone_name)
@@ -230,7 +242,7 @@ async def handle_current_time(mode: str, params: Dict[str, Any]) -> Dict[str, An
         },
         source_detail={
             "clock": "local_os_clock",
-            "timezone_source": "system" if not timezone_name else "zoneinfo",
+            "timezone_source": timezone_source,
             "external_sync_checked": False,
             "storage": "stateless",
         },

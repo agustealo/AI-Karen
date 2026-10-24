@@ -165,7 +165,7 @@ function Metric({ icon, title, children }: { icon: ReactNode; title: string; chi
   </div>;
 }
 
-export function KarenWeatherPresentation({ data }: { data: unknown }) {
+export function KarenWeatherPresentation({ data, density = "comfortable" }: { data: unknown; density?: "compact" | "comfortable" }) {
   const weather = normalizeWeatherObservation(data);
   if (!weather) return null;
   const condition = weather.weatherCode === null ? null : CONDITIONS[weather.weatherCode] ?? null;
@@ -174,7 +174,7 @@ export function KarenWeatherPresentation({ data }: { data: unknown }) {
   const hasDetails = weather.humidity !== null || weather.windMph !== null || weather.precipitationProbability !== null;
   return (
     <section aria-label={`Weather observation for ${weather.location}`} data-testid="karen-weather-presentation"
-      className="my-3 min-w-0 space-y-3 rounded-2xl border border-border/70 bg-card p-4">
+      className={density === "compact" ? "my-2 min-w-0 space-y-2 rounded-xl border border-border/70 bg-card p-3" : "my-3 min-w-0 space-y-3 rounded-2xl border border-border/70 bg-card p-4"}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold">{weather.location}</h3>
