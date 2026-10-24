@@ -122,7 +122,17 @@ def is_personal_memory_recall_query(text: str) -> bool:
 
 def is_explicit_memory_save_request(text: str) -> bool:
     """Recognize bounded user-directed save intent, never authorize a write."""
-    return bool(_EXPLICIT_MEMORY_SAVE.fullmatch(_normalize_save_text(text)))
+    normalized = _normalize_save_text(text)
+    if _EXPLICIT_MEMORY_SAVE.fullmatch(normalized):
+        return True
+    # Combined first-person identity + save command is explicit user consent,
+    # but this signal does not bypass the runtime memory-write policy gate.
+    if re.fullmatch(
+        r"my name is [a-z][a-z' -]{0,60}?[, ]+remember (?:it|this)[.!?]*",
+        normalized,
+    ):
+        return True
+    return False
 
 
 def explicit_memory_save_target_terms(text: str) -> frozenset[str] | None:
@@ -218,7 +228,14 @@ def classify_explicit_user_memory(text: str) -> list[MemorySignal]:
 
     name_match = _NAME.search(normalized)
     if name_match:
-        value = _clean_value(name_match.group(1))
+        # A trailing request to remember the assertion is an instruction,
+        # not part of the person's name.
+        raw_name = re.sub(
+            r"(?i)\s+(?:please\s+)?remember\s+(?:it|this|that)\s*$",
+            "",
+            name_match.group(1),
+        )
+        value = _clean_value(raw_name)
         if value:
             signals.append(
                 MemorySignal(
