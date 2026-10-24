@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.contracts.values import JsonMap, JsonValue
+from ai_karen_engine.core.memory.contracts import GoalState as CanonicalGoalState
 
 
 # ===================================
@@ -298,7 +299,7 @@ class GoalState:
     """A user goal with provenance."""
     goal_id: str
     description: str
-    status: UserGoalStatus
+    status: CanonicalGoalState
     provenance: Provenance
     scope: PreferenceScope
     started_at: datetime
@@ -370,7 +371,7 @@ class CommitmentState:
     provenance: Provenance
     started_at: datetime
     target_date: Optional[datetime] = None
-    status: UserGoalStatus = UserGoalStatus.ACTIVE
+    status: CanonicalGoalState = CanonicalGoalState.ACTIVE
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -513,7 +514,7 @@ class UserGoal:
     tenant_id: str
     description: str
     scope: PreferenceScope
-    status: UserGoalStatus
+    status: CanonicalGoalState
     confidence: float
     evidence: List[str]
     started_at: datetime
