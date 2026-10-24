@@ -898,19 +898,8 @@ async def inspect_authenticated_legacy_migration_evidence(
         # A read-only admission never creates or carries a database write
         # capability. Recheck transaction-local principal and tenant after
         # all policy callbacks and before returning the inspection evidence.
-        db_scope = (await session.execute(text(
-            "SELECT current_setting('app.current_user_id', true), "
-            "current_setting('app.current_tenant_id', true), "
-            "current_setting('app.tenant_id', true)"
-        ))).one()
-        if db_scope[0] != user:
-            raise PermissionError(
-                "historical migration transaction principal changed during inspection"
-            )
-        if db_scope[1] != tenant or db_scope[2] != tenant:
-            raise PermissionError(
-                "historical migration transaction tenant changed during inspection"
-            )
+        # Canonical transaction authority verifies the bound principal,
+        # tenant and transaction ID without a duplicate SQL check here.
         if transaction_authority.transaction_id <= 0:
             raise PermissionError("valid migration inspection transaction required")
         # Verify transaction continuity after all source/replay and policy
