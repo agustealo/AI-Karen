@@ -18,8 +18,7 @@ const packageJson = JSON.parse(
 describe("governed assistant-ui AG-UI chat boundary", () => {
   it("uses the official AG-UI runtime with a same-origin canonical proxy", () => {
     expect(component).toContain("useAgUiRuntime({");
-    expect(component).toContain("new HttpAgent(");
-    expect(component).toContain('"/api/chat/ag-ui"');
+    expect(component).toContain('new HttpAgent({ url: "/api/chat/ag-ui", threadId })');
     expect(component).toContain("AssistantRuntimeProvider");
     expect(component).toContain("ThreadPrimitive.Messages");
     expect(component).toContain("ComposerPrimitive.Input");
