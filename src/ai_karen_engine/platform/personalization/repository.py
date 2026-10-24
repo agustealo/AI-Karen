@@ -632,14 +632,14 @@ class PostgresPersonalizationRepository(PersonalizationRepository):
         return PreferenceScope.GLOBAL
 
     @staticmethod
-    def _goal_status(state: str) -> UserGoalStatus:
-        mapping = {
-            "active": UserGoalStatus.ACTIVE,
-            "paused": UserGoalStatus.PAUSED,
-            "completed": UserGoalStatus.COMPLETED,
-            "abandoned": UserGoalStatus.ABANDONED,
-        }
-        return mapping.get(state, UserGoalStatus.ACTIVE)
+    def _goal_status(state: str) -> "GoalState":
+        """Decode the canonical memory lifecycle without collapsing states."""
+        from ai_karen_engine.core.memory.contracts import GoalState
+
+        try:
+            return GoalState(state)
+        except ValueError as exc:
+            raise ValueError("Unsupported persisted goal lifecycle state") from exc
 
     @staticmethod
     def _stability(value: str) -> PreferenceStability:
