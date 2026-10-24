@@ -700,9 +700,25 @@ async def stream_ag_ui_chat(
                 owned = await get_conversation_runtime_gateway().get_owned_snapshot(
                     lookup_context, message_limit=0,
                 )
-            except (PermissionError, RuntimeError, ValueError) as exc:
+            except PermissionError as exc:
+                # Do not disclose the existence of another user's conversation.
                 raise HTTPException(
                     status_code=404, detail="Conversation is unavailable",
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422, detail="Invalid conversation identity",
+                ) from exc
+            except RuntimeError as exc:
+                # Missing conversations and backend storage failures are not
+                # interchangeable. Preserve fail-closed ownership checks while
+                # surfacing infrastructure failure as a retryable condition.
+                if str(exc) == "conversation_not_found":
+                    raise HTTPException(
+                        status_code=404, detail="Conversation is unavailable",
+                    ) from exc
+                raise HTTPException(
+                    status_code=503, detail="Conversation lookup temporarily unavailable",
                 ) from exc
             conversation_id = str(owned.conversation.id)
             session_id = SecurityValidator.sanitize_session_id(
