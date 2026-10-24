@@ -24,7 +24,6 @@ from ai_karen_engine.core.personalization.contracts import (
     PreferenceStability,
     PreferenceState,
     UserGoal,
-    UserGoalStatus,
     UserModelHealth,
     UserModelHealthStatus,
     make_pattern_id,
