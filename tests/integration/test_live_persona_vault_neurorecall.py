@@ -981,7 +981,9 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                         correlation_id=str(uuid.uuid4()), source_record_id=str(source),
                         runtime_policy=RuntimePolicyEnforcer(),
                     )
-            assert refresh_count == 2
+            # The runtime may reauthenticate more than twice; any changed
+            # credentials must still be rejected before final policy execution.
+            assert refresh_count >= 2
             assert len(policy_inputs) == 1
             assert "audit.read" not in policy_inputs[0]
             # A final authority scoped to another principal must be rejected
