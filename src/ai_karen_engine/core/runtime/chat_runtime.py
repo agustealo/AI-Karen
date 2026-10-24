@@ -357,6 +357,15 @@ class ChatRuntime:
                     user_id=ctx.user_id,
                     attribute="current_location",
                 ) if decision.intent == "search.weather" else None
+                resolved_timezone = (
+                    RuntimeEvidenceResolver.authorized_semantic_value(
+                        decision.cognitive_context,
+                        tenant_id=ctx.tenant_id,
+                        user_id=ctx.user_id,
+                        attribute="timezone",
+                    )
+                    if decision.intent == "time.current" else None
+                )
                 direct_result = await direct_executor.execute(
                     request=request,
                     decision=decision,
@@ -367,7 +376,10 @@ class ChatRuntime:
                             "weather_location": resolved_location,
                             "location_source": "user_profile",
                         }
-                        if resolved_location else None
+                        if resolved_location else (
+                            {"timezone": resolved_timezone}
+                            if resolved_timezone else None
+                        )
                     ),
                 )
                 text = direct_result.text
