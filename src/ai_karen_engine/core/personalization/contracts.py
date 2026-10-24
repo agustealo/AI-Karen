@@ -86,23 +86,14 @@ class DriftState(str, Enum):
     UNKNOWN = "unknown"
 
 
-class UserGoalStatus(str, Enum):
-    """Goal lifecycle states."""
-    ACTIVE = "active"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    ABANDONED = "abandoned"
-    UNKNOWN = "unknown"
-
-
-def canonical_goal_status(value: CanonicalGoalState | UserGoalStatus | str) -> CanonicalGoalState:
+def canonical_goal_status(value: CanonicalGoalState | str) -> CanonicalGoalState:
     """Normalize historical goal statuses at the personalization boundary.
 
     The legacy unknown value maps explicitly to proposed. Unsupported states
     fail closed rather than silently becoming active.
     """
     raw = value.value if isinstance(value, Enum) else value
-    if raw == UserGoalStatus.UNKNOWN.value:
+    if raw == "unknown":
         return CanonicalGoalState.PROPOSED
     try:
         return CanonicalGoalState(raw)
@@ -683,7 +674,6 @@ __all__ = [
     "PreferenceScope",
     "PreferenceEvidenceSourceType",
     "DriftState",
-    "UserGoalStatus",
     "UserModelHealth",
     "ModelPropertyStatus",
     "EvidenceStatus",
