@@ -212,3 +212,22 @@ def test_multi_evidence_surface_requires_explicit_authorized_manifest():
             **rendered["data"], "evidence_refs": ["receipt-a", "receipt-a"],
         },
     }) is None
+
+
+def test_source_selected_display_density_is_governed():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "clock-1",
+        "component_type": "time.observation",
+        "evidence_ref": "observed-clock",
+        "data": {"formatted": "16:57:05", "timezone": "UTC"},
+    }
+    approved = validate_presentation({**base, "display": {"density": "compact"}})
+    assert approved is not None
+    assert approved["display"] == {"density": "compact"}
+    for invalid in (
+        {"density": "full-screen"},
+        {"density": "compact", "javascript": "alert(1)"},
+        {"density": 42},
+    ):
+        assert validate_presentation({**base, "display": invalid}) is None

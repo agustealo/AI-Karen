@@ -19,6 +19,12 @@ const observation = {
 };
 
 describe("governed weather presentation", () => {
+  it("honors an explicitly validated compact weather layout", () => {
+    const html = renderToStaticMarkup(<KarenWeatherPresentation data={observation} density="compact" />);
+    expect(html).toContain("p-3");
+    expect(html).toContain("60.3°F");
+  });
+
   it("renders observed NYC weather fields as a card instead of losing a verified observation", () => {
     const nyc = {
       location: "New York, New York, US",

@@ -21,7 +21,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         return None
     allowed = {
         "schema_version", "presentation_id", "component_type",
-        "data", "evidence_ref", "correlation_id",
+        "data", "evidence_ref", "correlation_id", "display",
     }
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
@@ -34,6 +34,13 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             return None
     correlation = raw.get("correlation_id")
     if correlation is not None and (not isinstance(correlation, str) or len(correlation) > 160):
+        return None
+    display = raw.get("display")
+    if display is not None and (
+        not isinstance(display, dict)
+        or set(display) != {"density"}
+        or display.get("density") not in ("compact", "comfortable")
+    ):
         return None
     data = raw.get("data")
     if not isinstance(data, (dict, list)):
