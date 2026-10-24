@@ -324,6 +324,7 @@ class DirectCapabilityExecutor:
                     query,
                     request,
                     mode,
+                    resolved_context,
                 ),
                 user_id=request.context.user_id,
                 tenant_id=request.context.tenant_id,
@@ -692,6 +693,7 @@ class DirectCapabilityExecutor:
         query: str,
         request: ChatExecutionRequest,
         mode: Optional[str],
+        resolved_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if intent == "time.current":
             location = self._extract_time_location(query)
@@ -703,6 +705,8 @@ class DirectCapabilityExecutor:
                 }
 
             timezone_name = self._metadata_timezone(request.metadata)
+            if not timezone_name:
+                timezone_name = self._metadata_timezone(resolved_context or {})
             params: Dict[str, Any] = {
                 "mode": "time",
                 "context": dict(request.metadata or {}),
