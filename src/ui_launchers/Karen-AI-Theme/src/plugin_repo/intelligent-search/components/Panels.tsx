@@ -1,4 +1,5 @@
 import { ArticleReader } from './ArticleReader';
+import { useSession } from '@/components/chat/SessionProvider';
 import React, { useMemo, useState } from 'react';
 import { IntelligentSearchResponse, SearchResultItem, SearchSourceItem } from '../types';
 import { Send, FileText, Code, AlignLeft, Download, ExternalLink } from 'lucide-react';
@@ -16,8 +17,8 @@ type ChatInjectItem = Partial<SearchSourceItem & SearchResultItem> & {
 /**
  * Enhanced function to send rich content to the main Karen chat
  */
-const sendToChat = (item: ChatInjectItem | undefined) => {
-  if (!item) return;
+const createSearchDraft = (item: ChatInjectItem | undefined): string | null => {
+  if (!item) return null;
   // ChatRuntime performs the answer generation and citation checks.
   // This is a bounded user request, never a forged assistant answer.
   const url = typeof item.url === 'string' && (item.url.startsWith('https://') || item.url.startsWith('http://'))
@@ -33,14 +34,8 @@ const sendToChat = (item: ChatInjectItem | undefined) => {
     excerpt ? `Untrusted excerpt:\n${excerpt}` : 'No excerpt is available.',
   ].filter(Boolean).join('\n\n');
 
-  const event = new CustomEvent('karen:inject-message', { 
-    detail: { 
-      content,
-      role: 'user',
-      autoSubmit: true 
-    } 
-  });
-  window.dispatchEvent(event);
+  return content;
+
 };
 
 /**
@@ -61,6 +56,8 @@ function ViewToggle({ active, onClick, label, icon }: { active: boolean; onClick
 }
 
 export function ResultsPanel({ response }: PanelProps) {
+  const { setSearchDraft } = useSession();
+  const sendToChat = (item: ChatInjectItem | undefined) => setSearchDraft(createSearchDraft(item));
   const results = response.results || [];
   const sources = response.sources || [];
   const initialActiveSourceIndex = useMemo(() => getMostRelevantSourceIndex(sources), [sources]);
@@ -299,6 +296,8 @@ export function ResultsPanel({ response }: PanelProps) {
 }
 
 export function SourcesPanel({ response }: PanelProps) {
+  const { setSearchDraft } = useSession();
+  const sendToChat = (item: ChatInjectItem | undefined) => setSearchDraft(createSearchDraft(item));
   const sources = response.sources || [];
   const initialActiveSourceIndex = useMemo(() => getMostRelevantSourceIndex(sources), [sources]);
   const [activeSourceIndex, setActiveSourceIndex] = useState(initialActiveSourceIndex);
