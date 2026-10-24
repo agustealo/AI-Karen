@@ -141,6 +141,48 @@ class DirectCapabilityExecutor:
         if not route:
             return DirectCapabilityResult(handled=False)
 
+        if decision.intent == "planner.read":
+            from ai_karen_engine.config.runtime import get_runtime_settings
+            from ai_karen_engine.services.personal_planner import PersonalPlannerService
+
+            started_at = time.perf_counter()
+            if not get_runtime_settings().enable_personal_planner_read_api:
+                return DirectCapabilityResult(
+                    handled=True, text="Planner reads are disabled.",
+                    error="planner_read_disabled", degraded=True,
+                )
+            if "planner.read" not in set(plan.allowed_capabilities):
+                return DirectCapabilityResult(
+                    handled=True, text="Planner read is not authorized for this request.",
+                    error="planner_read_not_authorized", degraded=True,
+                )
+            try:
+                principal = request.context.require_authenticated_user()
+                if not await meter.consume_tool_call():
+                    return DirectCapabilityResult(
+                        handled=True, text="Planner read budget exhausted.",
+                        error="execution_budget_exhausted", degraded=True,
+                    )
+                output = await PersonalPlannerService().list_presentation(
+                    user=principal,
+                    correlation_id=request.context.correlation_id,
+                    limit=20,
+                )
+            except (PermissionError, ValueError) as exc:
+                return DirectCapabilityResult(
+                    handled=True, text="Planner access unavailable.",
+                    error=type(exc).__name__, degraded=True,
+                )
+            tasks = (output.get("presentation") or {}).get("data", {}).get("tasks", [])
+            return DirectCapabilityResult(
+                handled=True, success=True, source="planner",
+                source_id="planner.read",
+                text=(f"Found {len(tasks)} planner commitments." if tasks else "No planner commitments found."),
+                payload={"presentation": output.get("presentation"), "empty": output.get("empty", False)},
+                attempts=[{"type": "planner", "id": "planner.read", "status": "success"}],
+                latency_ms=(time.perf_counter() - started_at) * 1000.0,
+            )
+
         started = time.perf_counter()
         query = self._latest_user_text(request)
         capability = str(route.get("required_capability") or "").strip()

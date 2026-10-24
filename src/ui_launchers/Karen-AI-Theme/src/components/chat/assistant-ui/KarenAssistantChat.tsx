@@ -14,6 +14,7 @@ import {
   ActionBarPrimitive,
   AuiIf,
   ComposerPrimitive,
+  ChainOfThoughtPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   ExportedMessageRepository,
@@ -22,10 +23,17 @@ import { HttpAgent } from "@ag-ui/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fromAgUiMessages, useAgUiRuntime } from "@assistant-ui/react-ag-ui";
-import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Copy, Loader2, Plus, Search, Square, ShieldCheck, Settings2 } from "lucide-react";
+import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
+import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
+import { KarenPersonaSelector } from "./KarenPersonaSelector";
+import { KarenBrowserDictation } from "./KarenBrowserDictation";
+import { KarenLocalDictation } from "./KarenLocalDictation";
+import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
+import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
-import { useSession } from "@/components/chat/ChatInterface";
+import { useSession } from "@/components/chat/SessionProvider";
 
 type Activity = {
   stepId?: string;
@@ -170,10 +178,59 @@ function KarenSubagent({ data }: { data: unknown }) {
   return <KarenActivity data={data} category="Subagent" />;
 }
 
+function KarenResponseIntegrity({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const receipt = data as Record<string, unknown>;
+  const truncated = receipt.output_truncated === true;
+  const recall = receipt.cortex_intent === "memory.recall" &&
+    typeof receipt.personal_recall_grounded === "boolean";
+  if (!truncated && !recall) return null;
+  return (
+    <section data-testid="karen-response-integrity" role="status" aria-live="polite"
+      className="my-2 rounded-xl border border-border/60 px-3 py-2 text-xs">
+      {truncated && <p data-testid="karen-output-truncated">
+        This answer stopped at the model&apos;s output-token limit. It may be incomplete.
+      </p>}
+      {recall && <p data-testid="karen-recall-provenance">
+        {receipt.personal_recall_grounded === true
+          ? "Personal recall grounded in authorized evidence."
+          : "Personal recall was not verified against authorized evidence."}
+      </p>}
+    </section>
+  );
+}
+
+function KarenRestoredExecutionReceipt({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const receipt = data as Record<string, unknown>;
+  if (
+    typeof receipt.actual_provider !== "string" || !receipt.actual_provider ||
+    typeof receipt.actual_model !== "string" || !receipt.actual_model ||
+    typeof receipt.response_source !== "string" || !receipt.response_source
+  ) return null;
+  return (
+    <details data-testid="karen-restored-execution-receipt"
+      className="my-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
+      <summary className="cursor-pointer font-medium">Saved execution details</summary>
+      <p className="mt-2">Provider: {receipt.actual_provider}</p>
+      <p>Model: {receipt.actual_model}</p>
+      <p>Response source: {receipt.response_source}</p>
+      {typeof receipt.runtime_engine === "string" && receipt.runtime_engine &&
+        <p>Engine: {receipt.runtime_engine}</p>}
+      {receipt.degraded_mode === true && <p>Degraded execution reported</p>}
+    </details>
+  );
+}
+
 const agentParts = {
   data: {
     by_name: {
       "karen.learning_decision": KarenLearningDecision,
+      "karen.execution_receipt.v1": KarenRestoredExecutionReceipt,
+      "karen.response_integrity.v1": KarenResponseIntegrity,
+      "karen.presentation.v1": KarenPresentationRegistry,
+      "karen.weather": KarenWeatherPresentation,
+      "karen.weather_observation": KarenWeatherPresentation,
       "karen.checkpoint": KarenCheckpoint,
       "karen.approval_required": KarenApprovalNotice,
       "agui-activity/KAREN_AGENT_STEP": KarenAgentStep,
@@ -183,7 +240,11 @@ const agentParts = {
   },
   tools: {
     // Render-only. No client execution, fake tool result, or permission path.
-    Fallback: ({ toolName, status }: { toolName?: string; status?: { type?: string } }) => {
+    Fallback: ({ toolName, status, result }: { toolName?: string; status?: { type?: string }; result?: unknown }) => {
+      const weatherTool = typeof toolName === "string" && /(?:^|[._/-])(?:weather|forecast|conditions)(?:$|[._/-])/i.test(toolName);
+      if (weatherTool && status?.type === "complete" && normalizeWeatherObservation(result)) {
+        return <KarenWeatherPresentation data={result} />;
+      }
       const observedState = status?.type || "unknown";
       const stateLabel = observedState === "complete"
         ? "Tool call completed"
@@ -263,6 +324,44 @@ function KarenMarkdownText({ text }: { text: string }) {
   );
 }
 
+/**
+ * Compatibility accordion for adjacent tool / reasoning activity parts.
+ * showThinking remains disabled: private model reasoning is never revealed.
+ * Display only runtime-observed tool lifecycle and explicitly public summaries.
+ */
+function KarenExecutionTrace() {
+  return (
+    <ChainOfThoughtPrimitive.Root className="my-3 rounded-xl border border-border/70 bg-muted/20">
+      <ChainOfThoughtPrimitive.AccordionTrigger
+        aria-label="Toggle execution activity"
+        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <span className="flex items-center gap-2"><ShieldCheck className="h-4 w-4" aria-hidden="true" />Execution activity</span>
+        <AuiIf condition={(s) => s.chainOfThought.collapsed}>
+          <ChevronDown className="h-4 w-4 -rotate-90" aria-hidden="true" />
+        </AuiIf>
+        <AuiIf condition={(s) => !s.chainOfThought.collapsed}>
+          <ChevronDown className="h-4 w-4" aria-hidden="true" />
+        </AuiIf>
+      </ChainOfThoughtPrimitive.AccordionTrigger>
+      <AuiIf condition={(s) => !s.chainOfThought.collapsed}>
+        <div className="border-t border-border/50 px-3 py-2">
+          <ChainOfThoughtPrimitive.Parts
+            components={{
+              Reasoning: () => (
+                <p className="text-xs text-muted-foreground">
+                  Internal model reasoning is not exposed. Runtime activity is listed where available.
+                </p>
+              ),
+              tools: agentParts.tools,
+            }}
+          />
+        </div>
+      </AuiIf>
+    </ChainOfThoughtPrimitive.Root>
+  );
+}
+
 function KarenCopyAction() {
   return (
     <ActionBarPrimitive.Root hideWhenRunning className="px-1">
@@ -299,7 +398,7 @@ function AssistantMessage() {
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Bot className="h-4 w-4" aria-hidden="true" /> Karen
         </div>
-        <MessagePrimitive.Parts components={{ ...agentParts, Text: KarenMarkdownText }} />
+        <MessagePrimitive.Parts components={{ data: agentParts.data, Text: KarenMarkdownText, ChainOfThought: KarenExecutionTrace }} />
       </div>
       <KarenCopyAction />
     </MessagePrimitive.Root>
@@ -307,6 +406,7 @@ function AssistantMessage() {
 }
 
 function KarenThread() {
+  const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
       <ThreadPrimitive.Viewport
@@ -338,7 +438,22 @@ function KarenThread() {
                 Karen is working
               </p>
             </AuiIf>
+            {composerSettingsOpen && (
+              <section aria-label="Karen composer settings" className="mb-3 rounded-xl border border-border/60 bg-card p-3 text-xs">
+                <h3 className="text-sm font-semibold">Karen conversation</h3>
+                <p className="mt-1 text-muted-foreground">Streaming, model routing, tools and approvals are decided by the authenticated runtime. Tool activity and approval requests appear only when reported by Karen.</p>
+                <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
+              </section>
+            )}
+            <div className="mb-2"><KarenPersonaSelector /></div>
             <ComposerPrimitive.Root className="flex items-end gap-2 rounded-2xl border border-input bg-card p-2 shadow-sm">
+              <button type="button" aria-label="Composer settings" aria-expanded={composerSettingsOpen}
+                onClick={() => setComposerSettingsOpen((open) => !open)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
+                <Settings2 className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <KarenLocalDictation />
+              <KarenBrowserDictation />
               <ComposerPrimitive.Input
                 rows={1}
                 aria-label="Message Karen"
@@ -372,26 +487,11 @@ function KarenThread() {
   );
 }
 
-type DurableMessage = { id?: string; role: string; content: string };
-
 async function readOwnedHistory(conversationId: string) {
-  const conversation = await apiClient.get<ConversationResponse>(
-    `/api/conversations/${encodeURIComponent(conversationId)}`,
-  );
-  if (conversation.id !== conversationId) {
-    throw new Error("Conversation history identity mismatch");
-  }
-  const saved = (conversation.messages || []) as DurableMessage[];
-  const converted = saved
-    .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-    .map((m, i) => ({
-      id: m.id || `${conversationId}-persisted-${i}`,
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    }));
-  return fromAgUiMessages(
-    converted as Parameters<typeof fromAgUiMessages>[0],
-    { showThinking: false },
+  return readOwnedConversationHistory(conversationId, (id) =>
+    apiClient.get<ConversationResponse>(
+      `/api/conversations/${encodeURIComponent(id)}`,
+    ) as Promise<{ id: string; messages?: DurableHistoryMessage[] | null }>,
   );
 }
 
@@ -553,7 +653,7 @@ export default function KarenAssistantChat() {
             {matchingSessions.length === 0 ? (
               <p className="py-3 text-sm text-muted-foreground">No matching conversations.</p>
             ) : matchingSessions.map((session) => (
-              <button key={session.id} type="button"
+              <button key={session.id} data-conversation-id={session.id} type="button"
                 aria-current={session.id === currentSession.id ? "page" : undefined}
                 onClick={() => void switchConversation(session.id)}
                 className="block min-h-11 w-full truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-[current=page]:bg-muted aria-[current=page]:font-semibold">

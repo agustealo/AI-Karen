@@ -8,6 +8,8 @@ come from the authoritative ChatRuntime stream.
 from __future__ import annotations
 
 from collections.abc import Mapping
+
+from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 from typing import Any
 
 
@@ -18,6 +20,8 @@ def _text(value: Any, limit: int = 1000) -> str:
 def _event_type(chunk: Any) -> str:
     value = getattr(chunk, "type", "")
     return str(getattr(value, "value", value))
+
+
 
 
 class AGUIEventProjection:
@@ -250,6 +254,15 @@ class AGUIEventProjection:
             # TOOL_CALL_END means only that the invocation is no longer active.
             return events
 
+        if kind == "presentation":
+            # Only explicitly runtime-origin, evidence-backed projections.
+            if meta.get("presentation_verified") is not True:
+                return []
+            validated = validate_presentation(meta.get("presentation"))
+            if validated is None:
+                return []
+            return [self._custom("karen.presentation.v1", validated)]
+
         if kind == "citation":
             raw_citations = meta.get("citations")
             citations = []
@@ -295,8 +308,25 @@ class AGUIEventProjection:
             })]
 
         if kind == "complete":
+            # Explicit terminal receipt, not an unrestricted metadata dump.
+            # Recall grounding requires a runtime-authorized evidence source.
+            receipt: dict[str, Any] = {
+                "output_truncated": meta.get("output_truncated") is True,
+            }
+            if meta.get("cortex_intent") == "memory.recall":
+                receipt["cortex_intent"] = "memory.recall"
+                source = meta.get("response_source")
+                receipt["personal_recall_grounded"] = source in {
+                    "authorized_memory_evidence",
+                    "authorized_conversation_evidence",
+                }
+                if receipt["personal_recall_grounded"]:
+                    receipt["evidence_source"] = source
+            events = self._finish_message()
+            if receipt["output_truncated"] or "personal_recall_grounded" in receipt:
+                events.append(self._custom("karen.response_integrity.v1", receipt))
             self._terminal = True
-            return self._finish_message() + [{
+            return events + [{
                 "type": "RUN_FINISHED",
                 "threadId": self.thread_id,
                 "runId": self.run_id,

@@ -5,7 +5,7 @@ import RichResultWorkspace from '@/components/chat/RichResultWorkspace';
 import type { ChatMessage } from '@/lib/types';
 
 describe('RichResultWorkspace', () => {
-  it('stays absent when the backend reported no rich result', () => {
+  it('explains the empty workspace when the backend reported no rich result', () => {
     const message: ChatMessage = {
       id: 'm1',
       role: 'assistant',
@@ -14,8 +14,8 @@ describe('RichResultWorkspace', () => {
       status: 'completed',
     };
 
-    const { container } = render(<RichResultWorkspace message={message} />);
-    expect(container.firstChild).toBeNull();
+    render(<RichResultWorkspace message={message} />);
+    expect(screen.getByRole('status').textContent).toContain('No files, artifacts');
   });
 
   it('renders only backend-provided artifacts, attachments, structure, and evidence', () => {

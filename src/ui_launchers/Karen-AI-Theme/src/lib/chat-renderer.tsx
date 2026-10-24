@@ -33,6 +33,18 @@ export const chatMarkdownComponents = {
     <ol className="list-decimal pl-5 mb-3 space-y-1" {...props} />
   ),
   li: (props: React.ComponentProps<'li'>) => <li className="mb-1" {...props} />,
+  img: ({ src, alt, ...props }: React.ComponentProps<'img'>) => {
+    const resolvedSrc = typeof src === 'string' ? src.trim() : src;
+    if (!resolvedSrc) return null;
+    return (
+      <img
+        src={resolvedSrc}
+        alt={alt ?? ''}
+        className="my-3 max-w-full rounded-xl border border-border/60"
+        {...props}
+      />
+    );
+  },
   code: ({ className, children, ...props }: React.ComponentProps<'code'>) => {
     const match = /language-(\w+)/.exec(className || '');
     const isInline = !match && !String(children).includes('\n');

@@ -6,9 +6,12 @@ on:
     paths:
       - "src/ai_karen_engine/core/planner/**"
       - "src/ai_karen_engine/persistence/repositories/personal_planner_repository.py"
+      - "src/ai_karen_engine/services/personal_planner.py"
+      - "src/ai_karen_engine/core/runtime/presentation_contract.py"
       - "src/ai_karen_engine/persistence/postgres/**"
       - "tests/core/planner/**"
       - "tests/integration/test_live_personal_planner_postgres.py"
+      - "tests/integration/test_live_composed_surface_postgres.py"
       - "supabase/migrations/20261020010000_38_personal_planner_commitments.sql"
       - ".github/workflows/personal-planner-postgres-proof.yml"
   workflow_dispatch:
@@ -199,3 +202,47 @@ jobs:
 
           asyncio.run(main())
           PY
+
+      - name: Install canonical conversation repository test dependencies
+        run: python -m pip install -r requirements/ci/chat.txt
+      - name: Seed approved disposable conversation and verify composed-surface durability
+        env:
+          PYTHONPATH: src
+          KAREN_TEST_DISPOSABLE_DATABASE: "1"
+          KAREN_TEST_GENERATIVE_SURFACE_POSTGRES: "1"
+          KAREN_TEST_CONVERSATION_TENANT_ID: "a0000000-0000-4000-8000-000000000001"
+          KAREN_TEST_CONVERSATION_ID: "c0000000-0000-4000-8000-000000000001"
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          import uuid
+          import asyncpg
+
+          async def seed():
+              db = await asyncpg.connect(os.environ["DATABASE_URL"])
+              try:
+                  tenant = uuid.UUID(os.environ["KAREN_TEST_CONVERSATION_TENANT_ID"])
+                  conversation = uuid.UUID(os.environ["KAREN_TEST_CONVERSATION_ID"])
+                  owner = uuid.UUID("b0000000-0000-4000-8000-000000000001")
+                  assert await db.fetchval(
+                      "SELECT count(*) FROM conversations WHERE conversation_id=$1", conversation
+                  ) == 0, "Refusing pre-existing conversation"
+                  await db.execute(
+                      "INSERT INTO tenants (id, name, slug) VALUES ($1, 'Surface CI Tenant', 'surface-ci-proof')",
+                      tenant,
+                  )
+                  await db.execute(
+                      "INSERT INTO auth_users (user_id, email, tenant_id, roles) VALUES ($1,$2,$3,$4::jsonb)",
+                      owner, "surface-ci@example.invalid", str(tenant), '["user"]',
+                  )
+                  await db.execute(
+                      "INSERT INTO conversations (conversation_id, tenant_id, user_id, title) "
+                      "VALUES ($1,$2,$3,'Disposable compositional-surface proof')",
+                      conversation, tenant, owner,
+                  )
+              finally:
+                  await db.close()
+          asyncio.run(seed())
+          PY
+          python -m pytest tests/integration/test_live_composed_surface_postgres.py -q -rs

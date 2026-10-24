@@ -119,6 +119,40 @@ class _Repository(ConversationRepository):
             metadata={"idempotent_replay": False},
         )
 
+    async def add_completed_turn(
+        self, user_message: Message, assistant_message: Message
+    ) -> RepositoryResult[int]:
+        if self.fail_add_role in {"user", "assistant"}:
+            return RepositoryResult(
+                success=False, error=f"{self.fail_add_role}_write_failed"
+            )
+        for candidate in (user_message, assistant_message):
+            for prior in self.messages:
+                if prior.id == candidate.id and (
+                    prior.tenant_id != candidate.tenant_id
+                    or prior.conversation_id != candidate.conversation_id
+                    or prior.role != candidate.role
+                    or prior.content != candidate.content
+                ):
+                    return RepositoryResult(
+                        success=False, error="message_idempotency_conflict"
+                    )
+        replays = [
+            any(prior.id == msg.id for prior in self.messages)
+            for msg in (user_message, assistant_message)
+        ]
+        if sum(replays) == 1:
+            return RepositoryResult(
+                success=False, error="incomplete_turn_replay"
+            )
+        if all(replays):
+            return RepositoryResult(
+                success=True, data=0,
+                metadata={"idempotent_replay": True},
+            )
+        self.messages.extend((user_message, assistant_message))
+        return RepositoryResult(success=True, data=2)
+
     async def get_messages(
         self,
         conversation_id: str,
@@ -394,7 +428,7 @@ async def test_same_conversation_id_is_isolated_by_tenant_lookup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assistant_failure_reports_partial_transcript_truth() -> None:
+async def test_assistant_failure_rolls_back_both_messages() -> None:
     repository = _Repository()
     repository.fail_add_role = "assistant"
     gateway = ConversationRuntimeGateway(repository=repository)
@@ -406,9 +440,9 @@ async def test_assistant_failure_reports_partial_transcript_truth() -> None:
     )
 
     assert result.status == "failed"
-    assert result.persisted_messages == 1
+    assert result.persisted_messages == 0
     assert result.reason == "assistant_write_failed"
-    assert [message.role for message in repository.messages] == ["user"]
+    assert repository.messages == []
 
 
 @pytest.mark.asyncio
@@ -540,3 +574,240 @@ async def test_conversation_delete_requires_same_user() -> None:
     assert await gateway.delete_conversation(context) is True
     assert (context.tenant_id, conversation_id) not in repository.conversations
 
+
+
+@pytest.mark.asyncio
+async def test_presentation_survives_canonical_history_and_retry_without_duplicate() -> None:
+    """The assistant's structured evidence stays in its owned durable message."""
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "weather-request-1",
+        "component_type": "weather.observation",
+        "evidence_ref": "request-1:weather-tool",
+        "data": {"location": "Detroit", "temperature_f": 60.3},
+    }
+    metadata = {"structured_content": {"presentation": envelope}}
+    initial = await gateway.persist_completed_turn(
+        _context(request_id="weather-request"),
+        user_text="What's the weather in Detroit?",
+        assistant_text="The observed temperature is 60.3°F.",
+        response_metadata=metadata,
+    )
+    assert initial.status == "persisted"
+    assert len(repository.messages) == 2
+    assistant = repository.messages[1]
+    assert assistant.role == "assistant"
+    assert assistant.metadata["structured_content"]["presentation"] == envelope
+
+    replay = await gateway.persist_completed_turn(
+        _context(request_id="weather-request"),
+        user_text="What's the weather in Detroit?",
+        assistant_text="The observed temperature is 60.3°F.",
+        response_metadata=metadata,
+    )
+    assert replay.status == "already_persisted"
+    assert len(repository.messages) == 2
+
+    history = await gateway.load_history(_context(request_id="next-request"), limit=10)
+    assert history.status == "loaded"
+    assert history.messages[-1].metadata["structured_content"]["presentation"] == envelope
+
+
+@pytest.mark.asyncio
+async def test_foreign_tenant_cannot_read_persisted_presentation_evidence() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    persisted = await gateway.persist_completed_turn(
+        _context(request_id="weather-request"),
+        user_text="What's the weather in Detroit?",
+        assistant_text="Observed temperature: 60.3°F.",
+        response_metadata={
+            "structured_content": {
+                "presentation": {
+                    "schema_version": 1,
+                    "presentation_id": "weather-request",
+                    "component_type": "weather.observation",
+                    "evidence_ref": "weather-request:weather-tool",
+                    "data": {"location": "Detroit", "temperature_f": 60.3},
+                }
+            }
+        },
+    )
+    assert persisted.status == "persisted"
+    with pytest.raises((PermissionError, RuntimeError, ValueError)):
+        await gateway.get_owned_snapshot(
+            _context(tenant_id="tenant-other", request_id="foreign-read"),
+            message_limit=10,
+        )
+
+
+@pytest.mark.asyncio
+async def test_planner_presentation_round_trip_through_durable_gateway_and_api_serializer():
+    """Authorized planner data remains the same after storing and re-reading a turn."""
+    from types import SimpleNamespace
+
+    from ai_karen_engine.api_routes.chat.conversation import _canonical_snapshot_to_response
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk, ChatStreamEventType
+    from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "planner-corr-1",
+        "component_type": "planner.task_list",
+        "evidence_ref": "planner-owned-read:corr-1",
+        "correlation_id": "corr-1",
+        "data": {"tasks": [{"id": "task-1", "title": "Review release", "status": "todo"}]},
+    }
+    result = SimpleNamespace(
+        success=True, degraded=False, source="planner", source_id="planner.read",
+        payload={"presentation": envelope},
+    )
+    verified = ChatRuntime._verified_planner_presentation(
+        SimpleNamespace(intent="planner.read"),
+        SimpleNamespace(allowed_capabilities=["planner.read"]),
+        result,
+    )
+    assert verified == envelope
+    projection = AGUIEventProjection(thread_id="owned-thread", run_id="run-1")
+    projection.begin()
+    events = projection.project(ChatStreamChunk(
+        type=ChatStreamEventType.PRESENTATION, content="", correlation_id="corr-1",
+        metadata={"presentation": verified, "presentation_verified": True},
+    ))
+    assert events[0]["value"] == envelope
+
+    persisted = await gateway.persist_completed_turn(
+        _context(request_id="planner-request-1"),
+        user_text="List my tasks",
+        assistant_text="Found 1 planner commitments.",
+        response_metadata={"structured_content": {"presentation": verified}},
+    )
+    assert persisted.status == "persisted"
+    snapshot = await gateway.get_owned_snapshot(_context(request_id="planner-read"))
+    api_response = _canonical_snapshot_to_response(snapshot)
+    assert api_response.messages[-1].structured_content == {"presentation": envelope}
+    assert api_response.messages[-1].content == "Found 1 planner commitments."
+
+    with pytest.raises(RuntimeError, match="conversation_not_found"):
+        await gateway.get_owned_snapshot(
+            _context(tenant_id="tenant-foreign", request_id="foreign-read"),
+        )
+    with pytest.raises(PermissionError, match="conversation_user_mismatch"):
+        await gateway.get_owned_snapshot(
+            _context(user_id="user-foreign", request_id="foreign-read"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_planner_presentation_write_failure_is_not_reported_as_saved():
+    """Failed assistant-message writes must not create a recoverable planner card."""
+    repository = _Repository()
+    repository.fail_add_role = "assistant"
+    gateway = ConversationRuntimeGateway(repository=repository)
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "planner-request-2",
+        "component_type": "planner.task_list",
+        "evidence_ref": "planner-owned-read:request-2",
+        "data": {"tasks": [{"id": "task-1", "title": "Review release", "status": "todo"}]},
+    }
+    context = _context(request_id="planner-request-2")
+    failed = await gateway.persist_completed_turn(
+        context,
+        user_text="List my tasks",
+        assistant_text="Found 1 planner commitments.",
+        response_metadata={"structured_content": {"presentation": envelope}},
+    )
+    assert failed.status == "failed"
+    assert failed.success is False
+    assert not [m for m in repository.messages if m.role == "assistant"]
+    snapshot = await gateway.get_owned_snapshot(context)
+    assert all("presentation" not in m.metadata.get("structured_content", {})
+               for m in snapshot.messages)
+
+    repository.fail_add_role = None
+    recovered = await gateway.persist_completed_turn(
+        context,
+        user_text="List my tasks",
+        assistant_text="Found 1 planner commitments.",
+        response_metadata={"structured_content": {"presentation": envelope}},
+    )
+    assert recovered.status == "persisted"
+    assert len(repository.messages) == 2
+    assert (await gateway.get_owned_snapshot(context)).messages[-1].metadata[
+        "structured_content"
+    ]["presentation"] == envelope
+
+
+
+@pytest.mark.asyncio
+async def test_history_restores_grounded_presentation_and_model_receipt() -> None:
+    repository = _Repository()
+    context = _context(request_id="grounded-receipt")
+    gateway = ConversationRuntimeGateway(repository=repository)
+    metadata = {
+        "actual_provider": "ollama",
+        "actual_model": "authorized-model",
+        "response_source": "grounded_observation_model",
+        "structured_content": {
+            "presentation": {
+                "type": "weather",
+                "data": {"temperature": 20, "unit": "celsius"},
+            }
+        },
+    }
+    committed = await gateway.persist_completed_turn(
+        context,
+        user_text="What is the weather?",
+        assistant_text="The verified temperature is 20 degrees Celsius.",
+        response_metadata=metadata,
+    )
+    assert committed.success
+    history = await gateway.load_history(
+        _context(request_id="subsequent-request"), limit=10
+    )
+    assert history.status == "loaded"
+    assistant = next(message for message in history.messages if message.role == "assistant")
+    assert assistant.content == "The verified temperature is 20 degrees Celsius."
+    for key, value in metadata.items():
+        assert assistant.metadata[key] == value
+    assert assistant.metadata["request_id"] == context.request_id
+
+
+@pytest.mark.asyncio
+async def test_response_metadata_cannot_override_authorized_transcript_identity() -> None:
+    repository = _Repository()
+    context = _context(request_id="authorized-request")
+    gateway = ConversationRuntimeGateway(repository=repository)
+    result = await gateway.persist_completed_turn(
+        context,
+        user_text="Who owns this conversation?",
+        assistant_text="Ownership comes from authenticated context.",
+        response_metadata={
+            "request_id": "forged-request",
+            "correlation_id": "forged-correlation",
+            "session_id": "forged-session",
+            "conversation_id": "forged-conversation",
+            "authorized_user_id": "forged-user",
+            "source": "forged-source",
+            "transcript_actor": "user",
+            "actual_provider": "ollama",
+            "actual_model": "test-model",
+        },
+    )
+    assert result.status == "persisted"
+    assistant = next(row for row in repository.messages if row.role == "assistant")
+    assert assistant.metadata["request_id"] == context.request_id
+    assert assistant.metadata["correlation_id"] == context.correlation_id
+    assert assistant.metadata["session_id"] == context.session_id
+    assert assistant.metadata["conversation_id"] == result.conversation_id
+    assert assistant.metadata["authorized_user_id"] == context.user_id
+    assert assistant.metadata["source"] == "chat_runtime"
+    assert assistant.metadata["transcript_actor"] == "assistant"
+    assert assistant.metadata["actual_provider"] == "ollama"
+    assert assistant.metadata["actual_model"] == "test-model"

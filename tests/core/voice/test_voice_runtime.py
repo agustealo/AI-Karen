@@ -1,0 +1,342 @@
+"""Voice readiness must be grounded in a real local engine health check."""
+import asyncio
+from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+
+import pytest
+
+from ai_karen_engine.core.voice.contracts import VoiceEngineStatus, AudioInput, TranscriptionResult, VoiceContractError
+from ai_karen_engine.services.voice_runtime import VoiceRuntime
+
+
+class Engine:
+    engine_id = "local-whisper"
+
+    def __init__(self, ready=True):
+        self.is_ready = AsyncMock(return_value=ready)
+
+
+@pytest.mark.asyncio
+async def test_no_engine_is_unavailable():
+    caps = await VoiceRuntime().capabilities()
+    assert caps.status is VoiceEngineStatus.UNAVAILABLE
+    assert not caps.transcription_available
+    assert caps.engine is None
+
+
+@pytest.mark.asyncio
+async def test_only_verified_healthy_local_engine_is_advertised():
+    engine = Engine()
+    caps = await VoiceRuntime(engine).capabilities()
+    engine.is_ready.assert_awaited_once()
+    assert caps.status is VoiceEngineStatus.READY
+    assert caps.transcription_available
+    assert not caps.synthesis_available
+    assert not caps.streaming_available
+    assert caps.engine == "local-whisper"
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_or_failed_engine_does_not_advertise_transcription():
+    failed = Engine(ready=False)
+    assert not (await VoiceRuntime(failed).capabilities()).transcription_available
+    failed.is_ready.side_effect = RuntimeError("offline")
+    assert (await VoiceRuntime(failed).capabilities()).status is VoiceEngineStatus.UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_blank_engine_identifier_is_never_marked_ready():
+    engine = Engine()
+    engine.engine_id = "   "
+    assert not (await VoiceRuntime(engine).capabilities()).transcription_available
+    engine.is_ready.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_transcription_is_rejected_without_second_model_call():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def infer(audio, metadata):
+        entered.set()
+        await release.wait()
+        return TranscriptionResult(text="verified speech", engine="local-whisper")
+
+    engine = Engine()
+    engine.transcribe = AsyncMock(side_effect=infer)
+    runtime = VoiceRuntime(engine)
+    audio = b"pcm-data"
+    metadata = AudioInput("audio/wav", len(audio), 0.5)
+    first = asyncio.create_task(runtime.transcribe(audio, metadata))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        with pytest.raises(RuntimeError, match="local_transcription_busy"):
+            await runtime.transcribe(audio, metadata)
+        engine.transcribe.assert_awaited_once()
+    finally:
+        release.set()
+        await first
+    assert (await runtime.transcribe(audio, metadata)).text == "verified speech"
+    assert engine.transcribe.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_canceled_request_keeps_capacity_until_inference_completes():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def infer(audio, metadata):
+        entered.set()
+        await release.wait()
+        return TranscriptionResult(text="finished", engine="local-whisper")
+
+    engine = Engine()
+    engine.transcribe = AsyncMock(side_effect=infer)
+    runtime = VoiceRuntime(engine)
+    payload = b"pcm-data"
+    metadata = AudioInput("audio/wav", len(payload), 0.5)
+    first = asyncio.create_task(runtime.transcribe(payload, metadata))
+    await asyncio.wait_for(entered.wait(), 1)
+    first.cancel()
+    await asyncio.sleep(0)
+    try:
+        with pytest.raises(RuntimeError, match="local_transcription_busy"):
+            await runtime.transcribe(payload, metadata)
+        engine.transcribe.assert_awaited_once()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+    assert (await runtime.transcribe(payload, metadata)).text == "finished"
+
+
+@pytest.mark.asyncio
+async def test_repeated_request_cancellation_never_releases_running_model():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def infer(audio, metadata):
+        entered.set()
+        await release.wait()
+        return TranscriptionResult(text="finished", engine="local-whisper")
+
+    engine = Engine()
+    engine.transcribe = AsyncMock(side_effect=infer)
+    runtime = VoiceRuntime(engine)
+    payload = b"pcm-data"
+    metadata = AudioInput("audio/wav", len(payload), 0.5)
+    first = asyncio.create_task(runtime.transcribe(payload, metadata))
+    await asyncio.wait_for(entered.wait(), 1)
+    first.cancel()
+    await asyncio.sleep(0)
+    first.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert runtime.transcription_busy()
+        with pytest.raises(RuntimeError, match="local_transcription_busy"):
+            await runtime.transcribe(payload, metadata)
+        engine.transcribe.assert_awaited_once()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first, 1)
+    assert not runtime.transcription_busy()
+    assert (await runtime.transcribe(payload, metadata)).text == "finished"
+
+
+@pytest.mark.asyncio
+async def test_mismatched_audio_metadata_is_contract_error_before_inference():
+    engine = Engine()
+    engine.transcribe = AsyncMock()
+    runtime = VoiceRuntime(engine)
+    with pytest.raises(VoiceContractError, match="audio_byte_count_mismatch"):
+        await runtime.transcribe(b"123", AudioInput("audio/wav", 4, 0.5))
+    engine.transcribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disabling_opt_in_removes_previously_healthy_engine(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    engine = Engine()
+    runtime = VoiceRuntime(engine)
+    assert (await runtime.capabilities()).transcription_available
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "false")
+    with patch.object(module, "get_voice_runtime", return_value=runtime):
+        capabilities = await module.configure_local_voice_runtime()
+    assert capabilities.status is VoiceEngineStatus.UNAVAILABLE
+    assert not capabilities.transcription_available
+    assert runtime.speech_engine is None
+
+
+@pytest.mark.asyncio
+async def test_changed_local_model_configuration_replaces_existing_engine(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    seen = []
+    class Adapter:
+        engine_id = "faster-whisper-local"
+        def __init__(self, model_path, *, device, compute_type):
+            seen.append((model_path, device, compute_type))
+        async def load(self):
+            pass
+        async def is_ready(self):
+            return True
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/first")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        first = runtime.speech_engine
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        assert runtime.speech_engine is first
+        monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/second")
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        assert runtime.speech_engine is not first
+        monkeypatch.setenv("KAREN_LOCAL_STT_DEVICE", "cuda")
+        assert (await module.configure_local_voice_runtime()).transcription_available
+        monkeypatch.setenv("KAREN_LOCAL_STT_COMPUTE_TYPE", "float16")
+        assert (await module.configure_local_voice_runtime()).transcription_available
+    assert seen == [
+        ("/local/first", "cpu", "int8"),
+        ("/local/second", "cpu", "int8"),
+        ("/local/second", "cuda", "int8"),
+        ("/local/second", "cuda", "float16"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["disable", "model"])
+async def test_settings_changed_during_model_load_do_not_register_stale_engine(monkeypatch, change):
+    from ai_karen_engine.services import voice_runtime as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Adapter:
+        engine_id = "faster-whisper-local"
+
+        def __init__(self, model_path, *, device, compute_type):
+            pass
+
+        async def load(self):
+            entered.set()
+            await release.wait()
+
+        async def is_ready(self):
+            return True
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/first")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        loading = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.wait_for(entered.wait(), 1)
+        if change == "disable":
+            monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "false")
+        else:
+            monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/second")
+        release.set()
+        capabilities = await asyncio.wait_for(loading, 1)
+    assert not capabilities.transcription_available
+    assert runtime.speech_engine is None
+
+
+@pytest.mark.asyncio
+async def test_configuration_change_waits_for_running_inference(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    initialized = []
+
+    class Adapter:
+        engine_id = "faster-whisper-local"
+
+        def __init__(self, model_path, *, device, compute_type):
+            initialized.append(model_path)
+
+        async def load(self):
+            pass
+
+        async def is_ready(self):
+            return True
+
+        async def transcribe(self, audio, metadata):
+            entered.set()
+            await release.wait()
+            return TranscriptionResult(text="original model", engine=self.engine_id)
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/first")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        await module.configure_local_voice_runtime()
+        payload = b"pcm-data"
+        metadata = AudioInput("audio/wav", len(payload), 0.5)
+        running = asyncio.create_task(runtime.transcribe(payload, metadata))
+        await asyncio.wait_for(entered.wait(), 1)
+        monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/second")
+        reconfigure = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.sleep(0)
+        try:
+            assert not reconfigure.done()
+            assert initialized == ["/local/first"]
+            assert runtime.transcription_busy()
+        finally:
+            release.set()
+        assert (await running).text == "original model"
+        assert (await asyncio.wait_for(reconfigure, 1)).transcription_available
+    assert initialized == ["/local/first", "/local/second"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_optional_bootstrap_loads_model_once(monkeypatch):
+    from ai_karen_engine.services import voice_runtime as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    loads = 0
+
+    class Adapter:
+        engine_id = "faster-whisper-local"
+
+        def __init__(self, model_path, *, device, compute_type):
+            assert model_path == "/local/model"
+
+        async def load(self):
+            nonlocal loads
+            loads += 1
+            entered.set()
+            await release.wait()
+
+        async def is_ready(self):
+            return True
+
+    runtime = VoiceRuntime()
+    monkeypatch.setenv("KAREN_LOCAL_STT_ENABLED", "true")
+    monkeypatch.setenv("KAREN_LOCAL_STT_MODEL_PATH", "/local/model")
+    with (
+        patch.object(module, "get_voice_runtime", return_value=runtime),
+        patch("ai_karen_engine.services.local_whisper_adapter.FasterWhisperLocalAdapter", Adapter),
+    ):
+        first = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(module.configure_local_voice_runtime())
+        await asyncio.sleep(0)
+        assert loads == 1
+        release.set()
+        first_capabilities, second_capabilities = await asyncio.gather(first, second)
+    assert loads == 1
+    assert first_capabilities.transcription_available
+    assert second_capabilities.transcription_available

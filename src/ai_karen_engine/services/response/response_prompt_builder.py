@@ -23,7 +23,7 @@ class ResponsePromptBuilder:
         if contract.purpose == "tool_synthesis" and contract.requires_live_data:
             system_lines.extend([
                 "Ground factual claims strictly in the provided authorized tool evidence.",
-                "Cite supporting source URLs from the tool results beside the factual claims.",
+                "Cite supporting source URLs only when the authorized evidence includes them; never invent a URL for a verified weather or clock observation.",
                 "Never invent a source URL, citation, quotation, or fetched page content.",
                 "Search-provider snippets are discovery evidence, not proof that a page was fetched.",
                 "If evidence is insufficient or only discovery snippets are available, say so plainly.",

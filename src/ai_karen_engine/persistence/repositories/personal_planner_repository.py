@@ -38,6 +38,19 @@ def _fingerprint(operation: str, fields: dict[str, object]) -> str:
 
 
 class PersonalPlannerRepository:
+    async def list_owned(self, *, tenant_id: UUID, owner_id: UUID, limit: int = 20) -> list[PersonalCommitment]:
+        """Read bounded canonical commitments, never across ownership scopes."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("Planner read limit must be between 1 and 20")
+        async with async_transaction_scope(str(tenant_id)) as session:
+            result = await session.execute(
+                text(f"""SELECT {_COLUMNS} FROM public.personal_planner_commitments
+                            WHERE tenant_id=:tenant AND owner_id=:owner
+                            ORDER BY updated_at DESC, id DESC LIMIT :limit"""),
+                {"tenant": tenant_id, "owner": owner_id, "limit": limit},
+            )
+            return [PersonalCommitment.model_validate(dict(row)) for row in result.mappings().all()]
+
     async def get(self, *, tenant_id: UUID, owner_id: UUID, commitment_id: UUID) -> PersonalCommitment:
         async with async_transaction_scope(str(tenant_id)) as session:
             row = (await session.execute(

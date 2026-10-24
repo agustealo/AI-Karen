@@ -4,7 +4,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.auth.models import UserData
 
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
@@ -45,6 +48,7 @@ class ChatStreamEventType(str, Enum):
     AGENT_STEP = "agent_step"
     TOOL = "tool"
     CITATION = "citation"
+    PRESENTATION = "presentation"
     APPROVAL = "approval"
     WARNING = "warning"
     ERROR = "error"
@@ -81,6 +85,20 @@ class ChatExecutionContext:
     correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     roles: List[str] = field(default_factory=list)
     permissions: List[str] = field(default_factory=list)
+    authenticated_user: Optional["UserData"] = field(default=None, repr=False, compare=False)
+
+    def require_authenticated_user(self) -> "UserData":
+        """Require the ingress principal and matching user and tenant scope."""
+        from ai_karen_engine.auth.models import UserData
+
+        principal = self.authenticated_user
+        if not isinstance(principal, UserData):
+            raise PermissionError("authenticated_principal_required")
+        if not principal.is_active or not principal.is_verified:
+            raise PermissionError("authenticated_principal_inactive")
+        if str(principal.user_id) != str(self.user_id) or str(principal.tenant_id) != str(self.tenant_id):
+            raise PermissionError("authenticated_principal_scope_mismatch")
+        return principal
 
     def __post_init__(self) -> None:
         if self.conversation_id or not self.session_id:

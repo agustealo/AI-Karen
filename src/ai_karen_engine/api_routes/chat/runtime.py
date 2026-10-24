@@ -190,6 +190,16 @@ class AGUIRunRequest(BaseModel):
     state: Dict[str, Any] = Field(default_factory=dict)
     forwardedProps: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("state", mode="before")
+    @classmethod
+    def normalize_empty_ag_ui_state(cls, value: Any) -> Any:
+        """AG-UI clients may send null when no shared state is initialized.
+
+        Only null is normalized; nonempty dictionaries and all other types
+        remain subject to the existing strict schema and authorization gate.
+        """
+        return {} if value is None else value
+
     def latest_user_message(self) -> str:
         last = self.messages[-1]
         if last.get("role") != "user":
@@ -279,6 +289,7 @@ def _execution_context(
         correlation_id=correlation_id,
         roles=list(user.get("roles") or []),
         permissions=list(user.get("permissions") or []),
+        authenticated_user=UserData.ensure(user),
     )
 
 
@@ -689,9 +700,25 @@ async def stream_ag_ui_chat(
                 owned = await get_conversation_runtime_gateway().get_owned_snapshot(
                     lookup_context, message_limit=0,
                 )
-            except (PermissionError, RuntimeError, ValueError) as exc:
+            except PermissionError as exc:
+                # Do not disclose the existence of another user's conversation.
                 raise HTTPException(
                     status_code=404, detail="Conversation is unavailable",
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422, detail="Invalid conversation identity",
+                ) from exc
+            except RuntimeError as exc:
+                # Missing conversations and backend storage failures are not
+                # interchangeable. Preserve fail-closed ownership checks while
+                # surfacing infrastructure failure as a retryable condition.
+                if str(exc) == "conversation_not_found":
+                    raise HTTPException(
+                        status_code=404, detail="Conversation is unavailable",
+                    ) from exc
+                raise HTTPException(
+                    status_code=503, detail="Conversation lookup temporarily unavailable",
                 ) from exc
             conversation_id = str(owned.conversation.id)
             session_id = SecurityValidator.sanitize_session_id(

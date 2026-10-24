@@ -206,3 +206,53 @@ async def test_update_message_is_tenant_scoped_and_does_not_write_missing_column
     assert "c.tenant_id = :tenant_id" in normalized_sql
     assert "updated_at" not in normalized_sql
     assert params["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_composed_surface_and_receipt_survive_canonical_repository_roundtrip() -> None:
+    """Contract test for stored metadata; live PostgreSQL remains a separate gate."""
+    import json
+    from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+    clock = {
+        "schema_version": 1, "presentation_id": "time-1",
+        "component_type": "time.observation", "evidence_ref": "req-1:clock",
+        "data": {"formatted": "10:15 AM", "timezone": "America/Detroit"},
+    }
+    surface = validate_presentation({
+        "schema_version": 1, "presentation_id": "surface-1",
+        "component_type": "surface.composition", "evidence_ref": "req-1:clock",
+        "data": {"layout": "stack", "items": [clock]},
+    })
+    assert surface is not None
+    metadata = {
+        "actual_provider": "local-provider",
+        "actual_model": "authorized-model",
+        "response_source": "grounded_observation_model",
+        "presentation_layout_provenance": {"provider": "layout-local", "model": "layout-model", "response_source": "surface_layout_model", "part_ids": ["time-1"]},
+        "structured_content": {"presentation": surface},
+    }
+    message = _message()
+    message.metadata = metadata
+    created = datetime(2026, 9, 27, 12, 0, 0)
+    row = SimpleNamespace(
+        message_id=message.id, conversation_id=message.conversation_id,
+        tenant_id=message.tenant_id, role=message.role,
+        content=message.content, message_metadata=json.dumps(metadata),
+        created_at=created,
+    )
+    session = _Session([_Result(rowcount=1), _Result(rows=[row])])
+    repository = _repository(session)
+    saved = await repository.add_message(message)
+    assert saved.success is True
+    write_params = session.executions[0][1]
+    assert json.loads(write_params["metadata"]) == metadata
+    retrieved = await repository.get_messages(message.conversation_id, message.tenant_id)
+    assert retrieved.success is True
+    restored = retrieved.data[0].metadata
+    assert restored["actual_provider"] == "local-provider"
+    assert restored["actual_model"] == "authorized-model"
+    assert restored["presentation_layout_provenance"] == metadata["presentation_layout_provenance"]
+    assert restored["structured_content"]["presentation"] == surface
+    assert validate_presentation(restored["structured_content"]["presentation"]) == surface
+    assert session.executions[1][1]["tenant_id"] == message.tenant_id

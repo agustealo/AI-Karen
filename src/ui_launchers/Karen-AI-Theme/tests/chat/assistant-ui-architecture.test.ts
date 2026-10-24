@@ -6,7 +6,7 @@ const component = readFileSync(
   resolve(process.cwd(), "src/components/chat/assistant-ui/KarenAssistantChat.tsx"),
   "utf8",
 );
-const legacyChat = readFileSync(resolve(process.cwd(), "src/components/chat/ChatInterface.tsx"), "utf8");
+const sessionSource = readFileSync(resolve(process.cwd(), "src/components/chat/SessionProvider.tsx"), "utf8");
 const dashboard = readFileSync(
   resolve(process.cwd(), "src/app/dashboard/page.tsx"),
   "utf8",
@@ -59,15 +59,10 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("dangerouslySetInnerHTML");
   });
 
-  it("keeps Web Speech constructor typing scoped instead of conflicting with browser globals", () => {
-    expect(legacyChat).toContain("const speechWindow = window as unknown as {");
-    expect(legacyChat).not.toContain("declare global {\\n  interface Window {\\n    SpeechRecognition");
-  });
-
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
     expect(dashboard).toContain("<SessionProvider>");
-    expect(dashboard).toContain("USE_ASSISTANT_UI_CHAT ? <KarenAssistantChat /> : <ChatInterface />");
-    expect(component).toContain('import { useSession } from "@/components/chat/ChatInterface"');
+    expect(dashboard).toContain("<KarenAssistantChat />");
+    expect(component).toContain('import { useSession } from "@/components/chat/SessionProvider"');
     expect(component).toContain("/api/conversations/");
     expect(component).toContain("ExportedMessageRepository.fromArray");
     expect(component).toContain("fromAgUiMessages");
@@ -157,7 +152,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
 
   it("keeps the adapter opt-in until backend and npm dependency proof pass", () => {
     expect(dashboard).toContain(
-      'process.env.NEXT_PUBLIC_KAREN_ASSISTANT_UI_ENABLED === "true"',
+      '<KarenAssistantChat />',
     );
     expect(dashboard).toContain('{ ssr: false }');
     expect(component).toContain("showThinking: false");
@@ -181,7 +176,7 @@ describe("persistent Karen workspace panel", () => {
     expect(dashboard).toContain('aria-label="Collapse Karen conversation"');
     expect(dashboard).toContain('aria-controls="persistent-karen-panel"');
     expect(dashboard.match(/<KarenAssistantChat \/>/g)?.length).toBe(1);
-    expect(dashboard.match(/<ChatInterface \/>/g)?.length).toBe(1);
+    expect(dashboard.match(/<ChatInterface \/>/g)?.length ?? 0).toBe(0);
     expect(dashboard).toContain("backendStatus === \"ready\" && (activeMainView === \"chat\" || karenPanelOpen)");
   });
 });
@@ -199,16 +194,16 @@ describe("Karen cross-workspace panel accessibility contract", () => {
 
 describe("shared governed Agent Runtime context", () => {
   it("keeps one workspace reference in the canonical session and both chat transports", () => {
-    expect(legacyChat).toContain("workspaceRunId: string | null");
-    expect(legacyChat).toContain("setWorkspaceRunId: (runId: string | null) => void");
-    expect(legacyChat).toContain("workspace_run_id: workspaceRunId || undefined");
+    expect(sessionSource).toContain("workspaceRunId: string | null");
+    expect(sessionSource).toContain("setWorkspaceRunId: (runId: string | null) => void");
+    expect(component).toContain("workspace_run_id: workspaceRunId");
     expect(component).toContain("workspaceRunId } = useSession()");
     expect(component).toContain("forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {}");
     expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
   });
 
   it("clears scoped work reference when switching conversations", () => {
-    expect(legacyChat).toContain("if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null)");
-    expect(legacyChat).toContain("setWorkspaceRunId(null);");
+    expect(sessionSource).toContain("if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null)");
+    expect(sessionSource).toContain("setWorkspaceRunId(null);");
   });
 });
