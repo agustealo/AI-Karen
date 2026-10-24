@@ -17,7 +17,6 @@ from ai_karen_engine.core.memory.user_state_lifecycle import (
 from ai_karen_engine.core.personalization.contracts import (
     PreferenceScope,
     UserGoal,
-    UserGoalStatus,
 )
 from ai_karen_engine.core.personalization.goals.conflicts import ConflictDetector
 from ai_karen_engine.core.personalization.goals.contracts import (
@@ -68,7 +67,7 @@ def test_goal_contract_conversion_preserves_explicit_user_goal() -> None:
         tenant_id="t1",
         description="ship feature",
         scope=PreferenceScope.GLOBAL,
-        status=UserGoalStatus.ACTIVE,
+        status=CanonicalGoalState.ACTIVE,
         confidence=0.9,
         evidence=["ev1"],
         started_at=datetime.utcnow(),
