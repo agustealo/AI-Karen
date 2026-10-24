@@ -890,8 +890,7 @@ class PersonaService:
     ) -> bool:
         """Save user preferences to database."""
         if not self.db_client:
-            logger.warning("No database client available for saving preferences")
-            return False
+            raise RuntimeError("persona_preferences_storage_unavailable")
         try:
             query = text(
                 """
@@ -965,8 +964,8 @@ class PersonaService:
                 await session.execute(query, payload)
             return True
         except Exception as exc:
-            logger.error("Failed to save user preferences: %s", exc)
-            return False
+            logger.error("Failed to save user preferences: %s", type(exc).__name__)
+            raise RuntimeError("persona_preferences_write_failed") from exc
 
 
 
