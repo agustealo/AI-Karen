@@ -102,3 +102,85 @@ async def test_weather_adapter_rejects_unmeasured_response(monkeypatch) -> None:
     monkeypatch.setattr(module, "get_config_value", lambda key, default=None: default)
     with pytest.raises(ValueError, match="no usable timestamped temperature"):
         await fetch_weather_observation("Weather today in Detroit")
+
+
+@pytest.mark.asyncio
+async def test_detroit_mi_resolves_to_michigan_not_a_similar_city(monkeypatch):
+    import ai_karen_engine.services.search.weather_observation_provider as module
+
+    requests = []
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.body
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, params):
+            requests.append(params)
+            if "geocoding" in url:
+                return Response({"results": [
+                    {"name": "Detroit", "admin1": "Oregon", "country_code": "US",
+                     "latitude": 44.7, "longitude": -122.1},
+                    {"name": "Detroit", "admin1": "Michigan", "country_code": "US",
+                     "latitude": 42.33, "longitude": -83.05,
+                     "timezone": "America/Detroit"},
+                ]})
+            return Response({
+                "timezone": "America/Detroit",
+                "current": {"time": "2026-10-24T17:15", "temperature_2m": 61},
+                "daily": {"temperature_2m_max": [63], "temperature_2m_min": [40]},
+            })
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(module, "get_config_value", lambda key, default=None: default)
+    data = await fetch_weather_observation("the weather in detroit mi")
+    assert requests[0]["name"] == "detroit"
+    assert requests[1]["latitude"] == 42.33
+    assert data["location"] == "Detroit, Michigan, US"
+
+
+@pytest.mark.asyncio
+async def test_state_qualifier_mismatch_fails_instead_of_substituting_city(monkeypatch):
+    import ai_karen_engine.services.search.weather_observation_provider as module
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"results": [{"name": "Detroit", "admin1": "Oregon",
+                                 "country_code": "US", "latitude": 44.7,
+                                 "longitude": -122.1}]}
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, params):
+            return Response()
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(module, "get_config_value", lambda key, default=None: default)
+    with pytest.raises(ValueError, match="requested city and state"):
+        await fetch_weather_observation("the weather in detroit mi")
