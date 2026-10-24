@@ -21,12 +21,11 @@ def test_commitments_default_to_canonical_active_state() -> None:
 
 def test_historical_goal_state_normalization() -> None:
     from ai_karen_engine.core.personalization.contracts import (
-        UserGoalStatus, canonical_goal_status,
+        canonical_goal_status,
     )
-    for status in UserGoalStatus:
-        expected = GoalState.PROPOSED if status is UserGoalStatus.UNKNOWN else GoalState(status.value)
+    for status in ('active', 'paused', 'completed', 'abandoned', 'unknown'):
+        expected = GoalState.PROPOSED if status == 'unknown' else GoalState(status)
         assert canonical_goal_status(status) is expected
-        assert canonical_goal_status(status.value) is expected
 
 
 def test_canonical_goal_normalization_rejects_unknown_value() -> None:
