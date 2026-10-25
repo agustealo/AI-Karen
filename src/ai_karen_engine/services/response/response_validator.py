@@ -103,7 +103,10 @@ class ResponseValidator:
         """
         if not evidence or intent not in {"search.weather", "time.current"}:
             return ValidationResult(valid=False, reason="missing_observation_evidence")
-        # Verified observations are not fetched pages and authorize no URL citations.\n        if re.search(r"https?://[^\\s)\\]>]+", text, re.IGNORECASE):\n            return ValidationResult(valid=False, reason="unverified_observation_url")\n        number_pattern = r"(?<!\w)\d+(?:[.,]\d+)*(?!\w)"
+        # Verified observations are not fetched pages and authorize no URL citations.
+        if re.search(r"https?://[^\\s)\\]>]+", text, re.IGNORECASE):
+            return ValidationResult(valid=False, reason="unverified_observation_url")
+        number_pattern = r"(?<!\w)\d+(?:[.,]\d+)*(?!\w)"
         authorized = set(re.findall(number_pattern, " ".join(map(str, evidence.values()))))
         reported = set(re.findall(number_pattern, text))
         if not reported.issubset(authorized):
