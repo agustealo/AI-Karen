@@ -70,7 +70,7 @@ describe("CopilotKit v2 protected gateway", () => {
   it("uses canonical auth and refuses forged tenant headers", async () => {
     const upstream = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => authenticatedReply());
     globalThis.fetch = upstream as typeof fetch;
-    const response = await POST(request({
+    const response = await GET(request({
       cookie: "kari_session=valid",
       "x-user-id": "attacker",
       "x-tenant-id": "foreign",
@@ -122,6 +122,48 @@ describe("CopilotKit v2 protected gateway", () => {
     });
     const allCalls = vi.mocked(globalThis.fetch).mock.calls;
     expect((allCalls.at(-1)?.[1] as RequestInit).redirect).toBe("manual");
+  });
+
+  it("rejects unowned in-memory SDK history, stop and clear before auth", async () => {
+    const upstream = vi.fn();
+    globalThis.fetch = upstream as typeof fetch;
+    for (const [method, path] of [
+      ["GET", "/api/copilotkit/threads"],
+      ["GET", "/api/copilotkit/threads/8d3f7a11-bc7a-4caa-bf1d-6932891d42d0/messages"],
+      ["POST", "/api/copilotkit/threads/clear"],
+      ["POST", "/api/copilotkit/agent/default/stop/8d3f7a11-bc7a-4caa-bf1d-6932891d42d0"],
+      ["POST", "/api/copilotkit/agent/default/connect"],
+      ["GET", "/api/copilotkit/inspector-metadata"],
+    ]) {
+      const candidate = new NextRequest(`http://localhost:3000${path}`, {
+        method,
+        headers: { cookie: "kari_session=valid" },
+      });
+      const response = method === "GET" ? await GET(candidate) : await POST(candidate);
+      expect(response.status, path).toBe(404);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+    expect(sdk.handlers).toBe(0);
+  });
+
+  it("rejects malformed or forged run envelopes before hitting the backend", async () => {
+    const upstream = vi.fn();
+    globalThis.fetch = upstream as typeof fetch;
+    const path = "http://localhost:3000/api/copilotkit/agent/default/run";
+    for (const data of [
+      { threadId: "opaque", runId: "run-1", messages: [{ role: "user", content: "hi" }] },
+      { threadId: "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0", runId: "run-1", messages: [{ role: "user", content: "hi" }], tools: [{ name: "doAnything" }] },
+      { threadId: "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0", runId: "run-1", messages: [{ role: "user", content: "hi" }], state: { role: "admin" } },
+    ]) {
+      const response = await POST(new NextRequest(path, {
+        method: "POST",
+        headers: { cookie: "kari_session=valid", "content-type": "application/json" },
+        body: JSON.stringify(data),
+      }));
+      expect(response.status).toBe(422);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+    expect(sdk.handlers).toBe(0);
   });
 
   it("exposes session validation without trusting browser-provided identity", async () => {
