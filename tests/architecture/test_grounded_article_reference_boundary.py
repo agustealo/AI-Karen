@@ -18,5 +18,8 @@ def test_grounded_synthesis_keeps_article_reference_resolution_authorized():
     assert "article_service.read_for_chat(" in code
     assert "execution_context=request.context" in code
     assert "scoped_text[:1000]" in code
-    assert "passage = \"\"" in code
+    assert "if article_id is not None:" in code
+    assert "if not scoped_text:" in code
+    assert "if not (" in code
+    assert "continue" in code
     assert "request.metadata.get(\"article_id\")" not in code
