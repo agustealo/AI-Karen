@@ -28,6 +28,7 @@ import { ArrowDown, ArrowUp, Bot, Check, CheckCircle2, ChevronDown, CircleAlert,
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
 import { KarenPersonaSelector } from "./KarenPersonaSelector";
+import { KarenComposerRuntimeCatalog } from "./KarenComposerRuntimeCatalog";
 import { KarenBrowserDictation } from "./KarenBrowserDictation";
 import { KarenLocalDictation } from "./KarenLocalDictation";
 import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
@@ -444,6 +445,7 @@ function KarenThread() {
             {composerSettingsOpen && (
               <section aria-label="Karen composer settings" className="mb-3 rounded-xl border border-border/60 bg-card p-3 text-xs">
                 <h3 className="text-sm font-semibold">Karen conversation</h3>
+                <KarenComposerRuntimeCatalog />
                 <p className="mt-1 text-muted-foreground">Streaming, model routing, tools and approvals are decided by the authenticated runtime. Tool activity and approval requests appear only when reported by Karen.</p>
                 <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
               </section>
