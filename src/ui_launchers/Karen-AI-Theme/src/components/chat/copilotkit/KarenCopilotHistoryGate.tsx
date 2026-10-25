@@ -2,6 +2,7 @@
 
 import { useAgent } from "@copilotkit/react-core/v2";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 import { fetchConversationBootstrap } from "@/components/chat/SessionProvider";
 
@@ -56,7 +57,7 @@ export function KarenCopilotHistoryGate({
   children,
 }: {
   conversationId: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const { agent, isReady } = useAgent({ agentId: "default" });
   const [loaded, setLoaded] = useState<string | null>(null);
