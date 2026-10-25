@@ -305,3 +305,35 @@ async def get_my_model_downloads(
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="Model library unavailable") from exc
     return {"jobs": jobs, "total": len(jobs), "scope": "authenticated_user"}
+
+
+@router.get("/model-library/my-downloads/{job_id}")
+async def get_my_model_download(
+    job_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Read one owned job. Foreign, missing and legacy rows have the same 404."""
+    from fastapi import HTTPException
+    from ai_karen_engine.core.model_runtime.model_download_control_service import (
+        get_model_download_control_service,
+    )
+
+    user_id = str(getattr(current_user, "user_id", "") or "").strip()
+    tenant_id = str(getattr(current_user, "tenant_id", "") or "").strip()
+    if (
+        not getattr(current_user, "is_active", False)
+        or not getattr(current_user, "is_verified", False)
+        or not user_id or not tenant_id or tenant_id == "default"
+    ):
+        raise HTTPException(status_code=403, detail="Verified tenant and user required")
+    if not job_id or len(job_id) > 128:
+        raise HTTPException(status_code=404, detail="Model job unavailable")
+    try:
+        job = await get_model_download_control_service().get_owned_job(
+            job_id=job_id, tenant_id=tenant_id, user_id=user_id
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Model job unavailable") from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="Model job unavailable")
+    return job
