@@ -5,6 +5,7 @@ on:
       - feat/ck02-copilotkit-v2-sdk-bootstrap-20261025
     paths:
       - 'src/ui_launchers/Karen-AI-Theme/package.json'
+      - '.github/workflows/ck02-sdk-lock-bootstrap.yml'
 permissions:
   contents: write
 concurrency:
