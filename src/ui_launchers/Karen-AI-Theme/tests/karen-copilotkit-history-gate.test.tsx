@@ -4,14 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backend = vi.hoisted(() => ({
   fetchConversation: vi.fn(),
-  setMessages: vi.fn(),
-  agent: { threadId: "" },
+  agent: { threadId: "", setMessages: vi.fn() },
   isReady: true,
 }));
 
 vi.mock("@copilotkit/react-core/v2", () => ({
   useAgent: () => ({
-    agent: { ...backend.agent, setMessages: backend.setMessages },
+    agent: backend.agent,
     isReady: backend.isReady,
   }),
 }));
@@ -32,7 +31,7 @@ beforeEach(() => {
   backend.isReady = true;
   backend.agent.threadId = "";
   backend.fetchConversation.mockReset();
-  backend.setMessages.mockReset();
+  backend.agent.setMessages.mockReset();
 });
 
 afterEach(() => {
@@ -79,7 +78,7 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
     expect(backend.fetchConversation).toHaveBeenCalledWith(CONVERSATION_A);
-    expect(backend.setMessages).toHaveBeenCalledWith([
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
       { id: "m1", role: "user", content: "Hello" },
       { id: "m2", role: "assistant", content: "Karen response" },
     ]);
@@ -93,7 +92,7 @@ describe("CopilotKit canonical conversation hydration", () => {
     render(guardedHistory());
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(screen.queryByTestId("agent-chat")).toBeNull();
-    expect(backend.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
   });
 
   it("fails closed on repository errors or missing message collections", async () => {
@@ -101,13 +100,13 @@ describe("CopilotKit canonical conversation hydration", () => {
     render(guardedHistory());
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(screen.getByRole("alert").textContent).not.toContain("tenant secret");
-    expect(backend.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
     cleanup();
 
     backend.fetchConversation.mockResolvedValueOnce({ id: CONVERSATION_A });
     render(guardedHistory());
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
-    expect(backend.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
   });
 
   it("ignores an obsolete conversation snapshot after switching threads", async () => {
@@ -125,8 +124,8 @@ describe("CopilotKit canonical conversation hydration", () => {
       id: CONVERSATION_A,
       messages: [{ id: "a1", role: "assistant", content: "Old private history" }],
     });
-    await waitFor(() => expect(backend.setMessages).toHaveBeenCalledTimes(1));
-    expect(backend.setMessages).toHaveBeenCalledWith([
+    await waitFor(() => expect(backend.agent.setMessages).toHaveBeenCalledTimes(1));
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
       { id: "b1", role: "assistant", content: "B only" },
     ]);
   });
