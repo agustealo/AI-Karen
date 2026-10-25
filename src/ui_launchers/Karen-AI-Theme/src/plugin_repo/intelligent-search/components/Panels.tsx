@@ -37,7 +37,8 @@ const sendToChat = (item: ChatInjectItem | undefined) => {
     detail: { 
       content,
       role: 'user',
-      autoSubmit: true 
+      // Evidence is untrusted. Require a deliberate user submit in chat.
+      autoSubmit: false 
     } 
   });
   window.dispatchEvent(event);
