@@ -29,6 +29,7 @@ import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWe
 import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
 import { KarenPersonaSelector } from "./KarenPersonaSelector";
 import { KarenComposerRuntimeCatalog } from "./KarenComposerRuntimeCatalog";
+import type { ComposerModelRequest } from "./KarenComposerRuntimeCatalog";
 import { KarenBrowserDictation } from "./KarenBrowserDictation";
 import { KarenLocalDictation } from "./KarenLocalDictation";
 import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
@@ -409,7 +410,7 @@ function AssistantMessage() {
   );
 }
 
-function KarenThread() {
+function KarenThread({ selection, onSelectionChange }: { selection: ComposerModelRequest; onSelectionChange: (next: ComposerModelRequest) => void }) {
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
@@ -445,7 +446,7 @@ function KarenThread() {
             {composerSettingsOpen && (
               <section aria-label="Karen composer settings" className="mb-3 rounded-xl border border-border/60 bg-card p-3 text-xs">
                 <h3 className="text-sm font-semibold">Karen conversation</h3>
-                <KarenComposerRuntimeCatalog />
+                <KarenComposerRuntimeCatalog selection={selection} onSelectionChange={onSelectionChange} />
                 <p className="mt-1 text-muted-foreground">Streaming, model routing, tools and approvals are decided by the authenticated runtime. Tool activity and approval requests appear only when reported by Karen.</p>
                 <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
               </section>
@@ -567,6 +568,7 @@ function KarenConversationIntelligence({ threadId }: { threadId: string }) {
 function KarenAgUiRuntime({ threadId }: { threadId: string }) {
   const { createNewSession, loadSession, workspaceRunId } = useSession();
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [modelRequest, setModelRequest] = useState<ComposerModelRequest>(null);
   const agent = useMemo(
     () => {
       // The backend resolves threadId as Karen's durable conversation UUID.
@@ -579,11 +581,14 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
       connected.run = ((input: Parameters<HttpAgent["run"]>[0]) =>
         canonicalRun({
           ...input,
-          forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {},
+          forwardedProps: {
+            ...(workspaceRunId ? { workspace_run_id: workspaceRunId } : {}),
+            ...(modelRequest ? { preferred_llm_provider: modelRequest.provider, preferred_model: modelRequest.model } : {}),
+          },
         })) as HttpAgent["run"];
       return connected;
     },
-    [threadId, workspaceRunId],
+    [threadId, workspaceRunId, modelRequest],
   );
   const historyLoad = useCallback(
     async () => ExportedMessageRepository.fromArray(
@@ -625,7 +630,7 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
         </p>
       )}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className="flex min-w-0 flex-1 flex-col"><KarenThread /></div>
+        <div className="flex min-w-0 flex-1 flex-col"><KarenThread selection={modelRequest} onSelectionChange={setModelRequest} /></div>
         <KarenConversationIntelligence threadId={threadId} />
       </div>
     </AssistantRuntimeProvider>
