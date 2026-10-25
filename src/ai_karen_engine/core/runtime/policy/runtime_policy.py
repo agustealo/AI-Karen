@@ -416,12 +416,10 @@ class RuntimePolicyEnforcer:
             if normalized and normalized not in allowed_tools:
                 allowed_tools.append(normalized)
 
+        # Candidate IDs are advisory, never permission grants. A caller can
+        # request delegation, but only separately verified runtime authority
+        # may populate AuthorizedExecutionPlan.allowed_agents.
         allowed_agents: List[str] = []
-        if bool(request.execution_topology.get("agent_delegation", False)):
-            for candidate in topology_agents:
-                normalized = str(candidate or "").strip()
-                if normalized and normalized not in allowed_agents:
-                    allowed_agents.append(normalized)
 
         runtime_constraints = self._build_runtime_constraints(request.runtime_level)
         runtime_constraints.update(
