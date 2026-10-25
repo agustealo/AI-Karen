@@ -466,7 +466,7 @@ class ModelDownloadRepository:
             )
             return _mapping(result.mappings().first())
 
-    async def cancel_job(self, job_id: str) -> Optional[dict[str, Any]]:
+    async def cancel_job(self, job_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Request cancellation without releasing a live execution lease.
 
         Blocking downloads run in ``asyncio.to_thread`` and cannot be stopped by
@@ -474,6 +474,10 @@ class ModelDownloadRepository:
         remains counted as active until the real I/O returns, fails, or its
         lease expires. Unclaimed work can be cancelled immediately.
         """
+        if (tenant_id is None) != (user_id is None):
+            raise PermissionError("model_download_owner_scope_incomplete")
+        if tenant_id is not None and (not tenant_id or tenant_id == "default" or not user_id):
+            raise PermissionError("verified_model_download_owner_required")
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
@@ -495,16 +499,21 @@ class ModelDownloadRepository:
                         heartbeat_at = CASE WHEN lease_token IS NOT NULL THEN heartbeat_at ELSE NULL END,
                         completed_at = CASE WHEN lease_token IS NOT NULL THEN completed_at ELSE now() END
                     WHERE job_id = :job_id
+                      AND (:tenant_id IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status NOT IN ('promoting', 'completed', 'failed', 'cancelled')
                     RETURNING *
                     """
                 ),
-                {"job_id": job_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
             )
             return _mapping(result.mappings().first())
 
-    async def pause_job(self, job_id: str) -> Optional[dict[str, Any]]:
+    async def pause_job(self, job_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Pause queued work immediately or fence active work after its I/O ends."""
+        if (tenant_id is None) != (user_id is None):
+            raise PermissionError("model_download_owner_scope_incomplete")
+        if tenant_id is not None and (not tenant_id or tenant_id == "default" or not user_id):
+            raise PermissionError("verified_model_download_owner_required")
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
@@ -516,17 +525,22 @@ class ModelDownloadRepository:
                             THEN 'Pause requested; active staging will not be promoted'
                             ELSE 'Paused before execution' END
                     WHERE job_id = :job_id
+                      AND (:tenant_id IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status IN ('queued', 'running')
                       AND cancel_requested = false
                     RETURNING *
                     """
                 ),
-                {"job_id": job_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
             )
             return _mapping(result.mappings().first())
 
-    async def resume_job(self, job_id: str) -> Optional[dict[str, Any]]:
+    async def resume_job(self, job_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Resume only fully paused work, never a still-leased pause request."""
+        if (tenant_id is None) != (user_id is None):
+            raise PermissionError("model_download_owner_scope_incomplete")
+        if tenant_id is not None and (not tenant_id or tenant_id == "default" or not user_id):
+            raise PermissionError("verified_model_download_owner_required")
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
@@ -541,12 +555,13 @@ class ModelDownloadRepository:
                         lease_expires_at = NULL,
                         heartbeat_at = NULL
                     WHERE job_id = :job_id
+                      AND (:tenant_id IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status = 'paused'
                       AND lease_token IS NULL
                     RETURNING *
                     """
                 ),
-                {"job_id": job_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
             )
             return _mapping(result.mappings().first())
 
