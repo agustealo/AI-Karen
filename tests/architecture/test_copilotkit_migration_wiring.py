@@ -1,0 +1,130 @@
+"""Migration guard regression tests: filesystem fixtures, no network or SDK needed."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+
+SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "scripts/architecture/audit_copilotkit_wiring.py"
+)
+SPEC = importlib.util.spec_from_file_location("audit_copilotkit_wiring", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+AUDITOR = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(AUDITOR)
+
+
+def fixture(root: Path, *, copilot: bool = False) -> None:
+    for path in AUDITOR.OWNERS.values():
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("canonical owner\n", encoding="utf-8")
+
+    config = root / AUDITOR.OWNERS["runtime_config"]
+    config.write_text("enable_ag_ui_bridge: bool = False\n", encoding="utf-8")
+    ingress = root / AUDITOR.OWNERS["ag_ui_ingress"]
+    ingress.write_text(
+        '@router.post("/chat/ag-ui")\n'
+        "get_runtime_settings().features.enable_ag_ui_bridge\n"
+        "if request.tools or request.state or request.context:\n"
+        "get_chat_runtime()\n",
+        encoding="utf-8",
+    )
+
+    web = root / AUDITOR.WEB
+    manifest = web / "package.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    dependencies = (
+        {"@copilotkit/react-core": "1.70.2"}
+        if copilot
+        else {"@assistant-ui/react": "0.15.29"}
+    )
+    manifest.write_text(
+        json.dumps({"dependencies": dependencies, "devDependencies": {}}),
+        encoding="utf-8",
+    )
+    dashboard = web / "src/app/dashboard/page.tsx"
+    dashboard.parent.mkdir(parents=True, exist_ok=True)
+    selected = AUDITOR.COPILOT_MOUNT if copilot else AUDITOR.LEGACY_MOUNT
+    dashboard.write_text(f'const mount = "{selected}";\n', encoding="utf-8")
+
+
+def test_live_repository_has_single_owner_mount() -> None:
+    result = AUDITOR.audit()
+    assert result["violations"] == []
+    assert result["runtime_verification"] == "not_run"
+    assert result["static_evidence_only"] is True
+
+
+def test_missing_runtime_authority_is_rejected(tmp_path: Path) -> None:
+    fixture(tmp_path)
+    (tmp_path / AUDITOR.OWNERS["approval_service"]).unlink()
+    result = AUDITOR.audit(tmp_path)
+    assert any("approval_service" in item for item in result["violations"])
+
+
+def test_dual_chat_mount_is_rejected(tmp_path: Path) -> None:
+    fixture(tmp_path)
+    dashboard = tmp_path / AUDITOR.WEB / "src/app/dashboard/page.tsx"
+    dashboard.write_text(
+        AUDITOR.LEGACY_MOUNT + "\n" + AUDITOR.COPILOT_MOUNT,
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path)
+    assert any("exactly one canonical chat mount" in item for item in result["violations"])
+
+
+def test_development_only_agent_bypass_is_rejected(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    component = tmp_path / AUDITOR.WEB_SDK_ROOT / "KarenCopilotChat.tsx"
+    component.parent.mkdir(parents=True, exist_ok=True)
+    component.write_text(
+        "const agents__unsafe_dev_only = {};\n", encoding="utf-8"
+    )
+    route = tmp_path / AUDITOR.WEB_GATEWAY / "[[...slug]]" / "route.ts"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text(
+        'import { createCopilotRuntimeHandler } from "@copilotkit/runtime/v2";\n',
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path)
+    assert any("Unapproved CopilotKit production shortcut" in x for x in result["violations"])
+
+
+def test_cutover_with_old_ui_dependencies_is_rejected(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    manifest = tmp_path / AUDITOR.WEB / "package.json"
+    manifest.write_text(
+        json.dumps({"dependencies": {
+            "@copilotkit/react-core": "1.70.2",
+            "@assistant-ui/react": "0.15.29",
+        }}),
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path)
+    assert any("remain after primary cutover" in item for item in result["violations"])
+
+
+def test_unversioned_runtime_adapter_is_rejected(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    route = tmp_path / AUDITOR.WEB_GATEWAY / "[[...slug]]" / "route.ts"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text('import { CopilotRuntime } from "@copilotkit/runtime";\n', encoding="utf-8")
+    result = AUDITOR.audit(tmp_path)
+    assert any("gateway must use the v2 runtime" in item for item in result["violations"])
+
+
+def test_valid_copilotkit_static_fixture_remains_explicitly_unverified(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    route = tmp_path / AUDITOR.WEB_GATEWAY / "[[...slug]]" / "route.ts"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text(
+        'import { CopilotRuntime } from "@copilotkit/runtime/v2";\n',
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path)
+    assert result["violations"] == []
+    assert result["chat_mount"] == "copilotkit"
+    assert result["runtime_verification"] == "not_run"
