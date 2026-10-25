@@ -30,14 +30,14 @@ test('editing advanced search settings preserves completed source evidence until
   await page.getByRole('textbox', { name: 'Query' }).fill('Jamaican history');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
 
-  await expect(page.getByText('Source evidence for Jamaican history')).toBeVisible();
+  await expect(page.getByText('Source evidence for Jamaican history').first()).toBeVisible();
   await page.getByRole('button', { name: 'Search settings' }).click();
-  await page.getByRole('textbox', { name: 'Max URLs' }).fill('6');
+  await page.getByText('Max URLs', { exact: true }).locator('..').locator('input').fill('6');
 
-  await expect(page.getByText('Source evidence for Jamaican history')).toBeVisible();
+  await expect(page.getByText('Source evidence for Jamaican history').first()).toBeVisible();
   expect(requestCount).toBe(1);
 
   await page.getByRole('button', { name: 'Update results' }).click();
   await expect.poll(() => requestCount).toBe(2);
-  await expect(page.getByText('Source evidence for Jamaican history')).toBeVisible();
+  await expect(page.getByText('Source evidence for Jamaican history').first()).toBeVisible();
 });
