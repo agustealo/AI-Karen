@@ -94,7 +94,7 @@ describe("CopilotKit v2 protected gateway", () => {
   });
 
   it("never advertises SDK discovery when the canonical feature is disabled", async () => {
-    const upstream = vi.fn(async (input: RequestInfo | URL) =>
+    const upstream = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
       String(input).endsWith("/api/auth/me")
         ? authenticatedReply()
         : Response.json({ enabled: false }),
@@ -115,7 +115,7 @@ describe("CopilotKit v2 protected gateway", () => {
     ]) {
       sdk.agents.length = 0;
       sdk.handlers = 0;
-      const upstream = vi.fn(async (input: RequestInfo | URL) =>
+      const upstream = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
         String(input).endsWith("/api/auth/me") ? authenticatedReply() : bad
       );
       globalThis.fetch = upstream as typeof fetch;
