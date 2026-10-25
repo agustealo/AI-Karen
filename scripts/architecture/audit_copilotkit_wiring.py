@@ -156,6 +156,41 @@ def audit(root: Path = ROOT) -> dict[str, Any]:
     else:
         warnings.append("CopilotKit v2 React package not declared: migration not installed")
 
+    lock_path = root / WEB / "package-lock.json"
+    ag_ui_client_versions: dict[str, str] = {}
+    if lock_path.is_file():
+        try:
+            lock = json.loads(_read(lock_path))
+            packages = lock.get("packages", {})
+            if not isinstance(packages, dict):
+                raise ValueError("packages must be an object")
+            for package_path, metadata in packages.items():
+                if (
+                    isinstance(package_path, str)
+                    and (package_path == "node_modules/@ag-ui/client"
+                         or package_path.endswith("/node_modules/@ag-ui/client"))
+                    and isinstance(metadata, dict)
+                    and isinstance(metadata.get("version"), str)
+                ):
+                    ag_ui_client_versions[package_path] = metadata["version"]
+        except (OSError, ValueError) as exc:
+            violations.append(f"AG-UI dependency lockfile is unreadable: {exc}")
+    elif copilot_installed:
+        violations.append("CopilotKit dependency declared without a committed package-lock.json")
+
+    unique_client_versions = sorted(set(ag_ui_client_versions.values()))
+    if copilot_installed and len(unique_client_versions) > 1:
+        if copilot_mount:
+            violations.append(
+                "CopilotKit chat cutover requires one AG-UI client version; "
+                f"found {', '.join(unique_client_versions)}"
+            )
+        else:
+            warnings.append(
+                "Migration-only duplicate AG-UI versions; do not merge as consumer-ready: "
+                + ", ".join(unique_client_versions)
+            )
+
     if legacy_mount:
         warnings.append("Assistant-ui still owns the consumer chat mount")
     if not (root / WEB_GATEWAY).exists():
@@ -169,6 +204,7 @@ def audit(root: Path = ROOT) -> dict[str, Any]:
         "chat_mount": "copilotkit" if copilot_mount else "assistant-ui" if legacy_mount else "unknown",
         "sdk_dependency_declared": copilot_installed,
         "new_sdk_files_checked": len(gateway_files),
+        "ag_ui_client_versions": unique_client_versions,
         "violations": sorted(set(violations)),
         "warnings": sorted(set(warnings)),
     }
