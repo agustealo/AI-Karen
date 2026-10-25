@@ -6,8 +6,11 @@ test('cancelling search aborts the browser request and ignores late results', as
   let requestFailed!: () => void;
   const failed = new Promise<void>((resolve) => { requestFailed = resolve; });
 
+  page.on('requestfailed', (request) => {
+    if (request.url().includes('/api/plugins/execute')) requestFailed();
+  });
+
   await page.route('**/api/plugins/execute', async (route) => {
-    route.request().on('requestfailed', () => requestFailed());
     requestStarted();
     // Keep the mocked transport in flight long enough for the cancel action.
     await new Promise<void>((resolve) => setTimeout(resolve, 1500));
