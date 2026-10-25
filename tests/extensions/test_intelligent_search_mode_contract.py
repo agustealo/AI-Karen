@@ -40,7 +40,11 @@ def _dispatcher_module():
             type_ignores=[],
         )
     )
-    scope = {}
+    # The extracted resolver uses typing annotations from its original module.
+    # Supply those dependencies instead of changing production annotations.
+    from typing import Any, Dict
+
+    scope = {"Any": Any, "Dict": Dict}
     exec(compile(minimal_tree, str(path), "exec"), scope)
     scope["MODE_HANDLER_MAP"] = known_modes
     scope["resolve_capability_decision"] = lambda query: type(
