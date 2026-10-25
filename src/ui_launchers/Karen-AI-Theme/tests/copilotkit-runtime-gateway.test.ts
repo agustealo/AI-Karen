@@ -48,6 +48,14 @@ function authenticatedReply(
   });
 }
 
+async function availableBackend(input: RequestInfo | URL, _init?: RequestInit): Promise<Response> {
+  if (String(input).endsWith("/api/auth/me")) return authenticatedReply();
+  if (String(input).endsWith("/api/chat/ag-ui/capabilities")) {
+    return Response.json({ enabled: true });
+  }
+  return Response.json({ detail: "Unexpected destination" }, { status: 502 });
+}
+
 describe("CopilotKit v2 protected gateway", () => {
   beforeEach(() => {
     sdk.agents.length = 0;
@@ -68,7 +76,7 @@ describe("CopilotKit v2 protected gateway", () => {
   });
 
   it("uses canonical auth and refuses forged tenant headers", async () => {
-    const upstream = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => authenticatedReply());
+    const upstream = vi.fn(availableBackend);
     globalThis.fetch = upstream as typeof fetch;
     const response = await GET(request({
       cookie: "kari_session=valid",
@@ -83,6 +91,39 @@ describe("CopilotKit v2 protected gateway", () => {
     const authInit = upstream.mock.calls[0][1] as RequestInit;
     expect(authInit.redirect).toBe("manual");
     expect((authInit.headers as Record<string, string>)["x-tenant-id"]).toBeUndefined();
+  });
+
+  it("never advertises SDK discovery when the canonical feature is disabled", async () => {
+    const upstream = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith("/api/auth/me")
+        ? authenticatedReply()
+        : Response.json({ enabled: false }),
+    );
+    globalThis.fetch = upstream as typeof fetch;
+    const response = await GET(request({ cookie: "kari_session=valid" }));
+    expect(response.status).toBe(503);
+    expect(sdk.agents).toHaveLength(0);
+    expect(sdk.handlers).toBe(0);
+    expect(upstream).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects redirected and malformed backend availability without claiming readiness", async () => {
+    for (const bad of [
+      new Response(null, { status: 307, headers: { location: "https://evil.example" } }),
+      Response.json({ enabled: "true" }),
+      new Response(null, { status: 500 }),
+    ]) {
+      sdk.agents.length = 0;
+      sdk.handlers = 0;
+      const upstream = vi.fn(async (input: RequestInfo | URL) =>
+        String(input).endsWith("/api/auth/me") ? authenticatedReply() : bad
+      );
+      globalThis.fetch = upstream as typeof fetch;
+      expect((await GET(request({ cookie: "kari_session=valid" }))).status).toBe(503);
+      expect(sdk.agents).toHaveLength(0);
+      expect(sdk.handlers).toBe(0);
+      expect((upstream.mock.calls[1][1] as RequestInit).redirect).toBe("manual");
+    }
   });
 
   it("fails closed on invalid principal and does not activate an agent", async () => {
@@ -109,7 +150,7 @@ describe("CopilotKit v2 protected gateway", () => {
   });
 
   it("uses a new per-request agent and prevents transcript redirects", async () => {
-    globalThis.fetch = vi.fn(async () => authenticatedReply()) as typeof fetch;
+    globalThis.fetch = vi.fn(availableBackend) as typeof fetch;
     expect((await GET(request({ cookie: "kari_session=one" }))).status).toBe(200);
     expect((await GET(request({ cookie: "kari_session=two" }))).status).toBe(200);
     expect(sdk.agents).toHaveLength(2);
