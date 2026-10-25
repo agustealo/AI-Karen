@@ -9,6 +9,48 @@ import { CardTitle } from '@/components/ui/card';
 const STORAGE_KEY = 'karen.intelligence.cards.v1';
 type CardPreference = { order: string[]; hidden: string[] };
 
+/**
+ * Recover the title users actually see, including nested span/fragment text.
+ * Icons and non-title card content do not contribute to the menu label.
+ */
+function titleText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node).trim();
+  }
+  if (Array.isArray(node)) {
+    return node.map(titleText).filter(Boolean).join(' ').trim();
+  }
+  if (!isValidElement<{ children?: ReactNode }>(node)) return '';
+  return titleText(node.props.children);
+}
+
+/** The first meaningful title text remains stable when runtime status badges change. */
+function firstTitleText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node).trim();
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const value = firstTitleText(item);
+      if (value) return value;
+    }
+    return '';
+  }
+  if (!isValidElement<{ children?: ReactNode }>(node)) return '';
+  return firstTitleText(node.props.children);
+}
+
+function findStableTitle(node: ReactNode): string {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const value = findStableTitle(item);
+      if (value) return value;
+    }
+    return '';
+  }
+  if (!isValidElement<{ children?: ReactNode }>(node)) return '';
+  if (node.type === CardTitle) return firstTitleText(node.props.children);
+  return findStableTitle(node.props.children);
+}
+
 function findTitle(node: ReactNode): string {
   if (Array.isArray(node)) {
     for (const entry of node) {
@@ -18,10 +60,7 @@ function findTitle(node: ReactNode): string {
     return '';
   }
   if (!isValidElement<{ children?: ReactNode }>(node)) return '';
-  if (node.type === CardTitle) {
-    return Children.toArray(node.props.children)
-      .filter((child) => typeof child === 'string').join(' ').trim();
-  }
+  if (node.type === CardTitle) return titleText(node.props.children);
   return findTitle(node.props.children);
 }
 
@@ -49,7 +88,8 @@ export default function CustomizableCardDeck({ children }: { children: ReactNode
   useEffect(() => setPreferences(restore()), []);
   const cards = Children.toArray(children).map((element, index) => {
     const title = findTitle(element) || `Card ${index + 1}`;
-    return { id: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title, element };
+    const stableTitle = findStableTitle(element) || title;
+    return { id: stableTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title, element };
   });
   const isMandatory = (id: string) => id === 'human-attention';
   const ordered = [...cards].sort((a, b) => {
