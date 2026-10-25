@@ -32,10 +32,19 @@ def get_service() -> AgentMedusaService:
 
 @router.get("/catalog")
 async def get_agent_catalog(
-    _current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    current_user: UserData = Depends(bypass_user_context_func),
     service: AgentMedusaService = Depends(get_service),
 ) -> Dict[str, Any]:
-    """Return registered active specialists without claiming request eligibility."""
+    """Return minimal registered-agent discovery without an authorization grant."""
+    user_id = str(current_user.get("user_id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    if (
+        current_user.get("is_active") is not True
+        or not user_id
+        or not tenant_id
+        or tenant_id.lower() in {"default", "dev-tenant"}
+    ):
+        raise HTTPException(status_code=403, detail="Active authenticated tenant required")
 
     agents = await service.list_agent_catalog()
     return {
@@ -43,14 +52,8 @@ async def get_agent_catalog(
             {
                 "agent_id": agent.agent_id,
                 "name": agent.name,
-                "description": agent.description,
-                "version": agent.version,
                 "lifecycle_state": agent.lifecycle_state,
-                "status": agent.status,
                 "capabilities": list(agent.capabilities),
-                "implementation_id": agent.implementation_id,
-                "prompt_contract_id": agent.prompt_contract_id,
-                "prompt_version": agent.prompt_version,
                 "healthy": agent.healthy,
                 "missing_dependencies": list(agent.missing_dependencies),
                 "eligibility": "runtime_decided_per_request",
@@ -58,6 +61,7 @@ async def get_agent_catalog(
             for agent in agents
         ],
         "total": len(agents),
+        "eligibility_verified": False,
         "selection_authority": "cortex_runtime_policy",
         "execution_authority": "chat_runtime",
         "orchestrator": "agent_medusa",
