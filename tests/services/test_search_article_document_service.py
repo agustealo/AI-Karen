@@ -122,3 +122,33 @@ async def test_chat_reference_read_enforces_actual_artifact_owner_and_tenant():
         execution_context=Context("tenant-b", "user-a"),
         article_id=saved.artifact_id,
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_chat_reference_rejects_misattributed_saved_source_url():
+    from types import SimpleNamespace
+
+    store = ArtifactDouble()
+    service = SearchArticleService(store)
+    saved = await service.save(
+        tenant_id="tenant-a", user_id="user-a",
+        source_url="https://example.org/original", title="Original",
+        document="Scoped trusted evidence",
+    )
+
+    class Context:
+        tenant_id = "tenant-a"
+        user_id = "user-a"
+
+        def require_authenticated_user(self):
+            return SimpleNamespace(tenant_id=self.tenant_id, user_id=self.user_id)
+
+    context = Context()
+    assert await service.read_for_chat(
+        execution_context=context, article_id=saved.artifact_id,
+        source_url="https://example.org/original",
+    ) == "Scoped trusted evidence"
+    assert await service.read_for_chat(
+        execution_context=context, article_id=saved.artifact_id,
+        source_url="https://example.org/forged-citation",
+    ) is None
