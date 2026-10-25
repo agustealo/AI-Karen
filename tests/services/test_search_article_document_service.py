@@ -113,14 +113,17 @@ async def test_chat_reference_read_enforces_actual_artifact_owner_and_tenant():
     assert await service.read_for_chat(
         execution_context=Context("tenant-a", "user-a"),
         article_id=saved.artifact_id,
+        source_url="https://example.org/research",
     ) == "Private source content"
     assert await service.read_for_chat(
         execution_context=Context("tenant-a", "user-b"),
         article_id=saved.artifact_id,
+        source_url="https://example.org/research",
     ) is None
     assert await service.read_for_chat(
         execution_context=Context("tenant-b", "user-a"),
         article_id=saved.artifact_id,
+        source_url="https://example.org/research",
     ) is None
 
 
