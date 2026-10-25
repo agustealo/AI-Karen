@@ -19,17 +19,23 @@ class ArticleServiceDouble:
 
 
 class MeterDouble:
-    def __init__(self):
+    def __init__(self, allow=False):
+        self.allow = allow
         self.model_calls = 0
 
     async def consume_model_call(self):
         self.model_calls += 1
-        return False
+        return self.allow
+
+    async def check_duration(self):
+        return True
 
 
 def request():
     return SimpleNamespace(
-        context=SimpleNamespace(user_id="owner", tenant_id="tenant-a", correlation_id="test"),
+        context=SimpleNamespace(user_id="owner", tenant_id="tenant-a", correlation_id="test", request_id="req-test"),
+        messages=[{"role": "user", "content": "What does this source establish?"}],
+        preferred_provider=None, preferred_model=None, temperature=0.2,
     )
 
 
@@ -85,3 +91,53 @@ async def test_authorized_scoped_document_reaches_model_budget_gate(monkeypatch)
     assert result is None
     assert articles.calls == [("owner", "tenant-a", "article-1")]
     assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_scoped_evidence_is_composed_via_gateway_with_model_receipt(monkeypatch):
+    from ai_karen_engine.services.response import response_validator
+
+    articles = ArticleServiceDouble("Verified scoped article evidence")
+    monkeypatch.setattr(repository_factory, "get_runtime_search_article_service", lambda: articles)
+    captured = []
+
+    class Gateway:
+        async def generate(self, task):
+            captured.append(task)
+            return SimpleNamespace(
+                text="The source establishes the result [1].",
+                provider="local-test", model="test-model", degraded=False,
+                runtime_engine="local", engine_id="local", degradation_reason=None,
+            )
+
+    class RuntimeHarness:
+        _composition = SimpleNamespace(expression_gateway=Gateway())
+
+        def _resolve_chat_generation_max_tokens(self, request, plan):
+            return 256
+
+    monkeypatch.setattr(
+        response_validator.ResponseValidator, "validate",
+        lambda self, answer, contract: SimpleNamespace(valid=True, reason=None),
+    )
+    plan = SimpleNamespace(
+        allowed_plugins=["intelligent-search"], required_capabilities=[],
+        forbidden_capabilities=[],
+    )
+    decision = SimpleNamespace(
+        intent="search.general", required_capabilities=[],
+        forbidden_capabilities=[], time_budget_ms=10000,
+    )
+    answer = await ChatRuntime._synthesize_search_evidence(
+        RuntimeHarness(), request(), decision, plan,
+        MeterDouble(allow=True), retrieved(),
+    )
+    assert answer is not None
+    assert answer[0] == "The source establishes the result [1]."
+    assert answer[1]["actual_provider"] == "local-test"
+    assert answer[1]["actual_model"] == "test-model"
+    assert answer[1]["response_source"] == "grounded_search_model"
+    assert len(captured) == 1
+    prompt = str(captured[0].messages)
+    assert "Verified scoped article evidence" in prompt
+    assert "Untrusted inline fallback must not enter synthesis" not in prompt
