@@ -571,6 +571,27 @@ class ModelDownloadControlService:
             for row in rows
         ]
 
+    async def get_owned_job(
+        self, *, job_id: str, tenant_id: str, user_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Never reveal shared worker paths or another tenant's job."""
+        await self.initialize()
+        row = await self._repository.get_owned_job(
+            job_id=job_id, tenant_id=tenant_id, user_id=user_id
+        )
+        if row is None:
+            return None
+        return {
+            **row,
+            "lifecycle": project_model_download_lifecycle(row),
+            "created_at": row["created_at"].isoformat()
+            if isinstance(row.get("created_at"), datetime)
+            else row.get("created_at"),
+            "updated_at": row["updated_at"].isoformat()
+            if isinstance(row.get("updated_at"), datetime)
+            else row.get("updated_at"),
+        }
+
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         await self.initialize()
         row = await self._repository.get_job(job_id)
