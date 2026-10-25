@@ -147,7 +147,7 @@ class AgentUIService:
                     progress = self._task_progress[task_id]
                     progress.status = TaskStatus.FAILED
                     progress.updated_at = datetime.utcnow()
-                    progress.error_message = str(exc)
+                    progress.error_message = "Canonical runtime execution failed"
 
             return SendMessageResponse(
                 success=False,
@@ -169,6 +169,8 @@ class AgentUIService:
         """
         try:
             logger.info("Creating long-running task for session %s", request.session_id)
+            if self.runtime_adapter is None:
+                raise RuntimeError("Canonical agent runtime is unavailable")
 
             agent_task = AgentTask(
                 task_id=str(uuid.uuid4()),
@@ -225,7 +227,7 @@ class AgentUIService:
                 success=False,
                 task_id="",
                 status=TaskStatus.FAILED,
-                execution_metadata={"error": str(exc)},
+                execution_metadata={"error_code": "COPILOT_RUNTIME_EXECUTION_FAILED"},
             )
 
     async def get_task_progress(
