@@ -16,6 +16,9 @@ describe("canonical assistant-ui rail restoration", () => {
     expect(source).toContain('part.type !== "data"');
     expect(source).toContain('message.role !== "assistant"');
     expect(source).toContain('new Map<string, AgentStepEvent>()');
+    expect(source).toContain('messages[messages.length - 1]');
+    expect(source).toContain('for (const rawMessage of activeMessages)');
+    expect(source).not.toContain('messages.slice(-60)');
     expect(source).not.toContain('agentSteps={[]}');
     expect(source).toContain('setLoadState("empty")');
     expect(source).toContain('setMetadata({});');
