@@ -2732,6 +2732,7 @@ class ChatRuntime:
                         continue
                     scoped_text = await article_service.read_for_chat(
                         execution_context=request.context, article_id=article_id,
+                        source_url=url,
                     )
                     if not scoped_text:
                         continue
