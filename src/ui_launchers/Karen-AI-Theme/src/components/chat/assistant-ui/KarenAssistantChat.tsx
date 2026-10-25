@@ -451,7 +451,7 @@ function KarenThread({ selectedProvider, selectedModel, onSelectionChange }: {
                 <h3 className="text-sm font-semibold">Karen conversation</h3>
                 <KarenComposerRuntimeCatalog selectedProvider={selectedProvider} selectedModel={selectedModel} onSelectionChange={onSelectionChange} />
                 <p className="mt-1 text-muted-foreground">Streaming, model routing, tools and approvals are decided by the authenticated runtime. Tool activity and approval requests appear only when reported by Karen.</p>
-                <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
+                <p className="mt-2 text-muted-foreground">Persona and model preferences are request-level controls. Karen reports the actual execution choice; unsupported attachments and tools are never simulated.</p>
               </section>
             )}
             <div className="mb-2"><KarenPersonaSelector /></div>
