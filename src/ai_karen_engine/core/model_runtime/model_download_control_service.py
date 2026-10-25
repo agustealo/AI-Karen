@@ -142,6 +142,7 @@ class ModelDownloadJob:
     created_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
     requested_by: Optional[str] = None
+    tenant_id: Optional[str] = None
     trust_remote_code: bool = False
     license_accepted: bool = False
     include_patterns: Optional[list[str]] = None
@@ -548,6 +549,28 @@ class ModelDownloadControlService:
         rows = await self._repository.list_jobs(status=status, limit=limit)
         return [self._job_payload(row) for row in rows]
 
+    async def list_owned_jobs(
+        self, *, tenant_id: str, user_id: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Privacy-safe owner projection, without admin paths or lease data."""
+        await self.initialize()
+        rows = await self._repository.list_owned_jobs(
+            tenant_id=tenant_id, user_id=user_id, limit=limit
+        )
+        return [
+            {
+                **row,
+                "lifecycle": project_model_download_lifecycle(row),
+                "created_at": row["created_at"].isoformat()
+                if isinstance(row.get("created_at"), datetime)
+                else row.get("created_at"),
+                "updated_at": row["updated_at"].isoformat()
+                if isinstance(row.get("updated_at"), datetime)
+                else row.get("updated_at"),
+            }
+            for row in rows
+        ]
+
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         await self.initialize()
         row = await self._repository.get_job(job_id)
@@ -663,6 +686,14 @@ class ModelDownloadControlService:
 
     async def start_download(self, request: Mapping[str, Any], user: Mapping[str, Any]) -> dict[str, Any]:
         await self.initialize()
+        if (
+            not str(user.get("tenant_id") or "").strip()
+            or str(user.get("tenant_id")).strip() == "default"
+            or not str(user.get("user_id") or "").strip()
+        ):
+            raise ModelOrchestratorError(
+                E_PERM, "Verified download tenant and owner required"
+            )
         if not self._policy.master_enabled or self._policy.block_new_downloads:
             raise ModelOrchestratorError(
                 E_PERM,
@@ -719,6 +750,7 @@ class ModelDownloadControlService:
             channel_id=validation.channel_id,
             storage_key=validation.storage_key,
             requested_by=str(user.get("user_id") or user.get("username") or "unknown"),
+            tenant_id=str(user.get("tenant_id") or "").strip() or None,
             trust_remote_code=bool(request.get("trust_remote_code", False)),
             license_accepted=bool(request.get("accept_license", False)),
             include_patterns=list(request.get("include_patterns") or []) or None,
