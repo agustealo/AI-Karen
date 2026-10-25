@@ -18,5 +18,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     longTimeout: true,
     retryAttempts: 1,
     retryOnStatusCodes: [],
+    followRedirects: false,
   });
 }
