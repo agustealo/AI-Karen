@@ -68,8 +68,10 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("fromAgUiMessages");
     expect(component).toContain("threadId,");
     expect(component).not.toContain("localStorage.setItem");
-    expect(component).not.toContain("selectedModel");
-    expect(component).not.toContain("setSelectedProvider");
+    expect(component).toContain("setSelectedProvider");
+    expect(component).toContain("preferred_llm_provider: selectedProvider");
+    expect(component).toContain("preferred_model: selectedModel");
+    expect(component).toContain("KarenComposerRuntimeCatalog selectedProvider={selectedProvider}");
   });
 
   it("never calls React hooks conditionally for malformed activity events", () => {
@@ -198,7 +200,7 @@ describe("shared governed Agent Runtime context", () => {
     expect(sessionSource).toContain("setWorkspaceRunId: (runId: string | null) => void");
     expect(component).toContain("workspace_run_id: workspaceRunId");
     expect(component).toContain("workspaceRunId } = useSession()");
-    expect(component).toContain("forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {}");
+    expect(component).toContain("...(workspaceRunId ? { workspace_run_id: workspaceRunId } : {})");
     expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
   });
 
