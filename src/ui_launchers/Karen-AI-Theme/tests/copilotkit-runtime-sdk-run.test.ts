@@ -14,6 +14,7 @@ const CONVERSATION = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 const RUN_ID = "run_123";
 const AGENT_ENDPOINT = "http://api:8000/api/chat/ag-ui";
 const AUTH_ENDPOINT = "http://api:8000/api/auth/me";
+const CAPABILITIES_ENDPOINT = "http://api:8000/api/chat/ag-ui/capabilities";
 
 function sdkRun(overrides: Record<string, unknown> = {}): NextRequest {
   return new NextRequest("http://localhost:3000/api/copilotkit/agent/default/run", {
@@ -61,6 +62,11 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
           is_active: true,
         });
       }
+      if (url === CAPABILITIES_ENDPOINT) {
+        expect(init?.redirect).toBe("manual");
+        expect(new Headers(init?.headers).get("cookie")).toBe("kari_session=verified");
+        return Response.json({ enabled: true });
+      }
       if (url === AGENT_ENDPOINT) {
         expect(init?.redirect).toBe("manual");
         const headers = new Headers(init?.headers);
@@ -84,7 +90,7 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
     expect(stream).toContain("RUN_STARTED");
     expect(stream).toContain("Karen test execution");
     expect(stream).toContain("RUN_FINISHED");
-    expect(calls.map((call) => call.url)).toEqual([AUTH_ENDPOINT, AGENT_ENDPOINT]);
+    expect(calls.map((call) => call.url)).toEqual([AUTH_ENDPOINT, CAPABILITIES_ENDPOINT, AGENT_ENDPOINT]);
   });
 
   it("rejects a client-provided privileged tool without invoking Karen", async () => {
