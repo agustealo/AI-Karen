@@ -32,7 +32,7 @@ test('editing advanced search settings preserves completed source evidence until
 
   await expect(page.getByText('Source evidence for Jamaican history').first()).toBeVisible();
   await page.getByRole('button', { name: 'Search settings' }).click();
-  await page.getByText('Max URLs', { exact: true }).locator('..').locator('input').fill('6');
+  await page.getByRole('spinbutton', { name: 'Max URLs' }).fill('6');
 
   await expect(page.getByText('Source evidence for Jamaican history').first()).toBeVisible();
   expect(requestCount).toBe(1);
