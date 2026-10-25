@@ -405,7 +405,7 @@ const percentLabel = (value?: number | null): string =>
   value == null ? 'Unavailable' : `${Math.round(value)}%`;
 
 const EmptyTruth = ({ children }: { children: React.ReactNode }) => (
-  <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
+  <p className="text-sm leading-relaxed text-muted-foreground">{children}</p>
 );
 
 function RailContent({
@@ -476,7 +476,7 @@ function RailContent({
     <CustomizableCardDeck>
       <Card className="karen-surface border-border/70 bg-card/70">
         <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
             <Brain className="h-3.5 w-3.5 text-primary" />
             Turn intelligence
           </CardTitle>
@@ -484,7 +484,7 @@ function RailContent({
         <CardContent className="space-y-3">
           {(turnIntelligence.intent || turnIntelligence.recallStatus) && (
             <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5">
-              <p className="karen-panel-label text-[9px]">Turn understanding</p>
+              <p className="karen-panel-label text-xs">Turn understanding</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {turnIntelligence.intent && (
                   <Badge variant="secondary" className="text-[9px]">
@@ -613,7 +613,7 @@ function RailContent({
         runtime.degradedMode) && (
         <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
           <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
-            <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
               <span className="flex items-center gap-2">
                 <Route className="h-3.5 w-3.5 text-primary" />
                 Runtime dispatch
@@ -730,7 +730,7 @@ function RailContent({
         <>
           <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
             <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
-              <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+              <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
                 <span className="flex items-center gap-2">
                   <ChartNoAxesColumnIncreasing className="h-3.5 w-3.5 text-primary" />
                   Token budget
@@ -797,7 +797,7 @@ function RailContent({
 
           <Card className="karen-surface border-border/70 bg-card/70">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
                 <Brain className="h-3.5 w-3.5 text-primary" />
                 Prompt decomposition
               </CardTitle>
@@ -827,7 +827,7 @@ function RailContent({
 
           <Card className="karen-surface border-border/70 bg-card/70">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+              <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
                 <span className="flex items-center gap-2">
                   <Network className="h-3.5 w-3.5 text-primary" />
                   Retrieval / vector health
@@ -882,7 +882,7 @@ function RailContent({
 
           <Card className="karen-surface border-border/70 bg-card/70">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
                 <Scale className="h-3.5 w-3.5 text-primary" />
                 Counterfactual scenarios
               </CardTitle>
@@ -935,7 +935,7 @@ function RailContent({
 
           <Card className="karen-surface border-border/70 bg-card/70">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
                 <UsersRound className="h-3.5 w-3.5 text-primary" />
                 Agent consensus
               </CardTitle>
@@ -983,7 +983,7 @@ function RailContent({
 
           <Card className="karen-surface border-border/70 bg-card/70">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+              <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
                 <span className="flex items-center gap-2">
                   <TimerReset className="h-3.5 w-3.5 text-primary" />
                   Execution waterfall
@@ -1026,7 +1026,7 @@ function RailContent({
       {(resourcesLoadState !== 'idle' || systemResources) && (
         <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
           <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
-            <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
               <span className="flex items-center gap-2">
                 <Gauge className="h-3.5 w-3.5 text-primary" />
                 System resources
@@ -1109,7 +1109,7 @@ function RailContent({
         capabilities.workflowId) && (
         <Card className="karen-surface overflow-hidden border-border/70 bg-card/70">
           <CardHeader className="border-b border-border/50 bg-muted/10 pb-2">
-            <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
               <span className="flex items-center gap-2">
                 <Gauge className="h-3.5 w-3.5 text-primary" />
                 Execution envelope
@@ -1197,7 +1197,7 @@ function RailContent({
 
       <Card className="karen-surface border-border/70 bg-card/70">
         <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
             Guardrails & capabilities
           </CardTitle>
@@ -1294,7 +1294,7 @@ function RailContent({
 
       <Card className="karen-surface border-border/70 bg-card/70">
         <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
             <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
             Execution trace
           </CardTitle>
@@ -1335,7 +1335,7 @@ function RailContent({
         runtime.memoryPersistenceStatus) && (
         <Card className="karen-surface border-border/70 bg-card/70">
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
               <GitBranch className="h-3.5 w-3.5 text-primary" />
               Provenance & persistence
             </CardTitle>
@@ -1389,7 +1389,7 @@ function RailContent({
       {needsAttention && (
         <Card className="border-amber-500/20 bg-amber-500/5">
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-amber-600 dark:text-amber-400">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-amber-600 dark:text-amber-400">
               <AlertTriangle className="h-3.5 w-3.5" />
               Human attention
             </CardTitle>
