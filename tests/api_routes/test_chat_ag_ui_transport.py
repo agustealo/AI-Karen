@@ -470,33 +470,33 @@ async def test_ag_ui_workspace_context_rejects_untrusted_fields_and_foreign_run(
 
 
 @pytest.mark.asyncio
-async def test_ag_ui_preserves_explicit_provider_and_model_hints(monkeypatch):
+async def test_ag_ui_model_request_uses_canonical_runtime_fields(monkeypatch):
     fake = FakeRuntime()
     monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: fake)
     response = await chat_ingress.stream_ag_ui_chat(
         request=agui_run(forwardedProps={
             "preferred_llm_provider": "ollama",
-            "preferred_model": "local-model",
+            "preferred_model": "approved-local-model",
         }),
         http_request=SimpleNamespace(headers={}),
         user={"user_id": USER, "tenant_id": TENANT_A},
     )
-    events = "".join([part async for part in response.body_iterator])
-    assert "RUN_FINISHED" in events
+    _ = [part async for part in response.body_iterator]
     assert len(fake.requests) == 1
     assert fake.requests[0].preferred_provider == "ollama"
-    assert fake.requests[0].preferred_model == "local-model"
+    assert fake.requests[0].preferred_model == "approved-local-model"
+    assert fake.requests[0].context.tenant_id == TENANT_A
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("hints", [
-    {"preferred_model": "unscoped-model"},
-    {"preferred_llm_provider": " "},
-    {"preferred_llm_provider": 123},
-    {"preferred_llm_provider": "ollama", "preferred_model": ["injected"]},
-    {"preferred_llm_provider": "ollama", "tools": ["unsafe"]},
+    {"preferred_llm_provider": "ollama"},
+    {"preferred_model": "model-only"},
+    {"preferred_llm_provider": "", "preferred_model": "valid"},
+    {"preferred_llm_provider": "ollama", "preferred_model": 123},
+    {"preferred_llm_provider": "ollama", "preferred_model": "test", "admin": True},
 ])
-async def test_ag_ui_rejects_invalid_selection_hints(hints):
+async def test_ag_ui_rejects_unpaired_or_untrusted_model_hints(hints):
     with pytest.raises(HTTPException) as exc:
         await chat_ingress.stream_ag_ui_chat(
             request=agui_run(forwardedProps=hints),
