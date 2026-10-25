@@ -1275,6 +1275,11 @@ class ChatRuntime:
                     for key, value in provider_meta.items()
                     if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
+                **({"answer_composition_status": provider_meta["answer_composition_status"]}
+                   if provider_meta.get("answer_composition_status") in {
+                       "grounded_model", "retrieved_evidence",
+                       "source_observation", "capability_unavailable",
+                   } else {}),
                 **({"pending_clarification": provider_meta["pending_clarification"]}
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
