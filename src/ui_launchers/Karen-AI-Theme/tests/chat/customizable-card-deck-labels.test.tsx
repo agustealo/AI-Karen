@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import CustomizableCardDeck from '@/components/chat/CustomizableCardDeck';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,7 +17,7 @@ describe('customizable rail menu labels', () => {
         </Card>
       </CustomizableCardDeck>,
     );
-    screen.getByRole('button', { name: 'Customize intelligence cards' }).click();
+    fireEvent.click(screen.getByRole('button', { name: 'Customize intelligence cards' }));
     expect(screen.getByText('Runtime dispatch healthy')).toBeTruthy();
     expect(screen.queryByText('Card 1')).toBeNull();
   });
