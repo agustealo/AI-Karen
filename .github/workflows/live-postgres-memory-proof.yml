@@ -283,4 +283,4 @@ jobs:
           PY
           pytest tests/integration/test_persona_activation_postgres.py -q -rs
           pytest tests/integration/test_live_persona_memory_provenance.py -q -rs
-          pytest tests/integration/test_live_persona_vault_neurorecall.py -q -rs
+          pytest tests/integration/test_live_persona_vault_neurorecall.py -vv -rs --timeout=120 -o faulthandler_timeout=60
