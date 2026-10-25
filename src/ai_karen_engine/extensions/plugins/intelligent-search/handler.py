@@ -271,6 +271,9 @@ class WebSearchDispatcher(ExtensionBase):
     def _resolve_mode(self, params: Dict[str, Any]) -> str:
         mode = params.get("mode")
 
+        if mode == "auto":
+            mode = None
+
         if mode is not None:
             # Explicit selection is a request contract, not a hint. Reject
             # unsupported modes rather than silently executing General search.
@@ -282,6 +285,8 @@ class WebSearchDispatcher(ExtensionBase):
 
         if "context" in params and isinstance(params["context"], dict):
             context_mode = params["context"].get("mode")
+            if context_mode == "auto":
+                context_mode = None
             if context_mode is not None:
                 return (
                     context_mode.strip().lower().replace("-", "_")
