@@ -1,4 +1,5 @@
 export type SearchModeId =
+  | 'auto'
   | 'general'
   | 'news'
   | 'docs'
