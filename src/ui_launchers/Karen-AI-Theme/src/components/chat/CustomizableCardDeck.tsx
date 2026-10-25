@@ -2,6 +2,7 @@
 
 import { Children, isValidElement, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Settings2, GripVertical } from 'lucide-react';
 import { CardTitle } from '@/components/ui/card';
 
@@ -41,6 +42,10 @@ export default function CustomizableCardDeck({ children }: { children: ReactNode
   const [preferences, setPreferences] = useState<CardPreference>({ order: [], hidden: [] });
   const [editing, setEditing] = useState(false);
   const [dragging, setDragging] = useState<string | null>(null);
+  const [headerTarget, setHeaderTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHeaderTarget(document.getElementById('karen-rail-customize-menu'));
+  }, []);
   useEffect(() => setPreferences(restore()), []);
   const cards = Children.toArray(children).map((element, index) => {
     const title = findTitle(element) || `Card ${index + 1}`;
@@ -78,13 +83,14 @@ export default function CustomizableCardDeck({ children }: { children: ReactNode
     persist({ ...preferences, order: ids });
   };
   return <div className="space-y-3">
-    <div className="flex items-center justify-between gap-2">
-      <h3 className="text-sm font-semibold tracking-tight">Cards</h3>
-      <button type="button" aria-label="Customize intelligence cards" aria-expanded={editing}
-        onClick={() => setEditing(!editing)} className="rounded-lg border p-2 hover:bg-muted">
+    {(() => {
+      const trigger = <button type="button" aria-label="Customize intelligence cards" aria-expanded={editing}
+        onClick={() => setEditing(!editing)} className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
         <Settings2 className="h-4 w-4" />
-      </button>
-    </div>
+      </button>;
+      return headerTarget ? createPortal(trigger, headerTarget) : trigger;
+    })()}
+    <h3 className="text-sm font-semibold tracking-tight">Cards</h3>
     {editing && <p className="text-xs text-muted-foreground">Show, hide, drag, or use arrows to arrange cards. Saved in this browser.</p>}
     {ordered.map(({ id, title, element }, index) => <div key={id}
       draggable={editing} onDragStart={() => setDragging(id)}
