@@ -430,7 +430,7 @@ class ModelDownloadRepository:
             result = await session.execute(
                 text("""
                     SELECT job_id, model_id, revision, channel_id, status,
-                           progress, message, error, created_at, updated_at
+                           progress, created_at, updated_at
                     FROM public.model_download_jobs
                     WHERE tenant_id = :tenant_id AND requested_by = :user_id
                     ORDER BY created_at DESC LIMIT :limit
