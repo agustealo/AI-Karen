@@ -499,7 +499,7 @@ class ModelDownloadRepository:
                         heartbeat_at = CASE WHEN lease_token IS NOT NULL THEN heartbeat_at ELSE NULL END,
                         completed_at = CASE WHEN lease_token IS NOT NULL THEN completed_at ELSE now() END
                     WHERE job_id = :job_id
-                      AND (:tenant_id IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
+                      AND (CAST(:tenant_id AS TEXT) IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status NOT IN ('promoting', 'completed', 'failed', 'cancelled')
                     RETURNING *
                     """
@@ -525,7 +525,7 @@ class ModelDownloadRepository:
                             THEN 'Pause requested; active staging will not be promoted'
                             ELSE 'Paused before execution' END
                     WHERE job_id = :job_id
-                      AND (:tenant_id IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
+                      AND (CAST(:tenant_id AS TEXT) IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status IN ('queued', 'running')
                       AND cancel_requested = false
                     RETURNING *
@@ -555,7 +555,7 @@ class ModelDownloadRepository:
                         lease_expires_at = NULL,
                         heartbeat_at = NULL
                     WHERE job_id = :job_id
-                      AND (:tenant_id IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
+                      AND (CAST(:tenant_id AS TEXT) IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status = 'paused'
                       AND lease_token IS NULL
                     RETURNING *
