@@ -10,6 +10,13 @@ from ai_karen_engine.services.search.article_document_service import SearchArtic
 class ScopedArticles(SearchArticleService):
     def __init__(self):
         self.calls = []
+        self._artifacts = SimpleNamespace(get_metadata=self._get_metadata)
+
+    async def _get_metadata(self, article_id, tenant_id):
+        return SimpleNamespace(success=True, data=SimpleNamespace(
+            kind="search_article", user_id="owner", deleted_at=None,
+            metadata={"source_url": "https://example.org/article"},
+        ))
 
     async def read(self, **kwargs):
         self.calls.append(kwargs)
@@ -34,7 +41,7 @@ class RuntimeContext:
 async def test_chat_reference_uses_principal_scope_not_reference_scope():
     service = ScopedArticles()
     context = RuntimeContext()
-    result = await service.read_for_chat(execution_context=context, article_id="article-123")
+    result = await service.read_for_chat(execution_context=context, article_id="article-123", source_url="https://example.org/article")
     assert context.checked is True
     assert result == "tenant scoped content"
     assert service.calls == [{"tenant_id": "tenant-A", "user_id": "owner", "article_id": "article-123"}]
