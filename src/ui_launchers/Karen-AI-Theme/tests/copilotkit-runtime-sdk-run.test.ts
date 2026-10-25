@@ -93,6 +93,26 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
     expect(calls.map((call) => call.url)).toEqual([AUTH_ENDPOINT, CAPABILITIES_ENDPOINT, AGENT_ENDPOINT]);
   });
 
+  it("cannot start a real SDK run when the backend AG-UI feature is off", async () => {
+    const outbound: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      outbound.push(String(input));
+      if (String(input) === AUTH_ENDPOINT) {
+        return Response.json({
+          user_id: "user-123", tenant_id: "tenant-456", is_active: true,
+        });
+      }
+      if (String(input) === CAPABILITIES_ENDPOINT) {
+        return Response.json({ enabled: false });
+      }
+      throw new Error("Disabled run attempted unauthorized model execution");
+    }) as typeof fetch;
+    const response = await POST(sdkRun());
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ detail: "Karen AG-UI transport is disabled" });
+    expect(outbound).toEqual([AUTH_ENDPOINT, CAPABILITIES_ENDPOINT]);
+  });
+
   it("rejects a client-provided privileged tool without invoking Karen", async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as typeof fetch;
