@@ -185,3 +185,31 @@ own conversation storage, mutate tools directly or synthesize success.
    installation/removal and tenant boundaries, then add Teams.
 7. Finish reference-audited legacy cleanup and permanent CI drift protection.
 
+
+## Superseding source-verified implementation plan
+
+Use `docs/capabilities/copilotkit-migration-implementation-v2.md` as the
+implementation roadmap and `docs/capabilities/ck01-canonical-preflight.md`
+as the updated source evidence. These supersede earlier statements here that
+the plugin loader, channel host or approval owner remain undiscovered.
+
+The discovered canonical plugin authority is `extensions/plugin_kernel.py`,
+backed by the platform registry and existing `extensions/plugins/*/manifest.json`
+packages. The channel host and worker are already under
+`services/channels/`, with contracts in `extensions/channels/contracts.py`
+and canonical persistence in `persistence/repositories/channel_repository.py`.
+Durable human approval ownership is `services/approvals.py` plus
+`persistence/repositories/approval_repository.py`. No duplicate services,
+registries or tables are permitted.
+
+The frontend source of truth is `src/ui_launchers/Karen-AI-Theme/`:
+`dashboard/page.tsx` mounts the existing chat; `SessionProvider.tsx`
+manages sessions; `globals.css` and `tailwind.config.ts` own the HSL-based
+Tailwind 3 visual language. CopilotKit v2 styling must be scoped and tested
+against this design system. CopilotKit v2's slot system should preserve
+Karen's user experience instead of forcing a visual redesign.
+
+Retirement and channel plans must use these confirmed owners and link
+each deletion to actual user-capability parity and a source/consumer audit.
+The documentation changes in this ADR still do not install CopilotKit,
+enable AG-UI in production, create a working Channels adapter or run CI.
