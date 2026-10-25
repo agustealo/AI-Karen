@@ -35,6 +35,7 @@ def _payload(job_id: str, install_path: str) -> dict[str, Any]:
         "error": None,
         "result": None,
         "requested_by": "integration-test",
+        "tenant_id": "integration-tenant",
         "trust_remote_code": False,
         "license_accepted": True,
         "include_patterns": None,
