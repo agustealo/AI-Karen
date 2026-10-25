@@ -2559,6 +2559,10 @@ class ChatRuntime:
         """One answer and presentation composition path for both transports."""
         accepted = dict(metadata)
         answer = result.text
+        if decision.intent in {"search.general", "search.weather", "time.current"}:
+            # A failed or denied capability must not be classified as grounded
+            # evidence or a model response merely because text was returned.
+            accepted["answer_composition_status"] = "capability_unavailable"
         if result.success and decision.intent in {
             "search.general", "search.weather", "time.current"
         }:
