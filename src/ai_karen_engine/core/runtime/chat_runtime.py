@@ -2568,6 +2568,13 @@ class ChatRuntime:
             if synthesized is not None:
                 answer, attribution = synthesized
                 accepted.update(attribution)
+                accepted["answer_composition_status"] = "grounded_model"
+            else:
+                # The original capability result remains readable evidence,
+                # never a model answer. Preserve the original provider receipt.
+                accepted["answer_composition_status"] = "source_observation" if (
+                    decision.intent in {"search.weather", "time.current"}
+                ) else "retrieved_evidence"
         structured = accepted.get("structured_content")
         presentation = structured.get("presentation") if isinstance(structured, dict) else None
         layout_provenance = {}
