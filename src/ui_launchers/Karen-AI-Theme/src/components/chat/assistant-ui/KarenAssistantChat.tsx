@@ -29,6 +29,7 @@ import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWe
 import { KarenPresentationRegistry } from "./KarenPresentationRegistry";
 import { KarenPersonaSelector } from "./KarenPersonaSelector";
 import { KarenComposerRuntimeCatalog } from "./KarenComposerRuntimeCatalog";
+import type { ComposerModelRequest } from "./KarenComposerRuntimeCatalog";
 import { KarenBrowserDictation } from "./KarenBrowserDictation";
 import { KarenLocalDictation } from "./KarenLocalDictation";
 import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
@@ -216,11 +217,18 @@ function KarenRestoredExecutionReceipt({ data }: { data: unknown }) {
     <details data-testid="karen-restored-execution-receipt"
       className="my-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
       <summary className="cursor-pointer font-medium">Saved execution details</summary>
-      <p className="mt-2">Provider: {receipt.actual_provider}</p>
+      {(typeof receipt.requested_provider === "string" || typeof receipt.requested_model === "string") && (
+        <p className="mt-2">Requested: {String(receipt.requested_provider || "Unspecified")} · {String(receipt.requested_model || "Unspecified")}</p>
+      )}
+      <p className="mt-2">Executed provider: {receipt.actual_provider}</p>
       <p>Model: {receipt.actual_model}</p>
       <p>Response source: {receipt.response_source}</p>
       {typeof receipt.runtime_engine === "string" && receipt.runtime_engine &&
         <p>Engine: {receipt.runtime_engine}</p>}
+      {typeof receipt.fallback_level === "number" && receipt.fallback_level > 0 &&
+        <p>Fallback level: {receipt.fallback_level}</p>}
+      {typeof receipt.degradation_reason === "string" && receipt.degradation_reason &&
+        <p>Degradation reason: {receipt.degradation_reason.replace(/_/g, " ")}</p>}
       {receipt.degraded_mode === true && <p>Degraded execution reported</p>}
     </details>
   );
@@ -409,11 +417,7 @@ function AssistantMessage() {
   );
 }
 
-function KarenThread({ selectedProvider, selectedModel, onSelectionChange }: {
-  selectedProvider: string;
-  selectedModel: string;
-  onSelectionChange: (provider: string, model: string) => void;
-}) {
+function KarenThread({ selection, onSelectionChange }: { selection: ComposerModelRequest; onSelectionChange: (next: ComposerModelRequest) => void }) {
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
@@ -449,9 +453,9 @@ function KarenThread({ selectedProvider, selectedModel, onSelectionChange }: {
             {composerSettingsOpen && (
               <section aria-label="Karen composer settings" className="mb-3 rounded-xl border border-border/60 bg-card p-3 text-xs">
                 <h3 className="text-sm font-semibold">Karen conversation</h3>
-                <KarenComposerRuntimeCatalog selectedProvider={selectedProvider} selectedModel={selectedModel} onSelectionChange={onSelectionChange} />
+                <KarenComposerRuntimeCatalog selection={selection} onSelectionChange={onSelectionChange} />
                 <p className="mt-1 text-muted-foreground">Streaming, model routing, tools and approvals are decided by the authenticated runtime. Tool activity and approval requests appear only when reported by Karen.</p>
-                <p className="mt-2 text-muted-foreground">Persona and model preferences are request-level controls. Karen reports the actual execution choice; unsupported attachments and tools are never simulated.</p>
+                <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
               </section>
             )}
             <div className="mb-2"><KarenPersonaSelector /></div>
@@ -571,12 +575,9 @@ function KarenConversationIntelligence({ threadId }: { threadId: string }) {
 function KarenAgUiRuntime({ threadId }: { threadId: string }) {
   const { createNewSession, loadSession, workspaceRunId } = useSession();
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState("");
-  const [selectedModel, setSelectedModel] = useState("");
-  const onSelectionChange = useCallback((provider: string, model: string) => {
-    setSelectedProvider(provider);
-    setSelectedModel(model);
-  }, []);
+  const [modelRequest, setModelRequest] = useState<ComposerModelRequest>(null);
+  const modelRequestRef = useRef<ComposerModelRequest>(null);
+  modelRequestRef.current = modelRequest;
   const agent = useMemo(
     () => {
       // The backend resolves threadId as Karen's durable conversation UUID.
@@ -591,13 +592,12 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
           ...input,
           forwardedProps: {
             ...(workspaceRunId ? { workspace_run_id: workspaceRunId } : {}),
-            ...(selectedProvider ? { preferred_llm_provider: selectedProvider } : {}),
-            ...(selectedModel ? { preferred_model: selectedModel } : {}),
+            ...(modelRequestRef.current ? { preferred_llm_provider: modelRequestRef.current.provider, preferred_model: modelRequestRef.current.model } : {}),
           },
         })) as HttpAgent["run"];
       return connected;
     },
-    [threadId, workspaceRunId, selectedProvider, selectedModel],
+    [threadId, workspaceRunId],
   );
   const historyLoad = useCallback(
     async () => ExportedMessageRepository.fromArray(
@@ -639,7 +639,7 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
         </p>
       )}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className="flex min-w-0 flex-1 flex-col"><KarenThread selectedProvider={selectedProvider} selectedModel={selectedModel} onSelectionChange={onSelectionChange} /></div>
+        <div className="flex min-w-0 flex-1 flex-col"><KarenThread selection={modelRequest} onSelectionChange={setModelRequest} /></div>
         <KarenConversationIntelligence threadId={threadId} />
       </div>
     </AssistantRuntimeProvider>
