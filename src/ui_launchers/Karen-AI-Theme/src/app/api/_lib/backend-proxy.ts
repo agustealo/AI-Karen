@@ -209,6 +209,8 @@ export async function proxyToBackend(
     retryDelayMs?: number;
     rawBody?: string;
     retryOnStatusCodes?: number[];
+    // Disable for mutating execution endpoints to prevent replaying a POST.
+    followRedirects?: boolean;
   },
 ): Promise<NextResponse> {
   const backendBaseUrl = getBackendBaseUrl();
@@ -216,6 +218,7 @@ export async function proxyToBackend(
   const retryAttempts = Math.max(1, options?.retryAttempts ?? 2);
   const retryDelayMs = Math.max(0, options?.retryDelayMs ?? 250);
   const retryOnStatusCodes = new Set(options?.retryOnStatusCodes ?? [502]);
+  const followRedirects = options?.followRedirects ?? true;
   const upstreamUrl = `${backendBaseUrl}${upstreamPath}${request.nextUrl.search}`;
 
   // Read the body once to avoid "Body has already been read" error on retries/redirects.
@@ -270,6 +273,7 @@ export async function proxyToBackend(
     const MAX_REDIRECTS = 5;
     let redirectCount = 0;
     while (
+      followRedirects &&
       upstream.status >= 300 &&
       upstream.status < 400 &&
       upstream.headers.has('location') &&
