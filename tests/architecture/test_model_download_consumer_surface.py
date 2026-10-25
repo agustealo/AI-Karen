@@ -218,3 +218,30 @@ def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     assert "if (!retryValidatedRevision(job) && job.license_accepted)" in ui
     assert "Review the current license and access terms" in ui
     assert "E_VERIFY," in control
+
+
+def test_model_lifecycle_surface_distinguishes_acquisition_from_execution() -> None:
+    source = UI.read_text(encoding="utf-8")
+    assert 'aria-label="Model lifecycle"' in source
+    for phrase in (
+        "Discover & review",
+        "Validate & acquire",
+        "Verify installation",
+        "Activate & use",
+        "Job status unavailable",
+        "Installed inventory unavailable",
+        "Only actual execution receipts confirm use",
+    ):
+        assert phrase in source
+
+
+def test_download_admin_boundary_is_not_removed_by_lifecycle_ui() -> None:
+    settings = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/src/components/settings/SettingsDialog.tsx"
+    ).read_text(encoding="utf-8")
+    router = ROUTE.read_text(encoding="utf-8")
+    assert "id: 'model-downloads' as const" in settings
+    assert "...(adminMode ? [{" in settings
+    assert "admin-scopes this router" in router
+    assert '@router.get("/download/jobs"' in router
