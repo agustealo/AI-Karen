@@ -69,3 +69,14 @@ async def test_invalid_reference_never_reads_storage():
     with pytest.raises(ValueError):
         await service.read_for_chat(execution_context=RuntimeContext(), article_id="x" * 129)
     assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_missing_citation_url_rejects_before_reading_article_bytes():
+    service = ScopedArticles()
+    context = RuntimeContext()
+    assert await service.read_for_chat(
+        execution_context=context, article_id="article-123",
+    ) is None
+    assert context.checked is True
+    assert service.calls == []
