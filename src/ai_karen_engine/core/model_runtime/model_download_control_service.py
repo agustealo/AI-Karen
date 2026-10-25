@@ -17,6 +17,7 @@ from ai_karen_engine.config.config_asset_loaders import (
     load_model_runtime_discovery_config,
 )
 from ai_karen_engine.config.config_manager import get_config_value, update_config
+from ai_karen_engine.core.model_runtime.model_download_lifecycle import project_model_download_lifecycle
 from ai_karen_engine.config.model_download import (
     ModelDownloadWorkerSettings,
     load_model_download_worker_settings,
@@ -484,6 +485,7 @@ class ModelDownloadControlService:
             if isinstance(value, datetime):
                 payload[key] = value.isoformat()
         channel = self._channels.get(str(payload.get("channel_id") or ""))
+        payload["lifecycle"] = project_model_download_lifecycle(payload)
         payload["channel"] = channel.to_dict(
             locked_by_master=self._channel_locked(channel)
         ) if channel is not None else None
