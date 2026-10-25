@@ -227,9 +227,9 @@ export function ChatInput({
         {composerSettingsOpen && (
           <section aria-label="Composer capabilities" className="mb-3 rounded-xl border border-border/70 bg-card p-3 text-xs">
             <h3 className="text-sm font-semibold">Conversation controls</h3>
-            <p className="mt-1 text-muted-foreground">Provider and model availability come from Karen's runtime. Change them using the model selector.</p>
+            <p className="mt-1 text-muted-foreground">Provider and model availability come from Karen&apos;s runtime. Change them using the model selector.</p>
             <dl className="mt-2 grid gap-2 sm:grid-cols-2">
-              <div><dt className="font-medium">Persona</dt><dd className="text-muted-foreground">Managed by Karen's authorized persona runtime; selection appears when available.</dd></div>
+              <div><dt className="font-medium">Persona</dt><dd className="text-muted-foreground">Managed by Karen&apos;s authorized persona runtime; selection appears when available.</dd></div>
               <div><dt className="font-medium">Voice</dt><dd className="text-muted-foreground">{speechRecognitionSupported ? 'Microphone transcription available' : 'Not supported in this browser'}</dd></div>
               <div><dt className="font-medium">Streaming</dt><dd className="text-muted-foreground">{streamingStatus || 'Runtime-managed response delivery'}</dd></div>
               <div><dt className="font-medium">Tools and approvals</dt><dd className="text-muted-foreground">Governed by backend permissions. No client-side auto-approval.</dd></div>

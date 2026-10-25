@@ -8,37 +8,14 @@ on:
         required: false
         type: boolean
         default: false
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "scripts/beta_live_model_smoke.py"
-      - "scripts/deepagents_live_tool_smoke.py"
-      - "scripts/ci/production-first-boot-smoke.sh"
-      - "scripts/ci/ollama_settings_live_proof.py"
-      - "src/ai_karen_engine/api_routes/models/settings.py"
-      - "src/ai_karen_engine/api_routes/chat/**"
-      - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
-      - "src/ai_karen_engine/core/runtime/**"
-      - ".github/workflows/beta-live-model-smoke.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "scripts/beta_live_model_smoke.py"
-      - "scripts/deepagents_live_tool_smoke.py"
-      - "scripts/setup_beta_actions_runner.ps1"
-      - "src/ai_karen_engine/core/expression/**"
-      - "src/ai_karen_engine/core/model_runtime/**"
-      - ".github/workflows/beta-live-model-smoke.yml"
-      - ".github/workflows/beta-release-gate.yml"
+  # Real model evidence runs on the dedicated beta runner by operator request.
+  # Normal PR and main pushes are covered by hosted quality and first-boot gates.
 
 permissions:
   contents: read
 
 jobs:
   live-model-smoke:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       - self-hosted
       - Windows

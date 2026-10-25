@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.extensions.contracts import ExtensionHealth, ExtensionLifecycleState
@@ -179,9 +180,51 @@ class ExtensionHealthMonitor:
             extension_metrics = {}
 
             try:
-                extensions = self.extension_manager.registry.get_all_extensions()
+                registry = getattr(self.extension_manager, "registry", None)
+                if registry is not None and hasattr(registry, "get_all_extensions"):
+                    extensions = registry.get_all_extensions()
+                elif hasattr(self.extension_manager, "list_extension_statuses"):
+                    # ExtensionCoreManager exposes catalog statuses instead of
+                    # a live registry. Adapt them to the record shape used by
+                    # the per-extension health check.
+                    statuses = self.extension_manager.list_extension_statuses()
+                    if not statuses and hasattr(self.extension_manager, "initialize"):
+                        # Fast startup defers extension discovery; the catalog
+                        # fills in on the first health check instead of
+                        # reporting an empty system forever.
+                        try:
+                            await self.extension_manager.initialize()
+                            statuses = self.extension_manager.list_extension_statuses()
+                        except Exception as init_error:
+                            logger.warning(
+                                "Extension catalog initialization failed: %s",
+                                init_error,
+                            )
+                    for status in statuses:
+                        name = str(status.get("name") or status.get("id") or "")
+                        if not name:
+                            continue
+                        state = str(status.get("status") or "unknown")
+                        is_active = state in {"enabled", "active", "running"}
+                        extensions[name] = SimpleNamespace(
+                            status=SimpleNamespace(
+                                value="active" if is_active else state
+                            ),
+                            instance=None,
+                            error_count=0 if is_active else 1,
+                            success_count=0,
+                            loaded_at=None,
+                            state=(
+                                ExtensionLifecycleState.ENABLED
+                                if is_active
+                                else ExtensionLifecycleState.DISABLED
+                            ),
+                            error=status.get("error_message"),
+                        )
             except Exception as e:
-                logger.warning(f"Failed to get extensions from registry: {e}")
+                logger.warning(
+                    f"Failed to get extensions from registry: {e}", exc_info=True
+                )
 
             # Check health of each extension
             for name, record in extensions.items():
@@ -192,8 +235,8 @@ class ExtensionHealthMonitor:
                     logger.error(f"Failed to check health for extension {name}: {e}")
                     extension_metrics[name] = ExtensionHealthRecord(
                         plugin_id=name,
-                        state=ExtensionLifecycleState.STOPPED,
-                        health=ExtensionHealth.UNHEALTHY,
+                        state=ExtensionLifecycleState.FAILED,
+                        health=ExtensionHealth.UNAVAILABLE,
                         response_time_ms=0,
                         last_check=datetime.now(timezone.utc),
                         error=str(e)
@@ -211,7 +254,7 @@ class ExtensionHealthMonitor:
             degraded_count = sum(1 for m in extension_metrics.values()
                                if m.health == ExtensionHealth.DEGRADED)
             unhealthy_count = sum(1 for m in extension_metrics.values()
-                               if m.health == ExtensionHealth.UNHEALTHY)
+                               if m.health == ExtensionHealth.UNAVAILABLE)
 
             # Determine overall status
             overall_status = self._calculate_overall_status(
@@ -283,7 +326,7 @@ class ExtensionHealthMonitor:
 
             return ExtensionHealthRecord(
                 plugin_id=name,
-                state=record.state if hasattr(record, 'state') else ExtensionLifecycleState.STOPPED,
+                state=record.state if hasattr(record, 'state') else ExtensionLifecycleState.UNAVAILABLE,
                 health=health_status,
                 response_time_ms=response_time,
                 last_check=datetime.now(timezone.utc),
@@ -296,8 +339,8 @@ class ExtensionHealthMonitor:
         except Exception as e:
             return ExtensionHealthRecord(
                 plugin_id=name,
-                state=ExtensionLifecycleState.STOPPED,
-                health=ExtensionHealth.UNHEALTHY,
+                state=ExtensionLifecycleState.FAILED,
+                health=ExtensionHealth.UNAVAILABLE,
                 response_time_ms=(time.time() - start_time) * 1000,
                 last_check=datetime.now(timezone.utc),
                 error=str(e)
@@ -314,15 +357,15 @@ class ExtensionHealthMonitor:
         """Determine extension health status based on various factors."""
         # If not active, it's unhealthy
         if not is_active:
-            return ExtensionHealth.UNHEALTHY
+            return ExtensionHealth.UNAVAILABLE
 
         # If health check failed, it's unhealthy
         if not health_result:
-            return ExtensionHealth.UNHEALTHY
+            return ExtensionHealth.UNAVAILABLE
 
         # Check response time
         if response_time > self.thresholds["response_time_critical_ms"]:
-            return ExtensionHealth.UNHEALTHY
+            return ExtensionHealth.UNAVAILABLE
         elif response_time > self.thresholds["response_time_warning_ms"]:
             return ExtensionHealth.DEGRADED
 
@@ -331,7 +374,7 @@ class ExtensionHealthMonitor:
         if total_requests > 0:
             error_rate = error_count / total_requests
             if error_rate > self.thresholds["error_rate_critical"]:
-                return ExtensionHealth.UNHEALTHY
+                return ExtensionHealth.UNAVAILABLE
             elif error_rate > self.thresholds["error_rate_warning"]:
                 return ExtensionHealth.DEGRADED
 

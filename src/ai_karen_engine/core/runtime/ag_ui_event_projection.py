@@ -322,7 +322,30 @@ class AGUIEventProjection:
                 }
                 if receipt["personal_recall_grounded"]:
                     receipt["evidence_source"] = source
+            # The restored-message UI already renders this named receipt.
+            # Emit the same bounded, source-verified execution identity live.
+            # Never export arbitrary runtime metadata, credentials, or attempts.
+            execution_receipt: dict[str, Any] = {}
+            for key, limit in (
+                ("requested_provider", 100),
+                ("requested_model", 200),
+                ("actual_provider", 100),
+                ("actual_model", 200),
+                ("response_source", 100),
+                ("runtime_engine", 100),
+                ("degradation_reason", 200),
+            ):
+                value = meta.get(key)
+                if isinstance(value, str) and value.strip():
+                    execution_receipt[key] = _text(value, limit)
+            if meta.get("degraded_mode") is True:
+                execution_receipt["degraded_mode"] = True
+            fallback_level = meta.get("fallback_level")
+            if type(fallback_level) is int and 0 <= fallback_level <= 100:
+                execution_receipt["fallback_level"] = fallback_level
             events = self._finish_message()
+            if execution_receipt.get("actual_provider") and execution_receipt.get("actual_model") and execution_receipt.get("response_source"):
+                events.append(self._custom("karen.execution_receipt.v1", execution_receipt))
             if receipt["output_truncated"] or "personal_recall_grounded" in receipt:
                 events.append(self._custom("karen.response_integrity.v1", receipt))
             self._terminal = True

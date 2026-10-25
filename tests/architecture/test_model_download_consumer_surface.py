@@ -218,3 +218,51 @@ def test_retry_preserves_install_alias_and_reviewed_revision() -> None:
     assert "if (!retryValidatedRevision(job) && job.license_accepted)" in ui
     assert "Review the current license and access terms" in ui
     assert "E_VERIFY," in control
+
+
+def test_model_lifecycle_surface_distinguishes_acquisition_from_execution() -> None:
+    source = UI.read_text(encoding="utf-8")
+    assert 'aria-label="Model lifecycle"' in source
+    for phrase in (
+        "Discover & review",
+        "Validate & acquire",
+        "Verify installation",
+        "Activate & use",
+        "Job status unavailable",
+        "Installed inventory unavailable",
+        "Only actual execution receipts confirm use",
+    ):
+        assert phrase in source
+
+
+def test_download_admin_boundary_is_not_removed_by_lifecycle_ui() -> None:
+    settings = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/src/components/settings/SettingsDialog.tsx"
+    ).read_text(encoding="utf-8")
+    router = ROUTE.read_text(encoding="utf-8")
+    assert "id: 'model-downloads' as const" in settings
+    assert "...(adminMode ? [{" in settings
+    assert "admin-scopes this router" in router
+    assert '@router.get("/download/jobs"' in router
+
+
+def test_owner_projection_is_tenant_scoped_and_excludes_sensitive_job_fields() -> None:
+    repository = (
+        ROOT / "src/ai_karen_engine/persistence/repositories/model_download_repository.py"
+    ).read_text(encoding="utf-8")
+    service = CONTROL.read_text(encoding="utf-8")
+    migration = (
+        ROOT / "supabase/migrations/20261025010000_42_model_download_tenant_ownership.sql"
+    ).read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS tenant_id text" in migration
+    assert "WHERE tenant_id = :tenant_id AND requested_by = :user_id" in repository
+    owner_query = repository.split("async def list_owned_jobs(", 1)[1].split(
+        "async def get_job(", 1
+    )[0]
+    assert "SELECT job_id, model_id, revision, channel_id, status" in owner_query
+    for forbidden in ("install_path", "lease_token", "trust_remote_code", "message, error"):
+        assert forbidden not in owner_query
+    assert "model_download_target_unavailable" in repository
+    assert "async def list_owned_jobs(" in service
+    assert 'tenant_id=str(user.get("tenant_id") or "").strip() or None' in service

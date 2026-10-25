@@ -204,6 +204,7 @@ class DownloadJobResponse(BaseModel):
     detected_modality: Optional[str] = None
     install_path: Optional[str] = None
     channel: Optional[DownloadChannelResponse] = None
+    lifecycle: Dict[str, Any] = Field(default_factory=dict)
 
 
 class InstalledModelsResponse(BaseModel):
@@ -322,6 +323,7 @@ def _serialize_download_job(job_payload: Optional[Dict[str, Any]]) -> DownloadJo
         detected_modality=job_payload.get("detected_modality"),
         install_path=job_payload.get("install_path"),
         channel=channel,
+        lifecycle=dict(job_payload.get("lifecycle") or {}),
     )
 
 

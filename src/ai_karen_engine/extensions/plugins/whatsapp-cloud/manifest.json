@@ -41,7 +41,7 @@
   },
   "permissions": {
     "network_access": [
-      "graph.facebook.com"
+      "outbound_https"
     ]
   },
   "rbac": {

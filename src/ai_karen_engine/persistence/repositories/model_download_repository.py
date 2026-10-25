@@ -320,14 +320,14 @@ class ModelDownloadRepository:
             """
             INSERT INTO public.model_download_jobs (
                 job_id, model_id, revision, channel_id, storage_key, status,
-                progress, message, error, result, requested_by, trust_remote_code,
+                progress, message, error, result, requested_by, tenant_id, trust_remote_code,
                 license_accepted, include_patterns, exclude_patterns, pin,
                 force_redownload, pause_requested, cancel_requested, warnings,
                 detected_runtime, detected_modality, install_path, max_attempts
             ) VALUES (
                 :job_id, :model_id, :revision, :channel_id, :storage_key, 'queued',
                 :progress, :message, :error, CAST(:result AS jsonb), :requested_by,
-                :trust_remote_code, :license_accepted,
+                :tenant_id, :trust_remote_code, :license_accepted,
                 CAST(:include_patterns AS jsonb), CAST(:exclude_patterns AS jsonb),
                 :pin, :force_redownload, false, false, CAST(:warnings AS jsonb),
                 :detected_runtime, :detected_modality, :install_path, :max_attempts
@@ -337,6 +337,7 @@ class ModelDownloadRepository:
         )
         params = {
             "job_id": payload["job_id"],
+            "tenant_id": payload.get("tenant_id"),
             "model_id": payload["model_id"],
             "revision": payload.get("revision"),
             "channel_id": payload["channel_id"],
@@ -389,6 +390,14 @@ class ModelDownloadRepository:
                 )
                 existing = _mapping(existing_result.mappings().first())
                 if existing is not None:
+                    # Shared install targets are exclusive across tenants and owners.
+                    if (
+                        not params["tenant_id"]
+                        or not existing.get("tenant_id")
+                        or existing["tenant_id"] != params["tenant_id"]
+                        or existing.get("requested_by") != params["requested_by"]
+                    ):
+                        raise PermissionError("model_download_target_unavailable")
                     existing["_target_reused"] = True
                     existing["_requested_job_id"] = str(payload["job_id"])
                     return existing
@@ -409,6 +418,46 @@ class ModelDownloadRepository:
             result = await session.execute(text(sql), params)
             return [dict(row) for row in result.mappings().all()]
 
+    async def list_owned_jobs(
+        self, *, tenant_id: str, user_id: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Scope ownership inside SQL before pagination, never in the UI."""
+        if not tenant_id or not user_id or tenant_id == "default":
+            raise PermissionError("verified_model_download_owner_required")
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text("""
+                    SELECT job_id, model_id, revision, channel_id, status,
+                           progress, created_at, updated_at
+                    FROM public.model_download_jobs
+                    WHERE tenant_id = :tenant_id AND requested_by = :user_id
+                    ORDER BY created_at DESC LIMIT :limit
+                """),
+                {"tenant_id": tenant_id, "user_id": user_id, "limit": limit},
+            )
+            return [dict(row) for row in result.mappings().all()]
+
+    async def get_owned_job(
+        self, *, job_id: str, tenant_id: str, user_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Resolve a single job with ownership enforced by PostgreSQL."""
+        if not job_id or not tenant_id or tenant_id == "default" or not user_id:
+            raise PermissionError("verified_model_download_owner_required")
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text("""
+                    SELECT job_id, model_id, revision, channel_id, status,
+                           progress, created_at, updated_at
+                    FROM public.model_download_jobs
+                    WHERE job_id = :job_id AND tenant_id = :tenant_id
+                      AND requested_by = :user_id
+                """),
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
+            )
+            return _mapping(result.mappings().first())
+
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         async with async_transaction_scope() as session:
             result = await session.execute(
@@ -417,7 +466,7 @@ class ModelDownloadRepository:
             )
             return _mapping(result.mappings().first())
 
-    async def cancel_job(self, job_id: str) -> Optional[dict[str, Any]]:
+    async def cancel_job(self, job_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Request cancellation without releasing a live execution lease.
 
         Blocking downloads run in ``asyncio.to_thread`` and cannot be stopped by
@@ -425,6 +474,10 @@ class ModelDownloadRepository:
         remains counted as active until the real I/O returns, fails, or its
         lease expires. Unclaimed work can be cancelled immediately.
         """
+        if (tenant_id is None) != (user_id is None):
+            raise PermissionError("model_download_owner_scope_incomplete")
+        if tenant_id is not None and (not tenant_id or tenant_id == "default" or not user_id):
+            raise PermissionError("verified_model_download_owner_required")
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
@@ -446,16 +499,21 @@ class ModelDownloadRepository:
                         heartbeat_at = CASE WHEN lease_token IS NOT NULL THEN heartbeat_at ELSE NULL END,
                         completed_at = CASE WHEN lease_token IS NOT NULL THEN completed_at ELSE now() END
                     WHERE job_id = :job_id
+                      AND (CAST(:tenant_id AS TEXT) IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status NOT IN ('promoting', 'completed', 'failed', 'cancelled')
                     RETURNING *
                     """
                 ),
-                {"job_id": job_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
             )
             return _mapping(result.mappings().first())
 
-    async def pause_job(self, job_id: str) -> Optional[dict[str, Any]]:
+    async def pause_job(self, job_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Pause queued work immediately or fence active work after its I/O ends."""
+        if (tenant_id is None) != (user_id is None):
+            raise PermissionError("model_download_owner_scope_incomplete")
+        if tenant_id is not None and (not tenant_id or tenant_id == "default" or not user_id):
+            raise PermissionError("verified_model_download_owner_required")
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
@@ -467,17 +525,22 @@ class ModelDownloadRepository:
                             THEN 'Pause requested; active staging will not be promoted'
                             ELSE 'Paused before execution' END
                     WHERE job_id = :job_id
+                      AND (CAST(:tenant_id AS TEXT) IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status IN ('queued', 'running')
                       AND cancel_requested = false
                     RETURNING *
                     """
                 ),
-                {"job_id": job_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
             )
             return _mapping(result.mappings().first())
 
-    async def resume_job(self, job_id: str) -> Optional[dict[str, Any]]:
+    async def resume_job(self, job_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Resume only fully paused work, never a still-leased pause request."""
+        if (tenant_id is None) != (user_id is None):
+            raise PermissionError("model_download_owner_scope_incomplete")
+        if tenant_id is not None and (not tenant_id or tenant_id == "default" or not user_id):
+            raise PermissionError("verified_model_download_owner_required")
         async with async_transaction_scope() as session:
             result = await session.execute(
                 text(
@@ -492,12 +555,13 @@ class ModelDownloadRepository:
                         lease_expires_at = NULL,
                         heartbeat_at = NULL
                     WHERE job_id = :job_id
+                      AND (CAST(:tenant_id AS TEXT) IS NULL OR (tenant_id = :tenant_id AND requested_by = :user_id))
                       AND status = 'paused'
                       AND lease_token IS NULL
                     RETURNING *
                     """
                 ),
-                {"job_id": job_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
             )
             return _mapping(result.mappings().first())
 

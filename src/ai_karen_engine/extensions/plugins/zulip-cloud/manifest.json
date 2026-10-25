@@ -42,7 +42,7 @@
   },
   "permissions": {
     "network_access": [
-      "zulipchat.com"
+      "outbound_https"
     ]
   },
   "rbac": {

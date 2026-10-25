@@ -229,7 +229,7 @@ async def overall_health(request: Request) -> Dict[str, Any]:
     extension_health = {}
     extension_status = "healthy"
     try:
-        from server.extension_health_monitor import get_extension_health_monitor
+        from ai_karen_engine.extensions.health import get_extension_health_monitor
 
         extension_monitor = get_extension_health_monitor()
         if extension_monitor:
@@ -244,11 +244,6 @@ async def overall_health(request: Request) -> Dict[str, Any]:
                 "supporting_services": ext_health["supporting_services"],
             }
             extension_status = ext_health["status"]
-
-            # Update extension metrics
-            extension_monitor.update_extension_metrics(
-                await extension_monitor.check_extension_system_health()
-            )
         else:
             extension_health = {
                 "status": "unknown",
@@ -415,7 +410,7 @@ async def _build_degraded_mode_status() -> Dict[str, Any]:
     extension_system_status = {}
     extension_degraded = False
     try:
-        from server.extension_health_monitor import get_extension_health_monitor
+        from ai_karen_engine.extensions.health import get_extension_health_monitor
 
         extension_monitor = get_extension_health_monitor()
         if extension_monitor:
@@ -775,7 +770,7 @@ async def extension_system_health(request: Request) -> Dict[str, Any]:
     correlation_id = request.headers.get("X-Correlation-Id") or get_request_id()
 
     try:
-        from server.extension_health_monitor import get_extension_health_monitor
+        from ai_karen_engine.extensions.health import get_extension_health_monitor
 
         extension_monitor = get_extension_health_monitor()
 
@@ -790,13 +785,6 @@ async def extension_system_health(request: Request) -> Dict[str, Any]:
         # Get comprehensive extension health
         health_data = await extension_monitor.get_extension_health_for_api()
 
-        # Update metrics
-        system_health = await extension_monitor.check_extension_system_health()
-        extension_monitor.update_extension_metrics(system_health)
-
-        # Get database performance metrics
-        db_performance = await extension_monitor.get_database_performance_metrics()
-
         duration_ms = (time.time() - start) * 1000
         _record_metrics("extensions", duration_ms)
 
@@ -810,7 +798,6 @@ async def extension_system_health(request: Request) -> Dict[str, Any]:
 
         return {
             **health_data,
-            "database_performance": db_performance,
             "correlation_id": correlation_id,
             "timestamp": time.time(),
             "response_time_ms": duration_ms,
@@ -846,7 +833,7 @@ async def individual_extension_health(
     correlation_id = request.headers.get("X-Correlation-Id") or get_request_id()
 
     try:
-        from server.extension_health_monitor import get_extension_health_monitor
+        from ai_karen_engine.extensions.health import get_extension_health_monitor
 
         extension_monitor = get_extension_health_monitor()
 

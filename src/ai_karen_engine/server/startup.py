@@ -641,6 +641,20 @@ async def on_startup(settings: Any, app: Optional[FastAPI] = None) -> None:
             else:
                 logger.info("Initializing extension system in background")
                 asyncio.create_task(extension_manager.initialize())
+
+        # The health endpoints report extension availability through this
+        # monitor; without initialization /api/health stays permanently
+        # degraded even when extensions are registered.
+        try:
+            from ai_karen_engine.extensions.health import (
+                initialize_extension_health_monitor,
+            )
+
+            await initialize_extension_health_monitor(extension_manager)
+        except Exception as monitor_error:
+            logger.warning(
+                "Extension health monitor initialization failed: %s", monitor_error
+            )
     except Exception as e:
         logger.warning("Could not initialize extension system: %s", e)
 
