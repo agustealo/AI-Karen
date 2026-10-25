@@ -7,7 +7,7 @@ import { MODE_CONFIG } from '../configs/modeConfig';
 export function useIntelligentSearch() {
   const [state, setState] = useState<IntelligentSearchState>({
     query: '',
-    mode: 'general',
+    mode: 'auto',
     options: {},
     isLoading: false,
     error: null,
