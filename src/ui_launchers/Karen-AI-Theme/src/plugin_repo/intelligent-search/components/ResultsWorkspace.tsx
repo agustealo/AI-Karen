@@ -33,6 +33,9 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
     'No retrieved preview available.';
   const featuredHref = featuredItem?.url || '';
   const hasEvidence = sourceCount > 0 || resultCount > 0;
+  const failedExecution = response?.metadata?.degraded === true && response?.status === 'error';
+  const searchFailure = response?.status === 'error' || response?.can_execute === false && response?.reason;
+  const failureMessage = typeof response?.reason === 'string' ? response.reason : 'The requested live information is unavailable. Please retry or refine your search.';
 
   useEffect(() => {
     if (activeSourceIndex > sources.length - 1) {
@@ -53,7 +56,8 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   if (state.isLoading) return <LoadingState state={state} />;
   if (state.error) return <ErrorState error={state.error} />;
   if (!response) return <EmptyState />;
-  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-xl font-semibold">No sources found</h2><p className="text-muted-foreground">{response.summary || 'The search did not return usable evidence.'} Try a broader query or a different search mode.</p></div>;
+  if (searchFailure || failedExecution) return <div role="alert" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">Search could not be completed</h2><p className="text-muted-foreground">{failureMessage}</p></div>;
+  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">No sources found</h2><p className="text-muted-foreground">The search did not return usable evidence. Try a broader query or a different search mode.</p></div>;
 
   const renderTabContent = () => {
     switch (currentTab) {
@@ -85,10 +89,11 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
-                {modeConfig.label}
+                {response.mode && response.mode !== 'auto' ? String(response.mode).replace(/_/g, ' ') : modeConfig.label}
               </h2>
               <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-                {response.summary || 'Retrieved sources for your query. These excerpts are not a generated answer.'}
+                {response.summary || 'Retrieved evidence is available below.'}
+                <span className="mt-1 block text-xs">Source summaries and excerpts are not verified AI-generated answers.</span>
               </p>
             </div>
           </div>
