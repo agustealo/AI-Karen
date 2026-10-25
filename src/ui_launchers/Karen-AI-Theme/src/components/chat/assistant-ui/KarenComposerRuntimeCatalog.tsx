@@ -24,9 +24,20 @@ export function KarenComposerRuntimeCatalog() {
     <p className="text-xs text-muted-foreground">Backend-reported discovery only. ChatRuntime owns execution and model routing.</p>
     {providers.length === 0 ? <p className="text-sm text-muted-foreground">No enabled providers reported.</p> :
       <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
-        {providers.map((provider) => <li key={provider.id} className="flex justify-between gap-2 rounded-lg border border-border/60 px-2 py-1.5">
-          <span className="min-w-0 truncate">{provider.label}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">{provider.healthy === false ? "Unhealthy" : provider.configured === false ? "Not configured" : String((provider.models || []).filter((model) => model.available !== false).length) + " models"}</span>
+        {providers.map((provider) => <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate font-medium">{provider.label}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{provider.healthy === false ? "Unhealthy" : provider.configured === false ? "Not configured" : String((provider.models || []).filter((model) => model.available === true).length) + " available models"}</span>
+          </div>
+          {provider.models && provider.models.length > 0 && <details className="mt-1 text-xs">
+            <summary className="cursor-pointer text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">View reported models</summary>
+            <ul className="mt-1 space-y-1">
+              {provider.models.map((model) => <li key={model.id} className="flex justify-between gap-2 rounded bg-muted/40 px-2 py-1">
+                <span className="min-w-0 break-all">{model.label}</span>
+                <span className="shrink-0 text-muted-foreground">{model.available === true ? "Available" : model.available === false ? "Unavailable" : "Unknown"}</span>
+              </li>)}
+            </ul>
+          </details>}
         </li>)}
       </ul>}
   </section>;
