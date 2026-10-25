@@ -11,6 +11,8 @@ export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, o
 }) {
   const [catalog, setCatalog] = useState<RuntimeProviderCatalogResponse | null>(null);
   const [error, setError] = useState(false);
+  const [agents, setAgents] = useState<Array<{ agent_id: string; name: string; lifecycle_state: string; healthy: boolean }>>([]);
+  const [agentCatalogError, setAgentCatalogError] = useState(false);
   useEffect(() => {
     let cancelled = false;
     apiClient.getRuntimeProviderCatalog().then((data) => {
@@ -18,6 +20,18 @@ export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, o
       if (!data || !Array.isArray(data.providers)) throw new Error("Invalid catalog");
       setCatalog(data);
     }).catch(() => { if (!cancelled) setError(true); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get<{ agents: Array<{ agent_id: string; name: string; lifecycle_state: string; healthy: boolean }> }>("/api/agent-runtime/catalog")
+      .then((result) => {
+        if (!cancelled) {
+          if (!Array.isArray(result.agents)) throw new Error("Invalid agent catalog");
+          setAgents(result.agents);
+        }
+      })
+      .catch(() => { if (!cancelled) setAgentCatalogError(true); });
     return () => { cancelled = true; };
   }, []);
   if (error) return <p role="status" className="text-sm text-muted-foreground">Runtime catalog unavailable. No provider selection was changed.</p>;
@@ -59,5 +73,15 @@ export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, o
           </details>}
         </li>)}
       </ul>}
+    <div className="mt-3 border-t border-border/60 pt-2">
+      <h4 className="text-sm font-medium">Registered agents</h4>
+      <p className="text-xs text-muted-foreground">Discovery only. Selecting a specialist requires runtime eligibility and an execution contract, so agents are not yet selectable here.</p>
+      {agentCatalogError ? <p role="status" className="text-xs text-muted-foreground">Agent catalog unavailable.</p> :
+        <ul className="mt-1 space-y-1 text-xs">{agents.map((agent) =>
+          <li key={agent.agent_id} className="flex justify-between gap-2">
+            <span>{agent.name}</span>
+            <span className="text-muted-foreground">{agent.lifecycle_state === "active" && agent.healthy ? "Registered" : "Unavailable"}</span>
+          </li>)}</ul>}
+    </div>
   </section>;
 }
