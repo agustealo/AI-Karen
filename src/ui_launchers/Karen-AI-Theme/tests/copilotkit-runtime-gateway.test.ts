@@ -68,7 +68,7 @@ describe("CopilotKit v2 protected gateway", () => {
   });
 
   it("uses canonical auth and refuses forged tenant headers", async () => {
-    const upstream = vi.fn(async () => authenticatedReply());
+    const upstream = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => authenticatedReply());
     globalThis.fetch = upstream as typeof fetch;
     const response = await POST(request({
       cookie: "kari_session=valid",
