@@ -167,13 +167,13 @@ Frontend (from `src/ui_launchers/Karen-AI-Theme`):
 ```bash
 npm run lint
 npm run typecheck
-npm test
+npx vitest run
 npm run build
 npm run test:e2e -- e2e/karen-durable-history-restoration.spec.ts
 npm run test:e2e -- e2e/kchat-workspace-continuity.spec.ts
 npm run test:e2e -- e2e/ux-user-journeys.spec.ts
 ```
-Use the resolved package-manager authority and supported CLI arguments in the checked-out project. Review generated screenshots, not just pixel-diff flags.
+The currently inspected package.json has no `test` script, so run the existing Vitest CLI directly or add one through the canonical package scripts only after validating coverage. Use the resolved package-manager authority and supported CLI arguments in the checked-out project. Review generated screenshots, not just pixel-diff flags.
 
 Existing workflow owners: `main-quality-gate.yml`, `chat-system-burn.yml`, `presentation-contract.yml`, `plugin-ci.yml`, `karen-history-browser-acceptance.yml`, `production-auth-security.yml`, `production-first-boot-smoke.yml`. Update their path triggers when new CopilotKit/channels files affect behavior.
 
