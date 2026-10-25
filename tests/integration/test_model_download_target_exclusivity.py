@@ -399,3 +399,31 @@ async def test_legacy_job_is_not_inferred_owned() -> None:
     assert await ModelDownloadRepository().list_owned_jobs(
         tenant_id="tenant-a", user_id="user-a"
     ) == []
+
+
+async def test_owned_single_job_lookup_isolated_by_tenant_and_user() -> None:
+    repository = ModelDownloadRepository()
+    await repository.create_job(
+        _payload("mdl-owned-one", "/tmp/models/owned-one"), max_attempts=3
+    )
+    owned = await repository.get_owned_job(
+        job_id="mdl-owned-one", tenant_id="integration-tenant",
+        user_id="integration-test",
+    )
+    assert owned is not None
+    assert owned["job_id"] == "mdl-owned-one"
+    assert "install_path" not in owned
+    assert "lease_token" not in owned
+    assert await repository.get_owned_job(
+        job_id="mdl-owned-one", tenant_id="foreign-tenant",
+        user_id="integration-test",
+    ) is None
+    assert await repository.get_owned_job(
+        job_id="mdl-owned-one", tenant_id="integration-tenant",
+        user_id="foreign-user",
+    ) is None
+    with pytest.raises(PermissionError):
+        await repository.get_owned_job(
+            job_id="mdl-owned-one", tenant_id="default",
+            user_id="integration-test",
+        )
