@@ -145,3 +145,11 @@ def test_default_general_search_does_not_enable_encyclopedia_only_fallback():
     assert "wikipedia" not in registry.sorted_enabled()
     configured = WebSearchProviderRegistry(settings={"search": {"wikipedia": {"enabled": True}}})
     assert configured.is_enabled("wikipedia")
+
+
+def test_wikipedia_default_respects_explicit_enable_and_disable_overrides():
+    from ai_karen_engine.config.web_search import build_provider_configs
+
+    assert build_provider_configs()["wikipedia"]["enabled"] is False
+    assert build_provider_configs({"search": {"wikipedia": {"enabled": True}}})["wikipedia"]["enabled"] is True
+    assert build_provider_configs({"search": {"wikipedia": {"enabled": False}}})["wikipedia"]["enabled"] is False
