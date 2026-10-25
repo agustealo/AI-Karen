@@ -187,3 +187,44 @@ async def test_chat_workspace_reference_rejects_cross_tenant_and_inactive_identi
             user={"tenant_id": other_tenant, "user_id": owner, "is_active": True},
         )
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_agent_discovery_redacts_internal_metadata_and_denies_invalid_scopes():
+    from ai_karen_engine.api_routes.agents.runtime import get_agent_catalog
+    class Catalog:
+        def __init__(self):
+            self.called = 0
+        async def list_agent_catalog(self):
+            self.called += 1
+            return [SimpleNamespace(
+                agent_id="research", name="Research", lifecycle_state="active",
+                healthy=True, implementation_id="internal-implementation",
+                prompt_contract_id="private-prompt", missing_dependencies=["secret"]
+            )]
+    catalog = Catalog()
+    for tenant, owner, active in [
+        ("default", "owner", True),
+        ("dev-tenant", "owner", True),
+        ("", "owner", True),
+        ("tenant-a", "", True),
+        ("tenant-a", "owner", False),
+    ]:
+        with pytest.raises(HTTPException) as error:
+            await get_agent_catalog(
+                current_user={"tenant_id": tenant, "user_id": owner, "is_active": active},
+                service=catalog,
+            )
+        assert error.value.status_code == 403
+    assert catalog.called == 0
+    result = await get_agent_catalog(
+        current_user={"tenant_id": "tenant-a", "user_id": "owner", "is_active": True},
+        service=catalog,
+    )
+    assert result["eligibility_verified"] is False
+    assert result["agents"] == [{
+        "agent_id": "research", "name": "Research",
+        "lifecycle_state": "active", "healthy": True,
+        "eligibility": "runtime_decided_per_request",
+    }]
+    assert "private-prompt" not in str(result)
