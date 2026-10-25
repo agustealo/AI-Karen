@@ -15,8 +15,8 @@ vi.mock("@copilotkit/react-core/v2", () => ({
   }),
 }));
 
-vi.mock("@/components/chat/SessionProvider", () => ({
-  fetchConversationBootstrap: backend.fetchConversation,
+vi.mock("@/lib/api", () => ({
+  apiClient: { get: backend.fetchConversation },
 }));
 
 import {
@@ -77,7 +77,7 @@ describe("CopilotKit canonical conversation hydration", () => {
     render(guardedHistory());
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
-    expect(backend.fetchConversation).toHaveBeenCalledWith(CONVERSATION_A);
+    expect(backend.fetchConversation).toHaveBeenCalledWith("/api/conversations/" + CONVERSATION_A);
     expect(backend.agent.setMessages).toHaveBeenCalledWith([
       { id: "m1", role: "user", content: "Hello" },
       { id: "m2", role: "assistant", content: "Karen response" },
