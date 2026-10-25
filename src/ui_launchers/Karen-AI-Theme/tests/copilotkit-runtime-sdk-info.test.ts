@@ -37,7 +37,9 @@ describe("CopilotKit pinned SDK discovery", () => {
     expect(result.headers.get("content-type")).toContain("application/json");
     const info: unknown = await result.json();
     expect(JSON.stringify(info)).toContain("default");
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([\n      "http://api:8000/api/auth/me",\n    ]);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "http://api:8000/api/auth/me",
+    ]);
   });
 
   it("rejects unauthenticated SDK discovery before any runtime work", async () => {
