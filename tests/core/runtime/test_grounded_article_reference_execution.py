@@ -139,15 +139,13 @@ async def test_scoped_evidence_is_composed_via_gateway_with_model_receipt(monkey
 
 @pytest.mark.asyncio
 async def test_validation_rejection_does_not_emit_grounded_model_receipt(monkeypatch):
-    from ai_karen_engine.services.response import response_validator
-
     articles = ArticleServiceDouble("Scoped trusted storage text")
     monkeypatch.setattr(repository_factory, "get_runtime_search_article_service", lambda: articles)
 
     class Gateway:
         async def generate(self, task):
             return SimpleNamespace(
-                text="Unsupported conclusion", provider="local-test",
+                text="Unsupported conclusion with no source citation", provider="local-test",
                 model="test-model", degraded=False,
             )
 
@@ -157,12 +155,6 @@ async def test_validation_rejection_does_not_emit_grounded_model_receipt(monkeyp
         def _resolve_chat_generation_max_tokens(self, request, plan):
             return 256
 
-    monkeypatch.setattr(
-        response_validator.ResponseValidator, "validate",
-        lambda self, answer, contract: SimpleNamespace(
-            valid=False, reason="unsupported_claim",
-        ),
-    )
     result = await ChatRuntime._synthesize_search_evidence(
         RuntimeHarness(), request(),
         SimpleNamespace(
