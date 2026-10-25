@@ -446,3 +446,37 @@ async def test_specialist_cannot_widen_parent_authorization_before_side_effects(
     registry.get_agent_health.assert_not_awaited()
     factory.resolve.assert_not_called()
     assert step.status is StepStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_approved_specialist_keeps_parent_grants_narrowed():
+    """A valid parent grant must execute without widening specialist permissions."""
+    specialist = SimpleNamespace(run=AsyncMock(return_value={"ok": True}))
+    registration = SimpleNamespace(capabilities=[], lifecycle_state="active")
+    registry = SimpleNamespace(
+        get_agent=AsyncMock(return_value=registration),
+        get_agent_health=AsyncMock(return_value={
+            "exists": True,
+            "healthy": True,
+            "readiness_reason": "ready",
+            "unknown_dependencies": [],
+            "missing_dependencies": [],
+        }),
+    )
+    coordinator = MedusaCoordinator(
+        registry=registry,
+        factory=SimpleNamespace(resolve=Mock(return_value=specialist)),
+    )
+    step = PlanStep(id="step-approved", agent_specialist="researcher")
+    result = await coordinator._execute_step(
+        step,
+        DeepExecutionPlan(request_id="req-1", steps=[step]),
+        _request(),
+        _plan(),
+    )
+    assert result == {"ok": True}
+    assert step.status is StepStatus.COMPLETED
+    execution_plan = specialist.run.await_args.kwargs["execution"].authorized_plan
+    assert execution_plan.allowed_agents == ["researcher"]
+    assert execution_plan.allowed_tools == []
+    assert execution_plan.allowed_plugins == []
