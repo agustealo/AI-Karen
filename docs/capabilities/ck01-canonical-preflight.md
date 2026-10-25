@@ -3,7 +3,7 @@
 Date: 2026-10-25
 Status: Source-level owner discovery **confirmed**, runtime and SDK integration **not verified**.
 Supersedes this document's previous unlocated plugin/approval owner assumptions.
-Detailed plan: [CopilotKit migration implementation v2](./copilotkit-migration-implementation-v2.md).
+Detailed plan: [CopilotKit migration implementation v2](./copilotkit-execution-plan.md).
 
 ## Verified canonical owners
 
