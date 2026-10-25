@@ -10,6 +10,14 @@ on:
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
       - 'tests/extensions/**'
+      - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
+      - 'src/ai_karen_engine/services/search/article_document_service.py'
+      - 'src/ai_karen_engine/services/response/response_validator.py'
+      - 'tests/core/runtime/test_grounded_article_reference_execution.py'
+      - 'tests/core/runtime/test_search_answer_composition_status.py'
+      - 'tests/services/test_search_article_chat_reference.py'
+      - 'tests/services/test_search_article_document_service.py'
+      - 'tests/architecture/test_grounded_article_reference_boundary.py'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
@@ -25,6 +33,14 @@ on:
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
       - 'tests/extensions/**'
+      - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
+      - 'src/ai_karen_engine/services/search/article_document_service.py'
+      - 'src/ai_karen_engine/services/response/response_validator.py'
+      - 'tests/core/runtime/test_grounded_article_reference_execution.py'
+      - 'tests/core/runtime/test_search_answer_composition_status.py'
+      - 'tests/services/test_search_article_chat_reference.py'
+      - 'tests/services/test_search_article_document_service.py'
+      - 'tests/architecture/test_grounded_article_reference_boundary.py'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
@@ -145,6 +161,11 @@ jobs:
         run: |
           pytest \
             tests/extensions/ \
+            tests/core/runtime/test_grounded_article_reference_execution.py \
+            tests/core/runtime/test_search_answer_composition_status.py \
+            tests/services/test_search_article_chat_reference.py \
+            tests/services/test_search_article_document_service.py \
+            tests/architecture/test_grounded_article_reference_boundary.py \
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
             tests/architecture/test_plugin_runtime_authority.py \
