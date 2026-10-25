@@ -409,7 +409,11 @@ function AssistantMessage() {
   );
 }
 
-function KarenThread() {
+function KarenThread({ selectedProvider, selectedModel, onSelectionChange }: {
+  selectedProvider: string;
+  selectedModel: string;
+  onSelectionChange: (provider: string, model: string) => void;
+}) {
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
@@ -445,7 +449,7 @@ function KarenThread() {
             {composerSettingsOpen && (
               <section aria-label="Karen composer settings" className="mb-3 rounded-xl border border-border/60 bg-card p-3 text-xs">
                 <h3 className="text-sm font-semibold">Karen conversation</h3>
-                <KarenComposerRuntimeCatalog />
+                <KarenComposerRuntimeCatalog selectedProvider={selectedProvider} selectedModel={selectedModel} onSelectionChange={onSelectionChange} />
                 <p className="mt-1 text-muted-foreground">Streaming, model routing, tools and approvals are decided by the authenticated runtime. Tool activity and approval requests appear only when reported by Karen.</p>
                 <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
               </section>
@@ -567,6 +571,12 @@ function KarenConversationIntelligence({ threadId }: { threadId: string }) {
 function KarenAgUiRuntime({ threadId }: { threadId: string }) {
   const { createNewSession, loadSession, workspaceRunId } = useSession();
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
+  const onSelectionChange = useCallback((provider: string, model: string) => {
+    setSelectedProvider(provider);
+    setSelectedModel(model);
+  }, []);
   const agent = useMemo(
     () => {
       // The backend resolves threadId as Karen's durable conversation UUID.
@@ -579,11 +589,15 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
       connected.run = ((input: Parameters<HttpAgent["run"]>[0]) =>
         canonicalRun({
           ...input,
-          forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {},
+          forwardedProps: {
+            ...(workspaceRunId ? { workspace_run_id: workspaceRunId } : {}),
+            ...(selectedProvider ? { preferred_llm_provider: selectedProvider } : {}),
+            ...(selectedModel ? { preferred_model: selectedModel } : {}),
+          },
         })) as HttpAgent["run"];
       return connected;
     },
-    [threadId, workspaceRunId],
+    [threadId, workspaceRunId, selectedProvider, selectedModel],
   );
   const historyLoad = useCallback(
     async () => ExportedMessageRepository.fromArray(
@@ -625,7 +639,7 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
         </p>
       )}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className="flex min-w-0 flex-1 flex-col"><KarenThread /></div>
+        <div className="flex min-w-0 flex-1 flex-col"><KarenThread selectedProvider={selectedProvider} selectedModel={selectedModel} onSelectionChange={onSelectionChange} /></div>
         <KarenConversationIntelligence threadId={threadId} />
       </div>
     </AssistantRuntimeProvider>
