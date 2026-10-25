@@ -1,8 +1,40 @@
 # Karen Channels: CopilotKit Channels SDK integration contract
 
-Status: **Approved direction, implementation pending**
+Status: **Approved direction; existing canonical Channels infrastructure confirmed, CopilotKit SDK adapter not implemented**
 Parent: [CopilotKit-first ADR](../architecture/decisions/2026-10-25-copilotkit-first.md)
 External reference: https://github.com/CopilotKit/OpenTag
+
+## Source-verified placement and ownership correction
+
+This plan extends, rather than reinvents, the already implemented Karen Channels
+subsystem. Canonical owners verified in `main`:
+
+- **PluginKernel / catalog:** `src/ai_karen_engine/extensions/plugin_kernel.py`,
+  `extensions/platform/core/registry/plugin_registry.py`.
+- **Manifest packages:** `src/ai_karen_engine/extensions/plugins/` with current
+  `manifest.json` convention, exemplified by `telegram-bot/manifest.json`.
+- **Channel interface:** `src/ai_karen_engine/extensions/channels/contracts.py`,
+  including ChannelAdapter, verified identity and delivery records.
+- **Host lifecycle:** `src/ai_karen_engine/services/channels/host.py`,
+  activation, linking, ingress, execution, delivery, credentials and worker.
+- **Canonical durability:** `src/ai_karen_engine/persistence/repositories/channel_repository.py`.
+- **Operator config:** `src/ai_karen_engine/config/channels.py`,
+  disabled-by-default validated ChannelHostSettings.
+- **Human approvals:** `src/ai_karen_engine/services/approvals.py` and
+  `persistence/repositories/approval_repository.py`.
+
+There is **no authorization to add a second channel host, plugin catalog,
+approval database, outbox, native worker or independent LangGraph agent**.
+Use CopilotKit Channels SDK/OpenTag only for SDK-native transport and presentation
+aspects not provided by Karen's existing channel adapter implementation.
+Any necessary Node runner must be an isolated, audited edge adapter into the
+existing ChannelIngressService and ChannelDeliveryService. Operator choice
+between managed CopilotKit Intelligence and a self-operated runner is explicit.
+
+Before adding a new channel capability manifest, evaluate the existing
+`telegram-bot`, `whatsapp-cloud` and other channel packages to reuse adapter,
+secret, lifecycle, install/uninstall and RBAC patterns. Keep native platform
+identities untrusted until host-owned binding and policy validation completes.
 
 ## Product capability
 
@@ -116,7 +148,7 @@ deliveries, direct writes from render components, or hidden mandatory hosted dep
 ## Suggested work packets
 
 - **CK-CH-01:** dependency/SDK/API/licensing check and current plugin-manifest audit.
-- **CK-CH-02:** registered Channels plugin host with fail-closed identity and event envelope.
+- **CK-CH-02:** register CopilotKit SDK-backed transport adapter in the existing PluginKernel and channel host, with fail-closed identity and event envelope.
 - **CK-CH-03:** Slack read-only AG-UI round-trip with provenance and native presentation.
 - **CK-CH-04:** authorized durable approvals, idempotent write path and concurrency burn.
 - **CK-CH-05:** canonical cross-channel history/replay and browser acceptance.
