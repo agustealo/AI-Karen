@@ -174,3 +174,27 @@ async def test_validation_rejection_does_not_emit_grounded_model_receipt(monkeyp
     )
     assert result is None
     assert articles.calls == [("owner", "tenant-a", "article-1")]
+
+
+@pytest.mark.asyncio
+async def test_forged_source_url_never_reaches_model_composition(monkeypatch):
+    class SourceBoundArticles:
+        def __init__(self):
+            self.urls = []
+
+        async def read_for_chat(self, *, execution_context, article_id, source_url):
+            self.urls.append(source_url)
+            return "trusted article" if source_url == "https://example.org/original" else None
+
+    articles = SourceBoundArticles()
+    monkeypatch.setattr(repository_factory, "get_runtime_search_article_service", lambda: articles)
+    result_with_forged_url = retrieved()
+    meter = MeterDouble(allow=True)
+    answer = await ChatRuntime._synthesize_search_evidence(
+        object(), request(), SimpleNamespace(intent="search.general"),
+        SimpleNamespace(allowed_plugins=["intelligent-search"]),
+        meter, result_with_forged_url,
+    )
+    assert answer is None
+    assert articles.urls == ["https://example.org/article"]
+    assert meter.model_calls == 0
