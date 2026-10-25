@@ -420,3 +420,29 @@ def test_durable_terminal_outcome_is_written_in_same_owner_fenced_transition() -
     durable_transition_section = manager_source.split("if run.shared_registered:", 1)[0]
     assert "set_outcome_status" not in durable_transition_section
     assert "outcome_status=outcome_status" in manager_source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["agent", "tool", "plugin"])
+async def test_specialist_cannot_widen_parent_authorization_before_side_effects(kind):
+    registry = SimpleNamespace(get_agent=AsyncMock(), get_agent_health=AsyncMock())
+    factory = SimpleNamespace(resolve=Mock())
+    coordinator = MedusaCoordinator(registry=registry, factory=factory)
+    step = PlanStep(
+        id="step-denied",
+        agent_specialist="foreign-agent" if kind == "agent" else "researcher",
+        required_tools=["unapproved-tool"] if kind == "tool" else [],
+        required_plugins=["unapproved-plugin"] if kind == "plugin" else [],
+    )
+    plan = _plan()
+    with pytest.raises(PermissionError, match="medusa_step_exceeds_authorized_plan"):
+        await coordinator._execute_step(
+            step,
+            DeepExecutionPlan(request_id="req-1", steps=[step]),
+            _request(),
+            plan,
+        )
+    registry.get_agent.assert_not_awaited()
+    registry.get_agent_health.assert_not_awaited()
+    factory.resolve.assert_not_called()
+    assert step.status is StepStatus.PENDING
