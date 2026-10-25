@@ -5,6 +5,7 @@ from ai_karen_engine.services.tooling.internet_capability_service import (
     InternetCapabilityService,
     InternetExecutionContext,
 )
+from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
 from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
 from ai_karen_engine.services.database.repositories.repository_factory import (
     get_runtime_search_article_service,
@@ -287,6 +288,14 @@ class WebSearchDispatcher(ExtensionBase):
                     if isinstance(context_mode, str) and context_mode.strip()
                     else "invalid_explicit_mode"
                 )
+
+        # With no explicit user-selected mode, reuse CORTEX's canonical
+        # capability decision rather than a second plugin keyword classifier.
+        # Only modes this plugin can execute are translated here. Other
+        # capabilities remain under their own runtime execution authority.
+        decision = resolve_capability_decision(str(params.get("query") or ""))
+        if decision.intent == "search.weather":
+            return "weather"
 
         manifest_default = self._read_manifest_setting("default_mode")
         if manifest_default:
