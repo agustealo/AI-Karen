@@ -18,6 +18,12 @@ vi.mock("@copilotkit/react-core/v2", () => ({
   },
 }));
 
+// The shell tests only verify provider/thread/model binding. The separate
+// history-gate suite covers canonical message loading and access failures.
+vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => ({
+  KarenCopilotHistoryGate: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 import { KarenCopilotChat } from "@/components/chat/copilotkit/KarenCopilotChat";
 
 const CONVERSATION = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
