@@ -1,8 +1,4 @@
 import { HttpAgent } from "@ag-ui/client-v1";
-import {
-  CopilotRuntime,
-  createCopilotRuntimeHandler,
-} from "@copilotkit/runtime/v2";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getBackendBaseUrl } from "../../_lib/backend-proxy";
@@ -99,6 +95,11 @@ async function handle(request: NextRequest): Promise<Response> {
   if (process.env.COPILOTKIT_TELEMETRY_DISABLED === undefined) {
     process.env.COPILOTKIT_TELEMETRY_DISABLED = "true";
   }
+
+  // Import after the local-first policy is configured. The SDK may initialise
+  // its telemetry client on module load, before a runtime instance exists.
+  const { CopilotRuntime, createCopilotRuntimeHandler } =
+    await import("@copilotkit/runtime/v2");
 
   const copilot = new CopilotRuntime({
     agents: { default: agent },
