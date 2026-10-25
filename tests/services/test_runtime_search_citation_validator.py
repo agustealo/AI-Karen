@@ -7,7 +7,7 @@ def contract():
         purpose="tool_synthesis",
         requires_live_data=True,
         latest_user_message="History of Jamaica",
-        tool_results=[{"sources": [{"url": "https://example.org/history"}]}],
+        tool_results=[{"sources": [{"url": "https://example.org/history", "evidence_level": "fetched_page"}]}],
     )
 
 
