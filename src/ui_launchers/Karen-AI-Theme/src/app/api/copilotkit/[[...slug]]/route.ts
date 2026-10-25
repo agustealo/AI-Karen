@@ -1,4 +1,4 @@
-import { HttpAgent } from "@ag-ui/client";
+import { HttpAgent } from "@ag-ui/client-v1";
 import {
   CopilotRuntime,
   createCopilotRuntimeHandler,
