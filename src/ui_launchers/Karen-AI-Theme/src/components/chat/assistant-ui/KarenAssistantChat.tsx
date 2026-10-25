@@ -33,7 +33,7 @@ import { KarenLocalDictation } from "./KarenLocalDictation";
 import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
 import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
-import type { ConversationResponse } from "@/lib/types";
+import type { AgentStepEvent, ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/SessionProvider";
 import ConversationContextRail from "@/components/chat/ConversationContextRail";
 
@@ -497,8 +497,69 @@ async function readOwnedHistory(conversationId: string) {
   );
 }
 
+/**
+ * Read observed assistant-ui data parts. The AG-UI adapter remains the sole
+ * subscriber/transport; this projection never opens a second event stream.
+ * Unknown activity payloads are ignored, not turned into synthetic successes.
+ */
+function projectObservedAgentSteps(messages: readonly unknown[]): AgentStepEvent[] {
+  const steps = new Map<string, AgentStepEvent>();
+  const names = new Set([
+    "agui-activity/KAREN_AGENT_STEP",
+    "agui-activity/KAREN_DEEPAGENTS_PLAN",
+    "agui-activity/KAREN_DEEPAGENTS_SUBAGENT",
+  ]);
+  for (const rawMessage of messages.slice(-60)) {
+    if (!rawMessage || typeof rawMessage !== "object") continue;
+    const message = rawMessage as Record<string, unknown>;
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const rawPart of message.content) {
+      if (!rawPart || typeof rawPart !== "object") continue;
+      const part = rawPart as Record<string, unknown>;
+      if (part.type !== "data" || typeof part.name !== "string" || !names.has(part.name)) continue;
+      if (!part.data || typeof part.data !== "object" || Array.isArray(part.data)) continue;
+      const wrapper = part.data as Record<string, unknown>;
+      const data = wrapper.content && typeof wrapper.content === "object" &&
+        !Array.isArray(wrapper.content) ? wrapper.content as Record<string, unknown> : wrapper;
+      const stepId = typeof data.step_id === "string" ? data.step_id :
+        typeof data.stepId === "string" ? data.stepId : "";
+      if (!stepId || stepId.length > 200) continue;
+      const rawStatus = typeof data.status === "string" ? data.status.toLowerCase() : "";
+      const eventType: AgentStepEvent["type"] =
+        ["failed", "failure", "error", "errored"].includes(rawStatus) ? "agent_step_failed" :
+        ["complete", "completed", "finished", "success", "succeeded"].includes(rawStatus) ? "agent_step_completed" :
+        ["skipped"].includes(rawStatus) ? "agent_step_skipped" : "agent_step_started";
+      const eventId = typeof data.event_id === "string" ? data.event_id :
+        typeof data.eventId === "string" ? data.eventId : "";
+      const key = eventId || `${part.name}:${stepId}`;
+      const metadata: Record<string, unknown> = {
+        activity_category: part.name,
+        observed_status: rawStatus || "unknown",
+      };
+      for (const field of ["tool", "plugin_id", "extension_id", "actual_provider", "provider", "run_id", "agent_id"]) {
+        if (typeof data[field] === "string" && (data[field] as string).length <= 200) {
+          metadata[field] = data[field];
+        }
+      }
+      steps.set(key, {
+        type: eventType,
+        step_id: stepId,
+        timestamp: typeof data.timestamp === "string" ? data.timestamp : undefined,
+        metadata,
+      });
+      if (steps.size > 100) {
+        const first = steps.keys().next().value;
+        if (first) steps.delete(first);
+      }
+    }
+  }
+  return Array.from(steps.values());
+}
+
 function KarenConversationIntelligence({ threadId }: { threadId: string }) {
   const isRunning = useAuiState((state) => state.thread.isRunning);
+  const observedMessages = useAuiState((state) => state.thread.messages);
+  const observedSteps = useMemo(() => projectObservedAgentSteps(observedMessages), [observedMessages]);
   const [metadata, setMetadata] = useState<Record<string, unknown>>({});
   const [loadState, setLoadState] = useState<"loading" | "ready" | "empty" | "unavailable">("loading");
 
@@ -549,7 +610,7 @@ function KarenConversationIntelligence({ threadId }: { threadId: string }) {
           No verified runtime insights were recorded for the latest assistant turn.
         </p>
       )}
-      <ConversationContextRail metadata={loadState === "ready" ? metadata : {}} agentSteps={[]} />
+      <ConversationContextRail metadata={loadState === "ready" ? metadata : {}} agentSteps={observedSteps} />
     </div>
   );
 }
