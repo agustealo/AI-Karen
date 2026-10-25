@@ -38,7 +38,9 @@ export function useIntelligentSearch() {
 
   const updateOptions = useCallback((newOptions: Partial<IntelligentSearchOptions>) => {
     requestSequence.current += 1;
-    // Keep the last completed evidence visible while the user adjusts settings.\n    // Invalidate any in-flight execution so its result cannot overwrite this state.\n    setState((prev) => ({ ...prev, options: { ...prev.options, ...newOptions }, isLoading: false, error: null }));
+    // Keep the last completed evidence visible while the user adjusts settings.
+    // Invalidate any in-flight execution so its result cannot overwrite this state.
+    setState((prev) => ({ ...prev, options: { ...prev.options, ...newOptions }, isLoading: false, error: null }));
   }, []);
 
   const executeSearch = useCallback(async () => {
