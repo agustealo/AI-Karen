@@ -57,6 +57,7 @@ interface UserPreferences {
 
 interface PersonaPreferences {
   active_persona_id?: string | null;
+  revision: number;
 }
 
 interface AuthProfileResponse {
@@ -78,7 +79,6 @@ const PERSONA_DRAFT_CACHE_KEY = 'karen_persona_draft_cache_v1';
 
 const PERSONAS_ENDPOINT = '/api/personas/';
 const PERSONA_PREFERENCES_ENDPOINT = '/api/personas/preferences/me';
-const PERSONA_SWITCH_ENDPOINT = '/api/personas/preferences/switch';
 const AUTH_ME_ENDPOINT = '/api/auth/me';
 const MEMORY_COMMIT_ENDPOINT = '/api/memory/commit';
 
@@ -200,6 +200,11 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
   );
   const [preferredAddressName, setPreferredAddressName] = useState('');
   const [currentPersonaId, setCurrentPersonaId] = useState<string | null>(null);
+  const [personaRevision, setPersonaRevision] = useState<number | null>(null);
+  const [availablePersonas, setAvailablePersonas] = useState<PersonaRecord[]>([]);
+  const [activePersonaId, setActivePersonaId] = useState<string | null>(null);
+  const [personaSearch, setPersonaSearch] = useState('');
+  const [isSwitchingPersona, setIsSwitchingPersona] = useState(false);
   const [personaApiStatus, setPersonaApiStatus] =
     useState<BackendStatus>('checking');
   const [profileApiStatus, setProfileApiStatus] =
@@ -244,6 +249,9 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         }
 
         setPersonaApiStatus('available');
+        setPersonaRevision(preferences.revision);
+        setAvailablePersonas(personas);
+        setActivePersonaId(preferences.active_persona_id ?? null);
 
         const selectedPersona = findEditablePersona(personas, preferences);
 
@@ -297,6 +305,17 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         return;
       }
 
+      // Reject stale or unavailable activation revisions before modifying any persona.
+      // This prevents a partial backend content write when activation cannot proceed.
+      if (personaRevision === null || isSwitchingPersona) {
+        toast({
+          title: 'Persona revision unavailable',
+          description: 'Reload Persona Studio before saving. Your draft remains unchanged.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
       setIsSavingPersona(true);
       writeDraftInstructions(normalizedInstructions);
 
@@ -309,23 +328,38 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
 
         let personaId = currentPersonaId;
 
+        let selected: PersonaPreferences;
         if (personaId) {
-          const updatedPersona = await apiClient.put<PersonaRecord>(
-            `/api/personas/${personaId}`,
-            payload,
+          // Existing personas update and activate in one backend transaction.
+          selected = await apiClient.post<PersonaPreferences>(
+            `/api/personas/${personaId}/save-and-activate`,
+            { ...payload, expected_revision: personaRevision },
           );
-          personaId = updatedPersona.id;
         } else {
+          // Creation still uses the legacy two-step contract; a failed
+          // activation is reported as failure, never as an active persona.
           const createdPersona = await apiClient.post<PersonaRecord>(
             PERSONAS_ENDPOINT,
             payload,
           );
           personaId = createdPersona.id;
+          selected = await apiClient.put<PersonaPreferences>(
+            PERSONA_PREFERENCES_ENDPOINT,
+            { active_persona_id: personaId, expected_revision: personaRevision },
+          );
         }
-
-        await apiClient.post(PERSONA_SWITCH_ENDPOINT, {
-          persona_id: personaId,
-        });
+        setPersonaRevision(selected.revision);
+        setActivePersonaId(selected.active_persona_id ?? personaId);
+        try {
+          const freshPersonas = await apiClient.get<PersonaRecord[]>(PERSONAS_ENDPOINT);
+          setAvailablePersonas(freshPersonas);
+        } catch {
+          // The persona and activation have already been committed. A gallery refresh
+          // failure must not report the confirmed backend activation as failed.
+          setAvailablePersonas((previous) => previous.some((persona) => persona.id === personaId)
+            ? previous.map((persona) => persona.id === personaId ? { ...persona, ...payload } : persona)
+            : [...previous, { id: personaId!, ...payload, is_system_persona: false }]);
+        }
 
         setCurrentPersonaId(personaId);
         setInstructions(normalizedInstructions);
@@ -337,6 +371,15 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
           description: "Karen's core persona instructions were synced to backend.",
         });
       } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          setPersonaRevision(null);
+          toast({
+            title: 'Persona changed elsewhere',
+            description: 'Your draft is preserved. Reload Persona Settings before saving again.',
+            variant: 'destructive',
+          });
+          return;
+        }
         setPersonaApiStatus('unavailable');
 
         toast({
@@ -350,7 +393,38 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
         setIsSavingPersona(false);
       }
     },
-    [currentPersonaId, isSavingPersona, toast],
+    [currentPersonaId, isSavingPersona, isSwitchingPersona, personaRevision, toast],
+  );
+
+  const switchActivePersona = useCallback(async (personaId: string) => {
+    if (personaRevision === null || isSwitchingPersona || isSavingPersona || personaApiStatus !== 'available') return;
+    if (personaId === activePersonaId) return;
+    setIsSwitchingPersona(true);
+    try {
+      const selected = await apiClient.put<PersonaPreferences>(
+        PERSONA_PREFERENCES_ENDPOINT,
+        { active_persona_id: personaId, expected_revision: personaRevision },
+      );
+      setPersonaRevision(selected.revision);
+      setActivePersonaId(selected.active_persona_id ?? null);
+      toast({ title: 'Persona activated', description: 'The selection was confirmed by Karen’s backend.' });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setPersonaRevision(null);
+        toast({ title: 'Persona selection changed', description: 'Reload Persona Studio to reconcile the latest selection.', variant: 'destructive' });
+      } else {
+        toast({ title: 'Activation failed', description: getErrorMessage(error), variant: 'destructive' });
+      }
+    } finally {
+      setIsSwitchingPersona(false);
+    }
+  }, [personaRevision, isSwitchingPersona, isSavingPersona, personaApiStatus, activePersonaId, toast]);
+
+  const filteredPersonas = useMemo(
+    () => availablePersonas.filter((persona) =>
+      `${persona.name} ${persona.description ?? ''}`.toLocaleLowerCase().includes(personaSearch.trim().toLocaleLowerCase())
+    ),
+    [availablePersonas, personaSearch],
   );
 
   const handleSave = useCallback(async () => {
@@ -437,13 +511,55 @@ export default function PersonaSettings({ inSheet = false }: PersonaSettingsProp
       <CardHeader>
         <CardTitle className="text-lg">Customize Karen&apos;s Core Persona</CardTitle>
         <CardDescription>
-          Define Karen&apos;s foundational behavior, expertise, or specific rules
-          she should always follow. These instructions are given high priority
-          in her decision-making.
+          Choose how Karen presents responses. Persona preferences cannot override
+          system policy, tool permissions, model routing, or runtime authorization.
         </CardDescription>
       </CardHeader>
 
       <CardContent>
+        <section className="mb-6 space-y-3" aria-label="Saved personas" data-testid="persona-gallery">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-base font-semibold">Your personas</h3>
+            <span className="text-xs text-muted-foreground">
+              {personaApiStatus === 'available'
+                ? `Active: ${availablePersonas.find((persona) => persona.id === activePersonaId)?.name ?? 'Default'}`
+                : 'Selection unavailable'}
+            </span>
+          </div>
+          <Input
+            aria-label="Search personas"
+            placeholder="Search saved personas"
+            value={personaSearch}
+            onChange={(event) => setPersonaSearch(event.target.value)}
+            disabled={personaApiStatus !== 'available'}
+          />
+          {personaApiStatus === 'available' && filteredPersonas.length === 0 && (
+            <p className="text-sm text-muted-foreground">No personas match your search.</p>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {filteredPersonas.map((persona) => (
+              <div key={persona.id} className="rounded-lg border p-3" data-testid="persona-gallery-item">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium">{persona.name}</p>
+                  {activePersonaId === persona.id && <span className="text-xs font-semibold text-primary">Active</span>}
+                </div>
+                {persona.description && <p className="mt-1 text-xs text-muted-foreground">{persona.description}</p>}
+                <Button
+                  className="mt-3"
+                  type="button"
+                  size="sm"
+                  variant={activePersonaId === persona.id ? 'secondary' : 'outline'}
+                  disabled={isLoadingPersona || isSwitchingPersona || isSavingPersona || personaRevision === null || activePersonaId === persona.id}
+                  onClick={() => void switchActivePersona(persona.id)}
+                  aria-label={`Activate ${persona.name}`}
+                >
+                  {activePersonaId === persona.id ? 'Selected' : 'Activate'}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </section>
+        <Separator />
         {(personaApiStatus === 'unavailable' || profileApiStatus === 'unavailable') && (
           <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
             <p className="font-semibold uppercase tracking-wide">

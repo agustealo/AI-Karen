@@ -19,21 +19,7 @@ class CompatibilityShim:
     remove_after: date
 
 
-COGNITIVE_COMPATIBILITY_SHIMS: tuple[CompatibilityShim, ...] = (
-    CompatibilityShim(
-        legacy_symbol="ai_karen_engine.core.personalization.contracts.UserGoalStatus",
-        canonical_symbol="ai_karen_engine.core.personalization.goals.contracts.GoalState",
-        owner="personalization/goals",
-        reason=(
-            "active stored UserGoal/UserModel contracts and GoalStore lifecycle still "
-            "consume UserGoalStatus; migrate persistence readers before removal"
-        ),
-        # Time-boxed exception: active persisted readers have not yet been
-        # migrated. See docs/architecture/goal-state-compatibility-retirement.md.
-        # The expiry invariant stays enabled; do not remove this gate.
-        remove_after=date(2026, 10, 22),
-    ),
-)
+COGNITIVE_COMPATIBILITY_SHIMS: tuple[CompatibilityShim, ...] = ()
 
 
 def expired_shims(today: date | None = None) -> tuple[CompatibilityShim, ...]:

@@ -1,0 +1,406 @@
+"""Fail-closed tenant and principal scoping for locked legacy evidence reads."""
+
+import uuid
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
+    verify_locked_legacy_migration_evidence,
+)
+
+
+@pytest.mark.asyncio
+async def test_locked_legacy_evidence_requires_active_transaction():
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = False
+    with pytest.raises(PermissionError, match="active canonical migration"):
+        await verify_locked_legacy_migration_evidence(
+            session=session, tenant_id=str(uuid.uuid4()),
+            user_id=str(uuid.uuid4()), source_record_id="source",
+        )
+    session.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_locked_legacy_evidence_denies_mismatched_scope_before_sensitive_reads():
+    tenant = str(uuid.uuid4())
+    user = str(uuid.uuid4())
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    scope_result = MagicMock()
+    scope_result.one.return_value = (str(uuid.uuid4()), tenant, user)
+    session.execute = AsyncMock(return_value=scope_result)
+
+    with pytest.raises(PermissionError, match="transaction principal mismatch"):
+        await verify_locked_legacy_migration_evidence(
+            session=session, tenant_id=tenant, user_id=user,
+            source_record_id="source",
+        )
+    assert session.execute.await_count == 1
+    assert "current_setting" in str(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_locked_legacy_evidence_denies_missing_authenticated_user_before_source_read():
+    tenant = str(uuid.uuid4())
+    user = str(uuid.uuid4())
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    scope_result = MagicMock()
+    scope_result.one.return_value = (tenant, tenant, None)
+    session.execute = AsyncMock(return_value=scope_result)
+
+    with pytest.raises(PermissionError, match="transaction principal mismatch"):
+        await verify_locked_legacy_migration_evidence(
+            session=session, tenant_id=tenant, user_id=user,
+            source_record_id="source",
+        )
+    assert session.execute.await_count == 1
+
+@pytest.mark.asyncio
+async def test_locked_payload_reader_denies_ineligible_source_before_content_query(monkeypatch):
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source as source
+
+    eligibility = AsyncMock(return_value=None)
+    monkeypatch.setattr(source, "verify_locked_legacy_migration_evidence", eligibility)
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=AssertionError("unauthorized content read"))
+    result = await source.read_locked_legacy_migration_source_content(
+        session=session, tenant_id=str(uuid.uuid4()),
+        user_id=str(uuid.uuid4()), source_record_id=str(uuid.uuid4()),
+    )
+    assert result is None
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_locked_payload_reader_rejects_source_drift(monkeypatch):
+    from datetime import datetime, timezone
+    from ai_karen_engine.platform.memory.postgres import legacy_persona_source as source
+
+    tenant, user, source_id = (str(uuid.uuid4()) for _ in range(3))
+    created = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        source, "verify_locked_legacy_migration_evidence",
+        AsyncMock(return_value=(created, "semantic")),
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=MagicMock(
+        one_or_none=MagicMock(return_value=MagicMock(
+            content="sensitive historical content",
+            created_at=created, memory_type="episodic",
+        ))
+    ))
+    with pytest.raises(PermissionError, match="source changed"):
+        await source.read_locked_legacy_migration_source_content(
+            session=session, tenant_id=tenant,
+            user_id=user, source_record_id=source_id,
+        )
+    assert session.execute.await_count == 1
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source", " LEGACY_PERSONA "),
+        ("source", "Legacy_Persona"),
+        ("source_type", " LEGACY_PERSONA "),
+        ("consent_scope", " PERSONA-MEMORY-MIGRATION "),
+    ],
+)
+def test_vault_rejects_noncanonical_historical_source_markers(field, value):
+    """Formatting differences must not turn historical entries into ordinary writes."""
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    custom = {"consent_scope": "memory.write"}
+    source = "chat_user"
+    if field == "source":
+        source = value
+    else:
+        custom[field] = value
+    entry = MemoryEntry(
+        id=str(uuid.uuid4()), content="historical content",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=str(uuid.uuid4()), user_id=str(uuid.uuid4()),
+            source=source, custom=custom,
+        ),
+    )
+    with pytest.raises(
+        NeuroVaultAuthorizationError,
+        match="historical migration persistence is disabled",
+    ):
+        PostgresNeuroVault._require_non_historical_write(entry)
+
+def test_historical_transaction_capability_rejects_forgery_and_reuse():
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        _HistoricalTransactionCapability,
+        _HISTORICAL_CAPABILITY_WITNESS,
+        _verify_historical_transaction_capability,
+    )
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    session = MagicMock()
+    session.in_transaction.return_value = True
+    context = SimpleNamespace(tenant_id=tenant, user_id=user)
+    entry = SimpleNamespace(id=memory_id)
+    args = dict(session=session, context=context, entry=entry,
+                transaction_id=42, policy_decision_id="allowed")
+    forged = _HistoricalTransactionCapability(
+        nonce=object(), session=session, tenant=tenant,
+        user=user, memory_id=memory_id,
+        transaction_id=42, policy_decision_id="allowed",
+    )
+    assert not _verify_historical_transaction_capability(forged, **args)
+    witness = _HistoricalTransactionCapability(
+        nonce=_HISTORICAL_CAPABILITY_WITNESS, session=session,
+        tenant=tenant, user=user, memory_id=memory_id,
+        transaction_id=42, policy_decision_id="allowed",
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, session=MagicMock(), context=context, entry=entry, transaction_id=42, policy_decision_id="allowed",
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, session=session,
+        context=SimpleNamespace(tenant_id=str(uuid.uuid4()), user_id=user),
+        entry=entry, transaction_id=42, policy_decision_id="allowed",
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, session=session, context=context,
+        entry=SimpleNamespace(id=str(uuid.uuid4())),
+        transaction_id=42, policy_decision_id="allowed",
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, **{**args, "transaction_id": 43},
+    )
+    assert not _verify_historical_transaction_capability(
+        witness, **{**args, "policy_decision_id": "revoked"},
+    )
+    assert _verify_historical_transaction_capability(witness, consume=True, **args)
+    assert not _verify_historical_transaction_capability(witness, **args)
+
+@pytest.mark.asyncio
+async def test_historical_capability_database_identity_rejects_drift(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock()
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, user, 42,
+    )
+    capability = module._HistoricalTransactionCapability(
+        nonce=module._HISTORICAL_CAPABILITY_WITNESS,
+        session=session, tenant=tenant, user=user, memory_id=memory_id,
+        transaction_id=42, policy_decision_id="current",
+    )
+    context = SimpleNamespace(tenant_id=tenant, user_id=user)
+    entry = SimpleNamespace(id=memory_id)
+    params = dict(
+        capability=capability, session=session, context=context,
+        entry=entry, policy_decision_id="current",
+    )
+    assert await module._verify_historical_capability_against_database(**params)
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, str(uuid.uuid4()), 42,
+    )
+    assert not await module._verify_historical_capability_against_database(**params)
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, user, 43,
+    )
+    assert not await module._verify_historical_capability_against_database(**params)
+    session.execute.return_value.one.return_value = (
+        tenant, tenant, user, 42,
+    )
+    assert not await module._verify_historical_capability_against_database(
+        **{**params, "policy_decision_id": "revoked"},
+    )
+
+@pytest.mark.asyncio
+async def test_historical_capability_consumed_only_after_matching_database_identity():
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock()
+    capability = module._HistoricalTransactionCapability(
+        nonce=module._HISTORICAL_CAPABILITY_WITNESS,
+        session=session, tenant=tenant, user=user, memory_id=memory_id,
+        transaction_id=42, policy_decision_id="current",
+    )
+    params = dict(
+        capability=capability, session=session,
+        context=SimpleNamespace(tenant_id=tenant, user_id=user),
+        entry=SimpleNamespace(id=memory_id), policy_decision_id="current",
+        consume=True,
+    )
+    session.execute.return_value.one.return_value = (tenant, tenant, user, 43)
+    assert not await module._verify_historical_capability_against_database(**params)
+    assert capability._used is False
+
+    session.execute.return_value.one.return_value = (tenant, tenant, user, 42)
+    assert await module._verify_historical_capability_against_database(**params)
+    assert capability._used is True
+    assert not await module._verify_historical_capability_against_database(**params)
+
+@pytest.mark.asyncio
+async def test_forged_historical_capability_rejected_before_database_access():
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    session = MagicMock(spec=AsyncSession)
+    session.in_transaction.return_value = True
+    session.execute = AsyncMock(side_effect=AssertionError("unauthorized SQL"))
+    capability = module._HistoricalTransactionCapability(
+        nonce=object(), session=session, tenant=tenant, user=user,
+        memory_id=memory_id, transaction_id=42, policy_decision_id="current",
+    )
+    accepted = await module._verify_historical_capability_against_database(
+        capability, session=session,
+        context=SimpleNamespace(tenant_id=tenant, user_id=user),
+        entry=SimpleNamespace(id=memory_id), policy_decision_id="current",
+        consume=True,
+    )
+    assert not accepted
+    assert capability._used is False
+    session.execute.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_historical_authority_inspection_never_opens_write_gate(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    entry = SimpleNamespace(id=memory_id)
+    context = SimpleNamespace(tenant_id=tenant, user_id=user)
+    session = MagicMock(spec=AsyncSession)
+    validated = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        module, "_verify_historical_capability_against_database", validated,
+    )
+    blocked = MagicMock(side_effect=module.NeuroVaultAuthorizationError(
+        "historical migration persistence is disabled"
+    ))
+    monkeypatch.setattr(module.PostgresNeuroVault, "_require_non_historical_write", blocked)
+    with pytest.raises(
+        module.NeuroVaultAuthorizationError,
+        match="historical migration persistence is disabled",
+    ):
+        await module._inspect_historical_migration_write_authority(
+            capability=object(), session=session, context=context,
+            entry=entry, policy_decision_id="current",
+        )
+    validated.assert_awaited_once()
+    blocked.assert_called_once_with(entry)
+
+
+@pytest.mark.asyncio
+async def test_historical_authority_inspection_denies_invalid_grant_without_write_gate(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.platform.memory.postgres import vault as module
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    rejected = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        module, "_verify_historical_capability_against_database", rejected,
+    )
+    blocked = MagicMock(side_effect=AssertionError("writer gate should not be reached"))
+    monkeypatch.setattr(module.PostgresNeuroVault, "_require_non_historical_write", blocked)
+    with pytest.raises(
+        module.NeuroVaultAuthorizationError,
+        match="valid transaction-bound historical migration authority required",
+    ):
+        await module._inspect_historical_migration_write_authority(
+            capability=object(), session=MagicMock(),
+            context=SimpleNamespace(tenant_id=tenant, user_id=user),
+            entry=SimpleNamespace(id=memory_id), policy_decision_id="current",
+        )
+    blocked.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_vault_transaction_rejects_provisional_capability_before_sql():
+    """No caller-supplied capability may bypass the disabled writer."""
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    entry = MemoryEntry(
+        id=memory_id, content="locked historical memory",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source="legacy_persona",
+            custom={"consent_scope": "persona-memory-migration"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user,
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        policy_context={"memory_write_authorized": True},
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=AssertionError("unauthorized SQL"))
+    with pytest.raises(
+        NeuroVaultAuthorizationError,
+        match="historical execution capability is not yet enabled",
+    ):
+        await PostgresNeuroVault().persist_in_transaction(
+            entry, context=context, session=session,
+            historical_capability=object(),
+        )
+    session.execute.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_inner_vault_ledger_denies_historical_capability_before_sql():
+    """Bypassing the outer gate must not let a candidate grant stage an event."""
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import (
+        MemoryEntry, MemoryMetadata, MemoryNamespace, MemoryType,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
+
+    tenant, user, memory_id = (str(uuid.uuid4()) for _ in range(3))
+    entry = MemoryEntry(
+        id=memory_id, content="sensitive historical content",
+        memory_type=MemoryType.SEMANTIC, namespace=MemoryNamespace.LONG_TERM,
+        metadata=MemoryMetadata(
+            tenant_id=tenant, user_id=user, source="legacy_persona",
+            custom={"consent_scope": "persona-memory-migration"},
+        ),
+    )
+    context = VaultContext(
+        tenant_id=tenant, user_id=user,
+        request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
+        policy_context={"memory_write_authorized": True},
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=AssertionError("ledger SQL executed"))
+    vault = PostgresNeuroVault()
+    with pytest.raises(NeuroVaultAuthorizationError, match="capability is not yet enabled"):
+        await vault._persist_with_session(
+            entry, context=context, session=session, commit=False,
+            historical_capability=object(),
+        )
+    with pytest.raises(NeuroVaultAuthorizationError, match="historical migration persistence is disabled"):
+        await vault._persist_with_session(
+            entry, context=context, session=session, commit=False,
+        )
+    session.execute.assert_not_awaited()

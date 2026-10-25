@@ -25,10 +25,12 @@ import {
   SlidersHorizontal,
   UserCircle,
   Trophy,
+  Drama,
 } from "lucide-react";
 
 import { AuthWrapper } from "@/components/AuthWrapper";
 import SettingsDialogComponent from "@/components/settings/SettingsDialog";
+import PersonaSettings from "@/components/settings/PersonaSettings";
 import { PluginHost } from "@/components/plugins/PluginHost";
 import { PluginErrorBoundary } from "@/plugin_host/PluginErrorBoundary";
 import PluginOverviewPage from "@/components/plugins/PluginOverviewPage";
@@ -175,6 +177,7 @@ const PRIMARY_NAV: Array<{
     section: "Personal",
     items: [
       { key: "account", label: "My Account", icon: UserCircle },
+      { key: "personaStudio", label: "Persona Studio", icon: Drama },
       { key: "growth", label: "Growth", icon: Trophy },
       {
         key: "settings",
@@ -355,6 +358,20 @@ export default function DashboardPage() {
     () => ({
 
       settings: <SettingsDialogComponent />,
+      personaStudio: (
+        <section data-testid="persona-studio-workspace" className="mx-auto w-full max-w-5xl space-y-5 overflow-y-auto p-4 md:p-7">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold">Persona Studio</h2>
+              <p className="text-sm text-muted-foreground">Customize Karen’s presentation using your existing account and conversation.</p>
+            </div>
+            <Button type="button" variant="outline" onClick={() => setActiveMainView("chat")}>
+              <MessageSquare className="mr-2 h-4 w-4" aria-hidden="true" />Return to Karen
+            </Button>
+          </div>
+          <PersonaSettings />
+        </section>
+      ),
       pluginOverview: <PluginOverviewPage />,
       agentsOverview: <AgentsOverviewPage />,
       agents: <AgentWorkspaceView openChat={() => setActiveMainView("chat")} />,

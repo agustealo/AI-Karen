@@ -1,0 +1,2 @@
+# Shared spaCy runtime/training constraint; upgrade only with tokenizer serialization proof.
+spacy==3.8.11

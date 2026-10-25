@@ -128,6 +128,11 @@ class NeuroRecall:
 
     async def recall(self, request: RecallRequest) -> RecallResult:
         request.validate()
+        persona_filter = request.metadata.get("persona_filter")
+        if persona_filter is not None and (
+            not isinstance(persona_filter, str) or not persona_filter.strip()
+        ):
+            raise RecallScopeError("persona_filter must be a nonempty string")
         started = time.perf_counter()
         effective_top_k = min(max(int(request.top_k), 1), 100)
         latency_budget_ms = request.resolved_latency_budget_ms()
@@ -243,6 +248,19 @@ class NeuroRecall:
             if str(memory_user or "") != request.user_id:
                 rejected_count += 1
                 continue
+
+            # Persona filtering is an eligibility restriction applied after
+            # mandatory tenant/user isolation. Unattributed memories remain
+            # visible as shared history; differently attributed memories do not.
+            if persona_filter is not None:
+                custom_metadata = getattr(metadata, "custom", {}) if metadata else {}
+                tagged_persona = (
+                    custom_metadata.get("persona_id")
+                    if isinstance(custom_metadata, dict) else None
+                )
+                if tagged_persona is not None and tagged_persona != persona_filter:
+                    rejected_count += 1
+                    continue
 
             candidate = self._to_candidate(memory, request)
             guard = evaluate_guardrails(candidate)

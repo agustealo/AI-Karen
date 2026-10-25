@@ -58,7 +58,7 @@ class PostgresRecallRetriever:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         stmt = (
-            select(MemoryAssertion)
+            select(MemoryAssertion, MemoryEvent.payload)
             .join(MemoryEvent, MemoryEvent.event_id == MemoryAssertion.event_id)
             .where(
                 MemoryAssertion.tenant_id == tenant_uuid,
@@ -87,13 +87,13 @@ class PostgresRecallRetriever:
         if self._session_factory is not None:
             async with self._session_factory() as session:
                 result = await session.execute(stmt)
-                rows = result.scalars().all()
+                rows = result.all()
         else:
             async with async_transaction_scope(tenant_id=tenant_id) as session:
                 result = await session.execute(stmt)
-                rows = result.scalars().all()
+                rows = result.all()
 
-        return [self._to_entry(row, query, text) for row in rows]
+        return [self._to_entry(row, query, text, payload) for row, payload in rows]
 
     @staticmethod
     def _query_terms(text: str) -> tuple[str, ...]:
@@ -111,10 +111,30 @@ class PostgresRecallRetriever:
         return tuple(terms)
 
     @staticmethod
-    def _to_entry(row: MemoryAssertion, query: MemoryQuery, query_text: str) -> MemoryEntry:
+    def _to_entry(
+        row: MemoryAssertion, query: MemoryQuery, query_text: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> MemoryEntry:
         content = str(row.content or "")
         relevance = PostgresRecallRetriever._lexical_relevance(query_text, content)
         created_at = row.created_at or datetime.now(timezone.utc).replace(tzinfo=None)
+        # The governed ledger event owns the original entry provenance.
+        # Recover only persona attribution; never reuse stored identity,
+        # consent or authorization metadata in place of assertion checks.
+        if not isinstance(event_payload, dict):
+            event_payload = {}
+        saved_metadata = event_payload.get("metadata")
+        if not isinstance(saved_metadata, dict):
+            saved_metadata = {}
+        saved_custom = saved_metadata.get("custom")
+        if not isinstance(saved_custom, dict):
+            saved_custom = {}
+        persona_id = saved_custom.get("persona_id")
+        persona_provenance = (
+            {"persona_id": persona_id}
+            if isinstance(persona_id, str) and persona_id.strip()
+            else {}
+        )
         metadata = MemoryMetadata(
             tenant_id=str(row.tenant_id),
             user_id=str(row.user_id),
@@ -122,6 +142,7 @@ class PostgresRecallRetriever:
             source="postgres_memory_ledger",
             custom={
                 "source_store": "postgres",
+                **persona_provenance,
                 "assertion_id": str(row.assertion_id),
                 "event_id": str(row.event_id),
                 "scope": row.scope,

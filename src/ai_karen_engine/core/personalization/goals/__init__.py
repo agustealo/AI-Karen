@@ -41,7 +41,6 @@ from .contracts import (
     ProspectiveState,
     ProspectiveTrigger,
     UserGoal,
-    UserGoalStatus,
     goal_from_user_goal,
     to_snapshot,
 )
@@ -82,7 +81,6 @@ __all__ = [
     "ProspectiveState",
     "ProspectiveTrigger",
     "UserGoal",
-    "UserGoalStatus",
     "goal_from_user_goal",
     "to_snapshot",
 ]

@@ -21,7 +21,7 @@ from ai_karen_engine.core.memory.contracts import (
 )
 from ai_karen_engine.core.reasoning.belief.contracts import EvidenceType
 
-from ..contracts import PreferenceScope, UserGoal, UserGoalStatus
+from ..contracts import PreferenceScope, UserGoal
 
 GoalId = str
 
@@ -278,20 +278,10 @@ def goal_from_user_goal(ug: UserGoal) -> Goal:
 
 
 def _map_user_goal_status(status: Any) -> GoalState:
-    mapping = {
-        UserGoalStatus.ACTIVE: GoalState.ACTIVE,
-        UserGoalStatus.PAUSED: GoalState.PAUSED,
-        UserGoalStatus.COMPLETED: GoalState.COMPLETED,
-        UserGoalStatus.ABANDONED: GoalState.ABANDONED,
-        UserGoalStatus.UNKNOWN: GoalState.PROPOSED,
-    }
-    if isinstance(status, str):
-        try:
-            status = UserGoalStatus(status)
-        except ValueError:
-            return GoalState.PROPOSED
-    return mapping.get(status, GoalState.PROPOSED)
+    """Use the canonical personalization decoding boundary, without duplicate maps."""
+    from ..contracts import canonical_goal_status
 
+    return canonical_goal_status(status)
 
 @dataclass
 class GoalSnapshot:
@@ -505,7 +495,6 @@ __all__ = [
     "ProspectiveState",
     "ProspectiveTrigger",
     "UserGoal",
-    "UserGoalStatus",
     "goal_from_user_goal",
     "to_snapshot",
 ]

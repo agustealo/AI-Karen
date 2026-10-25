@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.contracts.values import JsonMap, JsonValue
+from ai_karen_engine.core.memory.contracts import GoalState as CanonicalGoalState
 
 
 # ===================================
@@ -85,13 +86,19 @@ class DriftState(str, Enum):
     UNKNOWN = "unknown"
 
 
-class UserGoalStatus(str, Enum):
-    """Goal lifecycle states."""
-    ACTIVE = "active"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    ABANDONED = "abandoned"
-    UNKNOWN = "unknown"
+def canonical_goal_status(value: CanonicalGoalState | str) -> CanonicalGoalState:
+    """Normalize historical goal statuses at the personalization boundary.
+
+    The legacy unknown value maps explicitly to proposed. Unsupported states
+    fail closed rather than silently becoming active.
+    """
+    raw = value.value if isinstance(value, Enum) else value
+    if raw == "unknown":
+        return CanonicalGoalState.PROPOSED
+    try:
+        return CanonicalGoalState(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Unsupported persisted goal lifecycle state") from exc
 
 
 class UserModelHealth(str, Enum):
@@ -298,13 +305,16 @@ class GoalState:
     """A user goal with provenance."""
     goal_id: str
     description: str
-    status: UserGoalStatus
+    status: CanonicalGoalState
     provenance: Provenance
     scope: PreferenceScope
     started_at: datetime
     target_date: Optional[datetime] = None
     evidence_refs: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.status = canonical_goal_status(self.status)
 
 
 @dataclass
@@ -370,8 +380,11 @@ class CommitmentState:
     provenance: Provenance
     started_at: datetime
     target_date: Optional[datetime] = None
-    status: UserGoalStatus = UserGoalStatus.ACTIVE
+    status: CanonicalGoalState = CanonicalGoalState.ACTIVE
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.status = canonical_goal_status(self.status)
 
 
 @dataclass
@@ -513,7 +526,7 @@ class UserGoal:
     tenant_id: str
     description: str
     scope: PreferenceScope
-    status: UserGoalStatus
+    status: CanonicalGoalState
     confidence: float
     evidence: List[str]
     started_at: datetime
@@ -522,6 +535,7 @@ class UserGoal:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
+        self.status = canonical_goal_status(self.status)
         self.confidence = max(0.0, min(1.0, self.confidence))
 
 
@@ -660,7 +674,6 @@ __all__ = [
     "PreferenceScope",
     "PreferenceEvidenceSourceType",
     "DriftState",
-    "UserGoalStatus",
     "UserModelHealth",
     "ModelPropertyStatus",
     "EvidenceStatus",

@@ -95,7 +95,18 @@ class SpacyTrainingExecutor:
         if artifact.exists():
             raise ValueError("Artifact path already exists; refusing overwrite")
         artifact.mkdir(parents=True)
-        nlp.to_disk(artifact)
+        try:
+            nlp.to_disk(artifact)
+            # Candidate publication requires a real reload of the exact
+            # serialized pipeline, not merely a successful directory write.
+            restored = spacy.load(artifact)
+            if restored.pipe_names != nlp.pipe_names:
+                raise RuntimeError("spaCy candidate pipeline components changed on reload")
+        except Exception as exc:
+            import shutil
+
+            shutil.rmtree(artifact)
+            raise RuntimeError("spaCy candidate artifact failed reload verification") from exc
         metrics = {"macro_f1": score, "test_samples": len(test_rows), "training_samples": len(train_rows), "dataset_version": version, "feature_version": f"spacy_{mode}_v1", "engine": "spacy", "mode": mode}
         (artifact / "training_metrics.json").write_text(json.dumps(metrics, sort_keys=True), encoding="utf-8")
         return TrainingArtifact(

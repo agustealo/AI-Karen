@@ -24,6 +24,19 @@ from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolv
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
 
+class AvailablePersonaPreferences:
+    active_persona_id = "assistant"
+    enable_persona_memory_filtering = True
+    cross_persona_memory_sharing = False
+
+
+class RecordingPersonaService:
+    async def get_user_preferences(self, *, user_id: str, tenant_id: str):
+        assert user_id == "user-1"
+        assert bool(tenant_id)
+        return AvailablePersonaPreferences()
+
+
 class RecordingMemoryManager:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -107,7 +120,7 @@ async def test_runtime_evidence_resolver_calls_memory_authority_once_and_types_r
     request = _request()
     cognitive_context = _authorized_context(request)
     memory_manager = RecordingMemoryManager()
-    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager)
+    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager, persona_service=RecordingPersonaService())
 
     resolved = await resolver.resolve(request, cognitive_context)
 
@@ -142,7 +155,7 @@ async def test_runtime_evidence_resolver_calls_memory_authority_once_and_types_r
 async def test_failed_memory_scope_remains_unresolved_and_degraded() -> None:
     request = _request(tenant_id="default")
     cognitive_context = _authorized_context(request)
-    resolver = RuntimeEvidenceResolver(memory_manager=RejectingMemoryManager())
+    resolver = RuntimeEvidenceResolver(memory_manager=RejectingMemoryManager(), persona_service=RecordingPersonaService())
 
     resolved = await resolver.resolve(request, cognitive_context)
 
@@ -160,7 +173,7 @@ async def test_memory_recall_exceptions_never_enter_client_metadata_or_logs(capl
         async def recall_context(self, **kwargs: object) -> dict[str, object]:
             raise RuntimeError("secret_database_password=never-log-this")
 
-    resolver = RuntimeEvidenceResolver(memory_manager=_SecretFailure())
+    resolver = RuntimeEvidenceResolver(memory_manager=_SecretFailure(), persona_service=RecordingPersonaService())
     resolved = await resolver.resolve(_request(), _authorized_context(_request()))
     assert resolved.metadata["memory_recall_status"] == "failed"
     assert resolved.metadata["memory_degradation_reason"] == "memory_retrieval_unavailable"
@@ -271,7 +284,7 @@ async def test_semantic_role_lookup_uses_governed_requirement_not_raw_weather_qu
         {"semantic_role": "location.current", "retrieval_query": "Where am I currently?"}
     )
     memory_manager = RecordingMemoryManager()
-    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager)
+    resolver = RuntimeEvidenceResolver(memory_manager=memory_manager, persona_service=RecordingPersonaService())
 
     await resolver.resolve(request, cognitive_context)
 
@@ -336,3 +349,57 @@ def test_canonical_profile_recall_semantics_survive_typed_runtime_resolution():
             retrieved_at=datetime.now(timezone.utc),
         )
         assert untrusted.fact_semantics is None
+
+
+@pytest.mark.asyncio
+async def test_persona_preference_outage_fails_closed_before_memory_recall() -> None:
+    class UnavailablePersonaService:
+        async def get_user_preferences(self, *, user_id: str, tenant_id: str):
+            raise RuntimeError("secret-preference-backend-details")
+
+    manager = RecordingMemoryManager()
+    resolver = RuntimeEvidenceResolver(
+        memory_manager=manager, persona_service=UnavailablePersonaService()
+    )
+    request = _request()
+    context = _authorized_context(request)
+    resolved = await resolver.resolve(request, context)
+
+    assert manager.calls == []
+    assert resolved.metadata["memory_degraded"] is True
+    assert resolved.metadata["memory_degradation_reason"] == "persona_scope_unavailable"
+    assert EvidenceSource.MEMORY.value in resolved.unresolved_sources
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filtering", "sharing", "active", "expected"),
+    [
+        (True, False, "expert", "expert"),
+        (True, True, "expert", None),
+        (False, False, "expert", None),
+        (True, False, None, None),
+    ],
+)
+async def test_persona_scope_respects_backend_memory_sharing_preferences(
+    filtering: bool, sharing: bool, active: str | None, expected: str | None
+) -> None:
+    class ScopedPersonaService:
+        async def get_user_preferences(self, *, user_id: str, tenant_id: str):
+            assert user_id == "user-1"
+            assert tenant_id == "tenant-1"
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                active_persona_id=active,
+                enable_persona_memory_filtering=filtering,
+                cross_persona_memory_sharing=sharing,
+            )
+
+    manager = RecordingMemoryManager()
+    resolver = RuntimeEvidenceResolver(
+        memory_manager=manager, persona_service=ScopedPersonaService()
+    )
+    request = _request()
+    await resolver.resolve(request, _authorized_context(request))
+    assert len(manager.calls) == 1
+    assert manager.calls[0]["persona_filter"] == expected

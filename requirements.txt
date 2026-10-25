@@ -39,7 +39,7 @@ google-generativeai
 openai==2.32.0
 requests
 scikit-learn
-spacy
+-r requirements/spacy.txt
 nltk
 langdetect
 datasets
