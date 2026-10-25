@@ -42,3 +42,25 @@ def test_individual_job_contract_requires_sql_ownership_and_uniform_not_found():
     assert "AND requested_by = :user_id" in query
     for forbidden in ("install_path", "lease_token", "storage_key"):
         assert forbidden not in query
+
+
+def test_owned_control_is_sql_atomic_and_preserves_existing_state_guards():
+    source = REPOSITORY.read_text(encoding="utf-8")
+    for action in ("cancel_job", "pause_job", "resume_job"):
+        section = source.split(f"async def {action}(", 1)[1].split(
+            "    async def ", 1
+        )[0]
+        assert "tenant_id: Optional[str] = None" in section
+        assert "model_download_owner_scope_incomplete" in section
+        assert "tenant_id = :tenant_id AND requested_by = :user_id" in section
+        assert "RETURNING *" in section
+
+
+def test_consumer_mutation_validates_identity_and_action():
+    source = RUNTIME_API.read_text(encoding="utf-8")
+    section = source.split("async def control_my_model_download(", 1)[1]
+    assert 'action not in ("cancel", "pause", "resume")' in section
+    assert "Depends(get_current_user)" in section
+    assert 'getattr(current_user, "is_verified", False)' in section
+    assert "control_owned_job(" in section
+    assert "tenant_id=tenant_id, user_id=user_id" in section
