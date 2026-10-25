@@ -27,3 +27,18 @@ def test_owner_query_filters_before_limit_and_redacts():
     for forbidden in ("install_path", "lease_token", "trust_remote_code",
                       "storage_key", "message, error"):
         assert forbidden not in method
+
+
+def test_individual_job_contract_requires_sql_ownership_and_uniform_not_found():
+    api = RUNTIME_API.read_text(encoding="utf-8")
+    repository = REPOSITORY.read_text(encoding="utf-8")
+    assert '@router.get("/model-library/my-downloads/{job_id}")' in api
+    assert "get_owned_job(" in api
+    assert 'detail="Model job unavailable"' in api
+    query = repository.split("async def get_owned_job(", 1)[1].split(
+        "async def get_job(", 1
+    )[0]
+    assert "job_id = :job_id AND tenant_id = :tenant_id" in query
+    assert "AND requested_by = :user_id" in query
+    for forbidden in ("install_path", "lease_token", "storage_key"):
+        assert forbidden not in query
