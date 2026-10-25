@@ -4,7 +4,8 @@ import { useAgent } from "@copilotkit/react-core/v2";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
-import { fetchConversationBootstrap } from "@/components/chat/SessionProvider";
+import { apiClient } from "@/lib/api";
+import type { ConversationResponse } from "@/lib/types";
 
 /**
  * This is an interaction adapter, not an alternate conversation store.
@@ -71,7 +72,11 @@ export function KarenCopilotHistoryGate({
 
     void (async () => {
       try {
-        const snapshot = await fetchConversationBootstrap(conversationId);
+        // Authorization-sensitive read. Never reuse the process-local UI
+        // bootstrap cache across account or tenant transitions.
+        const snapshot = await apiClient.get<ConversationResponse>(
+          "/api/conversations/" + conversationId,
+        );
         if (cancelled) return;
         if (snapshot.id !== conversationId || !Array.isArray(snapshot.messages)) {
           throw new Error("Conversation history identity mismatch");
