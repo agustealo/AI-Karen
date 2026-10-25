@@ -95,7 +95,7 @@ async function handle(request: NextRequest): Promise<Response> {
     fetch: (url, init) => fetch(url, { ...init, redirect: "manual", cache: "no-store" }),
   });
 
-  const copilot = new CopilotRuntime({
+  // Local-first default. Operators may explicitly opt into SDK metadata telemetry.\n  if (process.env.COPILOTKIT_TELEMETRY_DISABLED === undefined) {\n    process.env.COPILOTKIT_TELEMETRY_DISABLED = "true";\n  }\n\n  const copilot = new CopilotRuntime({
     agents: { default: agent },
     // The only credential-bearing headers are the current request's
     // server-verified headers above. Do not forward arbitrary x-* claims.
