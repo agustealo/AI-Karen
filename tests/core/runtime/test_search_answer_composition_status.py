@@ -86,3 +86,16 @@ def test_stream_content_exposes_same_answer_composition_receipt():
     path = Path(__file__).resolve().parents[3] / "src/ai_karen_engine/core/runtime/chat_runtime.py"
     source = path.read_text(encoding="utf-8")
     assert '"answer_composition_status": normalized.get("answer_composition_status")' in source
+
+
+def test_transcript_persistence_allowlists_answer_composition_status():
+    path = Path(__file__).resolve().parents[3] / "src/ai_karen_engine/core/runtime/chat_runtime.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    runtime = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ChatRuntime")
+    method = next(node for node in runtime.body if isinstance(node, ast.AsyncFunctionDef)
+                  and node.name == "_persist_transcript")
+    source = ast.get_source_segment(path.read_text(encoding="utf-8"), method)
+    assert source is not None
+    assert '"answer_composition_status": provider_meta["answer_composition_status"]' in source
+    for status in ("grounded_model", "retrieved_evidence", "source_observation", "capability_unavailable"):
+        assert f'"{status}"' in source
