@@ -188,7 +188,7 @@ own conversation storage, mutate tools directly or synthesize success.
 
 ## Superseding source-verified implementation plan
 
-Use `docs/capabilities/copilotkit-migration-implementation-v2.md` as the
+Use `docs/capabilities/copilotkit-execution-plan.md` as the
 implementation roadmap and `docs/capabilities/ck01-canonical-preflight.md`
 as the updated source evidence. These supersede earlier statements here that
 the plugin loader, channel host or approval owner remain undiscovered.
