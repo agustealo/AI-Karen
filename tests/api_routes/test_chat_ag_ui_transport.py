@@ -504,3 +504,29 @@ async def test_ag_ui_rejects_unpaired_or_untrusted_model_hints(hints):
             user={"user_id": USER, "tenant_id": TENANT_A},
         )
     assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_capabilities_are_derived_from_canonical_feature_flag(monkeypatch):
+    """Transport discovery is an authenticated config projection, never fake health."""
+    identity = {"user_id": USER, "tenant_id": TENANT_A}
+    assert (
+        await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
+    ) == {"enabled": True}
+    monkeypatch.setattr(
+        chat_ingress,
+        "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(enable_ag_ui_bridge=False)),
+    )
+    assert (
+        await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
+    ) == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_capabilities_reject_missing_principal_or_tenant():
+    """A caller cannot learn transport state without backend-owned identity."""
+    for identity in ({}, {"user_id": USER}, {"tenant_id": TENANT_A}):
+        with pytest.raises(HTTPException) as exc:
+            await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
+        assert exc.value.status_code == 401
