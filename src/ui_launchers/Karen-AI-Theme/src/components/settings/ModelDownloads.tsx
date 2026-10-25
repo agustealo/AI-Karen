@@ -1406,6 +1406,31 @@ export default function ModelDownloads({
         </Alert>
       )}
 
+      <section aria-label="Model lifecycle" className="rounded-2xl border border-border/60 bg-card p-4 sm:p-5">
+        <div className="mb-3">
+          <h3 className="text-base font-semibold">Model lifecycle</h3>
+          <p className="text-sm text-muted-foreground">Acquisition is not activation. Follow backend-verified evidence from discovery through an available runtime.</p>
+        </div>
+        <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <li className="rounded-xl border border-border/60 p-3">
+            <p className="text-xs font-semibold">1. Discover & review</p>
+            <p className="mt-1 text-xs text-muted-foreground">Check source, license, revision and runtime compatibility before queueing.</p>
+          </li>
+          <li className="rounded-xl border border-border/60 p-3">
+            <p className="text-xs font-semibold">2. Validate & acquire</p>
+            <p className="mt-1 text-xs text-muted-foreground">{endpointErrors.jobs ? "Job status unavailable" : activeJobs.length ? `${activeJobs.length} active job(s) reported` : "No active jobs reported"}; policy and durable worker govern transfers.</p>
+          </li>
+          <li className="rounded-xl border border-border/60 p-3">
+            <p className="text-xs font-semibold">3. Verify installation</p>
+            <p className="mt-1 text-xs text-muted-foreground">{installed ? `${installedModels.length} model(s) in reported inventory` : "Installed inventory unavailable"}; presence does not establish loadability.</p>
+          </li>
+          <li className="rounded-xl border border-border/60 p-3">
+            <p className="text-xs font-semibold">4. Activate & use</p>
+            <p className="mt-1 text-xs text-muted-foreground">Choose a healthy, registered runtime model in Providers or Chat. Only actual execution receipts confirm use.</p>
+          </li>
+        </ol>
+      </section>
+
       <section className="overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-br from-card via-card to-primary/[0.025] shadow-sm">
         <div className="flex flex-col gap-5 p-5 lg:p-6">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
