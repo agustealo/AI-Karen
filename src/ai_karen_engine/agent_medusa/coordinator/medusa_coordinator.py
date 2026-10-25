@@ -483,6 +483,16 @@ class MedusaCoordinator:
                 )
             )
 
+        # A specialist step is a request, not a source of authority.
+        # Derive only a subset of RuntimePolicy's parent grants.
+        required_tools = set(step.required_tools)
+        required_plugins = set(step.required_plugins)
+        if (
+            step.agent_specialist not in set(authorized_plan.allowed_agents)
+            or not required_tools.issubset(set(authorized_plan.allowed_tools))
+            or not required_plugins.issubset(set(authorized_plan.allowed_plugins))
+        ):
+            raise PermissionError("medusa_step_exceeds_authorized_plan")
         specialist_plan = replace(
             authorized_plan,
             allowed_tools=list(step.required_tools),
