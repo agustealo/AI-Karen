@@ -109,6 +109,24 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
   });
 
+  it("rechecks ownership after remount even for the same cached UUID", async () => {
+    backend.fetchConversation
+      .mockResolvedValueOnce({ id: CONVERSATION_A, messages: [{ id: "m1", role: "user", content: "Earlier owner" }] })
+      .mockRejectedValueOnce(new Error("owner mismatch"));
+    const initial = render(guardedHistory());
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    initial.unmount();
+
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      2, "/api/conversations/" + CONVERSATION_A,
+    );
+    expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores an obsolete conversation snapshot after switching threads", async () => {
     let finishA!: (value: unknown) => void;
     backend.fetchConversation
