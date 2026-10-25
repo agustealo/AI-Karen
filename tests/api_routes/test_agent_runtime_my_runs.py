@@ -200,7 +200,8 @@ async def test_agent_discovery_redacts_internal_metadata_and_denies_invalid_scop
             return [SimpleNamespace(
                 agent_id="research", name="Research", lifecycle_state="active",
                 healthy=True, implementation_id="internal-implementation",
-                prompt_contract_id="private-prompt", missing_dependencies=["secret"]
+                prompt_contract_id="private-prompt", missing_dependencies=["secret"],
+                capabilities=["internal-only"]
             )]
     catalog = Catalog()
     for tenant, owner, active in [
