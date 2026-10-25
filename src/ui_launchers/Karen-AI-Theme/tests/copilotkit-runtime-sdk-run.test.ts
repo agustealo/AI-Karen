@@ -76,6 +76,11 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
         const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
         expect(payload.threadId).toBe(CONVERSATION);
         expect(payload.runId).toBe(RUN_ID);
+        // UI requests are hints only; Karen's runtime selects the actual model.
+        expect(payload.forwardedProps).toEqual({
+          preferred_llm_provider: "local",
+          preferred_model: "example-local",
+        });
         return new Response(reply, {
           headers: { "content-type": "text/event-stream" },
         });
@@ -83,7 +88,12 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
       throw new Error("Unexpected outbound request: " + url);
     }) as typeof fetch;
 
-    const response = await POST(sdkRun());
+    const response = await POST(sdkRun({
+      forwardedProps: {
+        preferred_llm_provider: "local",
+        preferred_model: "example-local",
+      },
+    }));
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const stream = await response.text();
