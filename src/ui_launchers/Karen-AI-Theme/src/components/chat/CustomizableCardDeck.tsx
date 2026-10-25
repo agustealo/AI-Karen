@@ -9,6 +9,21 @@ import { CardTitle } from '@/components/ui/card';
 const STORAGE_KEY = 'karen.intelligence.cards.v1';
 type CardPreference = { order: string[]; hidden: string[] };
 
+/**
+ * Recover the title users actually see, including nested span/fragment text.
+ * Icons and non-title card content do not contribute to the menu label.
+ */
+function titleText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node).trim();
+  }
+  if (Array.isArray(node)) {
+    return node.map(titleText).filter(Boolean).join(' ').trim();
+  }
+  if (!isValidElement<{ children?: ReactNode }>(node)) return '';
+  return titleText(node.props.children);
+}
+
 function findTitle(node: ReactNode): string {
   if (Array.isArray(node)) {
     for (const entry of node) {
@@ -18,10 +33,7 @@ function findTitle(node: ReactNode): string {
     return '';
   }
   if (!isValidElement<{ children?: ReactNode }>(node)) return '';
-  if (node.type === CardTitle) {
-    return Children.toArray(node.props.children)
-      .filter((child) => typeof child === 'string').join(' ').trim();
-  }
+  if (node.type === CardTitle) return titleText(node.props.children);
   return findTitle(node.props.children);
 }
 
