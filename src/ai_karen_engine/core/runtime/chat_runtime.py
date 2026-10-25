@@ -2691,13 +2691,46 @@ class ChatRuntime:
         from urllib.parse import urlsplit
 
         sources = []
+        # Research references are resolved exclusively from the authorized
+        # capability's returned sources, never from client request metadata.
+        authorized_source = (
+            retrieved.success
+            and retrieved.source == "plugin"
+            and retrieved.source_id in set(plan.allowed_plugins)
+        )
+        article_service = None
         for item in retrieved.sources:
             if not isinstance(item, dict) or item.get("evidence_level") != "fetched_page":
                 continue
             url = str(item.get("url") or "")
-            passage = str(item.get("content") or item.get("markdown") or "")[:1000]
             parsed = urlsplit(url)
-            if parsed.scheme in {"http", "https"} and parsed.hostname and passage:
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                continue
+            passage = str(item.get("content") or item.get("markdown") or "")[:1000]
+            article_id = item.get("article_id")
+            if authorized_source and isinstance(article_id, str) and 0 < len(article_id) <= 128:
+                try:
+                    if article_service is None:
+                        from ai_karen_engine.services.database.repositories.repository_factory import (
+                            get_runtime_search_article_service,
+                        )
+                        article_service = get_runtime_search_article_service()
+                    if article_service is not None:
+                        scoped_text = await article_service.read_for_chat(
+                            execution_context=request.context, article_id=article_id,
+                        )
+                        if scoped_text:
+                            passage = scoped_text[:1000]
+                except (PermissionError, ValueError):
+                    # Do not turn an inaccessible artifact into a model input.
+                    passage = ""
+                except Exception as exc:
+                    logger.warning("search_article_reference_unavailable", extra={
+                        "correlation_id": request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    })
+                    passage = ""
+            if passage:
                 sources.append({"url": url, "content": passage, "evidence_level": "fetched_page"})
             if len(sources) >= 4:
                 break
