@@ -146,3 +146,16 @@ async def test_authorized_replay_preserves_search_citations_and_synthesis_receip
             tenant_id="tenant-a", user_ctx={"user_id": "other"},
         )
     assert denied.value.status_code == 404
+
+
+def test_client_evidence_label_uses_persisted_status_only():
+    from pathlib import Path
+    component = (
+        Path(__file__).resolve().parents[3]
+        / "src/ui_launchers/Karen-AI-Theme/src/components/chat/MessageBubble.tsx"
+    ).read_text(encoding="utf-8")
+    assert "message.metadata?.answer_composition_status" in component
+    assert "chat-evidence-status" in component
+    assert "Verified grounded answer" in component
+    assert "Retrieved evidence only" in component
+    assert "Live capability unavailable" in component
