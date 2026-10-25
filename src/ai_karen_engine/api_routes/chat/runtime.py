@@ -656,12 +656,26 @@ async def stream_ag_ui_chat(
     # AG-UI may carry only a bounded resource lookup hint. Never trust the
     # client-supplied context, tools, or state as authorization.
     workspace_ref = request.forwardedProps.get("workspace_run_id")
-    if request.forwardedProps and (
-        set(request.forwardedProps) != {"workspace_run_id"}
-        or not isinstance(workspace_ref, str)
-        or not 1 <= len(workspace_ref) <= 128
+    preferred_provider = request.forwardedProps.get("preferred_llm_provider")
+    preferred_model = request.forwardedProps.get("preferred_model")
+    if (
+        set(request.forwardedProps) - {
+            "workspace_run_id", "preferred_llm_provider", "preferred_model"
+        }
+        or (workspace_ref is not None and (
+            not isinstance(workspace_ref, str) or not 1 <= len(workspace_ref) <= 128
+        ))
+        or (preferred_provider is not None and (
+            not isinstance(preferred_provider, str)
+            or not 1 <= len(preferred_provider.strip()) <= 100
+        ))
+        or (preferred_model is not None and (
+            not isinstance(preferred_model, str)
+            or not 1 <= len(preferred_model.strip()) <= 200
+            or not preferred_provider
+        ))
     ):
-        raise HTTPException(status_code=422, detail="Unsupported workspace context")
+        raise HTTPException(status_code=422, detail="Unsupported chat selection")
     # Reject ungoverned client-provided tools, shared state and context.
     if request.tools or request.state or request.context:
         raise HTTPException(
@@ -730,6 +744,8 @@ async def stream_ag_ui_chat(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 workspace_run_id=workspace_ref,
+                preferred_llm_provider=preferred_provider,
+                preferred_model=preferred_model,
             ),
             user=user,
             session_id=session_id,
