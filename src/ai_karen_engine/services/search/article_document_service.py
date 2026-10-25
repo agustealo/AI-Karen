@@ -81,3 +81,21 @@ class SearchArticleService:
         if hashlib.sha256(data).hexdigest() != artifact.sha256:
             raise RuntimeError("Article integrity verification failed")
         return data.decode("utf-8")
+
+    async def read_for_chat(self, *, execution_context, article_id: str) -> str | None:
+        """Resolve a browser-supplied research reference for canonical chat.
+
+        The caller's authenticated runtime principal, not request metadata,
+        is the authority for tenant and user scope. A reference does not grant
+        access by itself. The underlying read enforces artifact ownership,
+        deletion status, size and content integrity.
+        """
+        execution_context.require_authenticated_user()
+        tenant_id = str(execution_context.tenant_id or "").strip()
+        user_id = str(execution_context.user_id or "").strip()
+        self._identity(tenant_id, user_id)
+        if not isinstance(article_id, str) or not article_id or len(article_id) > 128:
+            raise ValueError("Valid article identifier is required")
+        return await self.read(
+            tenant_id=tenant_id, user_id=user_id, article_id=article_id,
+        )
