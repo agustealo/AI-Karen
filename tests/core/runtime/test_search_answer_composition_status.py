@@ -80,3 +80,9 @@ def test_failed_capability_is_neither_evidence_nor_model_answer():
     assert answer == "Capability unavailable"
     assert receipt["answer_composition_status"] == "capability_unavailable"
     assert receipt["actual_model"] is None
+
+
+def test_stream_content_exposes_same_answer_composition_receipt():
+    path = Path(__file__).resolve().parents[3] / "src/ai_karen_engine/core/runtime/chat_runtime.py"
+    source = path.read_text(encoding="utf-8")
+    assert '"answer_composition_status": normalized.get("answer_composition_status")' in source
