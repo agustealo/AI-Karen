@@ -3,8 +3,12 @@ import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
 import type { RuntimeProviderCatalogResponse } from "@/lib/model-runtime-inventory";
 
-/** Catalog visibility is not authority to select a model or execute a run. */
-export function KarenComposerRuntimeCatalog() {
+/** A request hint only: backend validates every model selection. */
+export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, onSelectionChange }: {
+  selectedProvider: string;
+  selectedModel: string;
+  onSelectionChange: (provider: string, model: string) => void;
+}) {
   const [catalog, setCatalog] = useState<RuntimeProviderCatalogResponse | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -21,7 +25,22 @@ export function KarenComposerRuntimeCatalog() {
   const providers = catalog.providers.filter((provider) => provider.enabled === true && provider.allowed_for_current_user !== false);
   return <section aria-label="Runtime provider discovery" className="space-y-2">
     <h4 className="text-sm font-medium">Providers and models</h4>
-    <p className="text-xs text-muted-foreground">Backend-reported discovery only. ChatRuntime owns execution and model routing.</p>
+    <p className="text-xs text-muted-foreground">Select a runtime-reported provider and model, or use automatic routing. The backend remains authoritative.</p>
+    <label htmlFor="karen-chat-provider" className="block font-medium">Provider</label>
+    <select id="karen-chat-provider" value={selectedProvider} onChange={(event) => onSelectionChange(event.target.value, "")} className="w-full rounded-md border border-input bg-background p-2">
+      <option value="">Automatic (runtime default)</option>
+      {providers.filter((provider) => provider.configured !== false && provider.healthy !== false).map((provider) =>
+        <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+    </select>
+    {selectedProvider && <>
+      <label htmlFor="karen-chat-model" className="block font-medium">Model</label>
+      <select id="karen-chat-model" value={selectedModel} onChange={(event) => onSelectionChange(selectedProvider, event.target.value)} className="w-full rounded-md border border-input bg-background p-2">
+        <option value="">Provider default</option>
+        {(providers.find((provider) => provider.id === selectedProvider)?.models || [])
+          .filter((model) => model.available === true)
+          .map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+      </select>
+    </>}
     {providers.length === 0 ? <p className="text-sm text-muted-foreground">No enabled providers reported.</p> :
       <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
         {providers.map((provider) => <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
