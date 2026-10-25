@@ -1,135 +1,309 @@
-# CK-02 to CK-07: implementation and design-system migration plan
+# CopilotKit-first migration: canonical execution and adversarial implementation plan
 
-Status: adversarial plan update; no SDK installation or runtime execution claimed.
-Date: 2026-10-25
-Parent: `docs/architecture/decisions/2026-10-25-copilotkit-first.md`
-Preservation ledger: `docs/capabilities/copilotkit-legacy-retirement.md`
-Canonical preflight: `docs/capabilities/ck01-canonical-preflight.md`
+**Status:** Design and evidence audit; no frontend migration or SDK install claimed.
+**Repository:** agustealo/AI-Karen
+**Scope:** CopilotKit UI/agent interactions, AG-UI, canonical Karen runtime, plugin/Channels, approvals, historic cleanup and consumer UX.
+**Decision:** CopilotKit takes precedence for overlapping *interaction* capabilities; Karen's governed execution/memory/persistence stays authoritative.
+**Canonical plan:** This document supersedes the older CK-02..CK-07 outline and the temporary v2 companion. Historical feature intentions and source evidence are retained here.
+**Companion:** `docs/architecture/decisions/2026-10-25-copilotkit-first.md`, `docs/capabilities/copilotkit-legacy-retirement.md`, PR #553 capability baseline.
 
-## Fresh source evidence
+## A. Verified repository owners and architectural consequences
 
-- Web app: `src/ui_launchers/Karen-AI-Theme`, Next `15.5.23`, React `18.3.1`, TypeScript 5, Tailwind `^3.4.1`.
-- `package.json` + `package-lock.json` use `@assistant-ui/react@0.15.29`, `@assistant-ui/react-ag-ui@0.0.70`, `@ag-ui/client@0.0.59`; no `@copilotkit/react-core` declared.
-- The current visual authority is `src/app/globals.css` (CSS design tokens, light/dark colors, typography, radius, sidebar variables) and `tailwind.config.ts`; neither may be indiscriminately replaced.
-- The current `KarenAssistantChat.tsx` composes server-backed model/agent catalog, persona, local/browser dictation, durable history, observed steps, governed presentation and intelligence rail. This is the functional baseline, not simply a textbox.
-- `KarenComposerRuntimeCatalog.tsx` already requests `/api/runtime/providers` and `/api/agent-runtime/catalog`; model/agent controls must keep backend authority and visibility of actual execution.
-- `src/ai_karen_engine/config/runtime.py` defaults `enable_ag_ui_bridge=False`, which requires explicit authorized enablement and a negative-path test.
+| Domain | Verified implementation | Canonical disposition |
+| --- | --- | --- |
+| Chat execution | `src/ai_karen_engine/core/runtime/chat_runtime.py` | All inference, provider/model selection, fallback, prompts, streams, persistence/degradation receipts remain here |
+| AG-UI backend ingress | `src/ai_karen_engine/api_routes/chat/runtime.py` | Reuse; thin, authenticated, policy-governed; do not create another direct agent endpoint |
+| AG-UI projection | `src/ai_karen_engine/core/runtime/ag_ui_event_projection.py` | Preserve event provenance, stream lifecycle and terminal integrity |
+| AG-UI frontend proxy | `src/ui_launchers/Karen-AI-Theme/src/app/api/chat/ag-ui/route.ts` | Preserve auth header sanitization, response IDs, abort/terminal/SSE checks |
+| AG-UI config | `src/ai_karen_engine/config/runtime.py` `FeatureFlags.enable_ag_ui_bridge=False` | Explicit authorized enablement and negative testing required; never override in React |
+| Current chat mount | `src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx` | One active chat mount, cut over with a centrally governed feature gate |
+| Current chat | `src/ui_launchers/Karen-AI-Theme/src/components/chat/assistant-ui/KarenAssistantChat.tsx` | Capture every consumer contract and replace rendering after parity |
+| Conversation state | `src/ui_launchers/Karen-AI-Theme/src/components/chat/SessionProvider.tsx` | Reuse canonical session identities, bootstrap deduplication and APIs; no second conversation store |
+| Persona, model, voice, history | `src/components/chat/assistant-ui/KarenPersonaSelector.tsx`, `KarenComposerRuntimeCatalog.tsx`, `KarenBrowserDictation.tsx`, `KarenLocalDictation.tsx`, `KarenHistoryRestoration.ts` | Move behavior into CopilotKit slots/adapters; do not throw away available functions |
+| Presentation and rail | `KarenPresentationRegistry.tsx`, `KarenWeatherPresentation.tsx`, `observedAgentSteps.ts`, `src/components/chat/ConversationContextRail.tsx` | Reuse evidence-bound data schemas and layout; change rendering adapter, not canonical presentation meaning |
+| UI design system | `src/ui_launchers/Karen-AI-Theme/src/app/globals.css`, `tailwind.config.ts` | Preserve the existing HSL tokens, dark theme, typography, breakpoints and three-panel composition |
+| Plugin catalog/execution | `src/ai_karen_engine/extensions/plugin_kernel.py`, `extensions/platform/core/registry/plugin_registry.py`, `extensions/registry.py` | Single extension manifest/catalog/execution authority; do not add another plugin registry |
+| Extension packages | `src/ai_karen_engine/extensions/plugins/*/manifest.json` | Existing package convention; reuse validator, permission and lifecycle contracts |
+| Channel adapter contracts | `src/ai_karen_engine/extensions/channels/contracts.py` | Use current ChannelAdapter and native event/identity/delivery schema, extend only if needed |
+| Channel host | `src/ai_karen_engine/services/channels/{host,activation,linking,ingress,execution,delivery,worker,credentials}.py` | ALREADY IMPLEMENTED host/ingress/worker lifecycle. CopilotKit Channels is a transport/native-UI adapter, not a replacement host |
+| Channel persistence | `src/ai_karen_engine/persistence/repositories/channel_repository.py` | Durable inbox/outbox, identity and tenant ownership remain |
+| Channel config | `src/ai_karen_engine/config/channels.py` | `ChannelHostSettings` disabled by default with validated installation/credential policy |
+| Approval authority | `src/ai_karen_engine/services/approvals.py` | Reuse runtime-owned approval lifecycle and request fingerprinting |
+| Approval store | `src/ai_karen_engine/persistence/repositories/approval_repository.py` | Reuse tenant-scoped durable one-shot approval receipts and RLS; no duplicate database |
+| Approval API | `src/ai_karen_engine/api_routes/automation/approvals.py` | Reuse for policy-authorized approval decisions; no side effects in HTTP/controller |
+| Plugin UI | `src/ui_launchers/Karen-AI-Theme/src/components/plugins/`, `src/ui_launchers/Karen-AI-Theme/src/plugin_host/` | Existing consumer plugin installation and navigation, never mount a new second plugin store |
 
-## Upstream SDK considerations (verify against pinned release at implementation time)
+These paths were read or enumerated from GitHub `main` on 2026-10-25. Existence is **not** live availability, package compatibility or readiness proof. Where a document says the plugin/approval owners are unknown, this table supersedes it.
 
-- CopilotKit supports chat slots that can override classes, props, and subcomponents, enabling retention of Karen's exact UX rather than adoption of stock visuals: https://docs.copilotkit.ai/built-in-agent/custom-look-and-feel/slots
-- CopilotKit Runtime offers authenticated discovery/middleware; dev-only `agents__unsafe_dev_only` must never be used in production. Documented `selfManagedAgents` is a different connection option with responsibilities and limitations: https://docs.copilotkit.ai/agno/backend/copilot-runtime
-- CopilotKit's AG-UI integration uses standard events and runtime agent proxies; those features do **not** grant it Karen model, memory, auth or persistence authority: https://docs.copilotkit.ai/ag2/ag-ui
-- Channels SDK is MIT licensed and supports Slack/Teams, using a platform delivery layer. This does not establish Karen's identity authorization, retention or self-hosted deployment automatically: https://github.com/CopilotKit/channels-sdk
-- OpenTag includes Node CopilotRuntime plus Python LangGraph reference services; study behavior but never fork its complete execution stack into Karen: https://github.com/CopilotKit/OpenTag/blob/main/setup.md
-- Tailwind 3 and current token syntax differ from documented current CopilotKit styling conventions. A version-pinned compatibility spike must prove generated CSS and visual behavior before proposing any global Tailwind migration.
+## B. Confirmed adversarial issues
 
-## Architecture decision: one shell, one bridge, one runtime
+### P0-01: Duplicate chat execution and premature UI cutover
+A second CopilotKit Runtime may be needed as a *thin SDK transport facade* but may not own providers, prompts, model selection, tools, memory, thread persistence or policy. Evaluate whether the current AG-UI endpoint can be used directly by the pinned v2 SDK; if not, create one authenticated, bounded bridge. Do not add another general chat API or node-based agent.
 
-**Interaction:** CopilotKit v2 chat/slots, shared *ephemeral* UI state, suggestions, agent actions, generative UI and approvals.
+### P0-02: Disabled AG-UI backend behind a seemingly functional frontend
+The runtime's `enable_ag_ui_bridge` defaults false. Define opt-in configuration and backend health/eligibility display before mount. Test disabled/unknown/misconfigured/allowed states and avoid client-side configuration overrides.
 
-**Bridge:** Preferred production integration is a restricted CopilotKit Runtime bridge if required for supported SDK middleware/threads/channels, delegating to Karen's existing authenticated AG-UI runtime. It must be proxied at same origin, authenticate requests, preserve tenant identity and correlation, validate agent capability declarations, and remain unable to pick models, construct prompts, run plugins, persist messages or approve actions. Evaluate `selfManagedAgents` only as an explicitly secured alternative, not an automatic production shortcut.
+### P0-03: Existing conversation bootstrap versus CopilotChat automatic run
+Current SessionProvider deduplicates conversation boots. CopilotChat v2 documentation describes running an agent on initial mount when not run; that behavior must not generate unintended initial answers, duplicate writes, reset session IDs or clear unsent drafts during transitions. Validate real installed SDK behavior and select the supported configuration/slot strategy.
 
-**Runtime:** One `ChatRuntime` owns inference and authoritative event/persistence receipts. `CORTEX` decides eligibility. `RuntimePolicy` controls actions. Existing repository / NeuroVault own durable state.
+### P0-04: Current design tokens conflict with CopilotKit v2 CSS expectations
+Karen uses Tailwind 3 + HSL variables; CopilotKit v2 documents Tailwind 4/shadcn-style OKLCH scoped tokens. DO NOT upgrade the whole application to Tailwind 4 as a precondition unless necessary and regression-proven. First test isolated stylesheet import and scoped token conversions without overwriting Karen's global token values. Preserve sidebars, right rail scrolling, sticky composer, responsive breakpoints, font sizes, contrast and focus rings.
 
-**Channels:** SDK/runner is subordinate ingress in the existing plugin registration and permission model (owner discovery remains pending). No independent OpenTag agent.
+### P0-05: Existing Channels lifecycle could be forked
+Canonical PluginKernel, ChannelHostSettings, ChannelIngressService, ChannelExecutionService, SqlChannelRepository, workers and ChannelAdapter contracts already exist. Building a new OpenTag-shaped channel runtime, manager, queue, retry worker, secret store, or conversation mapping would violate DRY/local-first. Use CopilotKit Channels SDK and OpenTag patterns as *adapter implementation inputs*, with explicitly mediated optional managed runner. Native cards cannot assert execution or persistence success.
 
-## Appearance and UX preservation contract
+### P0-06: Approvals already exist; frontend controls cannot become authority
+ApprovalService/SqlApprovalRepository and runtime approval policy are real. Map CopilotKit `useHumanInTheLoop`/interrupt affordances to existing approval ID/state/transitions. Distinguish a chat execution approval from a granular side-effect tool approval before reusing the exact same contract; extend the canonical owner only when the schema cannot represent the necessary audited action. Test expiration, revocation, replay, one-shot consumption, concurrent approval and post-approval reauthorization.
 
-Do not redesign Karen. Retain its identity: the three-panel layout, left conversation nav, central chat, right intelligence rail; consistent small sidebar headings and readable supporting text; current surface hierarchy; compact controls; desktop/mobile responsiveness; accessible focus and keyboard patterns.
+### P0-07: Live/restored/streaming data parity could be lost
+`KarenHistoryRestoration.ts` reconstructs `karen.presentation.v1` and `karen.execution_receipt.v1` parts from authenticated history. New CopilotKit renderers must consume real versioned events and durable history with the same evidence, source/ref and permission checks. Preserve requested versus actual provider/model and degradation metadata. Don't claim completion on RUN_FINISHED without canonical result.
 
-Map CopilotKit visual slots onto **existing** Karen CSS variables for both themes. Never import broad SDK CSS overrides without scoping and visual-diff review. The user-visible composer must preserve provider/model request (automatic as default), agent eligibility, sticky persona selector, attachments if supported, browser/local dictation, pending content across tab/window navigation, cancellation and evidence-based execution receipts.
+### P0-08: Legacy removal can weaken security or delete unique features
+Legacy `copilot.py` has compatibility predictors, and `copilotkit/safety_middleware.py` may still contain checks not reimplemented elsewhere. No blanket remove, shim-only replacement, simulated success, or unverified source deletion. Reference audit with runtime mount/manifest checks first; require verified successor, tests, and explicit removal in a follow-up commit within the same workstream.
 
-If CopilotKit lacks a specific native primitive, implement a narrow Karen-owned slot extending the supported SDK. Avoid adding a second chat renderer or moving backend authority to React.
+### P1-09: Documentation and SDK v1/v2 API drift
+Official docs have pages with different provider naming between versions; use a pinned `@copilotkit/react-core` version's published types and canonical versioned docs to settle `CopilotKitProvider` versus compatibility `CopilotKit`, `agentId`, `runtimeUrl`, styles and hooks. The v2 `CopilotChat` is in `@copilotkit/react-core/v2`; don't introduce the deprecated v1 `@copilotkit/react-ui` chat accidentally.
 
-For screenshots, use repeatable viewports, real UI state, golden references and meaningful tolerances. Do not alter snapshot dimensions or thresholds just to conceal regressions. Accessibility checks include keyboard focus, reduced motion, labels, contrast, and screen-reader live messaging.
+### P1-10: Lockfile and package manager drift
+Web app has `package.json`, `package-lock.json` and `pnpm-workspace.yaml`. Decide and enforce one install/lockfile authority for reproducible CopilotKit releases; honor existing approved native dependency scripts and CI without blanket trust. Capture bundle output, React/Next/Tailwind compatibility and duplicate AG-UI dependency versions.
 
-## Full execution work packets
+### P1-11: Feature inventory and CI fragmentation
+PR #553 proposes a conservative capability baseline. Reconcile into one source of product truth and existing tests. Integrate migrations with Main Quality Gate, Chat System Burn, Presentation Contract, plugin-ci, relevant channel/approval tests and Playwright. Avoid a parallel gate not invoked by the canonical workflows.
 
-### CK-02A: Dependency and styling compatibility
+## C. Non-negotiable UX preservation matrix
 
-- Inspect package-lock and current SDK peer dependencies, React/Next/Node compatibility, Tailwind styling imports and AG-UI library duplicates.
-- Pin compatible CopilotKit versions and refresh the single chosen package-manager lock under current security policy.
-- Build a versioned adapter compile test and isolated CopilotChat slot theme fixture using Karen's existing tokens, light/dark modes and typography.
-- Reject dependency churn that requires an unapproved major global Tailwind migration.
-- Proof: clean install, typecheck, lint, tests, build, browser/SSR hydration and visual fixtures.
+| Journey | Karen behavior to retain | CopilotKit replacement strategy | Evidence |
+| --- | --- | --- | --- |
+| Core chat | Run, cancel, retry, stream, scroll/resize and truthful error | v2 `CopilotChat` or `CopilotChatView` slots | Real authenticated AG-UI browser run and SSE abort |
+| Conversation | Create/switch/delete/rename, stable ID, durable reload | Keep SessionProvider + repository; configure CopilotKit thread binding | `karen-durable-history-restoration.spec.ts`, `kchat-workspace-continuity.spec.ts` |
+| Composer | Persistent draft, per-run provider and agent request, shared input across views | CopilotKit input slot + existing canonical draft/selection context | Switch pane/persona/reload without loss |
+| Persona | Active persona, scope/revision and error truth | Existing selector in CopilotKit slot/toolbar | Authorized selection and scoped response |
+| Models | Backend-reported inventory, request vs executed, fallback | Existing catalog component + CopilotKit component slot | Real provider receipt in live and history |
+| Voice | Browser/local dictation and cancellation | Retain Karen dictation adapters in composer slot unless CopilotKit equivalent proven | Mic permissions, audio, error and interruption |
+| Presentation | Weather/time/research/planner/evidence cards | `useRenderTool`/component slots + canonical `karen.presentation.v1` | Stream, restore, source trust and XSS |
+| Agent activity | Medusa/LangGraph real steps, subagents, planning | CopilotKit tool/activity renderer using actual AG-UI events | Same activity IDs/status, no invented steps |
+| Right rail | Intelligence cards, right scroll, typography parity, responsive behavior | Preserve Karen rail; CopilotKit occupies chat center only | Responsive screenshot/keyboard checks |
+| Approvals | Pending/approve/reject/expire + durable receipts | CopilotKit approval UI; existing ApprovalService backend | One-shot, concurrent, unprivileged negative cases |
+| Plugins and Channels | Enable/disable/uninstall, native cards, identity bindings | Existing PluginKernel + ChannelHost with CopilotKit SDK adapter | Real channel message and tenant/RBAC tests |
+| Accessibility | Labels, focus, contrast, motion, keyboard | Scoped CopilotKit slots/tokens | axe/Playwright manual checks with screenshots |
 
-### CK-02B: Runtime bridge and feature-gate proof
+UX dimensions to inspect: typography scale, density, line lengths, keyboard focus, scroll restoration, sticky footer/rail, action discoverability, empty/loading/degraded/success states, mobile viewport, reduced-motion, locale, screen readers. Screenshots supplement behavioral tests and must not be manipulated to hide differences.
 
-- Trace the FastAPI AG-UI mounted route, feature gate, session/tenant auth, request normalization, runtime event schema, history API and proxy termination.
-- Integrate supported CopilotKit Runtime route or documented self-managed agent adapter using the existing same-origin web entry point and canonical backend AG-UI target.
-- Allow no client-authored tools, arbitrary state, privilege flags, or unvalidated agent IDs.
-- Persist no independent thread/message store and do not invent fallback answers.
-- Validate enable/disable toggles from canonical `RuntimeSettings` and honest UI availability.
-- Proof: authorized stream, refused scope, disabled bridge, disconnect, cancellation, replay, incomplete SSE, actual provider identity.
+## D. Implementation stages and acceptance
 
-### CK-03: Feature-complete CopilotKit chat shell
+### CK-00: Baseline and owner reconciliation
+- Merge/reconcile #553 only after its static verifier tests pass; preserve all existing features and link original PR decisions.
+- Derive actual import, route, manifest, config and state graph from the repository, not filename guesses.
+- Bind feature records to existing architecture and browser tests.
+- Output: a baseline with known `implemented_unverified` vs `verified` distinctions; no production code changes.
 
-- Inventory and migrate every dependency of `KarenAssistantChat.tsx`: provider and agent catalogs, persona, local/browser dictation, history and draft, tool/presentation registry, observed agent activity, context rail, streaming and restoration.
-- Use CopilotKit chat slots and hooks for native equivalent behavior; use Karen-owned wrappers only for unique features.
-- Mount exactly **one** chat renderer controlled by the canonical feature flag during rollout, with no competing active messages, socket or state store.
-- Verify a per-capability before/after contract against assistant-ui on real authenticated paths.
-- Proof: screenshots at desktop/mobile, theme parity, accessible UI, core flows, prompt routing, model selection, real inference, state rehydration.
+### CK-01: SDK and visual compatibility spike
+- In `src/ui_launchers/Karen-AI-Theme/`, validate pinned `@copilotkit/react-core/v2` exports, provider config, built-in `CopilotChat` slots, styles and AG-UI semantics against current React/Next/TS/Tailwind.
+- Use package manager's locked install, without duplicating package managers or unnecessarily adding `@copilotkit/react-ui`.
+- Test SSR boundary, CSP, bundle, css token conversion, dark/light, fonts and breakpoint screenshots.
+- Proof: typecheck, unit tests, build, isolated Playwright captures and import-contract assertions.
+- Rollback: dependency-only revert, no active-mount changes.
 
-### CK-04: Native agentic interactions
+### CK-02: Canonical AG-UI/SDK connection
+- Determine whether pinned v2 frontend speaks directly to `/api/chat/ag-ui`; document exact request/event compatibility and auth propagation.
+- If SDK requires CopilotRuntime facade, use *one thin, local-only gateway* with fixed agent registration, bounded envelope, auth/correlation delegation to backend. No independent generator/orchestrator.
+- Reuse backend `ChatRuntime`, `AGUIEventProjection` and existing Next proxy. Validate `enable_ag_ui_bridge` server-side.
+- Proof: nonstream/stream parity, idempotent cancellation, invalid forwarding, tenant boundary, model request/reported identity, failures and replay.
 
-- Implement scoped UI-visible context and allowlisted agent state; never let UI state become authoritative memory, tenant scope or tool eligibility.
-- Map suggestions, tool renderers, and user approval interrupts onto existing ToolBridge/RuntimePolicy action contracts.
-- Trace the existing approval/transaction owner **before** adding a service/table; require final authorization gate and exactly-once side-effect semantics.
-- Proof: approval, deny, expiry, revocation, race, cancellation, idempotent replay, audit and provenance.
+### CK-03: Parallel rendering comparison without parallel execution
+- Build CopilotKit UI under existing frontend app and guarded single mount. Do not run two mounted agents or both send requests.
+- Preserve SessionProvider, conversation server truth, default persona, model catalog, voice and contextual rail.
+- No independent local conversation cache except transient UI state; use server revision for conflicts.
+- Golden tests: conversation creation/restore, cancel/retry, persona switch, provider request, long thread, draft persistence and accessibility.
 
-### CK-05: Durable generative UI and replay
+### CK-04: One-active-mount CopilotKit cutover
+- Switch `src/app/dashboard/page.tsx` to a single CopilotKit chat mount only after gates pass.
+- Preserve responsive three-column visual arrangement and typography; validate both themes.
+- Record before/after screenshots (desktop/tablet/mobile), measured bundle/latency and unchanged server request semantics.
+- Then delete superseded assistant-ui component imports and adapter-only modules when reference and behavior audits approve.
 
-- Reuse the existing `karen.presentation.v1`/governed presentation contracts rather than invent another renderer registry.
-- Generate evidence-bound typed parts and validate schemas, budgets, trusted sources and user-visible degradation.
-- Store presentations and approval receipts through canonical conversation transactions; restore accurately in CopilotKit history.
-- Proof: stream/non-stream/history equality, malformed/XSS/URL defense, cross-tenant rejection, valid tool receipts.
+### CK-05: Native agentic features and approved actions
+- Implement app-context synchronization, suggestions, CopilotKit tool renderers and interrupts through existing governed runtime action APIs.
+- Scoped frontend state can describe active document/task and selected panel; canonical backend must validate all privileged IDs/content independently.
+- Use ApprovalService and current audit pipeline; no duplicated approval tables.
+- Tests: hostile state, forged approval, stale permissions, revocation, expired nonce, concurrent execution, persistence and replay.
 
-### CK-06: Channels first-class plugin
+### CK-06: Generative presentation
+- Keep one `karen.presentation.v1` registry and backend evidence semantics. Adapt the CopilotKit UI renderer, not the model/persistence schema.
+- Verify compositional component allowlist, payload/URI budgets, source authenticity, no arbitrary model JS, safe text fallback and accessibility.
+- Prove typed data on live AG-UI stream, nonstream, reload and persisted history.
 
-- First discover exact plugin manifest/loader/permissions/install and remove semantics. No guessed directory or second registry.
-- Implement Slack-first through `@copilotkit/channels`, durable identity/tenant mappings and replay-safe runner delivery.
-- Delegate execution to Karen, render platform-native cards, and preserve approvals in canonical action transaction.
-- Make managed delivery an explicit opt-in deployment choice; assess self-hosted runner feasibility.
-- Teams follows only after Slack contracts are stable.
-- Proof: live authenticated platform test, duplication/race and worker-restart burn, revoke/uninstall semantics, browser replay.
+### CK-07: Channels + OpenTag adapter
+- Extend canonical ChannelAdapter in the existing `extensions/plugins/` convention and PluginKernel; use OpenTag as reference, not agent code/runner ownership.
+- Investigate managed CopilotKit Intelligence or self-operated runner explicitly. Default remains local-first with optional managed delivery, not silently required hosted infrastructure.
+- Slack read-only signed event/identity binding first, then native cards, authorized approvals, idempotent write, durable outbox and web-history continuity; Teams afterwards.
+- Gate with `tests/extensions/test_channel_*`, webhook transport tests, `tests/integration/test_channel_claim_concurrency_postgres.py` plus live Slack and browser proof.
 
-### CK-07: Aggressive verified legacy retirement
+### CK-08: Reference-audited legacy retirement
+- Remove dead `@assistant-ui/react` and `@assistant-ui/react-ag-ui` packages, import paths, obsolete renderers/stores, styles, flags and docs when proven superseded.
+- Audit pseudo-provider `integrations/providers/copilotkit_provider.py` and historical `copilotkit/` task/session files for real references and security behavior before retiring.
+- No duplicate channel worker, approval service, runtime/route/store or mirrored CopilotKit UI remains.
+- Document each deletion's purpose, replacement, references, test evidence, risk and rollback; block resurrection with architecture contracts.
 
-- Remove `@assistant-ui/react`, `@assistant-ui/react-ag-ui`, obsolete chat files, wrappers, CSS, tests and lock entries only after CK-03 parity.
-- Reference-audit and collapse historical `copilotkit_provider.py`, `AgentUIService`, in-memory thread/session managers and safety middleware only after consumer/security proof.
-- Preserve migrations, RBAC, authenticated ingress, auditing and canonical recovery code; never blanket-delete.
-- Update architectural docs, menus, feature flags, screenshots, README and CI checks to describe only reachable implementation.
-- Proof: full import/reference graph, zero stale production imports, dynamic registration scans, exact-head tests and observed single active renderer.
+### CK-09: Consumer readiness and distribution
+- Run existing CI and real provider/PostgreSQL/browser/channel tests on exact target commit.
+- Include screenshot review, visual contrast/typography, keyboard/focus, responsive, offline/unavailable, missing auth, stale session, provider down, feature flag off and worker restarts.
+- No release/distribution build until a human validates consumer readiness. No invented success receipts.
 
-## Release acceptance matrix
+## E. Exact proof entry points already in repo
 
-| Dimension | Gate |
-| --- | --- |
-| Capability | Preserve every currently supported user journey; missing feature gets explicit remediation, never silent drop |
-| Styling | Both themes, fonts, density, sidebars, composer, responsive spacing, accessibility, screenshot parity |
-| Runtime | Single ChatRuntime authority; real local model selection, traceable fallback/degraded metadata |
-| Streaming | RUN_STARTED through authentic terminal completion/error; reconnect and replay parity |
-| Security | Tenant/user/session and RBAC enforce from ingress to final durable side effect |
-| Memory | User/assistant transcripts, persona state, conversation and UI receipts persist through existing owners |
-| Agent UI | Verified shared state, suggestions, tool results and human approval interrupts |
-| Plugins | Existing manifest, permission, lifecycle and uninstall ownership |
-| Channels | Signed events, identity mapping, durable retries, native cards, authorized approvals |
-| Cleanup | Remove dead artifacts and packages only after negative import/reference evidence |
-| Observability | Correlation IDs, actual provider/model, event origin, action and persistence receipt |
-| Delivery | Exact-head frontend/backend suites plus actual browser, provider and database proof |
+Backend:
+```bash
+python -m compileall src
+pytest tests/api_routes/test_chat_ag_ui_transport.py tests/services/test_approval_service.py -q
+pytest tests/architecture/test_runtime_approval_authority.py tests/architecture/test_plugin_runtime_authority.py -q
+pytest tests/extensions/test_channel_host_lifecycle.py tests/extensions/test_channel_ingress_service.py tests/extensions/test_channel_execution_service.py -q
+pytest tests/integration/test_channel_claim_concurrency_postgres.py -q
+ruff check src tests
+mypy src
+```
+Integration test environments (Postgres, channel credentials, live model) must be real when used to claim E2E success; a missing test dependency yields `not_run` or `blocked_environment`, never green.
 
-## Explicit anti-patterns
+Frontend (from `src/ui_launchers/Karen-AI-Theme`):
+```bash
+npm run lint
+npm run typecheck
+npx vitest run
+npm run build
+npm run test:e2e -- e2e/karen-durable-history-restoration.spec.ts
+npm run test:e2e -- e2e/kchat-workspace-continuity.spec.ts
+npm run test:e2e -- e2e/ux-user-journeys.spec.ts
+```
+The currently inspected package.json has no `test` script, so run the existing Vitest CLI directly or add one through the canonical package scripts only after validating coverage. Use the resolved package-manager authority and supported CLI arguments in the checked-out project. Review generated screenshots, not just pixel-diff flags.
 
-- Installing CopilotKit as a popup while assistant-ui remains the real chat system.
-- Using `agents__unsafe_dev_only` in production.
-- Treating an AG-UI protocol connection as equivalent to full CopilotKit runtime middleware.
-- Hosting OpenTag's standalone LangGraph runtime as a second Karen execution authority.
-- Upgrading global Tailwind merely for cosmetic convenience without regressions.
-- Building a second session store, prompt builder, policy checker, agent router or approval database.
-- Deleting historic security or persistence code without proven authoritative replacement.
-- Declaring a documentation PR or unit fixture to be working consumer functionality.
+Existing workflow owners: `main-quality-gate.yml`, `chat-system-burn.yml`, `presentation-contract.yml`, `plugin-ci.yml`, `karen-history-browser-acceptance.yml`, `production-auth-security.yml`, `production-first-boot-smoke.yml`. Update their path triggers when new CopilotKit/channels files affect behavior.
 
-## Current proof status
+## F. Decision gates
 
-This document records a source review and upstream documentation comparison. No CopilotKit package has been installed here, no application code was migrated, and no live test/build/browser check has been run by this plan update. Acceptance must remain open.
+1. **Preserve:** if CopilotKit cannot match a Karen feature without weakening the user journey, keep the feature implemented via Karen extension/slot until it can.
+2. **Prefer:** when CopilotKit built-in behavior is equivalent and verified, use it and remove bespoke duplicate UI.
+3. **No accidental second owners:** every new source file must name its canonical module owner and who owns persistence, execution, RBAC and telemetry.
+4. **Local-first:** external channel delivery may be optional; no mandatory CopilotKit-managed dependency for local chat, model execution, memory or core UI.
+5. **No false success:** live request completion, provider identity, persistence and channel delivery claims originate in server receipts.
+6. **Retire:** when both old and new implementation work, do not keep both indefinitely. Complete cutover + deletion with green contract tests.
+7. **Honest status:** docs/plans vs code-installed vs wired vs E2E verified vs consumer-ready are distinct, always.
+
+## G. New CI contract requirements
+
+- Capability impact: relevant old capability tests are automatically selected when source paths change.
+- Forbidden ownership imports: frontend cannot choose provider/fallback or persist memory; routes cannot invoke ungoverned plugins.
+- Dependency lock: no duplicate CopilotKit v1 chat, no orphan assistant-ui packages after cutover, one compatible AG-UI graph.
+- Approval policy: UI cannot report approved write success from a click or HTTP 200 alone.
+- Channel contract: SDK integration cannot open a second inbox/outbox, identity ledger, agent runner or tenant mapper.
+- Browser UX: first run, long conversations, overflow, scroll parity, draft retention and actual screen-reader accessible controls.
+- Release: exact-head tests and manual certification required for consumer-ready state.
+
+## H. References
+
+- CopilotKit v2 API: https://docs.copilotkit.ai/reference/v2
+- CopilotKit v2 chat slots: https://docs.copilotkit.ai/reference/v2/components/CopilotChat
+- CopilotChatView slots: https://docs.copilotkit.ai/reference/v2/components/CopilotChatView
+- CopilotKit CSS: https://docs.copilotkit.ai/agent-spec/custom-look-and-feel/css
+- Channels SDK: https://github.com/CopilotKit/channels-sdk
+- OpenTag: https://github.com/CopilotKit/OpenTag
+- OpenTag setup: https://github.com/CopilotKit/OpenTag/blob/main/setup.md
+
+**Evidence boundary:** Verified source paths and documented upstream behavior; no dependency install, code cutover, test run or UI screenshot claim in this plan.
+
+
+## I. Production Runtime compatibility decision (SDK evidence 2026-10-25)
+
+The official v2 API names the provider `CopilotKitProvider` from
+`@copilotkit/react-core/v2`; it uses `agentId`, not the v1 wrapper's
+`agent` prop. The high-level `CopilotChat` can run when first mounted
+and clears its internal composer after submit. Treat these as concrete
+consumer-journey hazards, not mere styling concerns.
+
+**Do not use the development-only `agents__unsafe_dev_only` direct-agent
+connection in a production migration.** CopilotKit documents that direct
+HttpAgent connections bypass the supported Runtime middleware path and
+lose supported ecosystem features, including threading. Establish the
+supported `@copilotkit/runtime/v2` host using `CopilotRuntime` and
+`createCopilotRuntimeHandler` as a restricted gateway to the existing
+`/api/chat/ag-ui` backend. The SDK gateway is an interaction adapter only.
+
+Before implementation of the gateway, establish these exact contracts:
+
+1. **Per-request credential propagation.** The currently authenticated Karen
+   principal and tenant must be resolved by existing server-auth middleware.
+   Never trust browser-supplied `x-user-id`/`x-tenant-id` or a cached
+   process-global identity. Forward only canonical allowed auth headers and
+   cookies to backend, and scope any SDK agent/middleware state per principal.
+2. **Absolute internal endpoint.** A server-side SDK `HttpAgent` must reach
+   the configured trusted backend base URL rather than a browser-relative
+   `/api/chat/ag-ui`. Do not use user-supplied host or target URLs.
+3. **Thread normalization.** The CopilotKit thread ID must match Karen's
+   owned conversation identity. First-run creation, resumed threads,
+   cancellation and ownership must be tested. No phantom SDK-only threads
+   and no in-memory duplicate canonical transcripts.
+4. **Request compatibility.** Karen's AG-UI endpoint deliberately rejects
+   nonempty client `tools`, `context` and `state`, and accepts only
+   allowlisted `forwardedProps`. The new SDK must not send unaudited shared
+   state or frontend tools into that endpoint. Extend canonical ingestion only
+   with explicit policy-safe input schemas and tests where needed.
+5. **Runtime discovery and shutdown.** Probe the SDK `/api/copilotkit/info`
+   response for known agent configuration and matching multi-route mode,
+   then verify actual authenticated run, cancel, transport failure,
+   backend-disabled response and serialized replay. A healthy `/info`
+   response alone cannot certify chat functionality.
+6. **Local first.** No CopilotKit Intelligence key is mandatory for local
+   chat. Current SDK docs describe tradeoffs between local in-memory
+   runner and managed features. Do not enable a second durable SDK
+   conversation/thread store; preserve Karen's authoritative history.
+7. **SDK/package graph.** Avoid `@copilotkit/react-ui` v1 chat. Use one
+   pinned compatible `@ag-ui/client` version if explicitly imported;
+   current backend/frontend uses 0.0.59 while recent CopilotKit guidance
+   documents version 1.0.2. Run a real `npm ls @ag-ui/client`, lockfile
+   verification and a live stream test before migration.
+
+The migration guard implementation starts in
+[PR #555](https://github.com/agustealo/AI-Karen/pull/555):
+`scripts/architecture/audit_copilotkit_wiring.py` and
+`tests/architecture/test_copilotkit_migration_wiring.py`. These detect
+known architecture regressions but are **not** a substitute for SDK
+installation, live integration or browser proof.
+
+Official versioned references:
+- https://docs.copilotkit.ai/reference/v2
+- https://docs.copilotkit.ai/reference/v2/components/CopilotChat
+- https://docs.copilotkit.ai/backend/runtime-endpoints
+- https://docs.copilotkit.ai/agent-spec
+- https://docs.copilotkit.ai/langgraph-python/troubleshooting/migrate-to-v2
+- https://docs.copilotkit.ai/ag2/copilot-runtime
+
+
+## J. New transport security finding: redirected agent requests
+
+AG-UI issue [#2520](https://github.com/ag-ui-protocol/ag-ui/issues/2520)
+reports that `HttpAgent` 0.0.58 followed 307/308 redirects, potentially
+forwarding an agent-run POST to an unintended origin (including request content
+and non-Authorization headers). This report does **not** establish that Karen's
+currently declared 0.0.59 or a future upgraded dependency is affected; test
+the exact installed version and network runtime.
+
+Mandatory pre-cutover proof:
+- A trusted, config-resolved fixed backend origin with no user-supplied URL.
+- The chosen `HttpAgent` / fetch transport rejects redirects; 301/302/303/307/308
+  MUST NOT reissue the authenticated run to a new origin.
+- Use a controlled hostile-redirect integration test that verifies no body,
+  secret, cookie, tenant header or signed identity leaves the trusted destination.
+- Preserve the existing Next `/api/chat/ag-ui` proxy's `redirect: 'manual'`
+  behavior, terminal stream checks and sanitized authentication forwarding.
+- No global shared authenticated HttpAgent with credentials from a previous
+  request. Use request-scoped identity/agent binding if that is the selected SDK
+  integration approach.
+- Track AG-UI SDK vulnerability advisories and resolved versions before
+  lockfile updates; do not assume a package upgrade alone fixes this.
+
+This is a P0 security gate on the actual gateway implementation, not an
+assertion of a confirmed vulnerability in the deployed Karen environment.
+
+
+## Verified application package versions (preserved from previous plan)
+
+The inspected web package on 2026-10-25 used Next 15.5.23, React 18.3.1, TypeScript 5 and Tailwind ^3.4.1, with assistant-ui 0.15.29, assistant-ui AG-UI 0.0.70 and AG-UI client 0.0.59. These are baseline observations, not dependency resolutions for the new CopilotKit SDK.
