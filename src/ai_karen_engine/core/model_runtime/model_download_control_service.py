@@ -17,6 +17,7 @@ from ai_karen_engine.config.config_asset_loaders import (
     load_model_runtime_discovery_config,
 )
 from ai_karen_engine.config.config_manager import get_config_value, update_config
+from ai_karen_engine.core.model_runtime.model_download_lifecycle import project_model_download_lifecycle
 from ai_karen_engine.config.model_download import (
     ModelDownloadWorkerSettings,
     load_model_download_worker_settings,
@@ -141,6 +142,7 @@ class ModelDownloadJob:
     created_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
     requested_by: Optional[str] = None
+    tenant_id: Optional[str] = None
     trust_remote_code: bool = False
     license_accepted: bool = False
     include_patterns: Optional[list[str]] = None
@@ -484,6 +486,7 @@ class ModelDownloadControlService:
             if isinstance(value, datetime):
                 payload[key] = value.isoformat()
         channel = self._channels.get(str(payload.get("channel_id") or ""))
+        payload["lifecycle"] = project_model_download_lifecycle(payload)
         payload["channel"] = channel.to_dict(
             locked_by_master=self._channel_locked(channel)
         ) if channel is not None else None
@@ -545,6 +548,49 @@ class ModelDownloadControlService:
         await self.initialize()
         rows = await self._repository.list_jobs(status=status, limit=limit)
         return [self._job_payload(row) for row in rows]
+
+    async def list_owned_jobs(
+        self, *, tenant_id: str, user_id: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Privacy-safe owner projection, without admin paths or lease data."""
+        await self.initialize()
+        rows = await self._repository.list_owned_jobs(
+            tenant_id=tenant_id, user_id=user_id, limit=limit
+        )
+        return [
+            {
+                **row,
+                "lifecycle": project_model_download_lifecycle(row),
+                "created_at": row["created_at"].isoformat()
+                if isinstance(row.get("created_at"), datetime)
+                else row.get("created_at"),
+                "updated_at": row["updated_at"].isoformat()
+                if isinstance(row.get("updated_at"), datetime)
+                else row.get("updated_at"),
+            }
+            for row in rows
+        ]
+
+    async def get_owned_job(
+        self, *, job_id: str, tenant_id: str, user_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Never reveal shared worker paths or another tenant's job."""
+        await self.initialize()
+        row = await self._repository.get_owned_job(
+            job_id=job_id, tenant_id=tenant_id, user_id=user_id
+        )
+        if row is None:
+            return None
+        return {
+            **row,
+            "lifecycle": project_model_download_lifecycle(row),
+            "created_at": row["created_at"].isoformat()
+            if isinstance(row.get("created_at"), datetime)
+            else row.get("created_at"),
+            "updated_at": row["updated_at"].isoformat()
+            if isinstance(row.get("updated_at"), datetime)
+            else row.get("updated_at"),
+        }
 
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         await self.initialize()
@@ -661,6 +707,14 @@ class ModelDownloadControlService:
 
     async def start_download(self, request: Mapping[str, Any], user: Mapping[str, Any]) -> dict[str, Any]:
         await self.initialize()
+        if (
+            not str(user.get("tenant_id") or "").strip()
+            or str(user.get("tenant_id")).strip() == "default"
+            or not str(user.get("user_id") or "").strip()
+        ):
+            raise ModelOrchestratorError(
+                E_PERM, "Verified download tenant and owner required"
+            )
         if not self._policy.master_enabled or self._policy.block_new_downloads:
             raise ModelOrchestratorError(
                 E_PERM,
@@ -717,6 +771,7 @@ class ModelDownloadControlService:
             channel_id=validation.channel_id,
             storage_key=validation.storage_key,
             requested_by=str(user.get("user_id") or user.get("username") or "unknown"),
+            tenant_id=str(user.get("tenant_id") or "").strip() or None,
             trust_remote_code=bool(request.get("trust_remote_code", False)),
             license_accepted=bool(request.get("accept_license", False)),
             include_patterns=list(request.get("include_patterns") or []) or None,
@@ -743,6 +798,27 @@ class ModelDownloadControlService:
             E_PERM,
             f"Job cannot be {action}",
             {"job_id": job_id, "status": row.get("status")},
+        )
+
+    async def control_owned_job(
+        self, *, action: str, job_id: str, tenant_id: str, user_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Use the canonical worker state transitions with SQL-atomic ownership."""
+        if action not in ("cancel", "pause", "resume"):
+            raise ValueError("Unsupported model job action")
+        if not job_id or not tenant_id or tenant_id == "default" or not user_id:
+            raise PermissionError("verified_model_download_owner_required")
+        await self.initialize()
+        transition = {
+            "cancel": self._repository.cancel_job,
+            "pause": self._repository.pause_job,
+            "resume": self._repository.resume_job,
+        }[action]
+        updated = await transition(job_id, tenant_id=tenant_id, user_id=user_id)
+        if updated is None:
+            return None
+        return await self.get_owned_job(
+            job_id=job_id, tenant_id=tenant_id, user_id=user_id
         )
 
     async def cancel_job(self, job_id: str) -> dict[str, Any]:
