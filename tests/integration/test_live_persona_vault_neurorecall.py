@@ -1529,11 +1529,13 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             # A ledger row is not proof of legitimate migration provenance.
             assert not same_transaction_receipt.persisted
             assert same_transaction_receipt.persisted_memory_id == replay.memory_id
-            assert same_transaction_receipt == await lookup_legacy_replay_receipt(
-                tenant_id=str(tenant), user_id=str(user),
-                expected_memory_id=replay.memory_id,
-                expected_request_id=replay.request_id,
-            )
+        # Release the caller-owned advisory lock before the standalone
+        # lookup opens its own transaction for the same replay identity.
+        assert same_transaction_receipt == await lookup_legacy_replay_receipt(
+            tenant_id=str(tenant), user_id=str(user),
+            expected_memory_id=replay.memory_id,
+            expected_request_id=replay.request_id,
+        )
         from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
             inspect_locked_legacy_migration_preparation,
         )
