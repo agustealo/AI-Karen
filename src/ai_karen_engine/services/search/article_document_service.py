@@ -82,7 +82,7 @@ class SearchArticleService:
             raise RuntimeError("Article integrity verification failed")
         return data.decode("utf-8")
 
-    async def read_for_chat(self, *, execution_context, article_id: str) -> str | None:
+    async def read_for_chat(self, *, execution_context, article_id: str, source_url: str | None = None) -> str | None:
         """Resolve a browser-supplied research reference for canonical chat.
 
         The caller's authenticated runtime principal, not request metadata,
@@ -96,6 +96,22 @@ class SearchArticleService:
         self._identity(tenant_id, user_id)
         if not isinstance(article_id, str) or not article_id or len(article_id) > 128:
             raise ValueError("Valid article identifier is required")
-        return await self.read(
+        content = await self.read(
             tenant_id=tenant_id, user_id=user_id, article_id=article_id,
         )
+        if content is None or source_url is None:
+            return content
+        # The plugin-provided citation must match stored source provenance;
+        # possession of a valid article ID cannot launder a different URL.
+        source = await self._artifacts.get_metadata(article_id, tenant_id)
+        if not source.success or source.data is None:
+            return None
+        artifact = source.data
+        if (
+            artifact.kind != "search_article"
+            or artifact.user_id != user_id
+            or artifact.deleted_at is not None
+            or artifact.metadata.get("source_url") != source_url
+        ):
+            return None
+        return content
