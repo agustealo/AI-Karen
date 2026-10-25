@@ -6,7 +6,7 @@ const sdk = vi.hoisted(() => ({
   handlers: 0,
 }));
 
-vi.mock("@ag-ui/client", () => ({
+vi.mock("@ag-ui/client-v1", () => ({
   HttpAgent: class {
     constructor(config: { url: string; headers: Record<string, string>; fetch: typeof fetch }) {
       sdk.agents.push(config);
