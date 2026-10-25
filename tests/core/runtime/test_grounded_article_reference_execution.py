@@ -95,8 +95,6 @@ async def test_authorized_scoped_document_reaches_model_budget_gate(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_scoped_evidence_is_composed_via_gateway_with_model_receipt(monkeypatch):
-    from ai_karen_engine.services.response import response_validator
-
     articles = ArticleServiceDouble("Verified scoped article evidence")
     monkeypatch.setattr(repository_factory, "get_runtime_search_article_service", lambda: articles)
     captured = []
@@ -105,7 +103,7 @@ async def test_scoped_evidence_is_composed_via_gateway_with_model_receipt(monkey
         async def generate(self, task):
             captured.append(task)
             return SimpleNamespace(
-                text="The source establishes the result [1].",
+                text="The source establishes the result. https://example.org/article",
                 provider="local-test", model="test-model", degraded=False,
                 runtime_engine="local", engine_id="local", degradation_reason=None,
             )
@@ -116,10 +114,6 @@ async def test_scoped_evidence_is_composed_via_gateway_with_model_receipt(monkey
         def _resolve_chat_generation_max_tokens(self, request, plan):
             return 256
 
-    monkeypatch.setattr(
-        response_validator.ResponseValidator, "validate",
-        lambda self, answer, contract: SimpleNamespace(valid=True, reason=None),
-    )
     plan = SimpleNamespace(
         allowed_plugins=["intelligent-search"], required_capabilities=[],
         forbidden_capabilities=[],
@@ -133,7 +127,7 @@ async def test_scoped_evidence_is_composed_via_gateway_with_model_receipt(monkey
         MeterDouble(allow=True), retrieved(),
     )
     assert answer is not None
-    assert answer[0] == "The source establishes the result [1]."
+    assert answer[0] == "The source establishes the result. https://example.org/article"
     assert answer[1]["actual_provider"] == "local-test"
     assert answer[1]["actual_model"] == "test-model"
     assert answer[1]["response_source"] == "grounded_search_model"
