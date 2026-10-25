@@ -702,6 +702,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             source_record_id=str(source),
         ) is None
         replay = await prepare_governed_legacy_migration_retry(**base)
+        print("persona-migration-stage-5", flush=True)
         # A prepared replay identity is not valid after source deletion.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             await session.execute(text(
@@ -718,6 +719,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             ), {"id": str(source), "tenant": str(tenant), "user": str(user),
                 "content": "Synthetic read-only assembly proof",
                 "kind": "semantic", "created": created.replace(tzinfo=None)})
+        print("persona-migration-stage-1", flush=True)
         # Exercise authenticated ingress with an actual signed access JWT,
         # the existing middleware decoder, and real PostgreSQL evidence.
         import jwt
@@ -1123,6 +1125,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                     runtime_policy=RuntimePolicyEnforcer(),
                 )
         assert replay == await prepare_governed_legacy_migration_retry(**base)
+        print("persona-migration-stage-2", flush=True)
         # Historical writes are disabled even after successful preflight,
         # explicit consent, and a caller-provided capability flag.
         blocked_migration_entry = MemoryEntry(
@@ -1242,6 +1245,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                 ))).scalar_one()
                 original_event.payload = original_payload
         import asyncio
+        print("persona-migration-stage-3", flush=True)
         # Competing canonical NeuroVault retries must resolve through the
         # same durable assertion: identical content replays successfully,
         # conflicting content fails closed without changing stored content.
@@ -1428,6 +1432,7 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
                     ),
                     session=unbound_session,
                 )
+        print("persona-migration-stage-4", flush=True)
         # Caller-owned vault writes stage both ledger rows but never commit.
         # The canonical transaction manager owns rollback on failure.
         staged_id = str(uuid.uuid4())
