@@ -1539,7 +1539,9 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
         from ai_karen_engine.platform.memory.postgres.legacy_persona_source import (
             inspect_locked_legacy_migration_preparation,
         )
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+        async with async_transaction_scope(
+            tenant_id=str(tenant), user_id=str(user),
+        ) as session:
             inspected = await inspect_locked_legacy_migration_preparation(
                 session=session, tenant_id=str(tenant), user_id=str(user),
                 source_record_id=str(source),
