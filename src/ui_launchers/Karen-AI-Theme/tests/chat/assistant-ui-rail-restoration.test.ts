@@ -10,7 +10,11 @@ describe("canonical assistant-ui rail restoration", () => {
     );
     expect(source).toContain('import ConversationContextRail from "@/components/chat/ConversationContextRail"');
     expect(source).toContain('<KarenAgUiRuntime key={currentSession.id} threadId={currentSession.id} />');
-    expect(source).toContain('<ConversationContextRail metadata={loadState === "ready" ? metadata : {}} agentSteps={[]} />');
+    expect(source).toContain('<ConversationContextRail metadata={loadState === "ready" ? metadata : {}} agentSteps={observedSteps} />');
+    expect(source).toContain('projectObservedAgentSteps(observedMessages)');
+    expect(source).toContain('import { projectObservedAgentSteps } from "./observedAgentSteps"');
+    expect(source).toContain('state.thread.messages');
+    expect(source).not.toContain('agentSteps={[]}');
     expect(source).toContain('setLoadState("empty")');
     expect(source).toContain('setMetadata({});');
     expect(source).toContain('(message) => message.role === "assistant",');

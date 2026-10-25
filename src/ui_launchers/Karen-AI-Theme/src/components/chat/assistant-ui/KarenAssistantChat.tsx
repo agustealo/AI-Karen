@@ -34,6 +34,7 @@ import { readOwnedConversationHistory } from "./KarenHistoryRestoration";
 import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
+import { projectObservedAgentSteps } from "./observedAgentSteps";
 import { useSession } from "@/components/chat/SessionProvider";
 import ConversationContextRail from "@/components/chat/ConversationContextRail";
 
@@ -497,8 +498,15 @@ async function readOwnedHistory(conversationId: string) {
   );
 }
 
+/**
+ * Read observed assistant-ui data parts. The AG-UI adapter remains the sole
+ * subscriber/transport; this projection never opens a second event stream.
+ * Unknown activity payloads are ignored, not turned into synthetic successes.
+ */
 function KarenConversationIntelligence({ threadId }: { threadId: string }) {
   const isRunning = useAuiState((state) => state.thread.isRunning);
+  const observedMessages = useAuiState((state) => state.thread.messages);
+  const observedSteps = useMemo(() => projectObservedAgentSteps(observedMessages), [observedMessages]);
   const [metadata, setMetadata] = useState<Record<string, unknown>>({});
   const [loadState, setLoadState] = useState<"loading" | "ready" | "empty" | "unavailable">("loading");
 
@@ -549,7 +557,7 @@ function KarenConversationIntelligence({ threadId }: { threadId: string }) {
           No verified runtime insights were recorded for the latest assistant turn.
         </p>
       )}
-      <ConversationContextRail metadata={loadState === "ready" ? metadata : {}} agentSteps={[]} />
+      <ConversationContextRail metadata={loadState === "ready" ? metadata : {}} agentSteps={observedSteps} />
     </div>
   );
 }
