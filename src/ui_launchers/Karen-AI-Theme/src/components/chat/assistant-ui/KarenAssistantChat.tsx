@@ -500,22 +500,33 @@ async function readOwnedHistory(conversationId: string) {
 function KarenConversationIntelligence({ threadId }: { threadId: string }) {
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const [metadata, setMetadata] = useState<Record<string, unknown>>({});
-  const [loadState, setLoadState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "empty" | "unavailable">("loading");
 
   useEffect(() => {
-    if (isRunning) return;
-    let cancelled = false;
+    // Never display a preceding turn's evidence during execution or conversation reload.
+    setMetadata({});
     setLoadState("loading");
-    void apiClient.get<ConversationResponse>(`/api/conversations/${threadId}`)
+    if (isRunning) return;
+
+    let cancelled = false;
+    void apiClient.get<ConversationResponse>(`/api/conversations/${encodeURIComponent(threadId)}`)
       .then((conversation) => {
         if (cancelled) return;
         if (conversation.id !== threadId || !Array.isArray(conversation.messages)) {
           throw new Error("Conversation identity or messages contract mismatch");
         }
+        // Select the latest assistant turn first. Older receipts must never impersonate it.
         const lastAssistant = [...conversation.messages].reverse().find(
-          (message) => message.role === "assistant" && message.metadata,
+          (message) => message.role === "assistant",
         );
-        setMetadata(lastAssistant?.metadata || {});
+        const latestMetadata = lastAssistant?.metadata;
+        if (!latestMetadata || typeof latestMetadata !== "object" || Array.isArray(latestMetadata) ||
+            Object.keys(latestMetadata).length === 0) {
+          setMetadata({});
+          setLoadState("empty");
+          return;
+        }
+        setMetadata(latestMetadata as Record<string, unknown>);
         setLoadState("ready");
       })
       .catch(() => {
@@ -533,7 +544,12 @@ function KarenConversationIntelligence({ threadId }: { threadId: string }) {
           Conversation insights are unavailable. No runtime details have been inferred.
         </p>
       )}
-      <ConversationContextRail metadata={metadata} agentSteps={[]} />
+      {loadState === "empty" && (
+        <p role="status" className="max-w-[22rem] border-l px-3 py-2 text-xs text-muted-foreground">
+          No verified runtime insights were recorded for the latest assistant turn.
+        </p>
+      )}
+      <ConversationContextRail metadata={loadState === "ready" ? metadata : {}} agentSteps={[]} />
     </div>
   );
 }
