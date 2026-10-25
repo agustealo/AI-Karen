@@ -58,10 +58,16 @@ class AgentCatalogService:
         tenant_visible_ids: Optional[Set[str]] = None,
         rbac_visible_ids: Optional[Set[str]] = None,
         policy_eligible_ids: Optional[Set[str]] = None,
+        require_verified_scope: bool = False,
         include_disabled: bool = False,
         capability_health: Optional[Any] = None,
         admin: bool = False,
     ) -> List[AgentDescriptor]:
+        if require_verified_scope and any(
+            scope is None
+            for scope in (tenant_visible_ids, rbac_visible_ids, policy_eligible_ids)
+        ):
+            raise PermissionError("agent_catalog_eligibility_scope_unverified")
         agents = await self.registry.list_agents()
         out: List[AgentDescriptor] = []
         for reg in agents:

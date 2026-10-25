@@ -39,6 +39,7 @@ class AgentMedusaService:
         tenant_visible_ids: Optional[Any] = None,
         rbac_visible_ids: Optional[Any] = None,
         policy_eligible_ids: Optional[Any] = None,
+        require_verified_scope: bool = False,
         include_disabled: bool = False,
         capability_health: Optional[Any] = None,
         admin: bool = False,
@@ -52,9 +53,10 @@ class AgentMedusaService:
         if not self._initialized:
             await self.initialize()
         return await self.catalog.list_agents(
-            tenant_visible_ids=set(tenant_visible_ids) if tenant_visible_ids else None,
-            rbac_visible_ids=set(rbac_visible_ids) if rbac_visible_ids else None,
-            policy_eligible_ids=set(policy_eligible_ids) if policy_eligible_ids else None,
+            tenant_visible_ids=set(tenant_visible_ids) if tenant_visible_ids is not None else None,
+            rbac_visible_ids=set(rbac_visible_ids) if rbac_visible_ids is not None else None,
+            policy_eligible_ids=set(policy_eligible_ids) if policy_eligible_ids is not None else None,
+            require_verified_scope=require_verified_scope,
             include_disabled=include_disabled,
             capability_health=capability_health,
             admin=admin,
