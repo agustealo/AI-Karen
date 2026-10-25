@@ -274,3 +274,30 @@ Official versioned references:
 - https://docs.copilotkit.ai/agent-spec
 - https://docs.copilotkit.ai/langgraph-python/troubleshooting/migrate-to-v2
 - https://docs.copilotkit.ai/ag2/copilot-runtime
+
+
+## J. New transport security finding: redirected agent requests
+
+AG-UI issue [#2520](https://github.com/ag-ui-protocol/ag-ui/issues/2520)
+reports that `HttpAgent` 0.0.58 followed 307/308 redirects, potentially
+forwarding an agent-run POST to an unintended origin (including request content
+and non-Authorization headers). This report does **not** establish that Karen's
+currently declared 0.0.59 or a future upgraded dependency is affected; test
+the exact installed version and network runtime.
+
+Mandatory pre-cutover proof:
+- A trusted, config-resolved fixed backend origin with no user-supplied URL.
+- The chosen `HttpAgent` / fetch transport rejects redirects; 301/302/303/307/308
+  MUST NOT reissue the authenticated run to a new origin.
+- Use a controlled hostile-redirect integration test that verifies no body,
+  secret, cookie, tenant header or signed identity leaves the trusted destination.
+- Preserve the existing Next `/api/chat/ag-ui` proxy's `redirect: 'manual'`
+  behavior, terminal stream checks and sanitized authentication forwarding.
+- No global shared authenticated HttpAgent with credentials from a previous
+  request. Use request-scoped identity/agent binding if that is the selected SDK
+  integration approach.
+- Track AG-UI SDK vulnerability advisories and resolved versions before
+  lockfile updates; do not assume a package upgrade alone fixes this.
+
+This is a P0 security gate on the actual gateway implementation, not an
+assertion of a confirmed vulnerability in the deployed Karen environment.
