@@ -480,3 +480,24 @@ async def test_approved_specialist_keeps_parent_grants_narrowed():
     assert execution_plan.allowed_agents == ["researcher"]
     assert execution_plan.allowed_tools == []
     assert execution_plan.allowed_plugins == []
+
+
+@pytest.mark.asyncio
+async def test_wildcard_parent_agent_grant_does_not_authorize_specialist():
+    registry = SimpleNamespace(get_agent=AsyncMock(), get_agent_health=AsyncMock())
+    coordinator = MedusaCoordinator(
+        registry=registry,
+        factory=SimpleNamespace(resolve=Mock()),
+    )
+    step = PlanStep(id="step-wildcard", agent_specialist="researcher")
+    plan = _plan()
+    plan.allowed_agents = ["*"]
+    with pytest.raises(PermissionError, match="medusa_step_exceeds_authorized_plan"):
+        await coordinator._execute_step(
+            step,
+            DeepExecutionPlan(request_id="req-1", steps=[step]),
+            _request(),
+            plan,
+        )
+    registry.get_agent.assert_not_awaited()
+    assert step.status is StepStatus.PENDING
