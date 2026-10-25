@@ -509,7 +509,12 @@ function projectObservedAgentSteps(messages: readonly unknown[]): AgentStepEvent
     "agui-activity/KAREN_DEEPAGENTS_PLAN",
     "agui-activity/KAREN_DEEPAGENTS_SUBAGENT",
   ]);
-  for (const rawMessage of messages.slice(-60)) {
+  // Only the active assistant response may contribute live activity. Scanning
+  // previous turns leaks stale mission results into the current request.
+  const latest = messages[messages.length - 1];
+  const activeMessages = latest && typeof latest === "object" &&
+    (latest as Record<string, unknown>).role === "assistant" ? [latest] : [];
+  for (const rawMessage of activeMessages) {
     if (!rawMessage || typeof rawMessage !== "object") continue;
     const message = rawMessage as Record<string, unknown>;
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
@@ -529,9 +534,7 @@ function projectObservedAgentSteps(messages: readonly unknown[]): AgentStepEvent
         ["failed", "failure", "error", "errored"].includes(rawStatus) ? "agent_step_failed" :
         ["complete", "completed", "finished", "success", "succeeded"].includes(rawStatus) ? "agent_step_completed" :
         ["skipped"].includes(rawStatus) ? "agent_step_skipped" : "agent_step_started";
-      const eventId = typeof data.event_id === "string" ? data.event_id :
-        typeof data.eventId === "string" ? data.eventId : "";
-      const key = eventId || `${part.name}:${stepId}`;
+      const key = `${part.name}:${stepId}`;
       const metadata: Record<string, unknown> = {
         activity_category: part.name,
         observed_status: rawStatus || "unknown",
