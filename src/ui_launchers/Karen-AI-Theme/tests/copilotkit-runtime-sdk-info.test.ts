@@ -19,12 +19,17 @@ afterEach(() => {
 describe("CopilotKit pinned SDK discovery", () => {
   it("registers Karen's real SDK agent behind current backend authentication", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      // Capture any unexpected SDK requests for explicit network-policy review.
-      return Response.json({
-        user_id: "user-123",
-        tenant_id: "tenant-456",
-        is_active: true,
-      });
+      if (String(input) === "http://api:8000/api/auth/me") {
+        return Response.json({
+          user_id: "user-123",
+          tenant_id: "tenant-456",
+          is_active: true,
+        });
+      }
+      if (String(input) === "http://api:8000/api/chat/ag-ui/capabilities") {
+        return Response.json({ enabled: true });
+      }
+      throw new Error("Unexpected SDK network destination: " + String(input));
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
@@ -39,6 +44,7 @@ describe("CopilotKit pinned SDK discovery", () => {
     expect(JSON.stringify(info)).toContain("default");
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "http://api:8000/api/auth/me",
+      "http://api:8000/api/chat/ag-ui/capabilities",
     ]);
   });
 
