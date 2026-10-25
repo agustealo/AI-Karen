@@ -11,7 +11,7 @@ import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { ReactNode } from "react";
 import {
   AssistantRuntimeProvider,
-  useAssistantState,
+  useAuiState,
   ActionBarPrimitive,
   AuiIf,
   ComposerPrimitive,
@@ -498,7 +498,7 @@ async function readOwnedHistory(conversationId: string) {
 }
 
 function KarenConversationIntelligence({ threadId }: { threadId: string }) {
-  const isRunning = useAssistantState((state) => state.thread.isRunning);
+  const isRunning = useAuiState((state) => state.thread.isRunning);
   const [metadata, setMetadata] = useState<Record<string, unknown>>({});
   const [loadState, setLoadState] = useState<"loading" | "ready" | "unavailable">("loading");
 
