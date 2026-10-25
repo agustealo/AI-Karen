@@ -125,6 +125,17 @@ type DownloadJob = {
   detected_modality?: string | null;
   install_path?: string | null;
   channel?: DownloadChannel | null;
+  lifecycle?: {
+    phase: string;
+    reason_code: string;
+    artifact_published: boolean;
+    artifact_verified: boolean | null;
+    runtime_registered: boolean | null;
+    runtime_loadable: boolean | null;
+    runtime_healthy: boolean | null;
+    selectable_in_chat: boolean | null;
+    readiness_authority: string;
+  };
 };
 
 type DownloadValidation = {
@@ -2479,6 +2490,9 @@ export default function ModelDownloads({
                         )}
                       </div>
                       <div className="text-xs opacity-90">{job.message}</div>
+                       <p className="mt-1 text-xs opacity-90" aria-label="Model lifecycle evidence">
+                         {job.lifecycle ? `Acquisition: ${job.lifecycle.phase.replaceAll('_', ' ')}. Runtime readiness: ${job.lifecycle.runtime_healthy === true ? 'verified by runtime' : 'not established by download job'}.` : 'Lifecycle evidence unavailable'}
+                       </p>
                     </div>
 
                     <div className="flex items-center gap-1">
