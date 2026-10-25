@@ -63,6 +63,7 @@ describe("Legacy Copilot assist is thin, tenant-safe ingress", () => {
       longTimeout: true,
       retryAttempts: 1,
       retryOnStatusCodes: [],
+      followRedirects: false,
     });
     expect((await response.json()).detail).toBe("Backend unavailable");
   });
