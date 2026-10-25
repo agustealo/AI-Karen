@@ -141,3 +141,42 @@ async def test_scoped_evidence_is_composed_via_gateway_with_model_receipt(monkey
     prompt = str(captured[0].messages)
     assert "Verified scoped article evidence" in prompt
     assert "Untrusted inline fallback must not enter synthesis" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_validation_rejection_does_not_emit_grounded_model_receipt(monkeypatch):
+    from ai_karen_engine.services.response import response_validator
+
+    articles = ArticleServiceDouble("Scoped trusted storage text")
+    monkeypatch.setattr(repository_factory, "get_runtime_search_article_service", lambda: articles)
+
+    class Gateway:
+        async def generate(self, task):
+            return SimpleNamespace(
+                text="Unsupported conclusion", provider="local-test",
+                model="test-model", degraded=False,
+            )
+
+    class RuntimeHarness:
+        _composition = SimpleNamespace(expression_gateway=Gateway())
+
+        def _resolve_chat_generation_max_tokens(self, request, plan):
+            return 256
+
+    monkeypatch.setattr(
+        response_validator.ResponseValidator, "validate",
+        lambda self, answer, contract: SimpleNamespace(
+            valid=False, reason="unsupported_claim",
+        ),
+    )
+    result = await ChatRuntime._synthesize_search_evidence(
+        RuntimeHarness(), request(),
+        SimpleNamespace(
+            intent="search.general", required_capabilities=[],
+            forbidden_capabilities=[], time_budget_ms=10000,
+        ),
+        SimpleNamespace(allowed_plugins=["intelligent-search"]),
+        MeterDouble(allow=True), retrieved(),
+    )
+    assert result is None
+    assert articles.calls == [("owner", "tenant-a", "article-1")]
