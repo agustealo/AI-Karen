@@ -53,9 +53,7 @@ async def get_agent_catalog(
                 "agent_id": agent.agent_id,
                 "name": agent.name,
                 "lifecycle_state": agent.lifecycle_state,
-                "capabilities": list(agent.capabilities),
                 "healthy": agent.healthy,
-                "missing_dependencies": list(agent.missing_dependencies),
                 "eligibility": "runtime_decided_per_request",
             }
             for agent in agents
