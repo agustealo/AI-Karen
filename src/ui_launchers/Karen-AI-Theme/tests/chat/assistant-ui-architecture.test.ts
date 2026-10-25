@@ -198,7 +198,10 @@ describe("shared governed Agent Runtime context", () => {
     expect(sessionSource).toContain("setWorkspaceRunId: (runId: string | null) => void");
     expect(component).toContain("workspace_run_id: workspaceRunId");
     expect(component).toContain("workspaceRunId } = useSession()");
-    expect(component).toContain("forwardedProps: workspaceRunId ? { workspace_run_id: workspaceRunId } : {}");
+    expect(component).toContain("forwardedProps: {");
+    expect(component).toContain("workspace_run_id: workspaceRunId");
+    expect(component).toContain("preferred_llm_provider: modelRequestRef.current.provider");
+    expect(component).toContain("preferred_model: modelRequestRef.current.model");
     expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
   });
 
