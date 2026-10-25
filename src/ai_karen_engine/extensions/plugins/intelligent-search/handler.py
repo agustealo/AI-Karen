@@ -270,17 +270,23 @@ class WebSearchDispatcher(ExtensionBase):
     def _resolve_mode(self, params: Dict[str, Any]) -> str:
         mode = params.get("mode")
 
-        if mode:
-            normalized = mode.lower().replace("-", "_")
-            if normalized in MODE_HANDLER_MAP:
-                return normalized
+        if mode is not None:
+            # Explicit selection is a request contract, not a hint. Reject
+            # unsupported modes rather than silently executing General search.
+            return (
+                mode.strip().lower().replace("-", "_")
+                if isinstance(mode, str) and mode.strip()
+                else "invalid_explicit_mode"
+            )
 
         if "context" in params and isinstance(params["context"], dict):
             context_mode = params["context"].get("mode")
-            if context_mode:
-                normalized = context_mode.lower().replace("-", "_")
-                if normalized in MODE_HANDLER_MAP:
-                    return normalized
+            if context_mode is not None:
+                return (
+                    context_mode.strip().lower().replace("-", "_")
+                    if isinstance(context_mode, str) and context_mode.strip()
+                    else "invalid_explicit_mode"
+                )
 
         manifest_default = self._read_manifest_setting("default_mode")
         if manifest_default:
