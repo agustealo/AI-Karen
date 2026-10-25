@@ -60,6 +60,12 @@ export const IntelligentSearchApi = {
       throw new Error(envelope.error);
     }
 
+    // A plugin execution failure may still contain response-shaped diagnostics.
+    // Never mistake those diagnostics for successful search evidence.
+    if (envelope?.success === false) {
+      throw new Error(envelope.message || 'Search could not be completed. Please try again.');
+    }
+
     if (envelope?.result !== undefined) {
       return normalizeSearchResponse(envelope.result);
     }
