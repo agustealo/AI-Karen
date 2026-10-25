@@ -208,3 +208,69 @@ Existing workflow owners: `main-quality-gate.yml`, `chat-system-burn.yml`, `pres
 - OpenTag setup: https://github.com/CopilotKit/OpenTag/blob/main/setup.md
 
 **Evidence boundary:** Verified source paths and documented upstream behavior; no dependency install, code cutover, test run or UI screenshot claim in this plan.
+
+
+## I. Production Runtime compatibility decision (SDK evidence 2026-10-25)
+
+The official v2 API names the provider `CopilotKitProvider` from
+`@copilotkit/react-core/v2`; it uses `agentId`, not the v1 wrapper's
+`agent` prop. The high-level `CopilotChat` can run when first mounted
+and clears its internal composer after submit. Treat these as concrete
+consumer-journey hazards, not mere styling concerns.
+
+**Do not use the development-only `agents__unsafe_dev_only` direct-agent
+connection in a production migration.** CopilotKit documents that direct
+HttpAgent connections bypass the supported Runtime middleware path and
+lose supported ecosystem features, including threading. Establish the
+supported `@copilotkit/runtime/v2` host using `CopilotRuntime` and
+`createCopilotRuntimeHandler` as a restricted gateway to the existing
+`/api/chat/ag-ui` backend. The SDK gateway is an interaction adapter only.
+
+Before implementation of the gateway, establish these exact contracts:
+
+1. **Per-request credential propagation.** The currently authenticated Karen
+   principal and tenant must be resolved by existing server-auth middleware.
+   Never trust browser-supplied `x-user-id`/`x-tenant-id` or a cached
+   process-global identity. Forward only canonical allowed auth headers and
+   cookies to backend, and scope any SDK agent/middleware state per principal.
+2. **Absolute internal endpoint.** A server-side SDK `HttpAgent` must reach
+   the configured trusted backend base URL rather than a browser-relative
+   `/api/chat/ag-ui`. Do not use user-supplied host or target URLs.
+3. **Thread normalization.** The CopilotKit thread ID must match Karen's
+   owned conversation identity. First-run creation, resumed threads,
+   cancellation and ownership must be tested. No phantom SDK-only threads
+   and no in-memory duplicate canonical transcripts.
+4. **Request compatibility.** Karen's AG-UI endpoint deliberately rejects
+   nonempty client `tools`, `context` and `state`, and accepts only
+   allowlisted `forwardedProps`. The new SDK must not send unaudited shared
+   state or frontend tools into that endpoint. Extend canonical ingestion only
+   with explicit policy-safe input schemas and tests where needed.
+5. **Runtime discovery and shutdown.** Probe the SDK `/api/copilotkit/info`
+   response for known agent configuration and matching multi-route mode,
+   then verify actual authenticated run, cancel, transport failure,
+   backend-disabled response and serialized replay. A healthy `/info`
+   response alone cannot certify chat functionality.
+6. **Local first.** No CopilotKit Intelligence key is mandatory for local
+   chat. Current SDK docs describe tradeoffs between local in-memory
+   runner and managed features. Do not enable a second durable SDK
+   conversation/thread store; preserve Karen's authoritative history.
+7. **SDK/package graph.** Avoid `@copilotkit/react-ui` v1 chat. Use one
+   pinned compatible `@ag-ui/client` version if explicitly imported;
+   current backend/frontend uses 0.0.59 while recent CopilotKit guidance
+   documents version 1.0.2. Run a real `npm ls @ag-ui/client`, lockfile
+   verification and a live stream test before migration.
+
+The migration guard implementation starts in
+[PR #555](https://github.com/agustealo/AI-Karen/pull/555):
+`scripts/architecture/audit_copilotkit_wiring.py` and
+`tests/architecture/test_copilotkit_migration_wiring.py`. These detect
+known architecture regressions but are **not** a substitute for SDK
+installation, live integration or browser proof.
+
+Official versioned references:
+- https://docs.copilotkit.ai/reference/v2
+- https://docs.copilotkit.ai/reference/v2/components/CopilotChat
+- https://docs.copilotkit.ai/backend/runtime-endpoints
+- https://docs.copilotkit.ai/agent-spec
+- https://docs.copilotkit.ai/langgraph-python/troubleshooting/migrate-to-v2
+- https://docs.copilotkit.ai/ag2/copilot-runtime
