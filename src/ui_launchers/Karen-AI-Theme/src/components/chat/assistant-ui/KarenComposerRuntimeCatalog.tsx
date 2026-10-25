@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
 import type { RuntimeProviderCatalogResponse } from "@/lib/model-runtime-inventory";
 
-/** A request hint only: backend validates every model selection. */
-export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, onSelectionChange }: {
-  selectedProvider: string;
-  selectedModel: string;
-  onSelectionChange: (provider: string, model: string) => void;
+/** Catalog visibility is not authority to select a model or execute a run. */
+export type ComposerModelRequest = { provider: string; model: string } | null;
+export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
+  selection: ComposerModelRequest;
+  onSelectionChange: (selection: ComposerModelRequest) => void;
 }) {
   const [catalog, setCatalog] = useState<RuntimeProviderCatalogResponse | null>(null);
   const [error, setError] = useState(false);
@@ -25,11 +25,10 @@ export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, o
   useEffect(() => {
     let cancelled = false;
     apiClient.get<{ agents: Array<{ agent_id: string; name: string; lifecycle_state: string; healthy: boolean }> }>("/api/agent-runtime/catalog")
-      .then((result) => {
-        if (!cancelled) {
-          if (!Array.isArray(result.agents)) throw new Error("Invalid agent catalog");
-          setAgents(result.agents);
-        }
+      .then((data) => {
+        if (cancelled) return;
+        if (!data || !Array.isArray(data.agents)) throw new Error("Invalid agent catalog");
+        setAgents(data.agents.filter((agent) => typeof agent.agent_id === "string" && typeof agent.name === "string"));
       })
       .catch(() => { if (!cancelled) setAgentCatalogError(true); });
     return () => { cancelled = true; };
@@ -39,22 +38,32 @@ export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, o
   const providers = catalog.providers.filter((provider) => provider.enabled === true && provider.allowed_for_current_user !== false);
   return <section aria-label="Runtime provider discovery" className="space-y-2">
     <h4 className="text-sm font-medium">Providers and models</h4>
-    <p className="text-xs text-muted-foreground">Select a runtime-reported provider and model, or use automatic routing. The backend remains authoritative.</p>
-    <label htmlFor="karen-chat-provider" className="block font-medium">Provider</label>
-    <select id="karen-chat-provider" value={selectedProvider} onChange={(event) => onSelectionChange(event.target.value, "")} className="w-full rounded-md border border-input bg-background p-2">
-      <option value="">Automatic (runtime default)</option>
-      {providers.filter((provider) => provider.configured !== false && provider.healthy !== false).map((provider) =>
-        <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+    <label htmlFor="karen-model-request" className="block text-xs text-muted-foreground">Next message routing request</label>
+    <select id="karen-model-request" aria-label="Requested provider and model"
+      value={selection ? JSON.stringify([selection.provider, selection.model]) : ""}
+      onChange={(event) => {
+        if (!event.target.value) { onSelectionChange(null); return; }
+        const [provider, model] = JSON.parse(event.target.value) as [string, string];
+        const item = providers.find((entry) => entry.id === provider);
+        if (!item || item.healthy !== true || item.configured !== true ||
+          !item.models?.some((entry) => entry.id === model && entry.available === true)) {
+          onSelectionChange(null);
+          return;
+        }
+        onSelectionChange({ provider, model });
+      }}
+      className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm">
+      <option value="">Automatic routing (Karen default)</option>
+      {providers.filter((provider) => provider.configured === true && provider.healthy === true).map((provider) =>
+        (provider.models || []).filter((model) => model.available === true).map((model) =>
+          <option key={provider.id + "/" + model.id} value={JSON.stringify([provider.id, model.id])}>
+            {provider.label}: {model.label}
+          </option>
+        )
+      )}
     </select>
-    {selectedProvider && <>
-      <label htmlFor="karen-chat-model" className="block font-medium">Model</label>
-      <select id="karen-chat-model" value={selectedModel} onChange={(event) => onSelectionChange(selectedProvider, event.target.value)} className="w-full rounded-md border border-input bg-background p-2">
-        <option value="">Provider default</option>
-        {(providers.find((provider) => provider.id === selectedProvider)?.models || [])
-          .filter((model) => model.available === true)
-          .map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
-      </select>
-    </>}
+    {selection && <p className="text-xs text-muted-foreground">Requested only. ChatRuntime may reject or route differently under policy.</p>}
+    <p className="text-xs text-muted-foreground">Options come from the backend catalog. ChatRuntime validates each execution request.</p>
     {providers.length === 0 ? <p className="text-sm text-muted-foreground">No enabled providers reported.</p> :
       <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
         {providers.map((provider) => <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
@@ -73,15 +82,15 @@ export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, o
           </details>}
         </li>)}
       </ul>}
-    <div className="mt-3 border-t border-border/60 pt-2">
+    <section aria-label="Registered agent discovery" className="border-t border-border/60 pt-3">
       <h4 className="text-sm font-medium">Registered agents</h4>
-      <p className="text-xs text-muted-foreground">Discovery only. These are catalog entries, not authorized execution choices. RuntimePolicy eligibility and Medusa routing must be verified before an agent selector can be enabled.</p>
+      <p className="text-xs text-muted-foreground">Discovery only. Catalog health does not grant execution access. CORTEX and RuntimePolicy decide eligibility per request.</p>
       {agentCatalogError ? <p role="status" className="text-xs text-muted-foreground">Agent catalog unavailable.</p> :
-        <ul className="mt-1 space-y-1 text-xs">{agents.map((agent) =>
-          <li key={agent.agent_id} className="flex justify-between gap-2">
+        <ul className="mt-2 space-y-1 text-xs">{agents.map((agent) =>
+          <li key={agent.agent_id} className="flex justify-between gap-2 rounded border border-border/50 px-2 py-1.5">
             <span>{agent.name}</span>
-            <span className="text-muted-foreground">{agent.lifecycle_state === "active" && agent.healthy ? "Catalog healthy; eligibility unverified" : "Not ready"}</span>
+            <span className="text-muted-foreground">{agent.lifecycle_state === "active" && agent.healthy === true ? "Registered and healthy; eligibility unverified" : "Not ready"}</span>
           </li>)}</ul>}
-    </div>
+    </section>
   </section>;
 }
