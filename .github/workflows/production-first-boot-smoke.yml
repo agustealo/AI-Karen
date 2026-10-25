@@ -37,6 +37,10 @@ on:
       - "tests/architecture/test_first_run_system_contract.py"
       - ".github/workflows/production-first-boot-smoke.yml"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
