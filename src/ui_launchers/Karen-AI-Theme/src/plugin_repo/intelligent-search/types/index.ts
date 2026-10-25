@@ -110,6 +110,7 @@ export interface IntelligentSearchResponse {
   summary: string;
   query?: string;
   mode?: SearchModeId | string;
+  status?: string;
   provider?: string;
   total_results?: number;
   search_time?: number;
