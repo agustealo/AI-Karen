@@ -3,11 +3,13 @@ import { expect, test } from '@playwright/test';
 test('cancelling search aborts the browser request and ignores late results', async ({ page }) => {
   let requestStarted!: () => void;
   const started = new Promise<void>((resolve) => { requestStarted = resolve; });
-  let requestFailed!: () => void;
-  const failed = new Promise<void>((resolve) => { requestFailed = resolve; });
+  let requestFailed!: (reason: string) => void;
+  const failed = new Promise<string>((resolve) => { requestFailed = resolve; });
 
   page.on('requestfailed', (request) => {
-    if (request.url().includes('/api/plugins/execute')) requestFailed();
+    if (request.url().includes('/api/plugins/execute')) {
+      requestFailed(request.failure()?.errorText ?? 'unknown');
+    }
   });
 
   await page.route('**/api/plugins/execute', async (route) => {
@@ -34,6 +36,10 @@ test('cancelling search aborts the browser request and ignores late results', as
   await started;
   await page.getByRole('button', { name: 'Cancel search' }).click();
   await expect(page.getByText('Cancelled result must not render')).not.toBeVisible();
-  await Promise.race([failed, new Promise<void>(resolve => setTimeout(resolve, 2500))]);
+  const failureReason = await Promise.race([
+    failed,
+    new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Search HTTP request was not aborted')), 2500)),
+  ]);
+  expect(failureReason).toMatch(/abort|cancel|ERR_FAILED/i);
   await expect(page.getByRole('button', { name: 'Cancel search' })).not.toBeVisible();
 });
