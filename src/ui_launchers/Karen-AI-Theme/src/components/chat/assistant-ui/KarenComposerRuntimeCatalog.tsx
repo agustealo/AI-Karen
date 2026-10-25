@@ -75,12 +75,12 @@ export function KarenComposerRuntimeCatalog({ selectedProvider, selectedModel, o
       </ul>}
     <div className="mt-3 border-t border-border/60 pt-2">
       <h4 className="text-sm font-medium">Registered agents</h4>
-      <p className="text-xs text-muted-foreground">Discovery only. Selecting a specialist requires runtime eligibility and an execution contract, so agents are not yet selectable here.</p>
+      <p className="text-xs text-muted-foreground">Discovery only. These are catalog entries, not authorized execution choices. RuntimePolicy eligibility and Medusa routing must be verified before an agent selector can be enabled.</p>
       {agentCatalogError ? <p role="status" className="text-xs text-muted-foreground">Agent catalog unavailable.</p> :
         <ul className="mt-1 space-y-1 text-xs">{agents.map((agent) =>
           <li key={agent.agent_id} className="flex justify-between gap-2">
             <span>{agent.name}</span>
-            <span className="text-muted-foreground">{agent.lifecycle_state === "active" && agent.healthy ? "Registered" : "Unavailable"}</span>
+            <span className="text-muted-foreground">{agent.lifecycle_state === "active" && agent.healthy ? "Catalog healthy; eligibility unverified" : "Not ready"}</span>
           </li>)}</ul>}
     </div>
   </section>;
