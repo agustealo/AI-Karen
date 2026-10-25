@@ -2706,30 +2706,40 @@ class ChatRuntime:
             parsed = urlsplit(url)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                 continue
-            passage = str(item.get("content") or item.get("markdown") or "")[:1000]
             article_id = item.get("article_id")
-            if authorized_source and isinstance(article_id, str) and 0 < len(article_id) <= 128:
+            if article_id is not None:
+                # Stored references must never fall through to caller-supplied
+                # inline text when the principal, plan, or artifact lookup fails.
+                if not (
+                    authorized_source
+                    and isinstance(article_id, str)
+                    and 0 < len(article_id) <= 128
+                ):
+                    continue
                 try:
                     if article_service is None:
                         from ai_karen_engine.services.database.repositories.repository_factory import (
                             get_runtime_search_article_service,
                         )
                         article_service = get_runtime_search_article_service()
-                    if article_service is not None:
-                        scoped_text = await article_service.read_for_chat(
-                            execution_context=request.context, article_id=article_id,
-                        )
-                        if scoped_text:
-                            passage = scoped_text[:1000]
+                    if article_service is None:
+                        continue
+                    scoped_text = await article_service.read_for_chat(
+                        execution_context=request.context, article_id=article_id,
+                    )
+                    if not scoped_text:
+                        continue
+                    passage = scoped_text[:1000]
                 except (PermissionError, ValueError):
-                    # Do not turn an inaccessible artifact into a model input.
-                    passage = ""
+                    continue
                 except Exception as exc:
                     logger.warning("search_article_reference_unavailable", extra={
                         "correlation_id": request.context.correlation_id,
                         "error_type": type(exc).__name__,
                     })
-                    passage = ""
+                    continue
+            else:
+                passage = str(item.get("content") or item.get("markdown") or "")[:1000]
             if passage:
                 sources.append({"url": url, "content": passage, "evidence_level": "fetched_page"})
             if len(sources) >= 4:
