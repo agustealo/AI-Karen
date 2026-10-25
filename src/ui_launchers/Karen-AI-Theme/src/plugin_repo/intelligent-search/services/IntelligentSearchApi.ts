@@ -19,6 +19,16 @@ function isSearchResponse(value: unknown): value is IntelligentSearchResponse {
 
 function normalizeSearchResponse(value: unknown): IntelligentSearchResponse {
   if (isSearchResponse(value)) {
+    // The plugin envelope can be HTTP-successful while capability execution
+    // failed. Honor execution truth rather than rendering diagnostics as results.
+    const status = typeof value.status === 'string' ? value.status.toLowerCase() : '';
+    if (status === 'error' || status === 'failed' || value.can_execute === false && value.reason) {
+      throw new Error(
+        typeof value.reason === 'string' && value.reason.trim()
+          ? value.reason
+          : 'The requested search capability is unavailable. Please retry.'
+      );
+    }
     return value;
   }
 
