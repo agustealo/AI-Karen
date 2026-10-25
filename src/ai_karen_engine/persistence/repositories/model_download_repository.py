@@ -439,6 +439,25 @@ class ModelDownloadRepository:
             )
             return [dict(row) for row in result.mappings().all()]
 
+    async def get_owned_job(
+        self, *, job_id: str, tenant_id: str, user_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Resolve a single job with ownership enforced by PostgreSQL."""
+        if not job_id or not tenant_id or tenant_id == "default" or not user_id:
+            raise PermissionError("verified_model_download_owner_required")
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text("""
+                    SELECT job_id, model_id, revision, channel_id, status,
+                           progress, created_at, updated_at
+                    FROM public.model_download_jobs
+                    WHERE job_id = :job_id AND tenant_id = :tenant_id
+                      AND requested_by = :user_id
+                """),
+                {"job_id": job_id, "tenant_id": tenant_id, "user_id": user_id},
+            )
+            return _mapping(result.mappings().first())
+
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         async with async_transaction_scope() as session:
             result = await session.execute(
