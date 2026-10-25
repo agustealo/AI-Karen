@@ -17,31 +17,38 @@ export function useIntelligentSearch() {
   const { buildPayload } = useSearchPayload();
   const requestSequence = useRef(0);
   const mounted = useRef(true);
+  const activeRequest = useRef<AbortController | null>(null);
+
+  const invalidatePending = useCallback(() => {
+    requestSequence.current += 1;
+    activeRequest.current?.abort();
+    activeRequest.current = null;
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      requestSequence.current += 1;
+      invalidatePending();
     };
-  }, []);
+  }, [invalidatePending]);
 
   const setQuery = useCallback((query: string) => {
-    requestSequence.current += 1;
+    invalidatePending();
     setState((prev) => ({ ...prev, query, isLoading: false, response: null, error: null }));
-  }, []);
+  }, [invalidatePending]);
 
   const setMode = useCallback((mode: SearchModeId) => {
-    requestSequence.current += 1;
+    invalidatePending();
     setState((prev) => ({ ...prev, mode, options: {}, isLoading: false, response: null, error: null }));
-  }, []);
+  }, [invalidatePending]);
 
   const updateOptions = useCallback((newOptions: Partial<IntelligentSearchOptions>) => {
-    requestSequence.current += 1;
+    invalidatePending();
     // Keep the last completed evidence visible while the user adjusts settings.
     // Invalidate any in-flight execution so its result cannot overwrite this state.
     setState((prev) => ({ ...prev, options: { ...prev.options, ...newOptions }, isLoading: false, error: null }));
-  }, []);
+  }, [invalidatePending]);
 
   const executeSearch = useCallback(async () => {
     if (!state.query.trim() && !['weather', 'stock_market'].includes(state.mode)) {
@@ -49,16 +56,20 @@ export function useIntelligentSearch() {
       return;
     }
 
-    const requestId = ++requestSequence.current;
+    invalidatePending();
+    const requestId = requestSequence.current;
+    const controller = new AbortController();
+    activeRequest.current = controller;
     setState((prev) => ({ ...prev, isLoading: true, error: null, response: null }));
 
     try {
       const payload = buildPayload(state.mode, state.query, state.options);
-      const response = await IntelligentSearchApi.executeSearch(payload);
+      const response = await IntelligentSearchApi.executeSearch(payload, controller.signal);
       if (mounted.current && requestId === requestSequence.current) {
         setState((prev) => ({ ...prev, isLoading: false, response }));
       }
     } catch (error: unknown) {
+      if (controller.signal.aborted) return;
       if (mounted.current && requestId === requestSequence.current) {
         setState((prev) => ({
           ...prev,
@@ -66,13 +77,15 @@ export function useIntelligentSearch() {
           error: error instanceof Error ? error : new Error(String(error))
         }));
       }
+    } finally {
+      if (activeRequest.current === controller) activeRequest.current = null;
     }
-  }, [state.query, state.mode, state.options, buildPayload]);
+  }, [state.query, state.mode, state.options, buildPayload, invalidatePending]);
 
   const resetSearch = useCallback(() => {
-    requestSequence.current += 1;
+    invalidatePending();
     setState((prev) => ({ ...prev, query: '', isLoading: false, error: null, response: null }));
-  }, []);
+  }, [invalidatePending]);
 
   return {
     state,
