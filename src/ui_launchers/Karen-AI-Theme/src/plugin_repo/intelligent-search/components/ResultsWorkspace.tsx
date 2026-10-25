@@ -33,6 +33,14 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
     'No retrieved preview available.';
   const featuredHref = featuredItem?.url || '';
   const hasEvidence = sourceCount > 0 || resultCount > 0;
+  const weatherData = response?.mode === 'weather' && response.extractedData &&
+    typeof response.extractedData === 'object' ? response.extractedData : null;
+  const measuredTemperature = weatherData?.temperature_f;
+  const hasWeatherObservation = typeof measuredTemperature === 'number' &&
+    Number.isFinite(measuredTemperature) &&
+    typeof weatherData?.observed_at === 'string' &&
+    typeof weatherData?.location === 'string' &&
+    (response?.sources?.length ?? 0) > 0;
   const failedExecution = response?.metadata?.degraded === true && response?.status === 'error';
   const searchFailure = response?.status === 'error' || response?.can_execute === false && response?.reason;
   const failureMessage = typeof response?.reason === 'string' ? response.reason : 'The requested live information is unavailable. Please retry or refine your search.';
@@ -111,6 +119,21 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
           <SignalTile label="Retrieved chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
         </div></details>
       </div>
+
+      {hasWeatherObservation && weatherData && (
+        <section aria-label="Weather observation" className="relative mx-4 mt-4 rounded-2xl border border-border/60 bg-card p-5 lg:mx-6">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Live provider observation</p>
+          <h3 className="mt-2 text-lg font-semibold text-foreground">{String(weatherData.location)}</h3>
+          <p className="mt-2 text-3xl font-semibold text-foreground">{measuredTemperature} °F</p>
+          <p className="mt-2 text-sm text-muted-foreground">Provider timestamp: {String(weatherData.observed_at)} {typeof weatherData.timezone === 'string' ? weatherData.timezone : ''}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Structured weather data, not an AI-generated forecast explanation.</p>
+          {response.sources?.[0]?.url?.startsWith('https://') && (
+            <a href={response.sources[0].url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-sm text-primary underline">
+              View weather data provider
+            </a>
+          )}
+        </section>
+      )}
 
       <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
         style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>
