@@ -43,6 +43,9 @@ def _dispatcher_module():
     scope = {}
     exec(compile(minimal_tree, str(path), "exec"), scope)
     scope["MODE_HANDLER_MAP"] = known_modes
+    scope["resolve_capability_decision"] = lambda query: type(
+        "Decision", (), {"intent": "search.weather" if query == "weather in Detroit" else "general.chat"}
+    )()
     return scope["Resolver"]()
 
 
@@ -65,3 +68,10 @@ def test_explicit_valid_modes_preserve_requested_selection():
 def test_context_mode_cannot_silently_fall_back():
     resolver = _dispatcher_module()
     assert resolver._resolve_mode({"context": {"mode": "not_supported"}}) == "not_supported"
+
+
+def test_auto_selection_uses_cortex_decision_and_explicit_general_is_respected():
+    resolver = _dispatcher_module()
+    assert resolver._resolve_mode({"query": "weather in Detroit"}) == "weather"
+    assert resolver._resolve_mode({"mode": "auto", "query": "weather in Detroit"}) == "weather"
+    assert resolver._resolve_mode({"mode": "general", "query": "weather in Detroit"}) == "general"
