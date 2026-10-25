@@ -316,7 +316,7 @@ async def test_jobs_are_repository_backed_without_process_local_lifecycle_author
             "model_id": "test-owner/test-model",
             "channel_id": "core_runtime_transformers",
         },
-        {"user_id": "test-user"},
+        {"user_id": "test-user", "tenant_id": "test-tenant"},
     )
 
     assert "_jobs" not in service.__dict__
@@ -616,7 +616,7 @@ async def test_start_download_pins_reviewed_sha_but_keeps_main_install_slot(
             "validated_revision": "resolved-sha-123",
             "channel_id": "core_runtime_transformers",
         },
-        {"user_id": "test-user"},
+        {"user_id": "test-user", "tenant_id": "test-tenant"},
     )
 
     assert job["revision"] == "resolved-sha-123"
@@ -652,7 +652,7 @@ async def test_start_download_rejects_changed_reviewed_revision(
                 "validated_revision": "reviewed-sha",
                 "channel_id": "core_runtime_transformers",
             },
-            {"user_id": "test-user"},
+            {"user_id": "test-user", "tenant_id": "test-tenant"},
         )
 
 
@@ -970,7 +970,7 @@ async def test_every_curated_recommended_model_queues_with_verified_license_and_
                 "accept_license": True,
                 "include_patterns": item.get("include_patterns") or [],
             },
-            {"user_id": "authorized-test-user"},
+            {"user_id": "authorized-test-user", "tenant_id": "test-tenant"},
         )
         assert job["status"] == "queued"
         assert job["model_id"] == item["model_id"]
@@ -1006,7 +1006,7 @@ async def test_curated_recommended_model_does_not_queue_without_acknowledgement(
                 "validated_revision": "0123456789abcdef0123456789abcdef01234567",
                 "accept_license": False,
             },
-            {"user_id": "authorized-test-user"},
+            {"user_id": "authorized-test-user", "tenant_id": "test-tenant"},
         )
 
 
