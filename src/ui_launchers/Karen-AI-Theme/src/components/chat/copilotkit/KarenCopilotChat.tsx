@@ -1,6 +1,7 @@
 "use client";
 
 import { CopilotChat, CopilotKitProvider } from "@copilotkit/react-core/v2";
+import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
 
 const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -60,13 +61,15 @@ export function KarenCopilotChat({
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
     >
       <CopilotKitProvider runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
-        <CopilotChat
-          agentId="default"
-          threadId={conversationId}
-          labels={{
-            chatInputPlaceholder: "Message Karen...",
-          }}
-        />
+        <KarenCopilotHistoryGate conversationId={conversationId}>
+          <CopilotChat
+            agentId="default"
+            threadId={conversationId}
+            labels={{
+              chatInputPlaceholder: "Message Karen...",
+            }}
+          />
+        </KarenCopilotHistoryGate>
       </CopilotKitProvider>
     </section>
   );
