@@ -13,6 +13,8 @@ on:
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'src/ai_karen_engine/services/search/article_document_service.py'
       - 'src/ai_karen_engine/services/response/response_validator.py'
+      - 'tests/api_routes/chat/test_conversation_structured_content_response.py'
+      - 'tests/core/runtime/test_conversation_runtime_gateway.py'
       - 'tests/core/runtime/test_grounded_article_reference_execution.py'
       - 'tests/core/runtime/test_search_answer_composition_status.py'
       - 'tests/services/test_search_article_chat_reference.py'
@@ -36,6 +38,8 @@ on:
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'src/ai_karen_engine/services/search/article_document_service.py'
       - 'src/ai_karen_engine/services/response/response_validator.py'
+      - 'tests/api_routes/chat/test_conversation_structured_content_response.py'
+      - 'tests/core/runtime/test_conversation_runtime_gateway.py'
       - 'tests/core/runtime/test_grounded_article_reference_execution.py'
       - 'tests/core/runtime/test_search_answer_composition_status.py'
       - 'tests/services/test_search_article_chat_reference.py'
@@ -161,6 +165,8 @@ jobs:
         run: |
           pytest \
             tests/extensions/ \
+            tests/api_routes/chat/test_conversation_structured_content_response.py \
+            tests/core/runtime/test_conversation_runtime_gateway.py \
             tests/core/runtime/test_grounded_article_reference_execution.py \
             tests/core/runtime/test_search_answer_composition_status.py \
             tests/services/test_search_article_chat_reference.py \
