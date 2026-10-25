@@ -41,7 +41,7 @@
   },
   "permissions": {
     "network_access": [
-      "api.telegram.org"
+      "outbound_https"
     ]
   },
   "rbac": {
