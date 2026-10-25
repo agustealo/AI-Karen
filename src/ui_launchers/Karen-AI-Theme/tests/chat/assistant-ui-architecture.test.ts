@@ -210,3 +210,19 @@ describe("shared governed Agent Runtime context", () => {
     expect(sessionSource).toContain("setWorkspaceRunId(null);");
   });
 });
+
+
+describe("Medusa discovery uses existing canonical runtime catalog", () => {
+  it("renders registered agents as non-authoritative discovery", () => {
+    const catalog = readFileSync(
+      resolve(process.cwd(), "src/components/chat/assistant-ui/KarenComposerRuntimeCatalog.tsx"),
+      "utf8",
+    );
+    expect(catalog).toContain('"/api/agent-runtime/catalog"');
+    expect(catalog).toContain("Discovery only.");
+    expect(catalog).toContain("eligibility unverified");
+    expect(catalog).not.toContain("preferred_agent_id:");
+    expect(catalog).not.toContain("executeAgent(");
+    expect(catalog).toContain("ComposerModelRequest");
+  });
+});

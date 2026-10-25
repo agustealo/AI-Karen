@@ -11,6 +11,8 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
 }) {
   const [catalog, setCatalog] = useState<RuntimeProviderCatalogResponse | null>(null);
   const [error, setError] = useState(false);
+  const [agents, setAgents] = useState<Array<{ agent_id: string; name: string; lifecycle_state: string; healthy: boolean }>>([]);
+  const [agentCatalogError, setAgentCatalogError] = useState(false);
   useEffect(() => {
     let cancelled = false;
     apiClient.getRuntimeProviderCatalog().then((data) => {
@@ -18,6 +20,17 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
       if (!data || !Array.isArray(data.providers)) throw new Error("Invalid catalog");
       setCatalog(data);
     }).catch(() => { if (!cancelled) setError(true); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get<{ agents: Array<{ agent_id: string; name: string; lifecycle_state: string; healthy: boolean }> }>("/api/agent-runtime/catalog")
+      .then((data) => {
+        if (cancelled) return;
+        if (!data || !Array.isArray(data.agents)) throw new Error("Invalid agent catalog");
+        setAgents(data.agents.filter((agent) => typeof agent.agent_id === "string" && typeof agent.name === "string"));
+      })
+      .catch(() => { if (!cancelled) setAgentCatalogError(true); });
     return () => { cancelled = true; };
   }, []);
   if (error) return <p role="status" className="text-sm text-muted-foreground">Runtime catalog unavailable. No provider selection was changed.</p>;
@@ -69,5 +82,15 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
           </details>}
         </li>)}
       </ul>}
+    <section aria-label="Registered agent discovery" className="border-t border-border/60 pt-3">
+      <h4 className="text-sm font-medium">Registered agents</h4>
+      <p className="text-xs text-muted-foreground">Discovery only. Catalog health does not grant execution access. CORTEX and RuntimePolicy decide eligibility per request.</p>
+      {agentCatalogError ? <p role="status" className="text-xs text-muted-foreground">Agent catalog unavailable.</p> :
+        <ul className="mt-2 space-y-1 text-xs">{agents.map((agent) =>
+          <li key={agent.agent_id} className="flex justify-between gap-2 rounded border border-border/50 px-2 py-1.5">
+            <span>{agent.name}</span>
+            <span className="text-muted-foreground">{agent.lifecycle_state === "active" && agent.healthy === true ? "Registered and healthy; eligibility unverified" : "Not ready"}</span>
+          </li>)}</ul>}
+    </section>
   </section>;
 }
