@@ -68,10 +68,8 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).toContain("fromAgUiMessages");
     expect(component).toContain("threadId,");
     expect(component).not.toContain("localStorage.setItem");
-    expect(component).toContain("setSelectedProvider");
-    expect(component).toContain("preferred_llm_provider: selectedProvider");
-    expect(component).toContain("preferred_model: selectedModel");
-    expect(component).toContain("KarenComposerRuntimeCatalog selectedProvider={selectedProvider}");
+    expect(component).not.toContain("selectedModel");
+    expect(component).not.toContain("setSelectedProvider");
   });
 
   it("never calls React hooks conditionally for malformed activity events", () => {
@@ -161,19 +159,6 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
   });
 });
 
-describe("canonical Medusa agent discovery", () => {
-  it("shows canonical agent discovery without claiming specialist execution", () => {
-    const catalog = readFileSync(
-      resolve(process.cwd(), "src/components/chat/assistant-ui/KarenComposerRuntimeCatalog.tsx"),
-      "utf8",
-    );
-    expect(catalog).toContain('"/api/agent-runtime/catalog"');
-    expect(catalog).toContain("Discovery only.");
-    expect(catalog).not.toContain('preferred_agent_id:');
-    expect(catalog).not.toContain("executeAgent(");
-  });
-});
-
 describe("Agent Runtime original-conversation handoff", () => {
   it("uses shared SessionProvider rather than a new chat provider", () => {
     expect(dashboard).toContain("function AgentWorkspaceView");
@@ -213,12 +198,31 @@ describe("shared governed Agent Runtime context", () => {
     expect(sessionSource).toContain("setWorkspaceRunId: (runId: string | null) => void");
     expect(component).toContain("workspace_run_id: workspaceRunId");
     expect(component).toContain("workspaceRunId } = useSession()");
-    expect(component).toContain("...(workspaceRunId ? { workspace_run_id: workspaceRunId } : {})");
+    expect(component).toContain("forwardedProps: {");
+    expect(component).toContain("workspace_run_id: workspaceRunId");
+    expect(component).toContain("preferred_llm_provider: modelRequestRef.current.provider");
+    expect(component).toContain("preferred_model: modelRequestRef.current.model");
     expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
   });
 
   it("clears scoped work reference when switching conversations", () => {
     expect(sessionSource).toContain("if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null)");
     expect(sessionSource).toContain("setWorkspaceRunId(null);");
+  });
+});
+
+
+describe("Medusa discovery uses existing canonical runtime catalog", () => {
+  it("renders registered agents as non-authoritative discovery", () => {
+    const catalog = readFileSync(
+      resolve(process.cwd(), "src/components/chat/assistant-ui/KarenComposerRuntimeCatalog.tsx"),
+      "utf8",
+    );
+    expect(catalog).toContain('"/api/agent-runtime/catalog"');
+    expect(catalog).toContain("Discovery only.");
+    expect(catalog).toContain("eligibility unverified");
+    expect(catalog).not.toContain("preferred_agent_id:");
+    expect(catalog).not.toContain("executeAgent(");
+    expect(catalog).toContain("ComposerModelRequest");
   });
 });
