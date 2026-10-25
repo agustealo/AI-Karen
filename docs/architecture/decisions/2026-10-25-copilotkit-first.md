@@ -78,3 +78,110 @@ Do not represent this ADR's existence as migration progress. Shipping CopilotKit
 - https://docs.copilotkit.ai/reference/v2
 - https://github.com/CopilotKit/CopilotKit
 - https://github.com/CopilotKit/OpenTag
+
+
+## Adversarial architecture reconciliation (2026-10-25)
+
+This section supersedes any workstream language above that could be interpreted as
+authorization to invent a new registry, runtime, transport, approval authority,
+plugin structure or persistence service.
+
+### Confirmed source-of-truth anchors
+
+- Backend configuration: `src/ai_karen_engine/config/runtime.py` and its existing
+  `RuntimeSettings` / `FeatureFlags` contracts. Do not create a separate
+  CopilotKit environment/config registry or frontend-owned default routing.
+- Backend chat authority: `src/ai_karen_engine/core/runtime/chat_runtime` and
+  existing RuntimePolicy/CORTEX/tool boundaries. Legacy Copilot routes at
+  `src/ai_karen_engine/api_routes/chat/copilot.py` still require reference
+  and mount audits before retirement.
+- Web app root: `src/ui_launchers/Karen-AI-Theme/`; current primary chat is
+  `src/components/chat/assistant-ui/KarenAssistantChat.tsx` relative to that root.
+  Migrate its existing persona, runtime-catalog, dictation, history, observed
+  activity, governed presentation and contextual-rail contracts individually.
+- Web ingress: `src/app/api/chat/ag-ui/route.ts` relative to the app root.
+  Retain its upstream authentication forwarding, SSE framing, terminal event
+  integrity, cancellation, response IDs and bounded event behavior.
+- Governed presentation: existing `docs/architecture/governed-generative-ui.md`
+  is the contract to amend for CopilotKit renderers; do not create a new
+  parallel presentation vocabulary or let the model execute frontend code.
+- Capability baseline: PR #553 is the proposed inventory. Reconcile and merge
+  into one authority, not a second CopilotKit capability registry. Its initial
+  static checks do not establish consumer readiness.
+
+### Structural placement rules
+
+1. Put CopilotKit React components/adapters inside the **existing** web application's
+   canonical chat/component structure. Do not create a second Next.js app, global
+   store, agent runtime or independently mounted chat framework.
+2. Put channels in the **discovered existing plugin framework** only after
+   identifying its actual manifest loader, permission checker, lifecycle hooks
+   and install/uninstall contract. A proposed `plugins/channels` directory or
+   brand-new manifest schema is not authoritative until validated. Platform
+   adapters remain owned by one Channels capability/plugin, not separate
+   unrelated execution plugins.
+3. Backend CopilotKit compatibility code belongs at an interaction boundary,
+   not in `integrations/providers/` as an LLM implementation. Preserve only
+   useful adapter behavior and delete the pseudo-provider after reference and
+   execution-contract proof.
+4. Use canonical configuration, registries, storage repositories, retention
+   policies and telemetry. Shared CopilotKit state is **ephemeral UI context**,
+   not permission truth, durable user memory or conversation persistence.
+5. Check whether an existing runtime action/approval contract can own Channels
+   approval receipts before introducing any service or schema. Duplicate durable
+   approval stores or UI-side authoritative action state are prohibited.
+6. Integrate into current CI/test entry points rather than adding an independent
+   quality gate disconnected from the Main Quality Gate.
+
+### Mandatory preflight against convenience-driven refactors
+
+For each candidate feature, document its existing source, all consumers, current
+owner, CopilotKit API/version compatibility, behavior contract, config authority,
+security/data boundaries, proof, and precise retirement decision. Prefer the
+CopilotKit capability only after supported API and parity are verified, then
+remove redundant implementation in the same tracked migration workstream.
+
+Do not assume CopilotKit v2 components/hooks have names or capabilities identical
+to v1, or that an AG-UI endpoint can be consumed without a compatibility adapter.
+Version-pin only after reading the actual installed React/Next/TypeScript lockfile
+and current official SDK contract. A necessary Node bridge must remain thin,
+authenticated and subordinate to ChatRuntime; it cannot select inference models,
+own conversation storage, mutate tools directly or synthesize success.
+
+### Required adversarial acceptance
+
+- **Architecture:** only one current chat mount, event transport, model-selection
+  owner, config source, memory authority, tool registry and persistence path.
+- **Capability preservation:** baseline comparison covers voice/dictation,
+  composer, persistent draft/session, persona, model selection, fallback receipts,
+  history/replay, governed UI, specialist activity, navigation and accessibility.
+- **Security:** actor/tenant/session scope from trusted ingress through final
+  mutation; approval expiry/revocation, idempotency, audit, cross-channel privacy,
+  replay and cancellation tests.
+- **Reliability:** explicit degraded execution metadata, truthful errors,
+  stream/nonstream/replayed equivalence, real model and database proof, no silent
+  compatibility fallback.
+- **Retirement:** no obsolete imports/packages/styles/routes/hooks/config/CI/docs
+  left behind, but no deletion of migration/security/authorization components
+  without proven canonical replacement.
+- **Evidence:** each milestone records source SHA, exact tests run, outcome,
+  remaining gaps and a reversible change path. Documentation-only PRs must
+  not be marked as implemented product features.
+
+### Revised implementation order
+
+1. Reconcile #553 capability inventory and discover canonical plugin/approval
+   ownership; map all current chat behavior to specific supported CopilotKit APIs.
+2. Verify pinned SDK and AG-UI compatibility in a controlled frontend integration
+   with zero independent model/tool/memory authority.
+3. Migrate complete primary chat consumer journey and its governed components;
+   demonstrate authenticated stream, replay, execution receipts, persona,
+   model selection, accessibility and local-first behavior.
+4. Cut over the single active chat mount, remove assistant-ui-only artifacts,
+   and retain any unique functionality in appropriately owned Karen extensions.
+5. Add first-class shared state, generative UI and runtime-authorized actions
+   through the *existing* action/presentation contracts.
+6. Build Slack-first Channels inside the proven plugin architecture, preserve
+   installation/removal and tenant boundaries, then add Teams.
+7. Finish reference-audited legacy cleanup and permanent CI drift protection.
+
