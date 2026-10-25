@@ -65,3 +65,18 @@ def test_weather_fallback_is_observation_not_model_answer():
     ))
     assert answer == "Measured observation"
     assert receipt["answer_composition_status"] == "source_observation"
+
+
+def test_failed_capability_is_neither_evidence_nor_model_answer():
+    runtime = _composition_harness(("Should not synthesize", {
+        "actual_provider": "unreachable",
+        "actual_model": "unreachable",
+    }))
+    result = SimpleNamespace(success=False, text="Capability unavailable")
+    answer, receipt = asyncio.run(runtime._compose_direct_capability_answer(
+        None, SimpleNamespace(intent="search.weather"), None, None, result,
+        {"response_source": "capability_unavailable", "actual_model": None},
+    ))
+    assert answer == "Capability unavailable"
+    assert receipt["answer_composition_status"] == "capability_unavailable"
+    assert receipt["actual_model"] is None
