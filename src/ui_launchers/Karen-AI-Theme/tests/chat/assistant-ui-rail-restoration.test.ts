@@ -10,7 +10,9 @@ describe("canonical assistant-ui rail restoration", () => {
     );
     expect(source).toContain('import ConversationContextRail from "@/components/chat/ConversationContextRail"');
     expect(source).toContain('<KarenAgUiRuntime key={currentSession.id} threadId={currentSession.id} />');
-    expect(source).toContain('<ConversationContextRail metadata={{}} agentSteps={[]} />');
+    expect(source).toContain('<ConversationContextRail metadata={metadata} agentSteps={[]} />');
+    expect(source).toContain('<KarenConversationIntelligence threadId={threadId} />');
+    expect(source).toContain('conversation.id !== threadId');
     expect(source.match(/<KarenAgUiRuntime key=/g)).toHaveLength(1);
   });
 });
