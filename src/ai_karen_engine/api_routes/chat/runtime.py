@@ -644,6 +644,19 @@ async def _ag_ui_sse(
         yield f"data: {json.dumps(event)}\n\n"
 
 
+@router.get("/chat/ag-ui/capabilities")
+async def get_ag_ui_transport_capabilities(
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> Dict[str, Any]:
+    """Truthful, authenticated transport enablement; not a model health claim.
+
+    This read-only projection uses the same flag as the actual AG-UI route.
+    SDK discovery must not advertise an agent while backend ingress is disabled.
+    """
+    _require_execution_identity(user)
+    return {"enabled": bool(get_runtime_settings().features.enable_ag_ui_bridge)}
+
+
 @router.post("/chat/ag-ui")
 async def stream_ag_ui_chat(
     request: AGUIRunRequest,
