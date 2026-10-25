@@ -19,7 +19,7 @@ afterEach(() => {
 describe("CopilotKit pinned SDK discovery", () => {
   it("registers Karen's real SDK agent behind current backend authentication", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      expect(String(input)).toBe("http://api:8000/api/auth/me");
+      // Capture any unexpected SDK requests for explicit network-policy review.
       return Response.json({
         user_id: "user-123",
         tenant_id: "tenant-456",
@@ -37,7 +37,7 @@ describe("CopilotKit pinned SDK discovery", () => {
     expect(result.headers.get("content-type")).toContain("application/json");
     const info: unknown = await result.json();
     expect(JSON.stringify(info)).toContain("default");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([\n      "http://api:8000/api/auth/me",\n    ]);
   });
 
   it("rejects unauthenticated SDK discovery before any runtime work", async () => {
