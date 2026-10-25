@@ -2538,6 +2538,7 @@ class ChatRuntime:
                 "actual_model": normalized.get("actual_model"),
                 "runtime_engine": normalized.get("runtime_engine"),
                 "response_source": normalized.get("response_source"),
+                "answer_composition_status": normalized.get("answer_composition_status"),
                 "degraded_mode": normalized.get("degraded_mode", False),
             },
         )
