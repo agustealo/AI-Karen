@@ -46,13 +46,14 @@ export const IntelligentSearchApi = {
     }
     return result.full_content;
   },
-  executeSearch: async (payload: Record<string, unknown>): Promise<IntelligentSearchResponse> => {
+  executeSearch: async (payload: Record<string, unknown>, signal?: AbortSignal): Promise<IntelligentSearchResponse> => {
     const response = await apiClient.post<PluginExecutionEnvelope<IntelligentSearchResponse> | IntelligentSearchResponse>(
       '/api/plugins/execute',
       {
         plugin_name: 'intelligent-search',
         parameters: payload,
-      }
+      },
+      { signal }
     );
     const envelope = response as PluginExecutionEnvelope<IntelligentSearchResponse>;
 
