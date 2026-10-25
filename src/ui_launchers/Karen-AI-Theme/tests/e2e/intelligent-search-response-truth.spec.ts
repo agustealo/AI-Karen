@@ -52,6 +52,6 @@ test('a failed backend observation does not masquerade as a successful empty sea
   await page.goto('/plugins/intelligent-search');
   await page.getByRole('textbox', { name: 'Query' }).fill('weather in Detroit');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
-  await expect(page.getByRole('alert').getByText('Search could not be completed')).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('The requested search capability is unavailable');
   await expect(page.getByText('No sources found')).not.toBeVisible();
 });
