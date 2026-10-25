@@ -19,6 +19,7 @@ on:
       - 'tests/core/runtime/test_search_answer_composition_status.py'
       - 'tests/services/test_search_article_chat_reference.py'
       - 'tests/services/test_search_article_document_service.py'
+      - 'tests/services/test_runtime_search_citation_validator.py'
       - 'tests/architecture/test_grounded_article_reference_boundary.py'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
@@ -44,6 +45,7 @@ on:
       - 'tests/core/runtime/test_search_answer_composition_status.py'
       - 'tests/services/test_search_article_chat_reference.py'
       - 'tests/services/test_search_article_document_service.py'
+      - 'tests/services/test_runtime_search_citation_validator.py'
       - 'tests/architecture/test_grounded_article_reference_boundary.py'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
@@ -171,6 +173,7 @@ jobs:
             tests/core/runtime/test_search_answer_composition_status.py \
             tests/services/test_search_article_chat_reference.py \
             tests/services/test_search_article_document_service.py \
+            tests/services/test_runtime_search_citation_validator.py \
             tests/architecture/test_grounded_article_reference_boundary.py \
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
