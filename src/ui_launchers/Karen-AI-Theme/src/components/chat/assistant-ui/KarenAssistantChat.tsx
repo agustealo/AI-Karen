@@ -217,11 +217,18 @@ function KarenRestoredExecutionReceipt({ data }: { data: unknown }) {
     <details data-testid="karen-restored-execution-receipt"
       className="my-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
       <summary className="cursor-pointer font-medium">Saved execution details</summary>
-      <p className="mt-2">Provider: {receipt.actual_provider}</p>
+      {(typeof receipt.requested_provider === "string" || typeof receipt.requested_model === "string") && (
+        <p className="mt-2">Requested: {String(receipt.requested_provider || "Unspecified")} · {String(receipt.requested_model || "Unspecified")}</p>
+      )}
+      <p className="mt-2">Executed provider: {receipt.actual_provider}</p>
       <p>Model: {receipt.actual_model}</p>
       <p>Response source: {receipt.response_source}</p>
       {typeof receipt.runtime_engine === "string" && receipt.runtime_engine &&
         <p>Engine: {receipt.runtime_engine}</p>}
+      {typeof receipt.fallback_level === "number" && receipt.fallback_level > 0 &&
+        <p>Fallback level: {receipt.fallback_level}</p>}
+      {typeof receipt.degradation_reason === "string" && receipt.degradation_reason &&
+        <p>Degradation reason: {receipt.degradation_reason.replace(/_/g, " ")}</p>}
       {receipt.degraded_mode === true && <p>Degraded execution reported</p>}
     </details>
   );

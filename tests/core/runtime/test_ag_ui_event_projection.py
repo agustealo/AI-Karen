@@ -580,3 +580,41 @@ def test_authorized_planner_presentation_is_emitted_as_read_only_ag_ui_data():
         content="", correlation_id="request-1",
         metadata={"presentation": envelope, "presentation_verified": False},
     )) == []
+
+
+def test_complete_emits_allowlisted_execution_receipt_before_terminal():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    events = p.project(chunk(
+        "complete",
+        requested_provider="ollama",
+        requested_model="local-model",
+        actual_provider="vllm",
+        actual_model="fallback-model",
+        response_source="provider",
+        runtime_engine="vllm",
+        fallback_level=1,
+        degraded_mode=True,
+        degradation_reason="requested_unavailable",
+        secret="never-expose",
+        provider_attempts=[{"api_key": "never-expose"}],
+    ))
+    assert [e["type"] for e in events] == ["CUSTOM", "RUN_FINISHED"]
+    assert events[0]["name"] == "karen.execution_receipt.v1"
+    receipt = events[0]["value"]
+    assert receipt["requested_model"] == "local-model"
+    assert receipt["actual_model"] == "fallback-model"
+    assert receipt["fallback_level"] == 1
+    assert receipt["degraded_mode"] is True
+    assert "never-expose" not in str(events)
+
+
+def test_complete_without_verified_execution_identity_does_not_invent_receipt():
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    events = p.project(chunk(
+        "complete", requested_provider="ollama", requested_model="missing",
+        actual_provider="", secret="never-expose",
+    ))
+    assert [e["type"] for e in events] == ["RUN_FINISHED"]
+    assert "karen.execution_receipt.v1" not in str(events)
