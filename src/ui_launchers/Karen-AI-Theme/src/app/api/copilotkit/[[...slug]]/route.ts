@@ -137,6 +137,45 @@ async function validateRunEnvelope(request: NextRequest): Promise<NextResponse |
   return null;
 }
 
+/**
+ * Feature eligibility comes from the same canonical runtime flag as AG-UI
+ * execution. Successful SDK discovery alone cannot prove the transport is on.
+ */
+export async function verifyKarenAgUiEnabled(
+  request: NextRequest,
+  backendBaseUrl: string,
+  headers: Record<string, string>,
+): Promise<NextResponse | null> {
+  let response: Response;
+  try {
+    response = await fetch(`${backendBaseUrl}/api/chat/ag-ui/capabilities`, {
+      method: "GET",
+      headers,
+      cache: "no-store",
+      redirect: "manual",
+      signal: request.signal,
+    });
+  } catch {
+    return NextResponse.json({ detail: "Karen transport availability is unknown" }, { status: 503 });
+  }
+  if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
+    return NextResponse.json({ detail: "Karen transport availability is unknown" }, { status: 503 });
+  }
+  try {
+    const flags: unknown = await response.json();
+    if (!flags || typeof flags !== "object" || Array.isArray(flags) ||
+        typeof (flags as Record<string, unknown>).enabled !== "boolean") {
+      return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
+    }
+    if (!(flags as { enabled: boolean }).enabled) {
+      return NextResponse.json({ detail: "Karen AG-UI transport is disabled" }, { status: 503 });
+    }
+  } catch {
+    return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
+  }
+  return null;
+}
+
 async function handle(request: NextRequest): Promise<Response> {
   const unavailable = validateCopilotRoute(request);
   if (unavailable) return unavailable;
@@ -145,6 +184,8 @@ async function handle(request: NextRequest): Promise<Response> {
   const backendBaseUrl = getBackendBaseUrl();
   const auth = await verifyKarenCopilotSession(request, backendBaseUrl);
   if (auth instanceof NextResponse) return auth;
+  const disabled = await verifyKarenAgUiEnabled(request, backendBaseUrl, auth.headers);
+  if (disabled) return disabled;
 
   // This SDK agent does not own memory, model routing, policy, or tools.
   const agent = new HttpAgent({
