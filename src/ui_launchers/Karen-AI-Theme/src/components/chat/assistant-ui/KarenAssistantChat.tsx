@@ -34,6 +34,7 @@ import type { DurableHistoryMessage } from "./KarenHistoryRestoration";
 import { apiClient } from "@/lib/api";
 import type { ConversationResponse } from "@/lib/types";
 import { useSession } from "@/components/chat/SessionProvider";
+import ConversationContextRail from "@/components/chat/ConversationContextRail";
 
 type Activity = {
   stepId?: string;
@@ -666,7 +667,12 @@ export default function KarenAssistantChat() {
           </div>
         </section>
       )}
-      <KarenAgUiRuntime key={currentSession.id} threadId={currentSession.id} />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <KarenAgUiRuntime key={currentSession.id} threadId={currentSession.id} />
+        </div>
+        <ConversationContextRail metadata={{}} agentSteps={[]} />
+      </div>
     </div>
   );
 }
