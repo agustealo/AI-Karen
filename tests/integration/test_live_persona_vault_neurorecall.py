@@ -1553,12 +1553,13 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             # A canonical ledger assertion is not a completed historical migration receipt.
             assert not inspected[1].persisted
             assert inspected[1].persisted_memory_id == replay.memory_id
-            assert await inspect_locked_legacy_migration_preparation(
-                session=session, tenant_id=str(uuid.uuid4()), user_id=str(user),
-                source_record_id=str(source),
-                expected_memory_id=replay.memory_id,
-                expected_request_id=replay.request_id,
-            ) is None
+            with pytest.raises(PermissionError, match="transaction principal mismatch"):
+                await inspect_locked_legacy_migration_preparation(
+                    session=session, tenant_id=str(uuid.uuid4()), user_id=str(user),
+                    source_record_id=str(source),
+                    expected_memory_id=replay.memory_id,
+                    expected_request_id=replay.request_id,
+                )
         mismatched = await lookup_legacy_replay_receipt(
             tenant_id=str(tenant), user_id=str(user),
             expected_memory_id=replay.memory_id,
