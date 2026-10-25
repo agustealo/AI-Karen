@@ -607,7 +607,9 @@ function RailContent({
         </CardContent>
       </Card>
 
-      {(runtime.actualProvider ||
+      {(runtime.requestedProvider ||
+        runtime.requestedModel ||
+        runtime.actualProvider ||
         runtime.runtimeEngine ||
         runtime.latencyMs !== undefined ||
         runtime.degradedMode) && (
@@ -649,6 +651,24 @@ function RailContent({
                 </p>
               </div>
             </div>
+
+            {(runtime.requestedProvider || runtime.requestedModel) && (
+              <div className="rounded-lg border border-border/60 bg-background/40 p-2 text-xs">
+                <p className="karen-panel-label text-[10px]">Requested routing</p>
+                <p className="mt-1 break-words font-medium">
+                  {runtime.requestedProvider || 'Provider not reported'}
+                  {runtime.requestedModel ? ` · ${runtime.requestedModel}` : ''}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  {runtime.actualProvider && runtime.actualModel
+                    ? runtime.requestedProvider === runtime.actualProvider &&
+                      runtime.requestedModel === runtime.actualModel
+                      ? 'Requested model executed'
+                      : 'Execution differed from request. See actual provider and model above.'
+                    : 'Execution has not been confirmed by a backend receipt.'}
+                </p>
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-1.5">
               {runtime.locality && (

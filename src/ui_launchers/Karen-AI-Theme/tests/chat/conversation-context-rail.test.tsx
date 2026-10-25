@@ -5,6 +5,33 @@ import ConversationContextRail from '@/components/chat/ConversationContextRail';
 import type { AgentStepEvent } from '@/lib/types';
 
 describe('ConversationContextRail', () => {
+  it('contrasts requested and actual backend-reported model identities', () => {
+    render(<ConversationContextRail metadata={{
+      requested_provider: 'ollama',
+      requested_model: 'local-model',
+      actual_provider: 'vllm',
+      actual_model: 'fallback-model',
+      used_fallback: true,
+      fallback_level: 1,
+      response_source: 'provider',
+    }} agentSteps={[]} />);
+    expect(screen.getByText('Requested routing')).toBeTruthy();
+    expect(screen.getByText('ollama · local-model')).toBeTruthy();
+    expect(screen.getByText('fallback-model')).toBeTruthy();
+    expect(screen.getByText(/Execution differed from request/)).toBeTruthy();
+    expect(screen.getByText('fallback L1')).toBeTruthy();
+  });
+
+  it('does not claim a requested model executed without actual runtime identity', () => {
+    render(<ConversationContextRail metadata={{
+      requested_provider: 'ollama',
+      requested_model: 'unconfirmed',
+    }} agentSteps={[]} />);
+    expect(screen.getByText('Execution has not been confirmed by a backend receipt.')).toBeTruthy();
+    expect(screen.queryByText('Requested model executed')).toBeNull();
+  });
+
+
   it('shows actual projection target failures without leaking memory receipt IDs', () => {
     render(
       <ConversationContextRail
