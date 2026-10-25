@@ -569,6 +569,8 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
   const { createNewSession, loadSession, workspaceRunId } = useSession();
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [modelRequest, setModelRequest] = useState<ComposerModelRequest>(null);
+  const modelRequestRef = useRef<ComposerModelRequest>(null);
+  modelRequestRef.current = modelRequest;
   const agent = useMemo(
     () => {
       // The backend resolves threadId as Karen's durable conversation UUID.
@@ -583,12 +585,12 @@ function KarenAgUiRuntime({ threadId }: { threadId: string }) {
           ...input,
           forwardedProps: {
             ...(workspaceRunId ? { workspace_run_id: workspaceRunId } : {}),
-            ...(modelRequest ? { preferred_llm_provider: modelRequest.provider, preferred_model: modelRequest.model } : {}),
+            ...(modelRequestRef.current ? { preferred_llm_provider: modelRequestRef.current.provider, preferred_model: modelRequestRef.current.model } : {}),
           },
         })) as HttpAgent["run"];
       return connected;
     },
-    [threadId, workspaceRunId, modelRequest],
+    [threadId, workspaceRunId],
   );
   const historyLoad = useCallback(
     async () => ExportedMessageRepository.fromArray(
