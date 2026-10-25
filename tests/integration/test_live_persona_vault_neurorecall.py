@@ -1550,7 +1550,9 @@ async def test_governed_migration_assembly_disposable_postgres_recovery():
             )
             assert inspected is not None
             assert inspected[0][1] == "semantic"
-            assert inspected[1].persisted
+            # A canonical ledger assertion is not a completed historical migration receipt.
+            assert not inspected[1].persisted
+            assert inspected[1].persisted_memory_id == replay.memory_id
             assert await inspect_locked_legacy_migration_preparation(
                 session=session, tenant_id=str(uuid.uuid4()), user_id=str(user),
                 source_record_id=str(source),
