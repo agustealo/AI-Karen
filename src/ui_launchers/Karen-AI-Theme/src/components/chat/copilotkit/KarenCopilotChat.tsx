@@ -14,11 +14,19 @@ const CONVERSATION_UUID =
  * CopilotChat may issue an initial run on mount. That behavior must be
  * suppressed or reconciled with SessionProvider before production cutover.
  */
+export interface KarenCopilotChatProps {
+  /** Canonical persisted conversation ID, obtained through SessionProvider. */
+  conversationId: string;
+  /** Optional user preference from Karen's backend-owned model catalog. */
+  preferredProvider?: string | null;
+  preferredModel?: string | null;
+}
+
 export function KarenCopilotChat({
   conversationId,
-}: {
-  conversationId: string;
-}) {
+  preferredProvider = null,
+  preferredModel = null,
+}: KarenCopilotChatProps) {
   if (!CONVERSATION_UUID.test(conversationId)) {
     return (
       <p role="alert" className="text-sm text-destructive">
@@ -27,12 +35,31 @@ export function KarenCopilotChat({
     );
   }
 
+  // Only a paired, bounded preference is forwarded. It is never a model
+  // execution decision; ChatRuntime validates eligibility and reports actual
+  // provider/model in its execution receipt.
+  if ((preferredProvider === null) !== (preferredModel === null) ||
+      (preferredProvider !== null && (!preferredProvider.trim() || preferredProvider.length > 100)) ||
+      (preferredModel !== null && (!preferredModel.trim() || preferredModel.length > 200))) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Karen could not validate the requested model.
+      </p>
+    );
+  }
+  const properties = preferredProvider !== null && preferredModel !== null
+    ? {
+        preferred_llm_provider: preferredProvider.trim(),
+        preferred_model: preferredModel.trim(),
+      }
+    : undefined;
+
   return (
     <section
       aria-label="Karen CopilotKit conversation"
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
     >
-      <CopilotKitProvider runtimeUrl="/api/copilotkit" agentId="default">
+      <CopilotKitProvider runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <CopilotChat
           agentId="default"
           threadId={conversationId}
