@@ -1505,11 +1505,11 @@ export default function ConversationContextRail(
 
   return (
     <aside
-      className="hidden w-[21rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/45 p-3 xl:block 2xl:w-[22rem]"
+      className="hidden h-full min-h-0 w-[21rem] shrink-0 overflow-y-auto overscroll-contain border-l border-border/70 bg-background/45 p-3 xl:block 2xl:w-[22rem]"
       aria-label="Conversation intelligence deck"
       data-testid="conversation-context-rail"
     >
-      <div className="sticky top-0 space-y-3">
+      <div className="space-y-3">
         <div className="sticky top-0 z-10 rounded-2xl border border-border/70 bg-card/90 p-3 shadow-sm backdrop-blur-xl">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-2.5">
