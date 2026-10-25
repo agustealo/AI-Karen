@@ -99,8 +99,10 @@ class SearchArticleService:
         content = await self.read(
             tenant_id=tenant_id, user_id=user_id, article_id=article_id,
         )
-        if content is None or source_url is None:
-            return content
+        if content is None:
+            return None
+        if not isinstance(source_url, str) or not source_url:
+            return None
         # The plugin-provided citation must match stored source provenance;
         # possession of a valid article ID cannot launder a different URL.
         source = await self._artifacts.get_metadata(article_id, tenant_id)
