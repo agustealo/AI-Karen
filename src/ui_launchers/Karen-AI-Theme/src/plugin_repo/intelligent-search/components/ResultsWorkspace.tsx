@@ -124,7 +124,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         <section aria-label="Weather observation" className="relative mx-4 mt-4 rounded-2xl border border-border/60 bg-card p-5 lg:mx-6">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Live provider observation</p>
           <h3 className="mt-2 text-lg font-semibold text-foreground">{String(weatherData.location)}</h3>
-          <p className="mt-2 text-3xl font-semibold text-foreground">{measuredTemperature} °F</p>
+          <p className="mt-2 text-3xl font-semibold text-foreground">{String(measuredTemperature)} °F</p>
           <p className="mt-2 text-sm text-muted-foreground">Provider timestamp: {String(weatherData.observed_at)} {typeof weatherData.timezone === 'string' ? weatherData.timezone : ''}</p>
           <p className="mt-1 text-xs text-muted-foreground">Structured weather data, not an AI-generated forecast explanation.</p>
           {response.sources?.[0]?.url?.startsWith('https://') && (
