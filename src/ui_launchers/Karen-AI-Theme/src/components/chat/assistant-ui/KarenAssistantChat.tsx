@@ -625,6 +625,8 @@ export default function KarenAssistantChat() {
           <p className="text-xs text-muted-foreground">Agent activity is based on observed runtime events</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <div id="karen-rail-customize-menu" className="hidden xl:flex" />
+          <span aria-hidden="true" className="hidden h-6 w-px bg-border xl:block" />
           <button
             type="button" ref={historyTriggerRef} aria-label="Find conversations" aria-expanded={historyOpen} aria-controls={historyOpen ? "karen-conversation-history" : undefined}
             onClick={() => setHistoryOpen((open) => !open)}
