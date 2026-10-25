@@ -4,7 +4,11 @@ import { apiClient } from "@/lib/api";
 import type { RuntimeProviderCatalogResponse } from "@/lib/model-runtime-inventory";
 
 /** Catalog visibility is not authority to select a model or execute a run. */
-export function KarenComposerRuntimeCatalog() {
+export type ComposerModelRequest = { provider: string; model: string } | null;
+export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
+  selection: ComposerModelRequest;
+  onSelectionChange: (selection: ComposerModelRequest) => void;
+}) {
   const [catalog, setCatalog] = useState<RuntimeProviderCatalogResponse | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -21,7 +25,32 @@ export function KarenComposerRuntimeCatalog() {
   const providers = catalog.providers.filter((provider) => provider.enabled === true && provider.allowed_for_current_user !== false);
   return <section aria-label="Runtime provider discovery" className="space-y-2">
     <h4 className="text-sm font-medium">Providers and models</h4>
-    <p className="text-xs text-muted-foreground">Backend-reported discovery only. ChatRuntime owns execution and model routing.</p>
+    <label htmlFor="karen-model-request" className="block text-xs text-muted-foreground">Next message routing request</label>
+    <select id="karen-model-request" aria-label="Requested provider and model"
+      value={selection ? JSON.stringify([selection.provider, selection.model]) : ""}
+      onChange={(event) => {
+        if (!event.target.value) { onSelectionChange(null); return; }
+        const [provider, model] = JSON.parse(event.target.value) as [string, string];
+        const item = providers.find((entry) => entry.id === provider);
+        if (!item || item.healthy !== true || item.configured !== true ||
+          !item.models?.some((entry) => entry.id === model && entry.available === true)) {
+          onSelectionChange(null);
+          return;
+        }
+        onSelectionChange({ provider, model });
+      }}
+      className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm">
+      <option value="">Automatic routing (Karen default)</option>
+      {providers.filter((provider) => provider.configured === true && provider.healthy === true).map((provider) =>
+        (provider.models || []).filter((model) => model.available === true).map((model) =>
+          <option key={provider.id + "/" + model.id} value={JSON.stringify([provider.id, model.id])}>
+            {provider.label}: {model.label}
+          </option>
+        )
+      )}
+    </select>
+    {selection && <p className="text-xs text-muted-foreground">Requested only. ChatRuntime may reject or route differently under policy.</p>}
+    <p className="text-xs text-muted-foreground">Options come from the backend catalog. ChatRuntime validates each execution request.</p>
     {providers.length === 0 ? <p className="text-sm text-muted-foreground">No enabled providers reported.</p> :
       <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
         {providers.map((provider) => <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
