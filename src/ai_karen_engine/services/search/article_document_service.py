@@ -96,12 +96,13 @@ class SearchArticleService:
         self._identity(tenant_id, user_id)
         if not isinstance(article_id, str) or not article_id or len(article_id) > 128:
             raise ValueError("Valid article identifier is required")
+        # Reject missing citation provenance before touching document bytes.
+        if not isinstance(source_url, str) or not source_url:
+            return None
         content = await self.read(
             tenant_id=tenant_id, user_id=user_id, article_id=article_id,
         )
         if content is None:
-            return None
-        if not isinstance(source_url, str) or not source_url:
             return None
         # The plugin-provided citation must match stored source provenance;
         # possession of a valid article ID cannot launder a different URL.
