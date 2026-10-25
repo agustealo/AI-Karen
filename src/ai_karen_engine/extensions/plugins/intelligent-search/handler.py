@@ -151,7 +151,11 @@ class WebSearchDispatcher(ExtensionBase):
         payload = self._extract_hook_payload(context)
         result = await self.run(self._extract_params(payload))
         return {
-            "success": bool(result.get("can_execute", False) or result.get("sources")),
+            "success": bool(
+                result.get("success") is not False
+                and result.get("status") != "error"
+                and (result.get("can_execute", False) or result.get("sources"))
+            ),
             "hook_point": hook_point.value,
             "result": result,
             "mode": result.get("mode"),
