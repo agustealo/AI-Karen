@@ -56,6 +56,10 @@ on:
       - 'tests/core/model_runtime/test_structured_tool_chat_model.py'
       - '.github/workflows/medusa-core-ci.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: '3.12'
   PYTHONPATH: src
