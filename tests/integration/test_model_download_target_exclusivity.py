@@ -347,3 +347,55 @@ async def test_publication_guard_denies_all_reclaim_authority_until_guard_releas
     assert recovered["interrupted_lease_token"] == token
     assert str(recovered["lease_token"]) != token
     assert recovered["status"] == "promoting"
+
+
+async def test_busy_target_other_tenant_fails_closed_without_job_disclosure() -> None:
+    path = "/tmp/models/transformers/owner--cross-tenant/main"
+    first = await ModelDownloadRepository().create_job(
+        _payload("mdl-tenant-a", path), max_attempts=3
+    )
+    assert first["_target_reused"] is False
+    foreign = _payload("mdl-tenant-b", path)
+    foreign["tenant_id"] = "another-tenant"
+    with pytest.raises(PermissionError, match="model_download_target_unavailable"):
+        await ModelDownloadRepository().create_job(foreign, max_attempts=3)
+    jobs = await ModelDownloadRepository().list_owned_jobs(
+        tenant_id="another-tenant", user_id="integration-test"
+    )
+    assert jobs == []
+
+
+async def test_owned_jobs_are_scoped_before_limit_and_redacted() -> None:
+    repository = ModelDownloadRepository()
+    for index, (tenant, owner) in enumerate([
+        ("tenant-a", "user-a"), ("tenant-b", "user-a"),
+        ("tenant-a", "user-b"), ("tenant-a", "user-a"),
+    ]):
+        payload = _payload(f"mdl-owner-{index}", f"/tmp/models/owner-{index}")
+        payload["tenant_id"] = tenant
+        payload["requested_by"] = owner
+        await repository.create_job(payload, max_attempts=3)
+    jobs = await repository.list_owned_jobs(
+        tenant_id="tenant-a", user_id="user-a", limit=1
+    )
+    assert len(jobs) == 1
+    assert jobs[0]["job_id"] == "mdl-owner-3"
+    assert "install_path" not in jobs[0]
+    assert "requested_by" not in jobs[0]
+    assert "lease_token" not in jobs[0]
+    with pytest.raises(PermissionError):
+        await repository.list_owned_jobs(tenant_id="default", user_id="user-a")
+
+
+async def test_legacy_job_is_not_inferred_owned() -> None:
+    assert DATABASE_URL is not None
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute("""
+            INSERT INTO public.model_download_jobs (
+                job_id, model_id, channel_id, status, requested_by
+            ) VALUES ('mdl-legacy-unowned', 'org/legacy', 'core_runtime_transformers',
+                      'queued', 'user-a')
+        """)
+    assert await ModelDownloadRepository().list_owned_jobs(
+        tenant_id="tenant-a", user_id="user-a"
+    ) == []
