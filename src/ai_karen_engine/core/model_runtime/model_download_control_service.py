@@ -800,6 +800,27 @@ class ModelDownloadControlService:
             {"job_id": job_id, "status": row.get("status")},
         )
 
+    async def control_owned_job(
+        self, *, action: str, job_id: str, tenant_id: str, user_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Use the canonical worker state transitions with SQL-atomic ownership."""
+        if action not in ("cancel", "pause", "resume"):
+            raise ValueError("Unsupported model job action")
+        if not job_id or not tenant_id or tenant_id == "default" or not user_id:
+            raise PermissionError("verified_model_download_owner_required")
+        await self.initialize()
+        transition = {
+            "cancel": self._repository.cancel_job,
+            "pause": self._repository.pause_job,
+            "resume": self._repository.resume_job,
+        }[action]
+        updated = await transition(job_id, tenant_id=tenant_id, user_id=user_id)
+        if updated is None:
+            return None
+        return await self.get_owned_job(
+            job_id=job_id, tenant_id=tenant_id, user_id=user_id
+        )
+
     async def cancel_job(self, job_id: str) -> dict[str, Any]:
         await self.initialize()
         row = await self._repository.cancel_job(job_id)
