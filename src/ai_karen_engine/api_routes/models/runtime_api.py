@@ -275,3 +275,33 @@ async def get_runtime_provider_catalog(
     except Exception as e:
         logger.error(f"Error building runtime provider catalog: {e}")
         return _build_bootstrap_runtime_catalog(e)
+
+
+@router.get("/model-library/my-downloads")
+async def get_my_model_downloads(
+    limit: int = 50,
+    current_user=Depends(get_current_user),
+):
+    """Read-only tenant-scoped model acquisition history, never admin job data."""
+    from fastapi import HTTPException
+    from ai_karen_engine.core.model_runtime.model_download_control_service import (
+        get_model_download_control_service,
+    )
+
+    user_id = str(getattr(current_user, "user_id", "") or "").strip()
+    tenant_id = str(getattr(current_user, "tenant_id", "") or "").strip()
+    if (
+        not getattr(current_user, "is_active", False)
+        or not getattr(current_user, "is_verified", False)
+        or not user_id or not tenant_id or tenant_id == "default"
+    ):
+        raise HTTPException(status_code=403, detail="Verified tenant and user required")
+    if not 1 <= limit <= 200:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
+    try:
+        jobs = await get_model_download_control_service().list_owned_jobs(
+            tenant_id=tenant_id, user_id=user_id, limit=limit
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Model library unavailable") from exc
+    return {"jobs": jobs, "total": len(jobs), "scope": "authenticated_user"}
