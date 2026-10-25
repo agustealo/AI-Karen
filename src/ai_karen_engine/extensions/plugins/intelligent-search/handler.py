@@ -206,6 +206,13 @@ class WebSearchDispatcher(ExtensionBase):
                         },
                         context=trusted_context,
                     )
+                    if internet_result.get("status") == "error" or internet_result.get("success") is False:
+                        internet_result["can_execute"] = False
+                        internet_result["success"] = False
+                        internet_result.setdefault("sources", [])
+                        internet_result.setdefault("results", [])
+                        return internet_result
+
                     if internet_result.get("sources") or internet_result.get("results"):
                         internet_result.setdefault("mode", mode)
                         internet_result["can_execute"] = True
