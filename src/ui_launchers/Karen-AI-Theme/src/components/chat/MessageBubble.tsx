@@ -234,7 +234,7 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
       ? restoredCitations.filter(
           (item): item is Citation =>
             Boolean(item) && typeof item === 'object' &&
-            typeof item.url === 'string' && /^https?:\\/\\//i.test(item.url),
+            typeof item.url === 'string' && /^https?:\/\//i.test(item.url),
         )
       : [];
   const hasCitations = !isUser && citations.length > 0;
