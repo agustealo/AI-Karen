@@ -13,7 +13,7 @@ class ArticleServiceDouble:
         self.document = document
         self.calls = []
 
-    async def read_for_chat(self, *, execution_context, article_id):
+    async def read_for_chat(self, *, execution_context, article_id, source_url=None):
         self.calls.append((execution_context.user_id, execution_context.tenant_id, article_id))
         return self.document
 
