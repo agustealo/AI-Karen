@@ -101,7 +101,11 @@ def content(text: str = "token") -> ChatStreamChunk:
 
 
 def completed() -> ChatStreamChunk:
-    return ChatStreamChunk(type=ChatStreamEventType.COMPLETE, content="")
+    return ChatStreamChunk(
+        type=ChatStreamEventType.COMPLETE,
+        content="",
+        metadata={"transcript_persistence_status": "persisted"},
+    )
 
 
 @pytest.mark.asyncio
