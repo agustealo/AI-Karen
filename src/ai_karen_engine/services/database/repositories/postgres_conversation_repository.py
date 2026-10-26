@@ -320,30 +320,76 @@ class PostgresConversationRepository(ConversationRepository):
         operation="delete_conversation", repository="PostgresConversationRepository"
     )
     async def delete_conversation(
-        self, conversation_id: str, tenant_id: str
+        self, conversation_id: str, tenant_id: str, *, user_id: str
     ) -> RepositoryResult[bool]:
+        """Atomically delete one owned conversation AND its run event evidence.
+
+        Lock ordering is run rows before conversation rows, matching atomic
+        chat completion. The event journal cascades from the run ledger.
+        Never leave an audit/replay payload behind after transcript erasure.
+        """
         start = time.perf_counter()
         try:
+            if not user_id:
+                raise ValueError("conversation_deletion_owner_required")
             async with await self._session() as session:
-                result = await session.execute(
-                    text(
-                        f"""
-                        DELETE FROM {self._conversation_table}
-                        WHERE conversation_id = :id AND tenant_id = :tenant_id
-                        """
-                    ),
-                    {"id": conversation_id, "tenant_id": tenant_id},
-                )
-                await session.commit()
+                async with session.begin():
+                    scope = {
+                        "id": conversation_id, "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    }
+                    # Enforce RLS for the same owning principal in this
+                    # transaction, even if the pooled session was reused.
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :value, true)"),
+                        {"value": tenant_id},
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :value, true)"),
+                        {"value": user_id},
+                    )
+                    # A database not yet migrated to CK-07 has no run ledger.
+                    # Check actual schema capability, never use a broad
+                    # exception fallback that could hide a failed deletion.
+                    ledger = await session.execute(
+                        text("SELECT to_regclass('public.runtime_chat_runs')"),
+                    )
+                    if ledger.scalar_one_or_none() is not None:
+                        await session.execute(
+                            text(f"""
+                                DELETE FROM public.runtime_chat_runs AS r
+                                WHERE r.tenant_id = CAST(:tenant_id AS uuid)
+                                  AND r.user_id = CAST(:user_id AS uuid)
+                                  AND r.conversation_id = CAST(:id AS uuid)
+                                  AND EXISTS (
+                                    SELECT 1 FROM {self._conversation_table} AS c
+                                    WHERE c.conversation_id = r.conversation_id
+                                      AND c.tenant_id = r.tenant_id
+                                      AND c.user_id = r.user_id
+                                  )
+                            """),
+                            scope,
+                        )
+                    result = await session.execute(
+                        text(f"""
+                            DELETE FROM {self._conversation_table}
+                            WHERE conversation_id = :id
+                              AND tenant_id = :tenant_id
+                              AND user_id = :user_id
+                        """),
+                        scope,
+                    )
+                    deleted = result.rowcount > 0
                 latency = time.perf_counter() - start
                 logger.debug(
                     "delete_conversation id=%s latency_ms=%.2f",
-                    conversation_id,
-                    latency * 1000,
+                    conversation_id, latency * 1000,
                 )
-                return RepositoryResult(success=True, data=result.rowcount > 0)
+                return RepositoryResult(success=True, data=deleted)
         except Exception as exc:
-            logger.error("delete_conversation failed: %s", exc)
+            logger.error(
+                "delete_conversation failed", extra={"error_type": type(exc).__name__},
+            )
             return RepositoryResult(success=False, error=str(exc))
 
     @instrument_repository(
