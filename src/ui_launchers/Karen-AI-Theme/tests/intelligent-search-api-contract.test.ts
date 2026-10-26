@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const post = vi.fn();
+const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 
 vi.mock('@/lib/api', () => ({
   apiClient: { post, get: vi.fn() },
