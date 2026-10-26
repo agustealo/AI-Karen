@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import Optional
 
+from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatStreamChunk,
@@ -27,7 +28,10 @@ from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
 )
 
 logger = logging.getLogger(__name__)
-_HEARTBEAT_INTERVAL_SECONDS = 10
+
+
+def _heartbeat_seconds() -> int:
+    return get_runtime_settings().timeouts.chat_run_heartbeat_seconds
 
 
 class ChatRunConflict(Exception):
@@ -80,7 +84,7 @@ class ChatRunCoordinator:
                 next_chunk = asyncio.create_task(anext(chunks))
                 while not next_chunk.done():
                     done, _ = await asyncio.wait(
-                        {next_chunk}, timeout=_HEARTBEAT_INTERVAL_SECONDS
+                        {next_chunk}, timeout=_heartbeat_seconds()
                     )
                     if not done and not await self._repository.renew(lease):
                         raise ChatRunLeaseLost("chat_run_lease_lost")
