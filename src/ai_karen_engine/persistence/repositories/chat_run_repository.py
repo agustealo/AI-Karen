@@ -14,9 +14,9 @@ from typing import Optional
 from sqlalchemy import text
 
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
+from ai_karen_engine.config.runtime import get_runtime_settings
 
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
-_LEASE_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,10 @@ class SqlChatRunRepository:
     Every operation sets tenant and user PostgreSQL RLS context. The database
     mutation additionally matches both identities and the execution lease.
     """
+
+    @staticmethod
+    def _lease_seconds() -> int:
+        return get_runtime_settings().timeouts.chat_run_lease_seconds
 
     async def admit(
         self,
@@ -112,7 +116,7 @@ class SqlChatRunRepository:
                     "request_id": request_id,
                     "correlation_id": correlation_id,
                     "token": token,
-                    "ttl": _LEASE_SECONDS,
+                    "ttl": self._lease_seconds(),
                 },
             )
             if result.scalar_one_or_none() is None:
@@ -148,7 +152,7 @@ class SqlChatRunRepository:
                     RETURNING execution_id
                     """
                 ),
-                self._scope(lease, ttl=_LEASE_SECONDS),
+                self._scope(lease, ttl=self._lease_seconds()),
             )
             return result.scalar_one_or_none() is not None
 
