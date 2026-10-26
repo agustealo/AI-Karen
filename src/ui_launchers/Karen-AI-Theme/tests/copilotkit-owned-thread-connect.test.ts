@@ -142,6 +142,20 @@ describe("CopilotKit completed-history reconnect", () => {
     expect(JSON.stringify(await response.json())).not.toContain("weather.observation");
   });
 
+  it("never emits a successful history replay when 501 canonical messages reveal truncation", async () => {
+    mockBackend(() => ownerHistory(Array.from({ length: 501 }, (_, index) => ({
+      id: "turn-" + index,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: "persisted-" + index,
+    }))));
+    const response = await POST(connect());
+    expect(response.status).toBe(502);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const responseBody = JSON.stringify(await response.json());
+    expect(responseBody).not.toContain("RUN_FINISHED");
+    expect(responseBody).not.toContain("persisted-0");
+  });
+
   it("refuses client-controlled tool, context, state and arbitrary endpoint fields", async () => {
     for (const payload of [
       { threadId: "not-a-uuid" },
