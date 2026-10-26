@@ -50,8 +50,9 @@ function validReceipt(value: unknown): value is Record<string, unknown> {
   }
   return (value.degraded_mode === undefined || value.degraded_mode === true) &&
     (value.fallback_level === undefined ||
-      (Number.isInteger(value.fallback_level) && Number(value.fallback_level) >= 0 &&
-       Number(value.fallback_level) <= 100));
+      (typeof value.fallback_level === "number" &&
+       Number.isInteger(value.fallback_level) && value.fallback_level >= 0 &&
+       value.fallback_level <= 100));
 }
 
 function validIntegrity(value: unknown): value is Record<string, unknown> {
@@ -81,7 +82,10 @@ export function parseKarenVerifiedHistory(
   }
   const assistantIds = new Set(messages.filter(m => m.role === "assistant").map(m => m.id));
   const parts = new Map<string, VerifiedPart[]>();
-  const counters = new Map<string, { presentation: number; receipt: number; integrity: number }>();
+  const counters = new Map<string, {
+    presentation: number; receipt: number; integrity: number;
+    presentationIds: Set<string>;
+  }>();
   for (const candidate of value) {
     if (!record(candidate) || Object.keys(candidate).some(
       key => !["type", "name", "messageId", "value"].includes(key)
@@ -91,13 +95,18 @@ export function parseKarenVerifiedHistory(
     }
     const name = candidate.name;
     const id = candidate.messageId;
-    const seen = counters.get(id) || { presentation: 0, receipt: 0, integrity: 0 };
+    const seen = counters.get(id) || {
+      presentation: 0, receipt: 0, integrity: 0,
+      presentationIds: new Set<string>(),
+    };
     let part: VerifiedPart;
     if (name === "karen.presentation.v1") {
       const envelope = parseKarenPresentation(candidate.value);
-      if (!envelope || ++seen.presentation > 6) {
+      if (!envelope || ++seen.presentation > 6 ||
+          seen.presentationIds.has(envelope.presentation_id)) {
         throw new Error("Unsupported verified presentation");
       }
+      seen.presentationIds.add(envelope.presentation_id);
       part = { type: "presentation", value: envelope };
     } else if (name === "karen.execution_receipt.v1") {
       if (!validReceipt(candidate.value) || ++seen.receipt > 1) {
