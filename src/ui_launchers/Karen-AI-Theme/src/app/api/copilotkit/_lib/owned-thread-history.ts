@@ -102,8 +102,33 @@ export async function readKarenOwnedThreadMessages(
       return failure("Invalid canonical conversation message", 502);
     }
     const message = item as Record<string, unknown>;
-    // SDK rich/tool projections remain blocked until versioned payload parity.
-    if (message.role !== "user" && message.role !== "assistant") continue;
+    // Never silently discard privileged activity, attachments, or validated
+    // presentation receipts. CopilotKit's text-only adapter cannot replay them
+    // faithfully yet, so an incomplete transcript must not look restored.
+    const metadata = message.metadata;
+    const metadataMap =
+      metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? metadata as Record<string, unknown>
+        : {};
+    const richKeys = [
+      "structured_content", "presentation", "presentation_payload",
+      "karen.presentation.v1", "tool_activity", "tool_calls",
+      "attachments", "artifacts", "execution_receipt",
+    ];
+    const carriesRichValue = (value: unknown): boolean =>
+      value !== undefined && value !== null && value !== "" &&
+      (!Array.isArray(value) || value.length > 0) &&
+      (typeof value !== "object" || Object.keys(value).length > 0);
+    if (
+      (message.role !== "user" && message.role !== "assistant") ||
+      richKeys.some((key) =>
+        carriesRichValue(message[key]) || carriesRichValue(metadataMap[key]),
+      ) ||
+      carriesRichValue(message.function_call) ||
+      carriesRichValue(message.function_response)
+    ) {
+      return failure("Complete conversation replay is not yet supported", 409);
+    }
     if (typeof message.id !== "string" || !message.id.trim() || message.id.length > 200 ||
         typeof message.content !== "string" || message.content.length > 65536) {
       return failure("Invalid canonical conversation message", 502);
