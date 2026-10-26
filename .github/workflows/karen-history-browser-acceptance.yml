@@ -107,6 +107,8 @@ jobs:
 
     steps:
       - name: Require pinned reviewed source revision
+        working-directory: .
+        shell: bash
         env:
           TARGET_SHA: ${{ inputs.target_sha }}
         run: |
