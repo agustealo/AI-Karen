@@ -99,9 +99,16 @@ export function KarenCopilotHistoryGate({
         // A thread switch must never retain another conversation's agent state.
         agent.setMessages(messages);
         setLoaded(conversationId);
-      } catch {
+      } catch (error: unknown) {
         if (!cancelled) {
-          setError("Karen could not verify or restore this conversation.");
+          // A verified conversation can still require an unsupported rich
+          // renderer. Explain the limitation rather than presenting partial
+          // history as successfully restored.
+          const status = error && typeof error === "object" && "status" in error
+            ? (error as { status?: unknown }).status : undefined;
+          setError(status === 409
+            ? "This conversation contains interactive or structured content that CopilotKit cannot restore yet. Use the existing conversation view."
+            : "Karen could not verify or restore this conversation.");
         }
       }
     })();
