@@ -597,6 +597,7 @@ class PostgresConversationRepository(ConversationRepository):
                                   AND request_id = :request_id
                                   AND correlation_id = :correlation_id
                                   AND lease_token = CAST(:token AS uuid)
+                                  AND lease_expires_at > clock_timestamp()
                                   AND status = 'running'
                                   AND cancel_requested_at IS NULL
                                 RETURNING execution_id
