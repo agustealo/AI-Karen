@@ -37,6 +37,26 @@ vi.mock("@/components/chat/assistant-ui/KarenBrowserDictation", () => ({
   KarenBrowserDictationCapture: () => <div data-testid="shared-browser-dictation" />,
 }));
 
+vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
+  useKarenPersistedDraft: () => {
+    const [draft, setDraft] = React.useState("");
+    const text = React.useRef("");
+    return {
+      draft,
+      setText: (value: string) => {
+        if (value.length > 65536) return;
+        text.current = value;
+        setDraft(value);
+      },
+      readText: () => text.current,
+      status: "ready",
+      synced: true,
+      retry: vi.fn(),
+      discardAndReload: vi.fn(),
+    };
+  },
+}));
+
 vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedHistory", () => ({
   KarenCopilotAssistantSlot: () => null,
 }));
