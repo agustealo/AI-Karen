@@ -92,9 +92,23 @@ export async function stopKarenOwnedRun(
   }
   let receipt: unknown;
   try {
-    // The backend response is a deliberately bounded control-plane receipt.
-    const body = await response.text();
-    if (new TextEncoder().encode(body).byteLength > MAX_STOP_BYTES) throw new Error("oversized");
+    // Bound the actual byte stream, not only Content-Length or text decoding.
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("missing receipt");
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let bytes = 0;
+    let body = "";
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      bytes += part.value.byteLength;
+      if (bytes > MAX_STOP_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("oversized receipt");
+      }
+      body += decoder.decode(part.value, { stream: true });
+    }
+    body += decoder.decode();
     receipt = JSON.parse(body);
   } catch {
     return NextResponse.json({ detail: "Invalid cancellation receipt" }, { status: 503 });
