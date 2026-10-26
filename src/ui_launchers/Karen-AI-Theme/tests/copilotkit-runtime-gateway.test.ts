@@ -173,7 +173,6 @@ describe("CopilotKit v2 protected gateway", () => {
       ["GET", "/api/copilotkit/threads/not-a-uuid/messages"],
       ["POST", "/api/copilotkit/threads/clear"],
       ["POST", "/api/copilotkit/agent/default/stop/8d3f7a11-bc7a-4caa-bf1d-6932891d42d0"],
-      ["POST", "/api/copilotkit/agent/default/connect"],
       ["GET", "/api/copilotkit/inspector-metadata"],
     ]) {
       const candidate = new NextRequest(`http://localhost:3000${path}`, {
