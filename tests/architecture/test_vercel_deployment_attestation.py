@@ -1,0 +1,132 @@
+"""Fail-closed independent Vercel preview provenance acceptance contracts."""
+
+from __future__ import annotations
+
+import io
+import json
+from email.message import Message
+from urllib.error import HTTPError
+from unittest.mock import patch
+
+import pytest
+
+from scripts.ci.verify_deployment_revision import RevisionVerificationError
+from scripts.ci.verify_vercel_deployment import verify_vercel_deployment
+
+SHA = "a" * 40
+ORIGIN = "https://ai-karen-bc123-zeustheeternal-3982.vercel.app"
+PROJECT = "prj_ab12"
+TEAM = "team_ab12"
+REPO = "agustealo/AI-Karen"
+TOKEN = "test-token-never-log"
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(self, body: bytes, *, status: int = 200, mime: str = "application/json"):
+        super().__init__(body)
+        self.status = status
+        self.headers = Message()
+        self.headers["Content-Type"] = mime
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+class FakeOpener:
+    def __init__(self, response):
+        self.response = response
+        self.request = None
+        self.timeout = None
+
+    def open(self, request, *, timeout):
+        self.request = request
+        self.timeout = timeout
+        return self.response
+
+
+def metadata(**overrides):
+    values = {
+        "id": "dpl_abc123",
+        "url": "ai-karen-bc123-zeustheeternal-3982.vercel.app",
+        "readyState": "READY",
+        "projectId": PROJECT,
+        "source": "git",
+        "target": None,
+        "meta": {"githubCommitSha": SHA, "githubOrg": "agustealo", "githubRepo": "AI-Karen"},
+    }
+    values.update(overrides)
+    return values
+
+
+def verify(values, *, opener=None):
+    client = opener or FakeOpener(FakeResponse(json.dumps(values).encode()))
+    result = verify_vercel_deployment(ORIGIN, SHA, PROJECT, TEAM, REPO, TOKEN, opener=client)
+    return result, client
+
+
+def test_matching_platform_provenance_passes():
+    deployment_id, client = verify(metadata())
+    assert deployment_id == "dpl_abc123"
+    assert client.request.full_url.startswith(
+        "https://api.vercel.com/v13/deployments/ai-karen-bc123-zeustheeternal-3982.vercel.app?"
+    )
+    assert "teamId=team_ab12" in client.request.full_url
+    assert client.request.get_header("Authorization") == "Bearer " + TOKEN
+    assert client.timeout == 20
+
+
+@pytest.mark.parametrize("changes", [
+    {"readyState": "ERROR"},
+    {"readyState": "BUILDING"},
+    {"readyState": "QUEUED"},
+    {"url": "a-different-deployment.vercel.app"},
+    {"projectId": "prj_other"},
+    {"id": ""},
+    {"id": "not_a_deployment"},
+    {"source": "cli"},
+    {"target": "production"},
+    {"meta": {"githubCommitSha": "b" * 40, "githubOrg": "agustealo", "githubRepo": "AI-Karen"}},
+    {"meta": {"githubCommitSha": SHA, "githubOrg": "different", "githubRepo": "AI-Karen"}},
+    {"meta": {}},
+])
+def test_platform_mismatch_fails_closed(changes):
+    with pytest.raises(RevisionVerificationError):
+        verify(metadata(**changes))
+
+
+@pytest.mark.parametrize("url", [
+    "https://other.example.com",
+    "http://ai-karen-bc123-zeustheeternal-3982.vercel.app",
+    "https://alice:password@ai-karen-bc123-zeustheeternal-3982.vercel.app",
+    "https://vercel.app",
+    "https://vercel.app.evil.example",
+    "https://ai-karen-bc123-zeustheeternal-3982.vercel.app/path",
+])
+def test_non_immutable_or_untrusted_url_fails(url):
+    with pytest.raises(RevisionVerificationError):
+        verify_vercel_deployment(url, SHA, PROJECT, TEAM, REPO, TOKEN)
+
+
+def test_missing_auth_configuration_fails_without_network_access():
+    for project, team, token in (
+        ("", TEAM, TOKEN), (PROJECT, "", TOKEN), (PROJECT, TEAM, ""),
+    ):
+        with pytest.raises(RevisionVerificationError):
+            verify_vercel_deployment(ORIGIN, SHA, project, team, REPO, token)
+
+
+def test_platform_http_error_fails_without_exposing_token():
+    client = FakeOpener(FakeResponse(b"{}", status=403))
+    with pytest.raises(RevisionVerificationError) as exc:
+        verify_vercel_deployment(ORIGIN, SHA, PROJECT, TEAM, REPO, TOKEN, opener=client)
+    assert TOKEN not in str(exc.value)
+
+
+def test_platform_redirect_fails_without_following():
+    with patch("scripts.ci.verify_vercel_deployment.build_opener") as factory:
+        factory.return_value.open.side_effect = HTTPError(ORIGIN, 302, "Found", {}, None)
+        with pytest.raises(RevisionVerificationError):
+            verify_vercel_deployment(ORIGIN, SHA, PROJECT, TEAM, REPO, TOKEN)
