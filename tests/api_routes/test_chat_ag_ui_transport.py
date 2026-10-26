@@ -513,7 +513,7 @@ async def test_ag_ui_capabilities_are_derived_from_canonical_feature_flag(monkey
     identity = {"user_id": USER, "tenant_id": TENANT_A}
     assert (
         await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
-    ) == {"enabled": True, "governed_history": False}
+    ) == {"enabled": True, "governed_history": False, "observed_event_journal": False}
     monkeypatch.setattr(
         chat_ingress,
         "get_runtime_settings",
@@ -521,7 +521,7 @@ async def test_ag_ui_capabilities_are_derived_from_canonical_feature_flag(monkey
     )
     assert (
         await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
-    ) == {"enabled": False, "governed_history": False}
+    ) == {"enabled": False, "governed_history": False, "observed_event_journal": False}
 
 
 @pytest.mark.asyncio
