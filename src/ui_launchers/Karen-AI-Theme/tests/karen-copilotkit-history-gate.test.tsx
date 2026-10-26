@@ -55,15 +55,18 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(karenScopedAgentId(CONVERSATION_A)).not.toBe(karenScopedAgentId(CONVERSATION_B));
   });
 
-  it("maps only trusted user and assistant text, preserving durable message IDs and order", () => {
+  it("preserves exact message IDs and refuses to silently omit unsupported roles", () => {
     expect(toCopilotTextMessages([
       { id: "user-a", role: "user", content: "Question" },
-      { id: "system-a", role: "system", content: "Do not import" },
       { id: "assistant-a", role: "assistant", content: "Response" },
     ])).toEqual([
       { id: "user-a", role: "user", content: "Question" },
       { id: "assistant-a", role: "assistant", content: "Response" },
     ]);
+    expect(() => toCopilotTextMessages([
+      { id: "user-a", role: "user", content: "Question" },
+      { id: "system-a", role: "system", content: "Unrendered hidden content" },
+    ])).toThrow("invalid message");
   });
 
   it("refuses a malformed canonical text message, rather than creating invented content", () => {
@@ -149,6 +152,52 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(screen.getByRole("alert").textContent).toContain("interactive or structured content");
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
+  });
+
+  it("never mounts a text-only chat when verified rich playback events would be dropped", async () => {
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "m1", role: "assistant", content: "Weather observed" }],
+      replayEvents: [
+        { type: "CUSTOM", name: "karen.presentation.v1", messageId: "m1",
+          value: { component_type: "weather.observation" } },
+      ],
+    });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.getByRole("alert").textContent)
+      .toContain("interactive or structured content");
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+  });
+
+  it("accepts an explicitly empty verified replay array for text-only conversations", async () => {
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "m1", role: "user", content: "Plain question" }],
+      replayEvents: [],
+    });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
+      { id: "m1", role: "user", content: "Plain question" },
+    ]);
+  });
+
+  it("rejects duplicate IDs and invalid replay metadata without modifying an agent", async () => {
+    expect(() => toCopilotTextMessages([
+      { id: "same", role: "user", content: "Question" },
+      { id: "same", role: "assistant", content: "Answer" },
+    ])).toThrow("invalid message");
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "m1", role: "assistant", content: "Answer" }],
+      replayEvents: { type: "CUSTOM", private: "invalid" },
+    });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
   });
 
   it("ignores an obsolete conversation snapshot after switching threads", async () => {
