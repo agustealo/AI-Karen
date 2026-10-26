@@ -691,3 +691,130 @@ async def test_ck07_durable_run_admission_failure_fails_before_model_work(
     assert exc.value.status_code == 503
     assert exc.value.detail == "Chat run admission unavailable"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("record_status", "http_status", "confirmed"),
+    [
+        ("cancelling", 202, False),
+        ("cancelled", 200, True),
+        ("completed", 409, False),
+        ("failed", 409, False),
+        ("orphaned", 409, False),
+        (None, 404, False),
+    ],
+)
+async def test_ck07b_scoped_stop_never_conflates_intent_with_terminal(
+    monkeypatch, record_status, http_status, confirmed,
+):
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    thread = "7e76d870-5314-40ae-9478-513b843a9fd0"
+    calls = []
+
+    class StopCoordinator:
+        async def request_cancel(self, context, *, run_id):
+            calls.append((context.tenant_id, context.user_id,
+                          context.conversation_id, run_id))
+            return record_status
+
+    monkeypatch.setattr(
+        chat_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=True,
+        )),
+    )
+    monkeypatch.setattr(chat_ingress, "get_chat_run_coordinator", StopCoordinator)
+    response = await chat_ingress.cancel_ag_ui_chat_run(
+        thread_id=thread, run_id="run-scoped",
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    ) if record_status is not None else None
+    if record_status is None:
+        with pytest.raises(HTTPException) as denied:
+            await chat_ingress.cancel_ag_ui_chat_run(
+                thread_id=thread, run_id="run-scoped",
+                user={"user_id": USER, "tenant_id": TENANT_A},
+            )
+        assert denied.value.status_code == 404
+        return
+    assert response.status_code == http_status
+    body = json.loads(response.body)
+    if http_status in (200, 202):
+        assert body["cancellation_confirmed"] is confirmed
+        assert body["cancel_requested"] is True
+    else:
+        assert "cancellation_confirmed" not in body
+    assert calls[0] == (TENANT_A, USER, thread, "run-scoped")
+
+
+@pytest.mark.asyncio
+async def test_ck07b_stop_rejects_missing_run_identity_foreign_owner_and_flag_off(
+    monkeypatch,
+):
+    thread = "7e76d870-5314-40ae-9478-513b843a9fd0"
+    calls = []
+    class StopCoordinator:
+        async def request_cancel(self, context, *, run_id):
+            calls.append(run_id)
+            raise PermissionError("conversation_user_mismatch")
+
+    monkeypatch.setattr(chat_ingress, "get_chat_run_coordinator", StopCoordinator)
+    monkeypatch.setattr(
+        chat_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=False,
+        )),
+    )
+    with pytest.raises(HTTPException) as disabled:
+        await chat_ingress.cancel_ag_ui_chat_run(
+            thread_id=thread, run_id="run-scoped",
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert disabled.value.status_code == 404
+    assert calls == []
+
+    monkeypatch.setattr(
+        chat_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=True,
+        )),
+    )
+    with pytest.raises(HTTPException) as malformed:
+        await chat_ingress.cancel_ag_ui_chat_run(
+            thread_id=thread, run_id="forged run",
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert malformed.value.status_code == 422
+    assert calls == []
+    with pytest.raises(HTTPException) as denied:
+        await chat_ingress.cancel_ag_ui_chat_run(
+            thread_id=thread, run_id="run-scoped",
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert denied.value.status_code == 404
+    assert calls == ["run-scoped"]
+
+
+@pytest.mark.asyncio
+async def test_ck07b_run_stop_runtime_error_cannot_claim_success(monkeypatch):
+    thread = "7e76d870-5314-40ae-9478-513b843a9fd0"
+
+    class FailingCoordinator:
+        async def request_cancel(self, context, *, run_id):
+            raise RuntimeError("postgres-unavailable")
+
+    monkeypatch.setattr(
+        chat_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=True,
+        )),
+    )
+    monkeypatch.setattr(
+        chat_ingress, "get_chat_run_coordinator", lambda: FailingCoordinator(),
+    )
+    with pytest.raises(HTTPException) as unavailable:
+        await chat_ingress.cancel_ag_ui_chat_run(
+            thread_id=thread, run_id="run-scoped",
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert unavailable.value.status_code == 503
