@@ -12,7 +12,7 @@ from typing import Any
 
 
 TRUSTED_REQUEST_SOURCES = frozenset({
-    "user_selected", "user_profile",
+    "user_selected",
 })
 
 
@@ -56,7 +56,8 @@ def resolve_location(
         if value:
             return ResolvedLocation(value, "authorized_runtime")
 
-        if metadata.get("location_source") == "device_with_consent":
+        if (authorized.get("device_location_permitted") is True
+                and metadata.get("location_source") == "device_with_consent"):
             value = _bounded(metadata.get("weather_location") or metadata.get("location"))
             if value:
                 return ResolvedLocation(value, "device_with_consent")
@@ -76,7 +77,8 @@ def resolve_location(
         value = _bounded(authorized.get("timezone"))
         if value:
             return ResolvedLocation(value, "authorized_runtime")
-        if metadata.get("timezone_source") == "device_with_consent":
+        if (authorized.get("device_timezone_permitted") is True
+                and metadata.get("timezone_source") == "device_with_consent"):
             value = _bounded(metadata.get("timezone"))
             if value:
                 return ResolvedLocation(value, "device_with_consent")
