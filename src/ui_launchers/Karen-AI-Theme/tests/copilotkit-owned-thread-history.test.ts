@@ -21,7 +21,6 @@ function reply(
   identity: string,
   messages: unknown[] = [
     { id: "user-1", role: "user", content: "Hello", metadata: { password: "secret" } },
-    { id: "system-1", role: "system", content: "Never expose", metadata: {} },
     { id: "assistant-1", role: "assistant", content: "Welcome back", metadata: { internal: "secret" } },
   ],
 ) {
@@ -137,6 +136,9 @@ describe("CopilotKit owned thread history", () => {
       [
         { id: "user-1", role: "user", content: "Execute research" },
         { id: "tool-1", role: "tool", content: "Sensitive tool output" },
+      ],
+      [
+        { id: "system-1", role: "system", content: "System-level data" },
       ],
       [
         { id: "assistant-1", role: "assistant", content: "Done",
