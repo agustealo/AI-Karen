@@ -155,6 +155,18 @@ jobs:
           set -euo pipefail
           python ../../../scripts/ci/verify_deployment_revision.py
 
+      - name: Verify independent Vercel deployment provenance before browser acceptance
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          PYTHONPATH: ${{ github.workspace }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          python ../../../scripts/ci/verify_vercel_deployment.py
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
@@ -173,13 +185,18 @@ jobs:
           set -euo pipefail
           npm run test:e2e:search-release -- --reporter=list --retries=0
 
-      - name: Revalidate deployment and reviewed PR head after browser acceptance
+      - name: Revalidate platform, running deployment and reviewed PR head after browser acceptance
         shell: bash
         env:
           TARGET_SHA: ${{ inputs.target_sha }}
           GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ github.workspace }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           set -euo pipefail
+          python ../../../scripts/ci/verify_vercel_deployment.py
           python ../../../scripts/ci/verify_deployment_revision.py
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           actual_sha="$(gh api repos/${GITHUB_REPOSITORY}/pulls/550 --jq '.head.sha')"
