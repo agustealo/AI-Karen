@@ -148,6 +148,18 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.runAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("retains an unsent draft and unlocks submit when the SDK append fails synchronously", () => {
+    sdk.agent.addMessage.mockImplementationOnce(() => { throw new Error("private SDK failure"); });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("Retain my question"));
+    expect(input().value).toBe("Retain my question");
+    expect(screen.getByRole("alert").textContent).toContain("unsent draft was retained");
+    expect(screen.getByRole("alert").textContent).not.toContain("private");
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    act(() => input().onSubmitMessage("Retry after recovery"));
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("never triggers inference for blank, oversized, running, or foreign-thread input", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     act(() => input().onSubmitMessage("  "));
