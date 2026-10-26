@@ -146,6 +146,9 @@ class TimeoutSettings:
     agent_timeout_seconds: int = 300
     saved_task_claim_lease_seconds: int = 900
     saved_task_claim_heartbeat_seconds: int = 60
+    # CK-07A durable AG-UI execution fencing; only used with opt-in ledger.
+    chat_run_lease_seconds: int = 120
+    chat_run_heartbeat_seconds: int = 10
     tool_timeout_seconds: int = 30
     web_search_timeout_seconds: int = 60
     extension_timeout_seconds: int = 30
@@ -423,6 +426,17 @@ class RuntimeSettings:
         if env_ag_ui_run_ledger is not None:
             self.features.enable_ag_ui_durable_runs = as_bool(env_ag_ui_run_ledger)
 
+        env_chat_run_lease = env("KARI_CHAT_RUN_LEASE_SECONDS")
+        if env_chat_run_lease is not None:
+            self.timeouts.chat_run_lease_seconds = as_int(
+                env_chat_run_lease, self.timeouts.chat_run_lease_seconds
+            )
+        env_chat_run_heartbeat = env("KARI_CHAT_RUN_HEARTBEAT_SECONDS")
+        if env_chat_run_heartbeat is not None:
+            self.timeouts.chat_run_heartbeat_seconds = as_int(
+                env_chat_run_heartbeat, self.timeouts.chat_run_heartbeat_seconds
+            )
+
         env_enable_streaming = env("KARI_ENABLE_STREAMING")
         if env_enable_streaming is not None:
             self.features.enable_streaming = as_bool(env_enable_streaming)
@@ -493,6 +507,12 @@ class RuntimeSettings:
         if not 2400 <= self.task_verification.max_answer_chars <= 262144:
             issues.append("Task review answer limit must be between 2400 and 262144 characters")
 
+        if not 30 <= self.timeouts.chat_run_lease_seconds <= 3600:
+            issues.append("Chat run lease must be between 30 and 3600 seconds")
+        if not 1 <= self.timeouts.chat_run_heartbeat_seconds <= (
+            self.timeouts.chat_run_lease_seconds // 3
+        ):
+            issues.append("Chat run heartbeat must be between 1 second and one third of its lease")
         if self.timeouts.saved_task_claim_lease_seconds < 30:
             issues.append("Saved task claim lease must be at least 30 seconds")
         if (
