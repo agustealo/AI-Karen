@@ -160,3 +160,8 @@ export function KarenCopilotAssistantMessage(
     </div>
   );
 }
+
+/** CopilotKit v2 slots require the default component's static slot namespace. */
+export const KarenCopilotAssistantSlot = Object.assign(
+  KarenCopilotAssistantMessage, CopilotChatAssistantMessage,
+);
