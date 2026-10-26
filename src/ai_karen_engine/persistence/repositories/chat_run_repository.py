@@ -287,7 +287,7 @@ class SqlChatRunRepository:
         serialized by locking its parent run, including terminal writers.
         """
         event_type = event.get("type") if isinstance(event, Mapping) else None
-        if event_type not in _EVENT_TYPES or not isinstance(event, Mapping):
+        if not isinstance(event_type, str) or event_type not in _EVENT_TYPES:
             raise ValueError("invalid_chat_projection_event")
         if not isinstance(event, dict):
             event = dict(event)
@@ -296,13 +296,16 @@ class SqlChatRunRepository:
             or event.get("runId") != lease.transport_run_id
         ):
             raise ValueError("chat_projection_identity_mismatch")
-        if event_type == "CUSTOM" and event.get("name") not in {
+        if event_type == "CUSTOM" and (
+            not isinstance(event.get("name"), str)
+            or event.get("name") not in {
             "karen.presentation.v1", "karen.execution_receipt.v1",
             "karen.response_integrity.v1", "karen.citations",
             "karen.agent_step", "karen.tool_activity", "karen.learning_decision",
             "karen.approval_required", "karen.status", "karen.warning",
             "karen.checkpoint",
-        }:
+            }
+        ):
             raise ValueError("unsupported_chat_projection_custom_event")
         try:
             encoded = json.dumps(
