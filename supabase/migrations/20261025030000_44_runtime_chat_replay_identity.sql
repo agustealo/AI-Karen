@@ -4,7 +4,8 @@ BEGIN;
 
 ALTER TABLE public.runtime_chat_runs
   ADD COLUMN user_message_id UUID,
-  ADD COLUMN assistant_message_id UUID;
+  ADD COLUMN assistant_message_id UUID,
+  ADD COLUMN assistant_message_digest CHAR(64);
 
 ALTER TABLE public.runtime_chat_runs
   ADD CONSTRAINT ck_runtime_chat_completed_message_identity CHECK (
@@ -12,6 +13,27 @@ ALTER TABLE public.runtime_chat_runs
     OR (
       user_message_id IS NOT NULL
       AND assistant_message_id IS NOT NULL
+      AND assistant_message_digest ~ '^[0-9a-f]{64}
+    )
+  ) NOT VALID;
+
+-- Existing completed rows from the earlier gated CK-07A schema did not
+-- record exact message IDs. They remain non-replayable rather than making
+-- this additive migration fail or inventing an attestation. All future
+-- writes must satisfy the constraint.
+CREATE INDEX idx_runtime_chat_replay_completed
+  ON public.runtime_chat_runs (tenant_id, user_id, conversation_id, created_at)
+  WHERE status = 'completed';
+
+COMMENT ON COLUMN public.runtime_chat_runs.user_message_id IS
+  'Exact canonical user message UUID committed with completed run in the same SQL transaction.';
+COMMENT ON COLUMN public.runtime_chat_runs.assistant_message_id IS
+  'Exact canonical assistant message UUID used to attest replay provenance.';
+COMMENT ON COLUMN public.runtime_chat_runs.assistant_message_digest IS
+  'SHA-256 of canonical assistant message identity, content and metadata, committed atomically with run.';
+
+COMMIT;
+
       AND user_message_id <> assistant_message_id
     )
   ) NOT VALID;
