@@ -157,11 +157,11 @@ async function validateRunEnvelope(request: NextRequest): Promise<NextResponse |
  * Feature eligibility comes from the same canonical runtime flag as AG-UI
  * execution. Successful SDK discovery alone cannot prove the transport is on.
  */
-export async function verifyKarenAgUiEnabled(
+export async function readKarenAgUiCapabilities(
   request: NextRequest,
   backendBaseUrl: string,
   headers: Record<string, string>,
-): Promise<NextResponse | null> {
+): Promise<{ governedHistory: boolean } | NextResponse> {
   let response: Response;
   try {
     response = await fetch(`${backendBaseUrl}/api/chat/ag-ui/capabilities`, {
@@ -186,10 +186,23 @@ export async function verifyKarenAgUiEnabled(
     if (!(flags as { enabled: boolean }).enabled) {
       return NextResponse.json({ detail: "Karen AG-UI transport is disabled" }, { status: 503 });
     }
+    const governed = (flags as Record<string, unknown>).governed_history;
+    if (governed !== undefined && typeof governed !== "boolean") {
+      return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
+    }
+    return { governedHistory: governed === true };
   } catch {
     return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
   }
-  return null;
+}
+
+export async function verifyKarenAgUiEnabled(
+  request: NextRequest,
+  backendBaseUrl: string,
+  headers: Record<string, string>,
+): Promise<NextResponse | null> {
+  const result = await readKarenAgUiCapabilities(request, backendBaseUrl, headers);
+  return result instanceof NextResponse ? result : null;
 }
 
 async function handle(request: NextRequest): Promise<Response> {
@@ -200,13 +213,14 @@ async function handle(request: NextRequest): Promise<Response> {
   const backendBaseUrl = getBackendBaseUrl();
   const auth = await verifyKarenCopilotSession(request, backendBaseUrl);
   if (auth instanceof NextResponse) return auth;
-  const disabled = await verifyKarenAgUiEnabled(request, backendBaseUrl, auth.headers);
-  if (disabled) return disabled;
+  const capabilities = await readKarenAgUiCapabilities(request, backendBaseUrl, auth.headers);
+  if (capabilities instanceof NextResponse) return capabilities;
 
   const requestedHistoryId = request.method === "GET" ? ownedThreadHistoryId(request) : null;
   if (requestedHistoryId) {
     return readKarenOwnedThreadMessages(
       request, backendBaseUrl, auth.headers, auth.principal, requestedHistoryId,
+      capabilities.governedHistory,
     );
   }
   const scopedStop = request.method === "POST"
@@ -224,6 +238,7 @@ async function handle(request: NextRequest): Promise<Response> {
     if (typeof threadId !== "string") return threadId;
     return connectKarenOwnedThread(
       request, backendBaseUrl, auth.headers, auth.principal, threadId,
+      capabilities.governedHistory,
     );
   }
 
