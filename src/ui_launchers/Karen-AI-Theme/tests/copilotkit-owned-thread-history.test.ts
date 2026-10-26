@@ -86,7 +86,7 @@ describe("CopilotKit owned thread history", () => {
   it("does not disclose a foreign user's conversation even if upstream accidentally returns one", async () => {
     guardedBackend(() => reply("foreign-user"));
     const result = await GET(request());
-    expect(result.status).toBe(502);
+    expect(result.status).toBe(404);
     expect(JSON.stringify(await result.json())).not.toContain("Welcome back");
   });
 
