@@ -90,12 +90,52 @@ def verify_deployment_revision(
         raise RevisionVerificationError("Deployed revision differs from reviewed PR head")
 
 
+
+def verify_backend_ready(base_url: str, *, opener: Any = None) -> None:
+    """Prove the web UI can reach its canonical backend before using credentials.
+
+    A rendered Next.js page or a working revision endpoint alone is insufficient
+    evidence of an operational authenticated consumer application.
+    """
+    endpoint = urlsplit(revision_endpoint(base_url))
+    health_url = urlunsplit((endpoint.scheme, endpoint.netloc, "/api/health", "", ""))
+    request = Request(
+        health_url,
+        headers={"Accept": "application/json", "Cache-Control": "no-cache"},
+        method="GET",
+    )
+    client = opener if opener is not None else build_opener(NoRedirects())
+    try:
+        with client.open(request, timeout=TIMEOUT_SECONDS) as response:
+            if response.status != 200:
+                raise RevisionVerificationError("Backend health endpoint returned non-200")
+            mime = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if mime != "application/json":
+                raise RevisionVerificationError("Backend health endpoint returned non-JSON")
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(body) > MAX_RESPONSE_BYTES:
+                raise RevisionVerificationError("Backend health response oversized")
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        raise RevisionVerificationError("Backend health endpoint unavailable or redirected") from exc
+
+    try:
+        payload = json.loads(body)
+    except (UnicodeError, ValueError) as exc:
+        raise RevisionVerificationError("Malformed backend health response") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") != "ok"
+        or payload.get("backend_ready") is not True
+    ):
+        raise RevisionVerificationError("Canonical backend is not ready")
+
 def main() -> int:
     try:
         verify_deployment_revision(
             os.environ.get("KAREN_BASE_URL", ""),
             os.environ.get("TARGET_SHA", ""),
         )
+        verify_backend_ready(os.environ.get("KAREN_BASE_URL", ""))
     except RevisionVerificationError as exc:
         LOGGER.error("Release revision verification failed: %s", exc)
         return 1
