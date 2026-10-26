@@ -586,6 +586,8 @@ class PostgresConversationRepository(ConversationRepository):
                             text("""
                                 UPDATE public.runtime_chat_runs
                                 SET status = 'completed',
+                                    user_message_id = CAST(:user_message_id AS uuid),
+                                    assistant_message_id = CAST(:assistant_message_id AS uuid),
                                     terminal_at = NOW(),
                                     updated_at = NOW(),
                                     lease_token = NULL,
@@ -603,6 +605,8 @@ class PostgresConversationRepository(ConversationRepository):
                                 RETURNING execution_id
                             """),
                             {
+                                "user_message_id": user_message.id,
+                                "assistant_message_id": assistant_message.id,
                                 "execution": run_lease.execution_id,
                                 "tenant": run_lease.tenant_id,
                                 "owner": run_lease.user_id,
