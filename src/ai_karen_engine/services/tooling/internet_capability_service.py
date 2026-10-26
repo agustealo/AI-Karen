@@ -353,6 +353,23 @@ class InternetCapabilityService:
                             "request_id": execution_context.request_id,
                         },
                     }
+                except ValueError as exc:
+                    # Missing or invalid place is an input requirement, not a
+                    # failed weather observation. Never retry through web search.
+                    return {
+                        "query": request.query, "mode": "weather",
+                        "status": "needs_location", "success": False,
+                        "can_execute": False,
+                        "reason": str(exc),
+                        "missing_requirements": ["location.current"],
+                        "results": [], "sources": [], "citations": [],
+                        "extractedData": None, "provider": "open_meteo",
+                        "metadata": {
+                            "provider": "open_meteo", "degraded": False,
+                            "correlation_id": execution_context.correlation_id,
+                            "request_id": execution_context.request_id,
+                        },
+                    }
                 except Exception as exc:
                     logger.warning(
                         "internet_capability.weather_unavailable",
