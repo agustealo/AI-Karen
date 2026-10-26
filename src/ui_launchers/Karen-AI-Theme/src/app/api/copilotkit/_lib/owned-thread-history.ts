@@ -55,7 +55,7 @@ export async function readKarenOwnedThreadMessages(
 ): Promise<Response> {
   let response: Response;
   try {
-    response = await fetch(baseUrl + "/api/conversations/" + threadId, {
+    response = await fetch(baseUrl + "/api/conversations/" + threadId + "?message_limit=" + (MAX_MESSAGES + 1), {
       method: "GET",
       headers,
       redirect: "manual",
