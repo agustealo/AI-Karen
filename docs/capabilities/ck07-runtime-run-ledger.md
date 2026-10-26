@@ -315,12 +315,73 @@ not an ad-hoc unscoped `localStorage` mirror. Rich live streaming,
 real-browser voice/microphone, keyboard/focus, and SDK stop parity also
 remain release blockers. No consumer feature flags are enabled.
 
+## CK-07E6: canonical authenticated cross-window drafts (migration 47)
+
+The canonical `ConversationRuntimeGateway` and existing
+`PostgresConversationRepository` own unsent draft reads and
+compare-and-swap updates. Migration
+`20261026010000_47_conversation_composer_drafts.sql` creates one
+`public.conversation_composer_drafts` row per canonical conversation,
+owned by the **same tenant and user**, with forced PostgreSQL RLS,
+bounded UTF-8 text (65,536 characters/262,144 bytes), monotonically
+increasing revisions, and `ON DELETE CASCADE` to the conversation.
+A nonexistent row has a virtual empty draft at revision 0.
+Drafts never appear in transcript, memory, tools, observability payloads,
+AG-UI runs, presentation receipts or model outputs.
+
+Thin authenticated `GET/PUT /api/conversations/{conversation_id}/draft`
+routes recheck canonical owner via the runtime gateway. A PUT must include
+`expected_revision` and receives a new revision only when the atomic SQL
+CAS succeeds. Concurrent stale-window writes return **409**; missing/foreign
+conversation returns **404**; missing migration or storage failure returns
+**503**, not fake persistence. Both successful responses include
+`Cache-Control: private, no-store`. The server never logs draft content.
+
+The unmounted CopilotKit composer now uses the single
+`useKarenPersistedDraft` adapter to read the canonical backend,
+autosave bounded typed and voice-dictated edits, and refresh clean drafts
+on focus/periodic checks. A dirty local draft is NEVER overwritten by
+background refresh. Revision conflicts stop writing and show a read-only
+copyable local draft plus an explicit discard/reload choice; unavailable
+storage is truthfully reported and the input cannot silently imply a
+save. Local text is cleared from memory on unmount/logout and is never
+mirrored to localStorage. Drafts persist in the canonical database while
+their conversation exists, including across new windows/sessions.
+
+Crucial submit boundary: `clearBeforeSubmit` requires an **acknowledged
+revision-fenced empty-draft PUT** before `agent.addMessage` or
+`copilotkit.runAgent`. It refuses conflicting, unavailable, pending or
+unverified state; an SDK append/run error restores the unsent text
+without inventing model completion. A caller cannot silently lose a
+newer draft from another window by sending a stale one.
+
+**Proof**: `tests/api_routes/test_composer_drafts.py` verifies owner
+checks, missing/foreign scope, storage errors, API 409/503, and bounded
+inputs. The existing dedicated PostgreSQL job now applies migration 47
+and verifies actual multiworker CAS, least-privilege tenant/user RLS,
+and physical erasure following canonical conversation deletion.
+`tests/karen-copilotkit-persisted-draft.test.tsx` tests real hook
+loading, autosave acknowledgments, conflicts, cross-window refresh,
+unavailable storage and invalid receipts. Additional controlled view
+tests verify no inference unless clear is durably confirmed.
+
+**Privacy/acceptance limits**: no dedicated background purge of abandoned
+draft rows is claimed; retention follows the canonical parent conversation,
+including explicit conversation/user erasure. Unsent drafts intentionally
+survive logouts on the *server* until erased with their parent, but logout
+does not keep a readable local copy. Cross-window synchronization is
+eventually consistent through backend rereads, not a real-time collaboration
+editor. Migration 47 must be applied before any consumer rollout;
+an uninstalled migration fails closed. Real-browser account switching,
+logout, network loss, conflicting tabs and keyboard/focus/voice parity
+remain required before the still-unmounted CopilotKit cutover.
+
 ## Proof entry points
 
 ```bash
 python -m compileall src
 pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
-cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-controlled-chat.test.tsx tests/karen-voice-draft-port.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
+cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-controlled-chat.test.tsx tests/karen-copilotkit-persisted-draft.test.tsx tests/karen-voice-draft-port.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
