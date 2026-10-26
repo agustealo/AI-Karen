@@ -153,6 +153,8 @@ class ChatRunCoordinator:
                     if not await self._repository.finish(
                         lease, status="failed", error_code="CHAT_RUNTIME_ERROR"
                     ):
+                        if await self._repository.cancel_requested(lease):
+                            raise ChatRunCancellationRequested("chat_run_cancel_requested")
                         raise ChatRunLeaseLost("chat_run_lease_lost")
                     terminal = True
                     yield chunk
@@ -202,6 +204,8 @@ class ChatRunCoordinator:
                     status="failed",
                     error_code="CHAT_SSE_MISSING_TERMINAL",
                 )
+                if not terminal and await self._repository.cancel_requested(lease):
+                    raise ChatRunCancellationRequested("chat_run_cancel_requested")
                 raise ChatRunLeaseLost("chat_run_missing_terminal")
         except ChatRunCancellationRequested:
             await close_upstream()
