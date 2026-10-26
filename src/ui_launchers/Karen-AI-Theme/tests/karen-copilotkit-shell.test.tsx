@@ -4,18 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({
   provider: [] as Array<Record<string, unknown>>,
-  chat: [] as Array<Record<string, unknown>>,
+  controlled: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@copilotkit/react-core/v2", () => ({
-  CopilotChatAssistantMessage: () => null,
   CopilotKitProvider: (props: Record<string, unknown>) => {
     sdk.provider.push(props);
     return <div data-testid="copilot-provider">{props.children as React.ReactNode}</div>;
   },
-  CopilotChat: (props: Record<string, unknown>) => {
-    sdk.chat.push(props);
-    return <div data-testid="copilot-chat" />;
+
+}));
+
+vi.mock("@/components/chat/copilotkit/KarenCopilotControlledChat", () => ({
+  KarenCopilotControlledChat: (props: Record<string, unknown>) => {
+    sdk.controlled.push(props);
+    return <div data-testid="copilot-controlled-chat" />;
   },
 }));
 
@@ -32,7 +35,7 @@ const CONVERSATION = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 
 beforeEach(() => {
   sdk.provider.length = 0;
-  sdk.chat.length = 0;
+  sdk.controlled.length = 0;
 });
 
 afterEach(() => {
@@ -43,11 +46,8 @@ afterEach(() => {
 describe("Karen CopilotKit chat compatibility shell", () => {
   it("binds the current canonical conversation UUID to CopilotKit's thread", () => {
     render(<KarenCopilotChat conversationId={CONVERSATION} />);
-    expect(screen.getByTestId("copilot-chat")).toBeTruthy();
-    expect(sdk.chat[0].threadId).toBe(CONVERSATION);
-    expect(sdk.chat[0].agentId).toBe("karen-" + CONVERSATION);
-    const messageView = sdk.chat[0].messageView as Record<string, unknown>;
-    expect(typeof messageView.assistantMessage).toBe("function");
+    expect(screen.getByTestId("copilot-controlled-chat")).toBeTruthy();
+    expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
     expect(sdk.provider[0].runtimeUrl).toBe("/api/copilotkit");
     expect(sdk.provider[0].properties).toBeUndefined();
   });
@@ -64,14 +64,14 @@ describe("Karen CopilotKit chat compatibility shell", () => {
       preferred_llm_provider: "local",
       preferred_model: "selected-model",
     });
-    expect(sdk.chat[0].threadId).toBe(CONVERSATION);
+    expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
   });
 
   it("does not mount an agent with an unverified conversation", () => {
     render(<KarenCopilotChat conversationId="not-an-owned-uuid" />);
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(sdk.provider).toHaveLength(0);
-    expect(sdk.chat).toHaveLength(0);
+    expect(sdk.controlled).toHaveLength(0);
   });
 
   it("rejects unpaired or oversized model hints without starting an agent", () => {
@@ -81,7 +81,7 @@ describe("Karen CopilotKit chat compatibility shell", () => {
       preferredModel={null}
     />);
     expect(screen.getByRole("alert")).toBeTruthy();
-    expect(sdk.chat).toHaveLength(0);
+    expect(sdk.controlled).toHaveLength(0);
     cleanup();
     render(<KarenCopilotChat
       conversationId={CONVERSATION}
@@ -89,6 +89,6 @@ describe("Karen CopilotKit chat compatibility shell", () => {
       preferredModel={"x".repeat(201)}
     />);
     expect(screen.getByRole("alert")).toBeTruthy();
-    expect(sdk.chat).toHaveLength(0);
+    expect(sdk.controlled).toHaveLength(0);
   });
 });
