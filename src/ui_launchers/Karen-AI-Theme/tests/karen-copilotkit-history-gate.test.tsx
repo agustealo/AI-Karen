@@ -140,6 +140,17 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
   });
 
+  it("warns about unsupported rich replay without showing a partial transcript", async () => {
+    backend.fetchConversation.mockRejectedValueOnce(
+      Object.assign(new Error("unsupported presentation"), { status: 409 }),
+    );
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.getByRole("alert").textContent).toContain("interactive or structured content");
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+  });
+
   it("ignores an obsolete conversation snapshot after switching threads", async () => {
     let finishA!: (value: unknown) => void;
     backend.fetchConversation
