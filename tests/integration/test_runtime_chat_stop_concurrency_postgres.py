@@ -21,6 +21,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ai_karen_engine.persistence.repositories import chat_run_repository as module
 from ai_karen_engine.persistence.repositories.chat_run_repository import SqlChatRunRepository
+from ai_karen_engine.services.database.repositories.conversation_repository import Message
+from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+    PostgresConversationRepository,
+)
 
 
 @pytest.mark.asyncio
@@ -44,12 +48,27 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         await raw.execute(
             """
             DROP TABLE IF EXISTS public.runtime_chat_runs CASCADE;
+            DROP TABLE IF EXISTS public.messages CASCADE;
+            DROP TABLE IF EXISTS public.conversations CASCADE;
             DROP TABLE IF EXISTS public.auth_users CASCADE;
             DROP TABLE IF EXISTS public.tenants CASCADE;
             CREATE TABLE public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.auth_users (
                 user_id uuid PRIMARY KEY,
                 tenant_id uuid NOT NULL REFERENCES public.tenants(id)
+            );
+            CREATE TABLE public.conversations (
+                conversation_id uuid PRIMARY KEY,
+                tenant_id uuid NOT NULL REFERENCES public.tenants(id),
+                user_id uuid NOT NULL REFERENCES public.auth_users(user_id)
+            );
+            CREATE TABLE public.messages (
+                message_id uuid PRIMARY KEY,
+                conversation_id uuid NOT NULL REFERENCES public.conversations(conversation_id),
+                role text NOT NULL,
+                content text NOT NULL,
+                message_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                created_at timestamptz NOT NULL DEFAULT now()
             );
             """
         )
@@ -69,6 +88,14 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             """,
             uuid.UUID(user_a), uuid.UUID(tenant_a),
             uuid.UUID(user_b), uuid.UUID(tenant_b),
+        )
+
+        await raw.execute(
+            """
+            INSERT INTO public.conversations(conversation_id,tenant_id,user_id)
+            VALUES ($1,$2,$3)
+            """,
+            uuid.UUID(thread), uuid.UUID(tenant_a), uuid.UUID(user_a),
         )
 
         engine = create_async_engine(
@@ -93,6 +120,7 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
 
         monkeypatch.setattr(module, "async_transaction_scope", real_scope)
         worker_a, worker_b = SqlChatRunRepository(), SqlChatRunRepository()
+        conversations = PostgresConversationRepository(factory)
 
         def identity(owner=user_a, tenant=tenant_a, run_id="run-one"):
             return {
@@ -117,7 +145,8 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         assert await worker_b.request_cancel(**identity()) == "cancelling"
         assert not await worker_a.renew(lease)
         assert await worker_a.cancel_requested(lease)
-        assert not await worker_a.finish(lease, status="completed")
+        with pytest.raises(ValueError, match="requires_atomic_transcript_commit"):
+            await worker_a.finish(lease, status="completed")
         assert await worker_a.finish(
             lease, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
         )
@@ -131,12 +160,35 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             request_id="race-a", correlation_id="race-trace",
         )
         assert race_lease is not None
-        stop_result, complete_result = await asyncio.gather(
+        def message(role: str) -> Message:
+            return Message(
+                id=str(uuid.uuid4()),
+                conversation_id=thread,
+                tenant_id=tenant_a,
+                role=role,
+                content="A literal test message" if role == "user" else "Authorized reply",
+                metadata={
+                    "authorized_user_id": user_a,
+                    "request_id": race_lease.request_id,
+                    "correlation_id": race_lease.correlation_id,
+                },
+            )
+        user_message = message("user")
+        assistant_message = message("assistant")
+        stop_result, transcript_result = await asyncio.gather(
             worker_b.request_cancel(**identity(run_id="run-race")),
-            worker_a.finish(race_lease, status="completed"),
+            conversations.add_completed_turn(
+                user_message, assistant_message, run_lease=race_lease,
+            ),
         )
-        if complete_result:
+        if transcript_result.success:
+            assert transcript_result.data == 2
             assert stop_result == "completed"
+            assert await worker_a.committed_turn(
+                race_lease,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+            )
         else:
             assert stop_result == "cancelling"
             assert await worker_a.cancel_requested(race_lease)
@@ -144,6 +196,19 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
                 race_lease, status="cancelled",
                 error_code="CHAT_STREAM_CANCELLED",
             )
+            assert not await worker_a.committed_turn(
+                race_lease,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+            )
+        stored_count = await raw.fetchval(
+            """
+            SELECT COUNT(*) FROM public.messages
+            WHERE message_id = ANY($1::uuid[])
+            """,
+            [uuid.UUID(user_message.id), uuid.UUID(assistant_message.id)],
+        )
+        assert stored_count == (2 if transcript_result.success else 0)
         observed = await raw.fetchval(
             """
             SELECT status FROM public.runtime_chat_runs
