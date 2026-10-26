@@ -232,11 +232,11 @@ class SqlChatRunRepository:
                      AND c.user_id = r.user_id
                     JOIN messages u
                       ON u.conversation_id = c.conversation_id
-                     AND u.message_id = CAST(:user_message AS uuid)
+                     AND u.message_id::text = :user_message
                      AND u.role = 'user'
                     JOIN messages a
                       ON a.conversation_id = c.conversation_id
-                     AND a.message_id = CAST(:assistant_message AS uuid)
+                     AND a.message_id::text = :assistant_message
                      AND a.role = 'assistant'
                     WHERE r.execution_id = CAST(:execution AS uuid)
                       AND r.tenant_id = CAST(:tenant AS uuid)
