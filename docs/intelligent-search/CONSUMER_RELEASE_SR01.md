@@ -152,3 +152,38 @@ provider readiness, or mark the consumer release green on frontend-only evidence
   backend /api/health, model execution receipts, persistence and citations.
 - Confirm exact deployment attestation and authenticated browser tests.
 - Conduct human consumer UX acceptance on the same reviewed release image.
+
+
+### Protected preview access without credential leakage
+
+The Vercel project enables SSO deployment protection for preview URLs.
+The release verification scripts and Playwright tests must therefore
+authenticate to the **verified deployment origin** before evaluating the
+consumer experience. An SSO login redirect must not count as a healthy app.
+
+- The canonical revision/health verifier accepts a protected
+  \`VERCEL_AUTOMATION_BYPASS_SECRET\` only for a validated HTTPS
+  single-label \`.vercel.app\` origin. It sends the bypass header on the
+  first-party, nonredirecting revision and health requests only.
+- Live consumer Playwright uses
+  \`e2e/fixtures/verified-vercel-preview.ts\` to obtain a first-party
+  \`_vercel_jwt\` cookie via a nonredirecting Vercel protection handshake.
+  No bypass credential is put into a URL, global browser headers, a
+  request interceptor, stored browser state, or another website request.
+- The workflow scopes browser account credentials exclusively to the
+  credential-validation and Playwright steps, not checkout, \`npm ci\`,
+  Node setup or browser installation. The bypass secret is scoped only
+  to revision probes and the protected browser step.
+- Configure \`VERCEL_AUTOMATION_BYPASS_SECRET\` as a protected
+  \`karen-sanitized-browser-acceptance\` environment secret. Require
+  a human reviewer for source revision authorization and keep this
+  environment unavailable to untrusted forks/branches. A GitHub
+  environment name alone does **not** guarantee required review;
+  verify and enforce protection settings in repository administration.
+- The history restoration workflow remains a distinct canonical
+  deployment acceptance track, without a Vercel-only bypass assumption.
+
+The fixture has no mock responses and no request interception. All
+actual user/application interactions continue through the real backend
+under normal RBAC and tenant policies. Until the preview is READY and
+its runtime metadata and backend are attested, acceptance remains RED.
