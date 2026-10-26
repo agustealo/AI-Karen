@@ -222,7 +222,8 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
   it("does not mount an input or request a run before the agent is ready", () => {
     sdk.isReady = false;
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
-    expect(screen.getByRole("status").textContent).toContain("Connecting");
+    expect(screen.getByRole("status").textContent)
+      .toContain("Loading verified conversation and saved draft");
     expect(screen.queryByTestId("native-copilot-view")).toBeNull();
     expect(sdk.runAgent).not.toHaveBeenCalled();
   });
