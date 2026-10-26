@@ -130,3 +130,25 @@ def test_platform_redirect_fails_without_following():
         factory.return_value.open.side_effect = HTTPError(ORIGIN, 302, "Found", {}, None)
         with pytest.raises(RevisionVerificationError):
             verify_vercel_deployment(ORIGIN, SHA, PROJECT, TEAM, REPO, TOKEN)
+
+
+
+def test_search_acceptance_checks_platform_before_and_after_browser():
+    """Platform attestation is required around the credentialed browser job."""
+    from pathlib import Path
+
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/karen-history-browser-acceptance.yml"
+    ).read_text(encoding="utf-8")
+    job = workflow.split("  authenticated-search-replay:", 1)[1]
+    pre = job.index("- name: Verify independent Vercel deployment provenance before browser acceptance")
+    browser = job.index("- name: Prove live authenticated grounded search and replay")
+    post = job.index("- name: Revalidate platform, running deployment and reviewed PR head")
+    assert pre < browser < post
+    assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
+    assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
+    assert "VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}" in job
+    assert "VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}" in job
+    assert "VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}" in job
+    assert "actual_sha=" in job[post:]
