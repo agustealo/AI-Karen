@@ -101,7 +101,7 @@ async def test_lease_heartbeat_and_final_are_fenced_by_owner_and_token(
     )
     repo = repository.SqlChatRunRepository()
     assert await repo.renew(lease) is True
-    assert await repo.finish(lease, status="completed") is False
+    assert await repo.finish(lease, status="failed", error_code="CHAT_TEST_ERROR") is False
     assert len(transaction.sql) == 2
     for sql, args in zip(transaction.sql, transaction.parameters):
         assert "lease_token = CAST(:token AS uuid)" in sql
@@ -227,6 +227,48 @@ async def test_worker_cancel_observation_is_scoped_to_its_fencing_token(
     assert "lease_token = CAST(:token AS uuid)" in tx.sql[0]
     assert "cancel_requested_at IS NOT NULL" in tx.sql[0]
     assert tx.parameters[0]["token"] == lease.lease_token
+
+
+@pytest.mark.asyncio
+async def test_ledger_refuses_standalone_completed_status() -> None:
+    lease = repository.ChatRunLease(
+        execution_id=str(uuid.uuid4()), lease_token=str(uuid.uuid4()),
+        tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+        transport_run_id="run-proof", request_id="request-proof",
+        correlation_id="correlation-proof",
+    )
+    with pytest.raises(ValueError, match="requires_atomic_transcript_commit"):
+        await repository.SqlChatRunRepository().finish(lease, status="completed")
+
+
+@pytest.mark.asyncio
+async def test_atomic_completion_receipt_checks_scoped_record_and_both_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = Transaction([1, None])
+    scoped_transaction(monkeypatch, transaction)
+    lease = repository.ChatRunLease(
+        execution_id=str(uuid.uuid4()), lease_token=str(uuid.uuid4()),
+        tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+        transport_run_id="run-proof", request_id="request-proof",
+        correlation_id="correlation-proof",
+    )
+    repo = repository.SqlChatRunRepository()
+    assert await repo.committed_turn(
+        lease,
+        user_message_id="11111111-1111-5111-8111-111111111111",
+        assistant_message_id="22222222-2222-5222-8222-222222222222",
+    )
+    assert await repo.completed(lease) is False
+    assert "JOIN messages u" in transaction.sql[0]
+    assert "JOIN messages a" in transaction.sql[0]
+    assert "status = 'completed'" in transaction.sql[0]
+    assert "r.request_id = :request_id" in transaction.sql[0]
+    assert "r.correlation_id = :correlation_id" in transaction.sql[0]
+    assert "u.message_metadata::jsonb ->> 'request_id'" in transaction.sql[0]
+    assert transaction.parameters[0]["tenant"] == TENANT
+    assert transaction.parameters[0]["owner"] == OWNER
+    assert transaction.parameters[0]["conversation"] == THREAD
 
 
 def test_migration_enforces_both_tenant_and_user_rls() -> None:
