@@ -7,6 +7,7 @@ runtime-specific rich data. Unsupported content fails the entire projection.
 
 from __future__ import annotations
 
+import hmac
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -15,6 +16,7 @@ from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProject
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import ConversationSnapshot
 from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
 
 _MAX_MESSAGES = 500
 _MAX_BYTES = 2 * 1024 * 1024
@@ -51,7 +53,7 @@ def _carries_value(value: Any) -> bool:
 def project_owned_history(
     snapshot: ConversationSnapshot,
     *,
-    attestations: Mapping[str, str],
+    attestations: Mapping[str, tuple[str, str]],
 ) -> dict[str, Any]:
     """Build complete text snapshot plus vetted CUSTOM events or fail closed."""
     records = snapshot.messages
@@ -87,13 +89,23 @@ def project_owned_history(
         if rich:
             # Metadata labels alone are NOT attestation. Only exact message
             # identities committed with a completed ledger run qualify.
+            attestation = attestations.get(identifier)
             if (
                 role != "assistant"
                 or str(metadata.get("source")) != "chat_runtime"
                 or not isinstance(metadata.get("request_id"), str)
-                or attestations.get(identifier) != metadata["request_id"]
+                or not isinstance(attestation, tuple)
+                or len(attestation) != 2
+                or attestation[0] != metadata["request_id"]
+                or not isinstance(attestation[1], str)
             ):
                 raise UnreplayableHistory("unattested_runtime_metadata")
+            try:
+                digest = canonical_message_digest(message)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise UnreplayableHistory("unserializable_attested_message") from exc
+            if not hmac.compare_digest(digest, attestation[1]):
+                raise UnreplayableHistory("modified_attested_message")
             projector = AGUIEventProjection(
                 thread_id=thread_id,
                 run_id="restored_" + identifier.replace("-", "_"),
