@@ -5,6 +5,7 @@ import { getBackendBaseUrl } from "../../_lib/backend-proxy";
 import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilotkit/_lib/owned-thread-history";
 import { connectKarenOwnedThread, readKarenConnectThreadId } from "../../copilotkit/_lib/owned-thread-reconnect";
 import { readKarenScopedStopRunId, stopKarenOwnedRun } from "../../copilotkit/_lib/owned-run-stop";
+import { ownedRunEventTarget, readKarenOwnedRunEvents } from "../../copilotkit/_lib/owned-run-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,6 +94,7 @@ export function validateCopilotRoute(request: NextRequest): NextResponse | null 
   const path = request.nextUrl.pathname;
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
   if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
+  if (request.method === "GET" && ownedRunEventTarget(request)) return null;
   // Exact-run stop is handled by Karen's runtime rather than SDK in-memory
   // agent state. Thread-only/missing-body stops remain denied before auth.
   const stop = STOP_ROUTE.exec(path);
@@ -161,7 +163,7 @@ export async function readKarenAgUiCapabilities(
   request: NextRequest,
   backendBaseUrl: string,
   headers: Record<string, string>,
-): Promise<{ governedHistory: boolean } | NextResponse> {
+): Promise<{ governedHistory: boolean; observedEvents: boolean } | NextResponse> {
   let response: Response;
   try {
     response = await fetch(`${backendBaseUrl}/api/chat/ag-ui/capabilities`, {
@@ -190,7 +192,11 @@ export async function readKarenAgUiCapabilities(
     if (governed !== undefined && typeof governed !== "boolean") {
       return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
     }
-    return { governedHistory: governed === true };
+    const observed = (flags as Record<string, unknown>).observed_event_journal;
+    if (observed !== undefined && typeof observed !== "boolean") {
+      return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
+    }
+    return { governedHistory: governed === true, observedEvents: observed === true };
   } catch {
     return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
   }
@@ -215,6 +221,18 @@ async function handle(request: NextRequest): Promise<Response> {
   if (auth instanceof NextResponse) return auth;
   const capabilities = await readKarenAgUiCapabilities(request, backendBaseUrl, auth.headers);
   if (capabilities instanceof NextResponse) return capabilities;
+
+  const requestedCursor = request.method === "GET"
+    ? ownedRunEventTarget(request) : null;
+  if (requestedCursor) {
+    if (!capabilities.observedEvents) {
+      return NextResponse.json({ detail: "Observed event journal is unavailable" }, { status: 404 });
+    }
+    return readKarenOwnedRunEvents(
+      request, backendBaseUrl, auth.headers, auth.principal,
+      requestedCursor.threadId, requestedCursor.runId,
+    );
+  }
 
   const requestedHistoryId = request.method === "GET" ? ownedThreadHistoryId(request) : null;
   if (requestedHistoryId) {
