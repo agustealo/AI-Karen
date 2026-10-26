@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backend = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }));
@@ -113,6 +113,26 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
       .toBe("");
     expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+  });
+
+  it("retains new whitespace-only edits while a durable send-clear is in flight", async () => {
+    let finishClear!: (reply: { text: string; revision: number }) => void;
+    backend.put.mockImplementationOnce(() => new Promise(resolve => {
+      finishClear = resolve;
+    }));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm durable clear" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(1));
+    const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "  Persisted earlier  " } });
+    await act(async () => finishClear({ text: "", revision: 5 }));
+    expect(input.value).toBe("  Persisted earlier  ");
+    await waitFor(() => expect(backend.put).toHaveBeenCalledWith(
+      TARGET, { text: "  Persisted earlier  ", expected_revision: 5 },
+      expect.objectContaining({ signal: expect.any(Object) }),
+    ), { timeout: 4000 });
   });
 
   it("refuses send clearance when another window already advanced the revision", async () => {
