@@ -104,8 +104,11 @@ def verify_vercel_deployment(
     if actual_project is None and isinstance(project, dict):
         actual_project = project.get("id")
     state = payload.get("readyState")
+    secondary_state = payload.get("state")
     if state is None:
-        state = payload.get("state")
+        state = secondary_state
+    if secondary_state is not None and secondary_state != state:
+        raise RevisionVerificationError("Vercel deployment state signals conflict")
     if (
         not isinstance(deployment_id, str)
         or not re.fullmatch(r"dpl_[A-Za-z0-9]+", deployment_id)
