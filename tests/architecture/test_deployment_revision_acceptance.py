@@ -163,7 +163,7 @@ def test_never_send_protected_bypass_to_unapproved_origin(base_url: str) -> None
 
 
 @pytest.mark.parametrize("secret", [
-    "", "  exposed  ", "bad\\nheader", "bad\\rheader",
+    "", "  exposed  ", "bad\nheader", "bad\rheader",
 ])
 def test_malformed_bypass_is_rejected_before_request(secret: str) -> None:
     with pytest.raises(RevisionVerificationError):
