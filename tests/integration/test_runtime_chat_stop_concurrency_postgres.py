@@ -89,6 +89,11 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             / "supabase/migrations/20261025040000_45_runtime_chat_replay_digest.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(digest_migration)
+        event_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261025050000_46_runtime_chat_event_journal.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(event_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)",
             uuid.UUID(tenant_a), uuid.UUID(tenant_b),
@@ -249,6 +254,64 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             uuid.UUID(race_lease.execution_id),
         )
         assert observed in {"completed", "cancelled"}
+
+        # Event cursor persisted by one worker is readable by another.
+        journal = await worker_a.admit(
+            **identity(run_id="run-journal"),
+            request_id="journal-a", correlation_id="journal-trace",
+        )
+        assert journal is not None
+        assert await worker_a.append_projected_event(journal, event={
+            "type": "RUN_STARTED",
+            "threadId": thread,
+            "runId": "run-journal",
+        }) == 1
+        assert await worker_a.append_projected_event(journal, event={
+            "type": "TEXT_MESSAGE_CONTENT",
+            "messageId": "assistant-run-journal",
+            "delta": "This was actually observed.",
+        }) == 2
+        other_worker_page = await worker_b.read_projected_events(
+            **identity(run_id="run-journal"), after=0, limit=1,
+        )
+        assert other_worker_page is not None
+        assert other_worker_page["nextCursor"] == 1
+        assert other_worker_page["hasMore"] is True
+        assert other_worker_page["runStatus"] == "running"
+        assert other_worker_page["continuationAvailable"] is False
+        second_page = await worker_b.read_projected_events(
+            **identity(run_id="run-journal"), after=1, limit=1,
+        )
+        assert second_page["nextCursor"] == 2
+        assert second_page["events"][0]["event"]["delta"] == (
+            "This was actually observed."
+        )
+        assert await worker_b.read_projected_events(
+            **identity(tenant=tenant_b, owner=user_b, run_id="run-journal"),
+        ) is None
+        assert await worker_b.request_cancel(
+            **identity(run_id="run-journal")
+        ) == "cancelling"
+        with pytest.raises(ValueError, match="chat_projection_run_not_active"):
+            await worker_a.append_projected_event(journal, event={
+                "type": "TEXT_MESSAGE_CONTENT", "messageId": "assistant-run-journal",
+                "delta": "Unowned after stop.",
+            })
+        assert await worker_a.finish(
+            journal, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
+        )
+        assert await worker_a.append_projected_event(journal, event={
+            "type": "RUN_ERROR",
+            "message": "This chat run was cancelled.",
+            "code": "CHAT_STREAM_CANCELLED",
+        }) == 3
+        terminal_page = await worker_b.read_projected_events(
+            **identity(run_id="run-journal"), after=2, limit=10,
+        )
+        assert terminal_page["runStatus"] == "cancelled"
+        assert terminal_page["terminalConfirmed"] is True
+        assert terminal_page["continuationAvailable"] is False
+        assert terminal_page["events"][0]["event"]["type"] == "RUN_ERROR"
 
         expired = await worker_a.admit(
             **identity(run_id="run-expired"),
