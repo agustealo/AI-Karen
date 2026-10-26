@@ -185,8 +185,11 @@ class SqlChatRunRepository:
                       AND conversation_id = CAST(:conversation AS uuid)
                       AND lease_token = CAST(:token AS uuid)
                       AND lease_expires_at > NOW()
-                      AND status = 'running'
-                      AND cancel_requested_at IS NULL
+                      AND (
+                          (:status = 'cancelled' AND status IN ('running', 'cancelling'))
+                          OR (:status != 'cancelled' AND status = 'running'
+                              AND cancel_requested_at IS NULL)
+                      )
                     RETURNING execution_id
                     """
                 ),
