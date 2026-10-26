@@ -13,6 +13,7 @@ const sdk = vi.hoisted(() => ({
   isReady: true,
   runAgent: vi.fn(),
   stopAgent: vi.fn(),
+  clearDraft: vi.fn(),
   useAgentOptions: [] as Array<Record<string, unknown>>,
 }));
 
@@ -51,6 +52,7 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
       readText: () => text.current,
       status: "ready",
       synced: true,
+      clearBeforeSubmit: (...args: unknown[]) => sdk.clearDraft(...args),
       retry: vi.fn(),
       discardAndReload: vi.fn(),
     };
@@ -82,6 +84,7 @@ beforeEach(() => {
   sdk.agent.addMessage.mockReset();
   sdk.runAgent.mockReset().mockResolvedValue(undefined);
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
+  sdk.clearDraft.mockReset().mockResolvedValue(true);
   vi.stubGlobal("crypto", { randomUUID: () => "2dab411c-640e-4206-909b-6783e32c7da0" });
 });
 afterEach(() => {
@@ -141,8 +144,12 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
 
   it("starts a canonical CopilotKit run only after an explicit nonempty composer submission", async () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
-    act(() => input().onSubmitMessage("  Send this question  "));
-    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    act(() => {
+      input().onChange("  Send this question  ");
+      input().onSubmitMessage("  Send this question  ");
+    });
+    await waitFor(() => expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1));
+    expect(sdk.clearDraft).toHaveBeenCalledWith("Send this question");
     expect(sdk.agent.addMessage).toHaveBeenCalledWith({
       id: "2dab411c-640e-4206-909b-6783e32c7da0",
       role: "user",
@@ -159,25 +166,42 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     }));
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     act(() => {
+      input().onChange("Send once");
       input().onSubmitMessage("Send once");
       input().onSubmitMessage("Send twice");
     });
-    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
     await act(async () => resolveRun());
     expect(sdk.runAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("retains an unsent draft and unlocks submit when the SDK append fails synchronously", () => {
+  it("retains an unsent draft and unlocks submit when the SDK append fails synchronously", async () => {
     sdk.agent.addMessage.mockImplementationOnce(() => { throw new Error("private SDK failure"); });
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
-    act(() => input().onSubmitMessage("Retain my question"));
-    expect(input().value).toBe("Retain my question");
+    act(() => {
+      input().onChange("Retain my question");
+      input().onSubmitMessage("Retain my question");
+    });
+    await waitFor(() => expect(input().value).toBe("Retain my question"));
     expect(screen.getByRole("alert").textContent).toContain("unsent draft was retained");
     expect(screen.getByRole("alert").textContent).not.toContain("private");
     expect(sdk.runAgent).not.toHaveBeenCalled();
     act(() => input().onSubmitMessage("Retry after recovery"));
-    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(sdk.agent.addMessage).toHaveBeenCalledTimes(2));
+  });
+
+  it("blocks inference until canonical draft clearance is confirmed", async () => {
+    sdk.clearDraft.mockResolvedValueOnce(false);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Do not send without saved-clear receipt");
+      input().onSubmitMessage("Do not send without saved-clear receipt");
+    });
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("Draft clearance was not confirmed"));
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
   });
 
   it("never triggers inference for blank, oversized, running, or foreign-thread input", () => {
@@ -206,7 +230,10 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
   it("reports a rejected model run but never fabricates an assistant completion", async () => {
     sdk.runAgent.mockRejectedValueOnce(new Error("private provider details"));
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
-    act(() => input().onSubmitMessage("Hello"));
+    act(() => {
+      input().onChange("Hello");
+      input().onSubmitMessage("Hello");
+    });
     await waitFor(() => expect(screen.getByRole("alert").textContent)
       .toContain("could not complete"));
     expect(screen.getByRole("alert").textContent).not.toContain("private");
