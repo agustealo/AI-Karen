@@ -2,6 +2,12 @@ name: KAREN History Browser Acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      verify_copilotkit_protocol:
+        description: "Also prove real authenticated CopilotKit history and observed cursor on the sanitized deployment"
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -21,6 +27,8 @@ jobs:
       KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
       KAREN_HISTORY_CONVERSATION_ID: ${{ vars.KAREN_HISTORY_CONVERSATION_ID }}
       KAREN_HISTORY_ACCEPTANCE_REQUIRED: "true"
+      KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.verify_copilotkit_protocol && 'true' || 'false' }}
+      KAREN_COPILOTKIT_OBSERVED_RUN_ID: ${{ vars.KAREN_COPILOTKIT_OBSERVED_RUN_ID }}
       KAREN_UX_IDENTITY_REPLAY: "true"
       KAREN_E2E_CAPTURE_VIDEO: "false"
       CI: "true"
@@ -66,6 +74,31 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright test e2e/karen-durable-history-restoration.spec.ts \
+            --config=e2e/playwright.config.ts \
+            --project=chromium \
+            --reporter=list \
+            --retries=0
+
+      - name: Check approved CopilotKit replay fixture
+        if: ${{ inputs.verify_copilotkit_protocol }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$KAREN_COPILOTKIT_OBSERVED_RUN_ID" || {
+            echo "::error::Missing approved real event-journal run ID"
+            exit 1
+          }
+          [[ "$KAREN_COPILOTKIT_OBSERVED_RUN_ID" =~ ^[A-Za-z0-9_-]{1,100}$ ]] || {
+            echo "::error::Invalid event-journal run identity"
+            exit 1
+          }
+
+      - name: Prove live CopilotKit history, replay and interruption contracts
+        if: ${{ inputs.verify_copilotkit_protocol }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright test e2e/karen-copilotkit-protocol-acceptance.spec.ts \
             --config=e2e/playwright.config.ts \
             --project=chromium \
             --reporter=list \
