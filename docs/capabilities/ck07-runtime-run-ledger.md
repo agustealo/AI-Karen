@@ -19,7 +19,7 @@ orchestrator and no legacy cancellation authority was imported.
 
 ## Operator activation (do not enable for consumer traffic yet)
 
-1. Apply and verify migrations 43, 44 and 45 in order through the canonical Supabase PostgreSQL migration pipeline; ensure tenant/user RLS is effective for runtime transactions.
+1. Apply and verify migrations 43, 44, 45 and 46 in order through the canonical Supabase PostgreSQL migration pipeline; ensure tenant/user RLS is effective for runtime transactions.
 2. Set `KARI_ENABLE_AG_UI_BRIDGE=true` only in a scoped integration environment.
 3. Set `KARI_ENABLE_AG_UI_DURABLE_RUNS=true` there, never on an unverified installation.
 4. The validated timing options are `KARI_CHAT_RUN_LEASE_SECONDS=120` (30–3600) and `KARI_CHAT_RUN_HEARTBEAT_SECONDS=10` (1 to a third of the lease).
@@ -33,7 +33,12 @@ orchestrator and no legacy cancellation authority was imported.
 7. Before enabling consumer stop, prove real multiworker cancellation and
    stop/completion races against live PostgreSQL and an authorized model.
 
-Both feature flags default **false**. Failure of admission while enabled results
+8. After dedicated PostgreSQL validation, the strictly internal CK-07E0
+   event journal can be trialed in an isolated environment by setting
+   `KARI_ENABLE_AG_UI_EVENT_JOURNAL=true`; it remains **false** in shipped
+   configs. This does not switch the consumer UI or authorize model resume.
+
+All three AG-UI flags default **false**. Failure of admission while enabled results
 in an explicit error before model execution, not a fallback that bypasses the
 ledger. A reused scoped SDK transport ID produces 409; the same ID in another
 tenant or user scope does not alias the old execution.
@@ -115,12 +120,39 @@ tenant or user scope does not alias the old execution.
    path or the new governed projection; reconnect emits one verified
    MESSAGES_SNAPSHOT, then associated CUSTOM events and a synthetic
    replay-only RUN_FINISHED. Nothing invokes a provider during replay.
-   **Still missing:** durable per-event cursor, live provider reattachment,
-   partial-run continuity after worker crash and visual browser parity.
+   **Still missing:** live provider reattachment,
+   partial-run continuation after worker crash and visual browser parity.
    The complete replay rejects unverified/legacy rich content instead of
    silently dropping it.
-4. **CK-07E:** Real PostgreSQL, actual model, multiple workers and browser
-   continuity proof; UI feature/voice/persona/draft/scroll parity.
+4. **CK-07E0:** An explicitly disabled-by-default runtime event journal now
+   persists only **observed AGUIEventProjection output** with per-run monotonic
+   `event_seq` assigned under the canonical run-row lock. Migration 46 adds
+   `public.runtime_chat_run_events` with a compound tenant/user/conversation
+   foreign key to `runtime_chat_runs`, forced RLS, allowed event types,
+   a maximum of 2,048 events per execution and 32 KiB per event. The backend
+   also enforces an 8 MiB total per run. `KARI_ENABLE_AG_UI_EVENT_JOURNAL=true`
+   requires both existing AG-UI flags, migration 46, and isolated proof.
+   The stream records each projected event BEFORE sending its SSE data and
+   publishes the committed sequence as an SSE `id:`. Journal startup failures
+   do not launch a model. Completed transcript truth remains owned by the
+   existing atomic conversation transaction; only canonical final-envelope
+   events may be appended after `completed`. The event log itself never
+   authorizes an `RUN_FINISHED` or resumed execution.
+
+   The authenticated read-only backend endpoint
+   `GET /api/chat/ag-ui/runs/{threadId}/{runId}/events?after=0&limit=50`
+   rechecks canonical conversation ownership, matches owner/tenant/run in SQL,
+   pages only committed projections and reports expired running leases as
+   `interrupted`, with `terminalConfirmed=false` and
+   `continuationAvailable=false`. Missing journal terminals are not invented
+   from a model label or client state. This endpoint is **not** an SDK
+   consumer connection route. The existing CopilotKit route remains closed
+   to ungoverned `/threads/:id/events` requests.
+
+   **Still missing:** real provider-process reattachment (which may never be
+   safe for all engines), governed frontend cursor consumption/acknowledgment,
+   retention/deletion coupling, actual PostgreSQL cross-process proof,
+   and UI feature/voice/persona/draft/scroll parity.
 5. Govern ledger retention/deletion and inactive-run reconciliation through
    existing privacy and audit policy before enabling the feature beyond tests.
 
@@ -128,7 +160,7 @@ tenant or user scope does not alias the old execution.
 
 ```bash
 python -m compileall src
-pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
+pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
 cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
@@ -138,8 +170,9 @@ A dedicated non-production PostgreSQL concurrency test is also checked in:
 `tests/integration/test_runtime_chat_stop_concurrency_postgres.py`. It exercises
 the real migration, PostgreSQL row locking, tenant/user scoped cancellation,
 duplicate stop, stop-versus-completion race, lease expiry and fenced finality.
-The test applies migrations 43, 44 and 45 and verifies atomic saved message
-IDs against the authenticated completed-run replay attestation. It
+The test applies migrations 43, 44, 45 and 46 and verifies atomic saved message
+IDs against the authenticated completed-run replay attestation, plus
+principal-scoped event cursors across simulated independent worker instances. It
 **requires** `CHAT_RUN_TEST_DATABASE_URL` pointing to a disposable
 database whose name is exactly `karen_chat_run_test`. It skips rather than
 claiming success when that resource is absent. It destroys test tables only in
