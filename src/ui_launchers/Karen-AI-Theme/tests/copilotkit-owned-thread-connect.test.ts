@@ -12,7 +12,7 @@ const THREAD = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 const ENDPOINT = "http://localhost:3000/api/copilotkit/agent/default/connect";
 const AUTH = "http://api:8000/api/auth/me";
 const FLAGS = "http://api:8000/api/chat/ag-ui/capabilities";
-const HISTORY = "http://api:8000/api/conversations/" + THREAD;
+const HISTORY = "http://api:8000/api/conversations/" + THREAD + "?message_limit=501";
 
 function connect(payload: unknown = { threadId: THREAD }) {
   return new NextRequest(ENDPOINT, {
