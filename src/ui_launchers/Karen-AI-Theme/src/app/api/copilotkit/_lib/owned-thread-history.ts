@@ -73,8 +73,10 @@ export async function readKarenOwnedThreadMessages(
   const data = snapshot as Record<string, unknown>;
   // Backend GetOwnedSnapshot is the tenant boundary. Check the returned user
   // and UUID again so a faulty proxy response cannot expose another transcript.
-  if (data.id !== threadId || data.user_id !== principal.user_id ||
-      !Array.isArray(data.messages) || data.messages.length > MAX_MESSAGES) {
+  if (data.id !== threadId || data.user_id !== principal.user_id) {
+    return failure("Conversation unavailable", 404);
+  }
+  if (!Array.isArray(data.messages) || data.messages.length > MAX_MESSAGES) {
     return failure("Conversation history verification failed", 502);
   }
 
