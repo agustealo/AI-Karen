@@ -67,3 +67,40 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   );
   expect(restoredSources).toEqual(originalSources);
 });
+
+
+test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surface', async ({ page }) => {
+  test.setTimeout(180_000);
+  const required = process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true';
+  test.skip(!required, 'Authenticated consumer release proof is opt-in');
+  const email = process.env.KAREN_UX_EMAIL;
+  const password = process.env.KAREN_UX_PASSWORD;
+  if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
+
+  await page.goto('/login');
+  await page.getByRole('textbox', { name: 'Email' }).fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+
+  // Locate the installed plugin through the consumer navigation. No private
+  // route, response interception, or synthetic provider values are permitted.
+  await page.getByText('Intelligent Search', { exact: true }).first().click();
+  const query = page.getByLabel('Query', { exact: true });
+  await expect(query).toBeVisible({ timeout: 30_000 });
+  await page.getByLabel('Search mode').selectOption('auto');
+  await query.fill('What is the weather in Detroit, MI?');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+
+  const observation = page.getByRole('region', { name: 'Weather observation' })
+    .or(page.locator('section[aria-label="Weather observation"]'));
+  await expect(observation).toBeVisible({ timeout: 120_000 });
+  await expect(observation).toContainText('Detroit');
+  await expect(observation).toContainText('°F');
+  await expect(observation).toContainText('Provider timestamp:');
+  await expect(page.getByRole('heading', { name: 'No sources found' })).toHaveCount(0);
+
+  await page.getByText('Technical search details').click();
+  await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
+  await expect(page.getByText('Provider', { exact: true }).first()).toBeVisible();
+});
