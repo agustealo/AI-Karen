@@ -152,3 +152,37 @@ def test_search_acceptance_checks_platform_before_and_after_browser():
     assert "VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}" in job
     assert "VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}" in job
     assert "actual_sha=" in job[post:]
+
+
+
+def test_browser_credentials_are_not_available_to_dependency_setup():
+    """Secret-bearing jobs must not expose credentials to npm ci or browser install."""
+    from pathlib import Path
+
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/karen-history-browser-acceptance.yml"
+    ).read_text(encoding="utf-8")
+    for job_start, check_step, proof_step in (
+        (
+            "  authenticated-history-restoration:",
+            "Validate approved acceptance configuration",
+            "Prove live authenticated conversation restoration",
+        ),
+        (
+            "  authenticated-search-replay:",
+            "Validate approved search deployment",
+            "Prove live authenticated grounded search and replay",
+        ),
+    ):
+        job = workflow.split(job_start, 1)[1].split("\n  authenticated-", 1)[0]
+        job_scope = job.split("\n    steps:", 1)[0]
+        for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
+            binding = secret + ": " + chr(36) + "{{ secrets." + secret + " }}"
+            assert binding not in job_scope
+            for step in (check_step, proof_step):
+                block = job.split("      - name: " + step, 1)[1].split("\n      - ", 1)[0]
+                assert binding in block
+            for step in ("Install pinned dependencies", "Install Chromium and system dependencies"):
+                block = job.split("      - name: " + step, 1)[1].split("\n      - ", 1)[0]
+                assert binding not in block
