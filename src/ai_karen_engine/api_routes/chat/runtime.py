@@ -929,7 +929,7 @@ async def cancel_ag_ui_chat_run(
         raise HTTPException(status_code=404, detail="Chat run unavailable")
 
     get_structured_logger().log_event(
-        event="chat_run_cancel_requested",
+        event="chat_run_cancel_decision",
         user_id=context.user_id,
         details={
             "tenant_id": context.tenant_id,
