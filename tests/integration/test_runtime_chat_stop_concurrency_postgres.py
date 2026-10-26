@@ -189,6 +189,21 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         if transcript_result.success:
             assert transcript_result.data == 2
             assert stop_result == "completed"
+            bound_ids = await raw.fetchrow(
+                """
+                SELECT user_message_id, assistant_message_id
+                FROM public.runtime_chat_runs
+                WHERE execution_id=$1 AND status='completed'
+                """,
+                uuid.UUID(race_lease.execution_id),
+            )
+            assert bound_ids is not None
+            assert bound_ids["user_message_id"] == uuid.UUID(user_message.id)
+            assert bound_ids["assistant_message_id"] == uuid.UUID(assistant_message.id)
+            replay_proof = await worker_b.completed_replay_attestations(
+                tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
+            )
+            assert replay_proof.get(assistant_message.id) == race_lease.request_id
             assert await worker_a.committed_turn(
                 race_lease,
                 user_message_id=user_message.id,
