@@ -42,6 +42,10 @@ class ChatRunLeaseLost(Exception):
     """This execution is no longer authorized to report success."""
 
 
+class ChatRunCancellationRequested(Exception):
+    """A different authorized worker/request has requested this run to stop."""
+
+
 class ChatRunCoordinator:
     """Runtime authority for one canonical run record and fenced stream."""
 
@@ -65,6 +69,19 @@ class ChatRunCoordinator:
             raise ChatRunConflict("chat_run_already_exists")
         return lease
 
+    async def request_cancel(
+        self, context: ChatExecutionContext, *, run_id: str,
+    ) -> Optional[str]:
+        """Verify owner again; atomically signal the ONE scoped execution."""
+        context.require_authenticated_user()
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
+        return await self._repository.request_cancel(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=context.require_conversation_id(),
+            transport_run_id=run_id,
+        )
+
     async def stream(
         self,
         chunks: AsyncIterator[ChatStreamChunk],
@@ -87,6 +104,8 @@ class ChatRunCoordinator:
                         {next_chunk}, timeout=_heartbeat_seconds()
                     )
                     if not done and not await self._repository.renew(lease):
+                        if await self._repository.cancel_requested(lease):
+                            raise ChatRunCancellationRequested("chat_run_cancel_requested")
                         raise ChatRunLeaseLost("chat_run_lease_lost")
                 try:
                     chunk = await next_chunk
@@ -94,6 +113,12 @@ class ChatRunCoordinator:
                     break
                 finally:
                     next_chunk = None
+
+                # A stopped task can yield one last chunk while stop wins the
+                # finality race. Do not project its completion or extra data.
+                if chunk.type in {ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR}:
+                    if await self._repository.cancel_requested(lease):
+                        raise ChatRunCancellationRequested("chat_run_cancel_requested")
 
                 if chunk.type == ChatStreamEventType.ERROR:
                     if not await self._repository.finish(
@@ -121,6 +146,8 @@ class ChatRunCoordinator:
                         status="failed" if error_code else "completed",
                         error_code=error_code,
                     ):
+                        if await self._repository.cancel_requested(lease):
+                            raise ChatRunCancellationRequested("chat_run_cancel_requested")
                         raise ChatRunLeaseLost("chat_run_lease_lost")
                     terminal = True
                     if error_code:
@@ -147,6 +174,13 @@ class ChatRunCoordinator:
                     error_code="CHAT_SSE_MISSING_TERMINAL",
                 )
                 raise ChatRunLeaseLost("chat_run_missing_terminal")
+        except ChatRunCancellationRequested:
+            if not await self._repository.finish(
+                lease, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
+            ):
+                raise ChatRunLeaseLost("chat_run_lease_lost")
+            terminal = True
+            raise
         except BaseException as exc:
             # Connection cancellation must not become a successful assistant
             # turn. The runtime generator itself owns provider cleanup.
