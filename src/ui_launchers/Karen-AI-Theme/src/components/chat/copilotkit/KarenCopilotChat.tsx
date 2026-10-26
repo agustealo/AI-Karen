@@ -2,6 +2,7 @@
 
 import { CopilotChat, CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { KarenCopilotHistoryGate, karenScopedAgentId } from "./KarenCopilotHistoryGate";
+import { KarenCopilotAssistantMessage } from "./KarenCopilotVerifiedHistory";
 
 const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -68,6 +69,7 @@ export function KarenCopilotChat({
             labels={{
               chatInputPlaceholder: "Message Karen...",
             }}
+            messageView={{ assistantMessage: KarenCopilotAssistantMessage }}
           />
         </KarenCopilotHistoryGate>
       </CopilotKitProvider>
