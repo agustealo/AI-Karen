@@ -75,11 +75,17 @@ export const IntelligentSearchApi = {
 
     // A plugin execution failure may still contain response-shaped diagnostics.
     // Never mistake those diagnostics for successful search evidence.
-    const responseCandidate = envelope?.result ?? envelope?.data ?? envelope?.payload ??
-      (response && typeof response === 'object' && 'response' in response
-        ? (response as { response?: unknown }).response : response);
-    const locationRequired = isSearchResponse(responseCandidate) &&
-      responseCandidate.status === 'needs_location';
+    // Examine all supported envelope shapes, not only the first present key.
+    // An invalid first key must never conceal a valid structured clarification,
+    // and conflicting execution results must fail rather than be cherry-picked.
+    const responseCandidates: unknown[] = [
+      envelope?.result, envelope?.data, envelope?.payload,
+      response && typeof response === 'object' && 'response' in response
+        ? (response as { response?: unknown }).response : undefined,
+    ].filter((candidate) => candidate !== undefined);
+    const locationRequired = responseCandidates.length > 0 &&
+      responseCandidates.every((candidate) =>
+        isSearchResponse(candidate) && candidate.status === 'needs_location');
     if (envelope?.success === false && !locationRequired) {
       throw new Error(envelope.message || 'Search could not be completed. Please try again.');
     }
