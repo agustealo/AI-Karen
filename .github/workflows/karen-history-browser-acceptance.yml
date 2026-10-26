@@ -114,6 +114,20 @@ jobs:
         run: |
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Provide a reviewed 40-character commit SHA"; exit 1; }
 
+      - name: Verify reviewed SHA is the current consumer release PR head
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(gh api repos/${GITHUB_REPOSITORY}/pulls/550 --jq '.head.sha')"
+          test "$TARGET_SHA" = "$actual_sha" || {
+            echo "::error::Requested revision does not match current PR #550 head"
+            exit 1
+          }
+
       - name: Check out exact reviewed source revision
         uses: actions/checkout@v5
         with:
