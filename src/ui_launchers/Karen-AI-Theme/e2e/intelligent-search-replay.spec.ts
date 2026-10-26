@@ -148,8 +148,14 @@ test('SEARCH-PLUGIN-03: general web retrieval proves independent source domains'
   await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
   const websites = page.getByText('Distinct websites', { exact: true }).locator('..');
   await expect(websites).toBeVisible();
-  const text = await websites.innerText();
-  const number = Number(text.match(/\b\d+\b/)?.[0]);
-  expect(Number.isFinite(number) && number >= 2,
-    'Five pages from one website do not prove independent web retrieval').toBe(true);
+  // Provider diversity is an outcome of the live retrieval, not a static
+  // render assertion. Poll the completed UI value without intercepting HTTP.
+  await expect.poll(async () => {
+    const label = await websites.innerText();
+    const matched = label.match(/Distinct websites\s+(\d+)/i);
+    return matched ? Number(matched[1]) : 0;
+  }, {
+    timeout: 30_000,
+    message: 'At least two independent websites must be represented in live search evidence',
+  }).toBeGreaterThanOrEqual(2);
 });
