@@ -8,6 +8,7 @@ const sdk = vi.hoisted(() => ({
 }));
 
 vi.mock("@copilotkit/react-core/v2", () => ({
+  CopilotChatAssistantMessage: () => null,
   CopilotKitProvider: (props: Record<string, unknown>) => {
     sdk.provider.push(props);
     return <div data-testid="copilot-provider">{props.children as React.ReactNode}</div>;
