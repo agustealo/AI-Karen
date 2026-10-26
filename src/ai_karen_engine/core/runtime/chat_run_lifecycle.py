@@ -107,7 +107,7 @@ class ChatRunCoordinator:
                 raise ChatRunCancellationRequested("chat_run_cancel_requested")
             raise ChatRunLeaseLost("chat_run_lease_lost")
 
-        async def close_upstream() -> None:
+        async def close_upstream(*, strict: bool = False) -> None:
             nonlocal next_chunk
             # Stop the actual model generator before confirming its terminal
             # cancellation. A DB intent alone is not a completed stop.
@@ -117,8 +117,13 @@ class ChatRunCoordinator:
                 with suppress(asyncio.CancelledError, StopAsyncIteration):
                     await next_chunk
                 next_chunk = None
-            with suppress(Exception):
+            if strict:
+                # An upstream cleanup failure cannot be counted as a
+                # confirmed cancelled execution.
                 await chunks.aclose()
+            else:
+                with suppress(Exception):
+                    await chunks.aclose()
 
         try:
             while True:
@@ -208,7 +213,7 @@ class ChatRunCoordinator:
                     raise ChatRunCancellationRequested("chat_run_cancel_requested")
                 raise ChatRunLeaseLost("chat_run_missing_terminal")
         except ChatRunCancellationRequested:
-            await close_upstream()
+            await close_upstream(strict=True)
             if not await self._repository.finish(
                 lease, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
             ):
@@ -231,7 +236,7 @@ class ChatRunCoordinator:
             # Connection cancellation must not become a successful assistant
             # turn. The runtime generator itself owns provider cleanup.
             if not terminal:
-                await close_upstream()
+                await close_upstream(strict=True)
                 try:
                     await self._repository.finish(
                         lease,
