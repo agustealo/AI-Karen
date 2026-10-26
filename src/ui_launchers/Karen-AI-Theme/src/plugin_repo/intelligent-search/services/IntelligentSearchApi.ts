@@ -83,7 +83,7 @@ export const IntelligentSearchApi = {
       response && typeof response === 'object' && 'response' in response
         ? (response as { response?: unknown }).response : undefined,
     ].filter((candidate) => candidate !== undefined);
-    const directResponse = isSearchResponse(response) &&
+    const directResponse = responseCandidates.length === 0 && isSearchResponse(response) &&
       (response as IntelligentSearchResponse).status === 'needs_location';
     const locationRequired = directResponse || (responseCandidates.length > 0 &&
       responseCandidates.every((candidate) =>
