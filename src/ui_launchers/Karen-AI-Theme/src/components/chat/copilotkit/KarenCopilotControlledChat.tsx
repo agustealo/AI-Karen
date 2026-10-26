@@ -70,7 +70,7 @@ export function KarenCopilotControlledChat({
         isRunning={agent.isRunning}
         autoScroll
         messageView={{ assistantMessage: KarenCopilotAssistantSlot }}
-        inputProps={{ onSubmitMessage, onStop }}
+        input={{ onSubmitMessage, onStop }}
       />
     </div>
   );
