@@ -30,7 +30,16 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
 
   const assistant = panel.getByTestId('chat-evidence-status').filter({ hasText: 'Verified grounded answer' });
   await expect(assistant).toBeVisible({ timeout: 90_000 });
-  await expect(panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ })).toBeVisible();
+  const citationBadge = panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).first();
+  await expect(citationBadge).toBeVisible();
+  await citationBadge.click();
+  const sourceToggle = panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).last();
+  await expect(sourceToggle).toBeVisible();
+  await sourceToggle.click();
+  const originalSources = await panel.locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
+    (links) => links.map((link) => (link as HTMLAnchorElement).href).filter(Boolean),
+  );
+  expect(originalSources.length, 'Grounded answers must expose a real source URL').toBeGreaterThan(0);
 
   // Navigation reload must read the durable conversation, not just the
   // previously rendered React state.
@@ -38,5 +47,12 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   await page.getByRole('button', { name: 'Ask Karen', exact: true }).click();
   await expect(panel.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(panel.getByTestId('chat-evidence-status').filter({ hasText: 'Verified grounded answer' })).toBeVisible();
-  await expect(panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ })).toBeVisible();
+  const restoredBadge = panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).first();
+  await expect(restoredBadge).toBeVisible();
+  await restoredBadge.click();
+  await panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).last().click();
+  const restoredSources = await panel.locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
+    (links) => links.map((link) => (link as HTMLAnchorElement).href).filter(Boolean),
+  );
+  expect(restoredSources).toEqual(originalSources);
 });
