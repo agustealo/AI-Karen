@@ -25,8 +25,13 @@ orchestrator and no legacy cancellation authority was imported.
 4. The validated timing options are `KARI_CHAT_RUN_LEASE_SECONDS=120` (30–3600) and `KARI_CHAT_RUN_HEARTBEAT_SECONDS=10` (1 to a third of the lease).
 5. Execute signed-in model → stream → PostgreSQL read-back, worker restart,
    concurrent duplicate-run, permission-revocation and fault-injection tests.
-6. Leave `POST /api/copilotkit/agent/default/stop` blocked until CK-07B truly
-   cancels the target runtime task and proves tenant/user/worker safety.
+6. The CK-07B SDK route `POST /api/copilotkit/agent/default/stop/:threadId`
+   requires the JSON body `{"runId":"..."}`; thread-only stop is denied.
+   The canonical backend endpoint is
+   `POST /api/chat/ag-ui/runs/:threadId/:runId/cancel`.
+   Both are disabled whenever either AG-UI or durable runs is disabled.
+7. Before enabling consumer stop, prove real multiworker cancellation and
+   stop/completion races against live PostgreSQL and an authorized model.
 
 Both feature flags default **false**. Failure of admission while enabled results
 in an explicit error before model execution, not a fallback that bypasses the
@@ -51,14 +56,28 @@ tenant or user scope does not alias the old execution.
 - **Worker loss:** When an authenticated actor next admits a run, expired
   leases for that actor are marked `orphaned`. This does not yet implement
   automatic cross-worker cancellation or ownership takeover.
+- **Stop request:** A second authenticated worker can atomically request
+  cancellation with a row lock scoped to tenant, user, conversation and exact
+  run ID. Duplicate requests preserve the initial stop timestamp. The owning
+  worker periodically checks the durable intent, even on fast streaming or
+  blocked provider I/O, unwinds its upstream generator and performs fenced
+  `cancelled` finalization. Completed/expired run outcomes are never reported
+  as successful cancellations. Tenant/user ownership is checked again through
+  the canonical ConversationRuntimeGateway at the point of cancellation.
 - **Replay:** Existing CK-06 completed plaintext history reconnect remains
   unchanged. A durable execution record is not an event cursor, and does not
   restore in-progress tokens or rich presentation payloads.
 
 ## Explicitly incomplete (P0)
 
-1. **CK-07B:** Stop request, durable cancel intent authorization, active worker
-   observation and actual provider cancellation. Cross-worker stop is NOT live.
+1. **CK-07B:** The authorized SDK stop adapter, PostgreSQL cancel intent,
+   runtime worker observation and model-task unwind are now implemented behind
+   the disabled-by-default feature. Cross-worker behavior is covered only by
+   component/unit tests, NOT verified against actual multiple worker processes
+   and live PostgreSQL. A 202 stop response is `cancelling` only; a worker
+   terminal record is required to confirm `cancelled`. SDK clients that omit
+   `runId` receive 422 rather than cancelling an arbitrary thread run.
+   Operator activation remains blocked pending E2E proof.
 2. **CK-07C0:** Harden completion/cancellation races across persistence,
    tool side effects and worker lease transitions.
 3. **CK-07D:** Governed, versioned presentation/execution receipt restoration,
@@ -73,6 +92,7 @@ tenant or user scope does not alias the old execution.
 ```bash
 python -m compileall src
 pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_ag_ui_transport.py -q
+cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
