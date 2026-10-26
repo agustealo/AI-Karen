@@ -271,7 +271,10 @@ async def test_sse_journal_failure_before_start_never_launches_model(monkeypatch
     class Runtime:
         async def execute_stream(self, request):
             started.append(request)
-            yield ChatStreamChunk(type=ChatStreamEventType.CONTENT, content="should not run")
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.CONTENT, content="should not run",
+                correlation_id=request.context.correlation_id,
+            )
 
     monkeypatch.setattr(
         ingress, "get_runtime_settings",
@@ -317,12 +320,19 @@ async def test_sse_cursor_is_emitted_only_after_successful_append(monkeypatch):
 
     class Runtime:
         async def execute_stream(self, request):
-            yield ChatStreamChunk(type=ChatStreamEventType.CONTENT, content="token")
-            yield ChatStreamChunk(type=ChatStreamEventType.COMPLETE, metadata={
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.CONTENT, content="token",
+                correlation_id=request.context.correlation_id,
+            )
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.COMPLETE,
+                correlation_id=request.context.correlation_id,
+                metadata={
                 "transcript_persistence_status": "persisted",
                 "actual_provider": "local", "actual_model": "observed",
                 "response_source": "model",
-            })
+            },
+            )
 
     monkeypatch.setattr(
         ingress, "get_runtime_settings",
