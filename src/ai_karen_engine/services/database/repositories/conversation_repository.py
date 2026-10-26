@@ -122,7 +122,9 @@ class ConversationRepository(Repository):
         """Update conversation metadata, title, tags, etc."""
 
     @abstractmethod
-    async def delete_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[bool]:
+    async def delete_conversation(
+        self, conversation_id: str, tenant_id: str, *, user_id: str
+    ) -> RepositoryResult[bool]:
         """Delete a conversation and its messages."""
 
     @abstractmethod
