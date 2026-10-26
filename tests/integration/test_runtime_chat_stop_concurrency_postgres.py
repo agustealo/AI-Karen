@@ -77,6 +77,11 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             / "supabase/migrations/20261025020000_43_runtime_chat_run_ledger.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(migration)
+        replay_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261025030000_44_runtime_chat_replay_identity.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(replay_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)",
             uuid.UUID(tenant_a), uuid.UUID(tenant_b),
