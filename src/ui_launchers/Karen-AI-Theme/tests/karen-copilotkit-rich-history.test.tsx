@@ -96,7 +96,7 @@ describe("CK-07E3 CopilotKit v2 rich restoration in native message slot", () => 
     [timeEvent, timeEvent, timeEvent, timeEvent, timeEvent, timeEvent, timeEvent],
     [receiptEvent, receiptEvent],
     [integrityEvent, integrityEvent],
-  ])("rejects the entire unsupported or forged replay set before SDK hydration", events => {
+  ].map(events => ({ events })))("rejects the entire unsupported or forged replay set before SDK hydration", ({ events }) => {
     expect(() => parseKarenVerifiedHistory(events, messages)).toThrow();
   });
 
