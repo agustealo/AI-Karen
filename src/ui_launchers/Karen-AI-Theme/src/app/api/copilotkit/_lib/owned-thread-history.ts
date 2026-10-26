@@ -114,6 +114,10 @@ export async function readKarenOwnedThreadMessages(
       "structured_content", "presentation", "presentation_payload",
       "karen.presentation.v1", "tool_activity", "tool_calls",
       "attachments", "artifacts", "execution_receipt",
+      "actual_provider", "actual_model", "response_source",
+      "requested_provider", "requested_model", "runtime_engine",
+      "fallback_level", "degradation_reason", "degraded_mode",
+      "citations", "sources", "agent_steps", "tool_results",
     ];
     const carriesRichValue = (value: unknown): boolean =>
       value !== undefined && value !== null && value !== "" &&
