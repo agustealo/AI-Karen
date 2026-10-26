@@ -45,6 +45,8 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     expect(screen.getByTestId("copilot-chat")).toBeTruthy();
     expect(sdk.chat[0].threadId).toBe(CONVERSATION);
     expect(sdk.chat[0].agentId).toBe("karen-" + CONVERSATION);
+    const messageView = sdk.chat[0].messageView as Record<string, unknown>;
+    expect(typeof messageView.assistantMessage).toBe("function");
     expect(sdk.provider[0].runtimeUrl).toBe("/api/copilotkit");
     expect(sdk.provider[0].properties).toBeUndefined();
   });
