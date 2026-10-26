@@ -6,13 +6,14 @@ const backend = vi.hoisted(() => ({
   fetchConversation: vi.fn(),
   agent: { threadId: "", setMessages: vi.fn() },
   isReady: true,
+  agentOptions: [] as Array<{agentId: string;runtimeAgentId: string;threadId: string}>,
 }));
 
 vi.mock("@copilotkit/react-core/v2", () => ({
-  useAgent: () => ({
-    agent: backend.agent,
-    isReady: backend.isReady,
-  }),
+  useAgent: (options: {agentId: string;runtimeAgentId: string;threadId: string}) => {
+    backend.agentOptions.push(options);
+    return { agent: backend.agent, isReady: backend.isReady };
+  },
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", () => ({
 
 import {
   KarenCopilotHistoryGate,
+  karenScopedAgentId,
   toCopilotTextMessages,
 } from "@/components/chat/copilotkit/KarenCopilotHistoryGate";
 
@@ -29,6 +31,7 @@ const CONVERSATION_B = "bd1d23c2-bbd7-4d31-987a-cf81025ebafd";
 
 beforeEach(() => {
   backend.isReady = true;
+  backend.agentOptions.length = 0;
   backend.agent.threadId = "";
   backend.fetchConversation.mockReset();
   backend.agent.setMessages.mockReset();
@@ -48,6 +51,10 @@ function guardedHistory(id = CONVERSATION_A) {
 }
 
 describe("CopilotKit canonical conversation hydration", () => {
+  it("allocates distinct local agent identities for different conversations", () => {
+    expect(karenScopedAgentId(CONVERSATION_A)).not.toBe(karenScopedAgentId(CONVERSATION_B));
+  });
+
   it("maps only trusted user and assistant text, preserving durable message IDs and order", () => {
     expect(toCopilotTextMessages([
       { id: "user-a", role: "user", content: "Question" },
@@ -78,6 +85,12 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
     expect(backend.fetchConversation).toHaveBeenCalledWith("/api/copilotkit/threads/" + CONVERSATION_A + "/messages");
+    expect(backend.agentOptions.at(-1)).toEqual({
+      agentId: "karen-" + CONVERSATION_A,
+      runtimeAgentId: "default",
+      threadId: CONVERSATION_A,
+    });
+    expect(backend.agent.threadId).toBe("");
     expect(backend.agent.setMessages).toHaveBeenCalledWith([
       { id: "m1", role: "user", content: "Hello" },
       { id: "m2", role: "assistant", content: "Karen response" },
