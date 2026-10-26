@@ -31,10 +31,10 @@ export default defineConfig({
     baseURL: process.env.KAREN_BASE_URL || 'http://localhost:8010',
     headless: !!process.env.CI,
     viewport: { width: 1280, height: 720 },
-    screenshot: process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ? 'off' : 'only-on-failure',
+    screenshot: process.env.KAREN_UX_IDENTITY_REPLAY === 'true' || process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ? 'off' : 'only-on-failure',
     // Opt in only on an approved sanitized test installation. Full-session
     // recordings may contain sensitive conversation text or browser state.
-    video: process.env.KAREN_UX_IDENTITY_REPLAY === 'true'
+    video: process.env.KAREN_UX_IDENTITY_REPLAY === 'true' || process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true'
       ? 'off'
       : process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'
         ? 'on'
@@ -42,7 +42,7 @@ export default defineConfig({
     // This opt-in suite types a real credential during sign-in.
     // Playwright traces retain fill action parameters, including passwords.
     // Never record such traces or include them in uploaded artifacts.
-    trace: process.env.KAREN_UX_IDENTITY_REPLAY === 'true'
+    trace: process.env.KAREN_UX_IDENTITY_REPLAY === 'true' || process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true'
       ? 'off'
       : 'retain-on-failure',
     actionTimeout: 15000,
