@@ -14,14 +14,14 @@ import re
 import sys
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode
 from urllib.request import Request, build_opener
 
 from scripts.ci.verify_deployment_revision import (
     NoRedirects,
     RevisionVerificationError,
     SHA_PATTERN,
-    revision_endpoint,
+    vercel_deployment_hostname,
 )
 
 LOGGER = logging.getLogger("karen.release.vercel")
@@ -57,15 +57,7 @@ def verify_vercel_deployment(
     if len(parts) != 2 or not all(parts):
         raise RevisionVerificationError("Invalid expected GitHub repository")
 
-    # Reuse the canonical strict HTTPS origin check, not a second parser.
-    hostname = urlsplit(revision_endpoint(base_url)).hostname
-    if (
-        not hostname
-        or not hostname.endswith(".vercel.app")
-        or hostname.count(".") != 2
-        or not re.fullmatch(r"[a-z0-9][a-z0-9-]*\.vercel\.app", hostname)
-    ):
-        raise RevisionVerificationError("Expected immutable Vercel deployment hostname")
+    hostname = vercel_deployment_hostname(base_url)
 
     api_url = (
         "https://api.vercel.com/v13/deployments/"
