@@ -80,6 +80,8 @@ def test_matching_platform_provenance_passes():
 
 @pytest.mark.parametrize("changes", [
     {"readyState": "ERROR"},
+    {"readyState": "READY", "state": "ERROR"},
+    {"readyState": "ERROR", "state": "READY"},
     {"readyState": "BUILDING"},
     {"readyState": "QUEUED"},
     {"url": "a-different-deployment.vercel.app"},
