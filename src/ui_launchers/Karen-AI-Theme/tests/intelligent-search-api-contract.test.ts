@@ -38,6 +38,15 @@ describe('Intelligent Search API execution truth', () => {
       .toBe('needs_location');
   });
 
+  it('rejects conflicting envelope results even when one requests location', async () => {
+    post.mockResolvedValue({
+      success: false,
+      result: clarification,
+      data: { status: 'error', reason: 'unauthorized', sources: [] },
+    });
+    await expect(IntelligentSearchApi.executeSearch({ query: 'weather' })).rejects.toThrow();
+  });
+
   it('rejects an envelope that failed despite response-shaped evidence', async () => {
     post.mockResolvedValue({
       success: false,
