@@ -186,3 +186,49 @@ def test_browser_credentials_are_not_available_to_dependency_setup():
             for step in ("Install pinned dependencies", "Install Chromium and system dependencies"):
                 block = job.split("      - name: " + step, 1)[1].split("\n      - ", 1)[0]
                 assert binding not in block
+
+
+
+def test_automation_bypass_is_step_scoped_and_browser_cookie_only():
+    """Never expose bypass secrets to installs or external link navigation."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    workflow = (
+        root / ".github/workflows/karen-history-browser-acceptance.yml"
+    ).read_text(encoding="utf-8")
+    job = workflow.split("  authenticated-search-replay:", 1)[1]
+    job_scope = job.split("\n    steps:", 1)[0]
+    secret = "VERCEL_AUTOMATION_BYPASS_SECRET: " + chr(36) + "{{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}"
+    assert secret not in job_scope
+    assert job.count(secret) == 3
+    for step in (
+        "Verify deployed revision before browser acceptance",
+        "Revalidate platform, running deployment and reviewed PR head after browser acceptance",
+        "Prove live authenticated grounded search and replay",
+    ):
+        block = job.split("      - name: " + step, 1)[1].split("\n      - ", 1)[0]
+        assert secret in block
+    for step in (
+        "Install pinned dependencies",
+        "Install Chromium and system dependencies",
+    ):
+        block = job.split("      - name: " + step, 1)[1].split("\n      - ", 1)[0]
+        assert secret not in block
+
+    fixture = (
+        root / "src/ui_launchers/Karen-AI-Theme/e2e/fixtures/verified-vercel-preview.ts"
+    ).read_text(encoding="utf-8")
+    suite = (
+        root / "src/ui_launchers/Karen-AI-Theme/e2e/intelligent-search-replay.spec.ts"
+    ).read_text(encoding="utf-8")
+    assert "maxRedirects: 0" in fixture
+    assert "'x-vercel-set-bypass-cookie': 'true'" in fixture
+    assert "context.cookies(approved.origin)" in fixture
+    assert "cookie.name === '_vercel_jwt'" in fixture
+    assert "extraHTTPHeaders" not in fixture
+    assert "page.route(" not in fixture
+    assert "fixtures/verified-vercel-preview" in suite
+    assert "trace: 'off'" in suite
+    assert "screenshot: 'off'" in suite
+    assert "video: 'off'" in suite
