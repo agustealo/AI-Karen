@@ -145,6 +145,14 @@ describe("CopilotKit owned thread history", () => {
           metadata: { execution_receipt: { response_source: "model" } } },
       ],
       [
+        { id: "assistant-2", role: "assistant", content: "Model answer",
+          metadata: {
+            actual_provider: "local",
+            actual_model: "sample-model",
+            response_source: "model",
+          } },
+      ],
+      [
         { id: "assistant-1", role: "assistant", content: "Done",
           attachments: [{ name: "document.pdf" }] },
       ],
