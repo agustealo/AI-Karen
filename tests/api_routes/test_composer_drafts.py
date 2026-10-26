@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -144,14 +145,18 @@ async def test_http_read_and_write_are_authenticated_thin_gateway_calls():
     read = await routes.get_composer_draft(
         CONV, conversation_gateway=gateway, tenant_id=TENANT, user_ctx=owner,
     )
-    assert read.text == "" and read.revision == 0
+    assert read.headers["cache-control"] == "private, no-store"
+    assert json.loads(read.body) == {"text": "", "revision": 0}
     updated = await routes.put_composer_draft(
         CONV, routes.UpdateComposerDraftRequest(
             text="Own saved draft", expected_revision=0,
         ),
         conversation_gateway=gateway, tenant_id=TENANT, user_ctx=owner,
     )
-    assert updated.text == "Own saved draft" and updated.revision == 1
+    assert updated.headers["cache-control"] == "private, no-store"
+    assert json.loads(updated.body) == {
+        "text": "Own saved draft", "revision": 1,
+    }
     with pytest.raises(HTTPException) as stale:
         await routes.put_composer_draft(
             CONV, routes.UpdateComposerDraftRequest(
