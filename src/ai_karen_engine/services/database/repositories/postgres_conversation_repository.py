@@ -392,6 +392,144 @@ class PostgresConversationRepository(ConversationRepository):
             )
             return RepositoryResult(success=False, error=str(exc))
 
+    async def get_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Read only an authorized unsent draft; never expose another user."""
+        try:
+            async with await self._session() as session:
+                async with session.begin():
+                    params = {
+                        "conversation": conversation_id,
+                        "tenant": tenant_id,
+                        "owner": user_id,
+                    }
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        params,
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :owner, true)"),
+                        params,
+                    )
+                    owned = await session.execute(
+                        text("""
+                            SELECT 1 FROM public.conversations
+                            WHERE conversation_id = CAST(:conversation AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                        """),
+                        params,
+                    )
+                    if owned.scalar_one_or_none() is None:
+                        return RepositoryResult(success=False, error="conversation_not_found")
+                    query = await session.execute(
+                        text("""
+                            SELECT draft_text, revision
+                            FROM public.conversation_composer_drafts
+                            WHERE conversation_id = CAST(:conversation AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                        """),
+                        params,
+                    )
+                    row = query.mappings().one_or_none()
+                    return RepositoryResult(
+                        success=True,
+                        data={
+                            "text": row["draft_text"] if row else "",
+                            "revision": int(row["revision"]) if row else 0,
+                        },
+                    )
+        except Exception as exc:
+            logger.error("get_composer_draft failed", extra={
+                "error_type": type(exc).__name__,
+            })
+            return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
+
+    async def put_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        content: str, expected_revision: int,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """One SQL CAS boundary prevents stale windows overwriting newer drafts.
+
+        A draft never creates a conversation, model execution, message, or
+        memory record. The parent FK owns deletion and prevents orphan writes.
+        """
+        if (
+            not isinstance(content, str)
+            or len(content) > 65536
+            or len(content.encode("utf-8")) > 262144
+            or type(expected_revision) is not int
+            or expected_revision < 0
+            or expected_revision > 9223372036854775805
+        ):
+            return RepositoryResult(success=False, error="composer_draft_invalid")
+        try:
+            async with await self._session() as session:
+                async with session.begin():
+                    params = {
+                        "conversation": conversation_id,
+                        "tenant": tenant_id,
+                        "owner": user_id,
+                        "content": content,
+                        "expected": expected_revision,
+                    }
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        params,
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :owner, true)"),
+                        params,
+                    )
+                    owned = await session.execute(
+                        text("""
+                            SELECT 1 FROM public.conversations
+                            WHERE conversation_id = CAST(:conversation AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                            FOR KEY SHARE
+                        """),
+                        params,
+                    )
+                    if owned.scalar_one_or_none() is None:
+                        return RepositoryResult(success=False, error="conversation_not_found")
+                    statement = await session.execute(
+                        text("""
+                            INSERT INTO public.conversation_composer_drafts AS d
+                              (conversation_id, tenant_id, user_id,
+                               draft_text, revision, updated_at)
+                            SELECT CAST(:conversation AS uuid),
+                                   CAST(:tenant AS uuid), CAST(:owner AS uuid),
+                                   :content, 1, clock_timestamp()
+                            WHERE :expected = 0
+                            ON CONFLICT (conversation_id) DO UPDATE
+                            SET draft_text = EXCLUDED.draft_text,
+                                revision = d.revision + 1,
+                                updated_at = clock_timestamp()
+                            WHERE d.tenant_id = EXCLUDED.tenant_id
+                              AND d.user_id = EXCLUDED.user_id
+                              AND d.revision = :expected
+                            RETURNING revision, draft_text
+                        """),
+                        params,
+                    )
+                    result = statement.mappings().one_or_none()
+                    if result is None:
+                        return RepositoryResult(
+                            success=False, error="composer_draft_revision_conflict",
+                        )
+                    return RepositoryResult(success=True, data={
+                        "text": result["draft_text"],
+                        "revision": int(result["revision"]),
+                    })
+        except Exception as exc:
+            logger.error("put_composer_draft failed", extra={
+                "error_type": type(exc).__name__,
+            })
+            return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
+
     @instrument_repository(
         operation="add_message", repository="PostgresConversationRepository"
     )
