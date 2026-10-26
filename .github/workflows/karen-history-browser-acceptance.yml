@@ -31,8 +31,6 @@ jobs:
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_HISTORY_ACCEPTANCE_URL }}
-      KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
-      KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
       KAREN_HISTORY_CONVERSATION_ID: ${{ vars.KAREN_HISTORY_CONVERSATION_ID }}
       KAREN_HISTORY_ACCEPTANCE_REQUIRED: "true"
       KAREN_UX_IDENTITY_REPLAY: "true"
@@ -51,6 +49,9 @@ jobs:
 
       - name: Validate approved acceptance configuration
         shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -77,6 +78,9 @@ jobs:
 
       - name: Prove live authenticated conversation restoration
         shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
         run: |
           set -euo pipefail
           npx playwright test e2e/karen-durable-history-restoration.spec.ts \
@@ -95,8 +99,6 @@ jobs:
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_SEARCH_ACCEPTANCE_URL }}
-      KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
-      KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
       KAREN_SEARCH_ACCEPTANCE_REQUIRED: "true"
       KAREN_E2E_CAPTURE_VIDEO: "false"
       CI: "true"
@@ -136,6 +138,9 @@ jobs:
 
       - name: Validate approved search deployment
         shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ inputs.target_sha }}"
@@ -181,6 +186,9 @@ jobs:
 
       - name: Prove live authenticated grounded search and replay
         shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
         run: |
           set -euo pipefail
           npm run test:e2e:search-release -- --reporter=list --retries=0
