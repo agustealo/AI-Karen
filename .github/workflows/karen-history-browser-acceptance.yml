@@ -11,6 +11,10 @@ on:
         options:
           - history
           - search
+      target_sha:
+        description: Exact reviewed 40-character PR commit SHA for search acceptance
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -102,16 +106,23 @@ jobs:
         working-directory: src/ui_launchers/Karen-AI-Theme
 
     steps:
-      - name: Check out exact requested head
+      - name: Require pinned reviewed source revision
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Provide a reviewed 40-character commit SHA"; exit 1; }
+
+      - name: Check out exact reviewed source revision
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.target_sha }}
           persist-credentials: false
 
       - name: Validate approved search deployment
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "${{ inputs.target_sha }}"
           test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved search deployment URL"; exit 1; }
           test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing acceptance identity"; exit 1; }
           test -n "$KAREN_UX_PASSWORD" || { echo "::error::Missing acceptance credential"; exit 1; }
