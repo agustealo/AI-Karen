@@ -151,8 +151,10 @@ tenant or user scope does not alias the old execution.
 
    **Still missing:** real provider-process reattachment (which may never be
    safe for all engines), governed frontend cursor consumption/acknowledgment,
-   retention/deletion coupling, actual PostgreSQL cross-process proof,
-   and UI feature/voice/persona/draft/scroll parity.
+   retention/deletion coupling and a genuine process-kill/restart proof,
+   as distinct from two independent repository instances operating against
+   the same real PostgreSQL database, plus UI feature/voice/persona/draft/scroll
+   parity.
 5. **CK-07E1 (partial):** Canonical conversation deletion now requires an
    authenticated owner and performs run-ledger deletion before deleting the
    conversation in the SAME PostgreSQL transaction. Journal rows cascade
@@ -180,12 +182,57 @@ tenant or user scope does not alias the old execution.
    unaudited background deletion loop is introduced here. Prove the
    complete retention and legal-hold policy before enabling consumers.
 
+## CK-07E2: protected browser protocol acceptance (not consumer parity)
+
+The existing CopilotKit **manual text hydrator** in
+`KarenCopilotHistoryGate` now rejects nonempty `replayEvents`, unsupported
+roles, duplicate message IDs and invalid bounds **before** calling
+`agent.setMessages()`. The canonical backend may attest rich CUSTOM events,
+but a text-only SDK hydration is not permission to silently discard them.
+Those conversations remain available through the mounted assistant-ui until
+an actual CopilotKit presentation renderer is implemented and verified.
+
+The existing protected `karen-history-browser-acceptance.yml` workflow
+has **three distinct scenarios**, history, search and `copilotkit`. History
+and the PR #550 search scenario were preserved during the two-parent merge of
+`main` into #556. The new CopilotKit scenario requires a reviewed 40-character
+**current PR #556 head**, an HTTPS sanitized deployment, authenticated
+credentials, an actual canonical conversation UUID, and an actual journaled
+run ID from the same tenant. It **fails**, rather than skips, if a fixture,
+capability, or permission is absent.
+
+Before making authenticated browser requests, it compares the actual deployed
+revision with the reviewed checkout via the single read-only
+`/api/deployment-revision` endpoint **owned by PR #550**. Do not create a
+second revision service in #556. Until that route is integrated and the
+deployment serves the exact requested PR commit, the manual acceptance
+remains deliberately blocked.
+
+The no-recording Playwright spec
+`e2e/karen-copilotkit-protocol-acceptance.spec.ts` reads backend-owned
+CopilotKit message history and verifies the SDK `connect` transport
+returns the same snapshot with any attested CUSTOM events, synthetic
+`replay_only` envelope, and no fabricated client transcript. Its optional
+cursor case reads a real run across contiguous pages and insists on
+`continuationAvailable=false`, correct completed/observed-terminal
+separation, and a 404 for a nonexistent run. These are **real browser/HTTP
+protocol checks**, not proof that `KarenCopilotChat` is the mounted composer
+or that a failed model worker can be revived. The mounted assistant-ui remains
+the user-facing fallback, not a hidden CopilotKit emulation.
+
+After the implementation is deployed, manually dispatch the existing
+workflow with `scenario=copilotkit`, `target_sha=<current PR #556 head>`.
+Do not mark CK-07E2 release ready unless it passes against the same
+deployed revision and a further user-facing CopilotKit visual and
+interaction parity run is green. No screenshot/video/trace artifacts may
+contain account credentials or saved private transcripts.
+
 ## Proof entry points
 
 ```bash
 python -m compileall src
 pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
-cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts
+cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/copilotkit-observed-run-events.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
