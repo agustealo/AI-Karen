@@ -15,6 +15,9 @@ import { apiClient } from "@/lib/api";
 type KarenOwnedThreadResponse = {
   threadId: string;
   messages: KarenOwnedHistoryMessage[];
+  // Backend-verified CUSTOM events exist, but this v2 manual hydrator only
+  // supports text. Never silently discard presentation/receipt provenance.
+  replayEvents?: unknown;
 };
 
 /** One private local UI agent per owned conversation, all routing to Karen default runtime. */
@@ -40,17 +43,23 @@ export function toCopilotTextMessages(
   if (!Array.isArray(messages)) {
     throw new Error("Canonical conversation history is unavailable");
   }
-  return messages.flatMap((message) => {
-    if (message.role !== "user" && message.role !== "assistant") return [];
-    if (typeof message.id !== "string" || !message.id.trim() ||
-        typeof message.content !== "string") {
+  if (messages.length > 500) {
+    throw new Error("Canonical conversation history exceeds the text limit");
+  }
+  const ids = new Set<string>();
+  return messages.map((message) => {
+    if (!message || (message.role !== "user" && message.role !== "assistant") ||
+        typeof message.id !== "string" || !message.id.trim() ||
+        message.id.length > 200 || ids.has(message.id) ||
+        typeof message.content !== "string" || message.content.length > 65536) {
       throw new Error("Canonical conversation history contains an invalid message");
     }
-    return [{
+    ids.add(message.id);
+    return {
       id: message.id,
       role: message.role,
       content: message.content,
-    }];
+    };
   });
 }
 
@@ -94,6 +103,19 @@ export function KarenCopilotHistoryGate({
         if (cancelled) return;
         if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
           throw new Error("Conversation history identity mismatch");
+        }
+        // The backed-owned read path may include attested rich events. Manual
+        // agent.setMessages() cannot restore these. Reject before mutating
+        // agent state, rather than claiming the conversation is restored.
+        if (snapshot.replayEvents !== undefined) {
+          if (!Array.isArray(snapshot.replayEvents)) {
+            throw new Error("Canonical conversation history has invalid replay metadata");
+          }
+          if (snapshot.replayEvents.length > 0) {
+            throw Object.assign(new Error("unsupported_rich_replay"), {
+              status: 409,
+            });
+          }
         }
         const messages = toCopilotTextMessages(snapshot.messages);
         // A thread switch must never retain another conversation's agent state.
