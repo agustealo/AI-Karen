@@ -313,6 +313,64 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         assert terminal_page["continuationAvailable"] is False
         assert terminal_page["events"][0]["event"]["type"] == "RUN_ERROR"
 
+        # Actual PostgreSQL RLS must hold for a least-privilege login;
+        # superuser-only repository queries do not prove policy isolation.
+        await raw.execute(
+            "CREATE ROLE karen_ci_chat_reader LOGIN PASSWORD 'chat_cursor_ci_only'"
+        )
+        await raw.execute(
+            "GRANT CONNECT ON DATABASE karen_chat_run_test TO karen_ci_chat_reader"
+        )
+        await raw.execute(
+            "GRANT USAGE ON SCHEMA public TO karen_ci_chat_reader"
+        )
+        await raw.execute(
+            "GRANT SELECT ON public.runtime_chat_runs, "
+            "public.runtime_chat_run_events TO karen_ci_chat_reader"
+        )
+        reader = await asyncpg.connect(
+            "postgresql://karen_ci_chat_reader:chat_cursor_ci_only@"
+            "127.0.0.1:5432/karen_chat_run_test"
+        )
+        try:
+            assert await reader.fetchval(
+                "SELECT count(*) FROM public.runtime_chat_run_events"
+            ) == 0
+            async with reader.transaction():
+                await reader.execute(
+                    "SELECT set_config('app.current_tenant_id', $1, true)",
+                    tenant_a,
+                )
+                await reader.execute(
+                    "SELECT set_config('app.current_user_id', $1, true)",
+                    user_a,
+                )
+                assert await reader.fetchval(
+                    "SELECT count(*) FROM public.runtime_chat_run_events"
+                ) == 3
+                assert await reader.fetchval(
+                    "SELECT count(*) FROM public.runtime_chat_runs "
+                    "WHERE transport_run_id='run-journal'"
+                ) == 1
+            async with reader.transaction():
+                await reader.execute(
+                    "SELECT set_config('app.current_tenant_id', $1, true)",
+                    tenant_b,
+                )
+                await reader.execute(
+                    "SELECT set_config('app.current_user_id', $1, true)",
+                    user_b,
+                )
+                assert await reader.fetchval(
+                    "SELECT count(*) FROM public.runtime_chat_run_events"
+                ) == 0
+                assert await reader.fetchval(
+                    "SELECT count(*) FROM public.runtime_chat_runs "
+                    "WHERE transport_run_id='run-journal'"
+                ) == 0
+        finally:
+            await reader.close()
+
         expired = await worker_a.admit(
             **identity(run_id="run-expired"),
             request_id="expired-a", correlation_id="expired-trace",
