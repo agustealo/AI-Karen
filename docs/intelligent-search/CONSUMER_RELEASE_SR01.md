@@ -216,3 +216,58 @@ The separate security hotfix PR #558 was merged into main as
 `33f60a97c050fbe42ca58619941b1286935f4c5e` and its history
 default-branch restrictions were reconciled without overwriting this
 consumer search attestation. No consumer release approval is implied.
+
+
+## Canonical Docker source identity and running image attestation (October 26, 2026)
+
+The canonical production Docker Compose overlay now requires
+`KAREN_DEPLOYED_COMMIT_SHA` for the **API and web images**, builds them with
+that source revision, applies revision-specific local image tags, and
+propagates the revision to each running container. The web production
+Dockerfile rejects malformed or missing 40-character lowercase revisions
+and places the revision on an OCI image label and on the existing
+`/api/deployment-revision` runtime response path. The API image carries
+the same OCI label.
+
+This fixes an earlier Docker-specific blocker: the live revision route
+previously had no guaranteed deployed SHA outside Vercel.
+
+### Authorized production host verification
+
+`scripts/ci/verify_docker_release.py` is a separate, read-only verifier
+for an operator-controlled Docker host. It expects the exact reviewed SHA
+and **both approved immutable Docker image IDs**, sourced from a separately
+verified build receipt:
+
+- `TARGET_SHA`
+- `KAREN_EXPECTED_WEB_IMAGE_ID` (full `sha256:` image ID)
+- `KAREN_EXPECTED_API_IMAGE_ID` (full `sha256:` image ID)
+- `KAREN_RELEASE_REPO_ROOT` (trusted checkout with production Compose files)
+
+The verifier calls the canonical Compose services `web` and `api`
+without a shell, identifies exactly one running container for each,
+requires healthy Docker status, confirms Compose service identity, and
+compares live container image IDs, inspected image IDs, OCI revision
+labels and runtime SHA against the approved values. It never logs
+container environments, authentication secrets or raw Docker inspect
+payloads. CI tests cover missing, duplicate, mismatched and unhealthy
+containers.
+
+**Important limitation:** SHA-based tags and OCI labels are self-claims.
+Checking a Docker image ID against an externally approved digest
+detects deployed-image drift, but does **not** independently prove that
+an untrusted image builder used the claimed Git source. The release
+process must independently attest and approve the build source/image
+relationship, protect the build artifacts, and furnish reviewed image
+IDs. Never manufacture this approval from the image's own labels.
+
+This Docker verifier is not a substitute for the separately checked
+`/api/deployment-revision` and `/api/health` endpoints or for the
+authenticated search/replay and human consumer checks. Running this
+verifier on the build runner without the actual release containers
+is **not** live consumer acceptance.
+
+The Vercel preview workflow remains provider-specific and may not be
+used to claim a canonical Docker release. Production promotion stays
+RED until the complete deployment, runtime, browser and security
+evidence chain is independently confirmed.
