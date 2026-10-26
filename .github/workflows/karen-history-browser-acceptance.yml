@@ -12,7 +12,7 @@ on:
           - history
           - search
       target_sha:
-        description: Exact reviewed 40-character PR commit SHA for search acceptance
+        description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
         required: false
 
@@ -116,7 +116,7 @@ jobs:
         run: |
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Provide a reviewed 40-character commit SHA"; exit 1; }
 
-      - name: Verify reviewed SHA is the current consumer release PR head
+      - name: Require the current reviewed main commit before checkout
         working-directory: .
         shell: bash
         env:
@@ -124,9 +124,17 @@ jobs:
           TARGET_SHA: ${{ inputs.target_sha }}
         run: |
           set -euo pipefail
-          actual_sha="$(gh api repos/${GITHUB_REPOSITORY}/pulls/550 --jq '.head.sha')"
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "::error::Protected browser acceptance only runs from main"
+            exit 1
+          }
+          test "$TARGET_SHA" = "$GITHUB_SHA" || {
+            echo "::error::Requested SHA differs from the dispatched main revision"
+            exit 1
+          }
+          actual_sha="$(gh api repos/${GITHUB_REPOSITORY}/branches/main --jq '.commit.sha')"
           test "$TARGET_SHA" = "$actual_sha" || {
-            echo "::error::Requested revision does not match current PR #550 head"
+            echo "::error::Main moved before protected acceptance"
             exit 1
           }
 
@@ -195,7 +203,7 @@ jobs:
           set -euo pipefail
           npm run test:e2e:search-release -- --reporter=list --retries=0
 
-      - name: Revalidate platform, running deployment and reviewed PR head after browser acceptance
+      - name: Revalidate platform, running deployment and reviewed main head after browser acceptance
         shell: bash
         env:
           TARGET_SHA: ${{ inputs.target_sha }}
@@ -210,9 +218,9 @@ jobs:
           python ../../../scripts/ci/verify_vercel_deployment.py
           python ../../../scripts/ci/verify_deployment_revision.py
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          actual_sha="$(gh api repos/${GITHUB_REPOSITORY}/pulls/550 --jq '.head.sha')"
+          actual_sha="$(gh api repos/${GITHUB_REPOSITORY}/branches/main --jq '.commit.sha')"
           test "$actual_sha" = "$TARGET_SHA" || {
-            echo "::error::PR head changed during browser acceptance"
+            echo "::error::Reviewed main revision changed during browser acceptance"
             exit 1
           }
 
