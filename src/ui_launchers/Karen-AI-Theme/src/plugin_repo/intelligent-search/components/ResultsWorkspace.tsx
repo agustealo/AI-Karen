@@ -23,7 +23,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
   const distinctHosts = new Set(sources.map((source) => {
-    try { return new URL(source.url).hostname.replace(/^www\\./, '').toLowerCase(); }
+    try { return new URL(source.url).hostname.replace(/^www\./, '').toLowerCase(); }
     catch { return ''; }
   }).filter(Boolean)).size;
   const actualMode = String(response?.mode || 'unknown');
