@@ -146,7 +146,7 @@ def test_search_acceptance_checks_platform_before_and_after_browser():
     job = workflow.split("  authenticated-search-replay:", 1)[1]
     pre = job.index("- name: Verify independent Vercel deployment provenance before browser acceptance")
     browser = job.index("- name: Prove live authenticated grounded search and replay")
-    post = job.index("- name: Revalidate platform, running deployment and reviewed PR head")
+    post = job.index("- name: Revalidate platform, running deployment and reviewed main head")
     assert pre < browser < post
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
@@ -206,7 +206,7 @@ def test_automation_bypass_is_step_scoped_and_browser_cookie_only():
     assert job.count(secret) == 3
     for step in (
         "Verify deployed revision before browser acceptance",
-        "Revalidate platform, running deployment and reviewed PR head after browser acceptance",
+        "Revalidate platform, running deployment and reviewed main head after browser acceptance",
         "Prove live authenticated grounded search and replay",
     ):
         block = job.split("      - name: " + step, 1)[1].split("\n      - ", 1)[0]
