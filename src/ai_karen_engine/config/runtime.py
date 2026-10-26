@@ -173,6 +173,8 @@ class FeatureFlags:
     enable_ag_ui_bridge: bool = False
     # CK-07A: opt-in only after migration 43 and live multiworker proof.
     enable_ag_ui_durable_runs: bool = False
+    # CK-07E0: gated journal of actual projected events; no model reattachment.
+    enable_ag_ui_event_journal: bool = False
     enable_memory_integration: bool = True
     enable_proactive_suggestions: bool = True
     enable_performance_optimization: bool = True
@@ -426,6 +428,10 @@ class RuntimeSettings:
         if env_ag_ui_run_ledger is not None:
             self.features.enable_ag_ui_durable_runs = as_bool(env_ag_ui_run_ledger)
 
+        env_ag_ui_event_journal = env("KARI_ENABLE_AG_UI_EVENT_JOURNAL")
+        if env_ag_ui_event_journal is not None:
+            self.features.enable_ag_ui_event_journal = as_bool(env_ag_ui_event_journal)
+
         env_chat_run_lease = env("KARI_CHAT_RUN_LEASE_SECONDS")
         if env_chat_run_lease is not None:
             self.timeouts.chat_run_lease_seconds = as_int(
@@ -507,6 +513,11 @@ class RuntimeSettings:
         if not 2400 <= self.task_verification.max_answer_chars <= 262144:
             issues.append("Task review answer limit must be between 2400 and 262144 characters")
 
+        if self.features.enable_ag_ui_event_journal and not (
+            self.features.enable_ag_ui_bridge
+            and self.features.enable_ag_ui_durable_runs
+        ):
+            issues.append("AG-UI event journal requires both bridge and durable-run flags")
         if not 30 <= self.timeouts.chat_run_lease_seconds <= 3600:
             issues.append("Chat run lease must be between 30 and 3600 seconds")
         if not 1 <= self.timeouts.chat_run_heartbeat_seconds <= (
