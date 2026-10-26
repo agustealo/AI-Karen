@@ -47,10 +47,16 @@ tenant or user scope does not alias the old execution.
 - **Heartbeat:** CAS renewal matches execution UUID, tenant/user/conversation,
   fencing token, active state, non-expired lease and absent cancel intent. The
   worker renews while the provider is blocked, not only after tokens arrive.
-- **Finality:** `completed`, `failed` and `cancelled` are terminal states
-  enforced in SQL; one server lease can transition the row once. `RUN_FINISHED`
-  may be projected only after the runtime's canonical completion and successful
-  database terminal commit. A lost lease cannot produce a successful finish.
+- **Finality:** `completed`, `failed` and `cancelled` are terminal states.
+  CK-07C0 now extends the EXISTING canonical `PostgresConversationRepository`
+  completed-turn transaction: it locks the scoped run BEFORE the owned
+  conversation, inserts both idempotent messages, and updates the SAME
+  run row to `completed` in the SAME PostgreSQL transaction. Stop requests
+  serialize on that exact row. There is no independent `completed` update
+  in `SqlChatRunRepository.finish()`; that path explicitly rejects it.
+  The runtime projects `RUN_FINISHED` only after it read-verifies the
+  completed run and both canonical message IDs under tenant/user RLS.
+  A lost lease or a failed insert/terminal update cannot produce a success.
 - **Disconnection:** The stream's cancellation/closure requests a cancelled
   transition; there is no fake successful model answer.
 - **Worker loss:** When an authenticated actor next admits a run, expired
@@ -78,8 +84,14 @@ tenant or user scope does not alias the old execution.
    terminal record is required to confirm `cancelled`. SDK clients that omit
    `runId` receive 422 rather than cancelling an arbitrary thread run.
    Operator activation remains blocked pending E2E proof.
-2. **CK-07C0:** Harden completion/cancellation races across persistence,
-   tool side effects and worker lease transitions.
+2. **CK-07C0:** Atomic transcript + completed-run finality is implemented
+   using the canonical PostgreSQL conversation repository with one transaction,
+   owner checks, fencing, and read-after-write verification. Durable-run memory
+   writes now occur AFTER successful transcript/terminal commit. Unit rollback
+   and isolated PostgreSQL stop-versus-commit race tests are checked in.
+   **Still unproven**: live dedicated-DB CI execution, post-commit process
+   crash/restart reconciliation and atomicity of external tool side effects,
+   which are governed separately by their canonical services.
 3. **CK-07D:** Governed, versioned presentation/execution receipt restoration,
    ordered replay cursor and live-stream continuation.
 4. **CK-07E:** Real PostgreSQL, actual model, multiple workers and browser
@@ -91,7 +103,7 @@ tenant or user scope does not alias the old execution.
 
 ```bash
 python -m compileall src
-pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_ag_ui_transport.py -q
+pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py -q
 cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
