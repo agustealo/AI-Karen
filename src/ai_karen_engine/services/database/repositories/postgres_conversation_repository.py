@@ -503,7 +503,13 @@ class PostgresConversationRepository(ConversationRepository):
                             SELECT CAST(:conversation AS uuid),
                                    CAST(:tenant AS uuid), CAST(:owner AS uuid),
                                    :content, 1, clock_timestamp()
-                            WHERE :expected = 0
+                            WHERE :expected = 0 OR EXISTS (
+                                SELECT 1 FROM public.conversation_composer_drafts
+                                WHERE conversation_id = CAST(:conversation AS uuid)
+                                  AND tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND revision = :expected
+                            )
                             ON CONFLICT (conversation_id) DO UPDATE
                             SET draft_text = EXCLUDED.draft_text,
                                 revision = d.revision + 1,
