@@ -356,6 +356,27 @@ class SqlChatRunRepository:
                     status in {"failed", "cancelled", "orphaned"}
                     and row["terminal_at"] is not None
                 )
+            elif status == "completed" and (
+                event_type == "TEXT_MESSAGE_END"
+                or (
+                    event_type == "CUSTOM"
+                    and event.get("name") in {
+                        "karen.execution_receipt.v1",
+                        "karen.response_integrity.v1",
+                    }
+                )
+            ):
+                # Canonical COMPLETE projects message-end and bounded
+                # receipts BEFORE RUN_FINISHED, after the atomic transcript
+                # transaction has already committed. Allow exactly those
+                # observed final-envelope events, not fresh model tokens.
+                allowed = (
+                    row["terminal_at"] is not None
+                    and row["assistant_message_id"] is not None
+                    and isinstance(row["assistant_message_digest"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", row["assistant_message_digest"])
+                    is not None
+                )
             else:
                 allowed = (
                     status == "running"
