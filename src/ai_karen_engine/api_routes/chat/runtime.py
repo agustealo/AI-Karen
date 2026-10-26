@@ -12,6 +12,7 @@ import logging
 import re
 import time
 import uuid
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -626,12 +627,60 @@ async def _ag_ui_sse(
     runtime_request: ChatExecutionRequest, *, thread_id: str, run_id: str,
     run_lease: Optional[ChatRunLease] = None,
 ):
-    """Translate the same authorized runtime stream into AG-UI event framing."""
-    projection = AGUIEventProjection(thread_id=thread_id, run_id=run_id)
-    yield ": stream_connected\n\n"
-    yield f"data: {json.dumps(projection.begin())}\n\n"
+    """Project canonical runtime chunks, with optional fenced observed cursor.
 
+    Every journaled AG-UI event is durably appended before the wire sends it.
+    Journal failure never turns an interrupted or unverified run into success.
+    Inference and the canonical transcript stay owned by ChatRuntime.
+    """
+    projection = AGUIEventProjection(thread_id=thread_id, run_id=run_id)
+    settings = get_runtime_settings()
+    journal_enabled = bool(
+        run_lease is not None
+        and getattr(settings.features, "enable_ag_ui_event_journal", False)
+        and settings.features.enable_ag_ui_bridge
+        and getattr(settings.features, "enable_ag_ui_durable_runs", False)
+    )
+    journal = get_chat_run_coordinator() if journal_enabled else None
+    canonical_stream = None
+
+    async def frame(event: dict[str, Any]) -> str:
+        payload = json.dumps(event, ensure_ascii=False, allow_nan=False)
+        if journal is not None and run_lease is not None:
+            seq = await journal.append_observed_event(run_lease, event)
+            return f"id: {seq}\ndata: {payload}\n\n"
+        return f"data: {payload}\n\n"
+
+    async def error_frames(code: str, message: str):
+        # A journal error can occur AFTER projection marked itself terminal.
+        # Never let that terminal bit hide an honest transport failure.
+        chunk = ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content=message,
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={"error_code": code},
+        )
+        projected = projection.project(chunk)
+        if not projected:
+            projected = [{"type": "RUN_ERROR", "message": message, "code": code}]
+        for event in projected:
+            try:
+                yield await frame(event)
+            except Exception as exc:
+                logger.error(
+                    "AG-UI event journal unavailable for error receipt",
+                    extra={
+                        "correlation_id": runtime_request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                # An unjournaled diagnostic is not represented as durable.
+                yield f"data: {json.dumps(event)}\n\n"
+
+    yield ": stream_connected\n\n"
     try:
+        # A failed first append must not start a provider execution.
+        yield await frame(projection.begin())
         canonical_stream = get_chat_runtime().execute_stream(runtime_request)
         if run_lease is not None:
             canonical_stream = get_chat_run_coordinator().stream(
@@ -639,18 +688,14 @@ async def _ag_ui_sse(
             )
         async for chunk in canonical_stream:
             for event in projection.project(chunk):
-                yield f"data: {json.dumps(event)}\n\n"
+                yield await frame(event)
             if projection.terminal:
                 break
     except ChatRunCancellationRequested:
-        error_chunk = ChatStreamChunk(
-            type=ChatStreamEventType.ERROR,
-            content="This chat run was cancelled.",
-            correlation_id=runtime_request.context.correlation_id,
-            metadata={"error_code": "CHAT_STREAM_CANCELLED"},
-        )
-        for event in projection.project(error_chunk):
-            yield f"data: {json.dumps(event)}\n\n"
+        async for packet in error_frames(
+            "CHAT_STREAM_CANCELLED", "This chat run was cancelled.",
+        ):
+            yield packet
     except ChatRunLeaseLost as exc:
         logger.error(
             "Fenced AG-UI run ended without authorized terminal",
@@ -664,34 +709,39 @@ async def _ag_ui_sse(
             if str(exc) == "chat_run_missing_terminal"
             else "CHAT_RUN_LEASE_LOST"
         )
-        error_chunk = ChatStreamChunk(
-            type=ChatStreamEventType.ERROR,
-            content="Chat execution ended without verified completion.",
-            correlation_id=runtime_request.context.correlation_id,
-            metadata={"error_code": code},
-        )
-        for event in projection.project(error_chunk):
-            yield f"data: {json.dumps(event)}\n\n"
+        async for packet in error_frames(
+            code, "Chat execution ended without verified completion.",
+        ):
+            yield packet
     except Exception as exc:
         logger.exception(
-            "AG-UI runtime projection failed",
+            "AG-UI runtime projection or journal failed",
             extra={
                 "correlation_id": runtime_request.context.correlation_id,
                 "error_type": type(exc).__name__,
             },
         )
-        error_chunk = ChatStreamChunk(
-            type=ChatStreamEventType.ERROR,
-            content="Chat streaming failed before completion.",
-            correlation_id=runtime_request.context.correlation_id,
-            metadata={"error_code": "CHAT_STREAM_RUNTIME_EXCEPTION"},
-        )
-        for event in projection.project(error_chunk):
-            yield f"data: {json.dumps(event)}\n\n"
+        if journal is not None and canonical_stream is None and run_lease is not None:
+            # Before inference, a failed start-event write is a durable
+            # failed run, not a user-visible fake model response.
+            with suppress(Exception):
+                await journal.fail_unstarted_event_journal(run_lease)
+        async for packet in error_frames(
+            "CHAT_EVENT_JOURNAL_UNAVAILABLE" if journal is not None
+            else "CHAT_STREAM_RUNTIME_EXCEPTION",
+            "Chat streaming failed before verified completion.",
+        ):
+            yield packet
+    finally:
+        if canonical_stream is not None:
+            with suppress(Exception):
+                await canonical_stream.aclose()
 
     for event in projection.fail_incomplete():
-        yield f"data: {json.dumps(event)}\n\n"
-
+        try:
+            yield await frame(event)
+        except Exception:
+            yield f"data: {json.dumps(event)}\n\n"
 
 @router.get("/chat/ag-ui/capabilities")
 async def get_ag_ui_transport_capabilities(
