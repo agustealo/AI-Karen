@@ -50,7 +50,7 @@ function guardedBackend(
     if (url === "http://api:8000/api/chat/ag-ui/capabilities") {
       return Response.json({ enabled: true });
     }
-    if (url === "http://api:8000/api/conversations/" + THREAD) return conversation();
+    if (url === "http://api:8000/api/conversations/" + THREAD + "?message_limit=501") return conversation();
     throw new Error("Unexpected external call " + url);
   });
   globalThis.fetch = upstream as typeof fetch;
@@ -78,8 +78,22 @@ describe("CopilotKit owned thread history", () => {
     expect(urls).toEqual([
       "http://api:8000/api/auth/me",
       "http://api:8000/api/chat/ag-ui/capabilities",
-      "http://api:8000/api/conversations/" + THREAD,
+      "http://api:8000/api/conversations/" + THREAD + "?message_limit=501",
     ]);
+  });
+
+  it("replays 500 canonical plaintext messages without accidentally fetching the legacy 100-message page", async () => {
+    guardedBackend(() => reply("user-A", Array.from({ length: 500 }, (_, index) => ({
+      id: "message-" + index,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: "turn " + index,
+    }))));
+    const response = await GET(request());
+    expect(response.status).toBe(200);
+    const snapshot = await response.json();
+    expect(snapshot.messages).toHaveLength(500);
+    expect(snapshot.messages[0].id).toBe("message-0");
+    expect(snapshot.messages[499].id).toBe("message-499");
   });
 
   it("does not disclose a foreign user's conversation even if upstream accidentally returns one", async () => {
