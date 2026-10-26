@@ -94,6 +94,21 @@ class MemoryLedger:
     async def cancel_requested(self, lease: ChatRunLease) -> bool:
         return self.cancel_intent
 
+    async def completed(self, lease: ChatRunLease) -> bool:
+        return any(
+            run_id == lease.transport_run_id and status == "completed"
+            for run_id, status, _ in self.finalized
+        )
+
+    async def committed_turn(
+        self, lease: ChatRunLease, *,
+        user_message_id: str, assistant_message_id: str,
+    ) -> bool:
+        if not self.allow_finish or self.cancel_intent:
+            return False
+        self.finalized.append((lease.transport_run_id, "completed", None))
+        return True
+
     async def request_cancel(self, *, tenant_id: str, user_id: str,
                              conversation_id: str, transport_run_id: str) -> str | None:
         scope = (tenant_id, user_id, conversation_id, transport_run_id)
@@ -119,7 +134,11 @@ def completed() -> ChatStreamChunk:
     return ChatStreamChunk(
         type=ChatStreamEventType.COMPLETE,
         content="",
-        metadata={"transcript_persistence_status": "persisted"},
+        metadata={
+            "transcript_persistence_status": "persisted",
+            "user_message_id": "11111111-1111-5111-8111-111111111111",
+            "assistant_message_id": "22222222-2222-5222-8222-222222222222",
+        },
     )
 
 
