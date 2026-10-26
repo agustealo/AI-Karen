@@ -12,7 +12,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from typing import Optional
+from typing import Any, Optional
 
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.logging import get_structured_logger
@@ -82,6 +82,40 @@ class ChatRunCoordinator:
             user_id=context.user_id,
             conversation_id=context.require_conversation_id(),
             transport_run_id=run_id,
+        )
+
+    async def append_observed_event(
+        self, lease: ChatRunLease, event: dict[str, Any],
+    ) -> int:
+        """Persist only an already-projected event, never raw model metadata."""
+        return await self._repository.append_projected_event(
+            lease, event=event,
+        )
+
+    async def read_observed_events(
+        self, context: ChatExecutionContext, *, run_id: str,
+        after: int = 0, limit: int = 50,
+    ) -> Optional[dict[str, Any]]:
+        """Reauthorize an owner; read persisted observations without running AI."""
+        context.require_authenticated_user()
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
+        return await self._repository.read_projected_events(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=context.require_conversation_id(),
+            transport_run_id=run_id,
+            after=after,
+            limit=limit,
+        )
+
+    async def fail_unstarted_event_journal(
+        self, lease: ChatRunLease,
+    ) -> bool:
+        """Only a journal failure before inference may fail the owned run."""
+        return await self._repository.finish(
+            lease,
+            status="failed",
+            error_code="CHAT_EVENT_JOURNAL_UNAVAILABLE",
         )
 
     async def stream(
