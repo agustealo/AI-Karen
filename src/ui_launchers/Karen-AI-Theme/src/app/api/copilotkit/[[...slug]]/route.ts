@@ -2,6 +2,7 @@ import { HttpAgent } from "@ag-ui/client-v1";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getBackendBaseUrl } from "../../_lib/backend-proxy";
+import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilotkit/_lib/owned-thread-history";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,6 +88,7 @@ const MAX_RUN_BYTES = 524288;
 export function validateCopilotRoute(request: NextRequest): NextResponse | null {
   const path = request.nextUrl.pathname;
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
+  if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
   if (request.method !== "POST" || path !== "/api/copilotkit/agent/default/run") {
     return NextResponse.json({ detail: "CopilotKit route is unavailable" }, { status: 404 });
   }
@@ -186,6 +188,13 @@ async function handle(request: NextRequest): Promise<Response> {
   if (auth instanceof NextResponse) return auth;
   const disabled = await verifyKarenAgUiEnabled(request, backendBaseUrl, auth.headers);
   if (disabled) return disabled;
+
+  const requestedHistoryId = request.method === "GET" ? ownedThreadHistoryId(request) : null;
+  if (requestedHistoryId) {
+    return readKarenOwnedThreadMessages(
+      request, backendBaseUrl, auth.headers, auth.principal, requestedHistoryId,
+    );
+  }
 
   // This SDK agent does not own memory, model routing, policy, or tools.
   const agent = new HttpAgent({
