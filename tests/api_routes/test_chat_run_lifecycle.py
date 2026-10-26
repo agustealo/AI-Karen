@@ -371,3 +371,43 @@ async def test_stop_winning_terminal_race_never_emits_success() -> None:
     assert repo.finalized == [
         ("run-terminal", "cancelled", "CHAT_STREAM_CANCELLED"),
     ]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_kind", ["error", "missing"])
+async def test_concurrent_stop_wins_error_or_missing_terminal_race(
+    terminal_kind: str,
+) -> None:
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-fail-race")
+
+    # Inject cancellation exactly as an ordinary terminal write attempts to
+    # commit. The run must finalize 'cancelled', never stick at 'cancelling'.
+    original_finish = repo.finish
+    first = True
+
+    async def racing_finish(lease, *, status, error_code=None):
+        nonlocal first
+        if first and status == "failed":
+            first = False
+            repo.cancel_intent = True
+            return False
+        return await original_finish(lease, status=status, error_code=error_code)
+
+    repo.finish = racing_finish  # type: ignore[method-assign]
+
+    async def failed_upstream():
+        if terminal_kind == "error":
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.ERROR,
+                content="Provider reported an error",
+            )
+        else:
+            yield content("partial")
+
+    with pytest.raises(ChatRunCancellationRequested):
+        async for _chunk in coordinator.stream(failed_upstream(), lease=lease):
+            pass
+    assert repo.finalized == [
+        ("run-fail-race", "cancelled", "CHAT_STREAM_CANCELLED"),
+    ]
