@@ -829,6 +829,7 @@ async def stream_ag_ui_chat(
             run_lease = await get_chat_run_coordinator().admit(
                 canonical_request.context, request.runId,
             )
+            canonical_request.runtime_run_lease = run_lease
         except ChatRunConflict as exc:
             raise HTTPException(
                 status_code=409, detail="Chat execution has already been admitted",
