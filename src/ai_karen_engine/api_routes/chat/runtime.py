@@ -760,6 +760,11 @@ async def get_ag_ui_transport_capabilities(
             features.enable_ag_ui_bridge
             and getattr(features, "enable_ag_ui_durable_runs", False)
         ),
+        "observed_event_journal": bool(
+            features.enable_ag_ui_bridge
+            and getattr(features, "enable_ag_ui_durable_runs", False)
+            and getattr(features, "enable_ag_ui_event_journal", False)
+        ),
     }
 
 
