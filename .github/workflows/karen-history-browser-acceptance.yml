@@ -150,7 +150,7 @@ jobs:
       - name: Verify deployed revision before browser acceptance
         shell: bash
         env:
-          TARGET_SHA: \${{ inputs.target_sha }}
+          TARGET_SHA: ${{ inputs.target_sha }}
         run: |
           set -euo pipefail
           python ../../../scripts/ci/verify_deployment_revision.py
@@ -176,13 +176,13 @@ jobs:
       - name: Revalidate deployment and reviewed PR head after browser acceptance
         shell: bash
         env:
-          TARGET_SHA: \${{ inputs.target_sha }}
-          GH_TOKEN: \${{ github.token }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python ../../../scripts/ci/verify_deployment_revision.py
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          actual_sha="$(gh api repos/\${GITHUB_REPOSITORY}/pulls/550 --jq '.head.sha')"
+          actual_sha="$(gh api repos/${GITHUB_REPOSITORY}/pulls/550 --jq '.head.sha')"
           test "$actual_sha" = "$TARGET_SHA" || {
             echo "::error::PR head changed during browser acceptance"
             exit 1
