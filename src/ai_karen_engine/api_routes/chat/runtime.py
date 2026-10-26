@@ -22,6 +22,12 @@ from pydantic import BaseModel, Field, field_validator
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+from ai_karen_engine.core.runtime.owned_history_projection import (
+    UnreplayableHistory, project_owned_history,
+)
+from ai_karen_engine.persistence.repositories.chat_run_repository import (
+    SqlChatRunRepository,
+)
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
     ChatRunConflict,
     ChatRunCancellationRequested,
@@ -698,6 +704,73 @@ async def get_ag_ui_transport_capabilities(
     """
     _require_execution_identity(user)
     return {"enabled": bool(get_runtime_settings().features.enable_ag_ui_bridge)}
+
+
+@router.get("/chat/ag-ui/threads/{thread_id}/history")
+async def get_ag_ui_owned_history(
+    thread_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Governed, non-executing completed-run replay from canonical storage.
+
+    The text and runtime receipts come from the same owned conversation
+    repository and attested run/message pair. No CopilotKit transcript store,
+    graph execution, or provider is called by this endpoint.
+    """
+    features = get_runtime_settings().features
+    if not (
+        features.enable_ag_ui_bridge
+        and getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Governed history unavailable")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid conversation identity") from exc
+    correlation_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user, session_id=thread, conversation_id=thread,
+        request_id=correlation_id, correlation_id=correlation_id,
+    )
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+        get_conversation_runtime_gateway,
+    )
+    try:
+        snapshot = await get_conversation_runtime_gateway().get_owned_snapshot(
+            context, message_limit=501,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+        logger.exception("Governed history read failed", extra={
+            "correlation_id": correlation_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="History temporarily unavailable") from exc
+    try:
+        attestations = await SqlChatRunRepository().completed_replay_attestations(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=thread,
+        )
+        history = project_owned_history(snapshot, attestations=attestations)
+    except UnreplayableHistory as exc:
+        # Nothing is streamed until the full owned-history verification passes.
+        raise HTTPException(
+            status_code=409, detail="Complete governed replay is unavailable",
+        ) from exc
+    except Exception as exc:
+        logger.exception("History attestation unavailable", extra={
+            "correlation_id": correlation_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(
+            status_code=503, detail="History verification unavailable",
+        ) from exc
+    return JSONResponse(
+        status_code=200, content=history,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/chat/ag-ui")
