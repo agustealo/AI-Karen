@@ -251,7 +251,8 @@ class SqlChatRunRepository:
                             ELSE 'orphaned'
                         END,
                         cancel_requested_at = CASE
-                            WHEN lease_expires_at > NOW() THEN NOW()
+                            WHEN lease_expires_at > NOW()
+                                THEN COALESCE(cancel_requested_at, NOW())
                             ELSE NULL
                         END,
                         terminal_at = CASE
