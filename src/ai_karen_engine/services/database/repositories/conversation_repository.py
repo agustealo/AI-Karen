@@ -5,7 +5,10 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 
 from .base import Repository, RepositoryResult
 
@@ -104,7 +107,8 @@ class ConversationRepository(Repository):
         """Append a message to a conversation."""
 
     async def add_completed_turn(
-        self, user_message: Message, assistant_message: Message
+        self, user_message: Message, assistant_message: Message,
+        *, run_lease: Optional["ChatRunLease"] = None,
     ) -> RepositoryResult[int]:
         """Atomically persist a pair; unsupported repositories fail closed."""
         return RepositoryResult(
