@@ -153,8 +153,32 @@ tenant or user scope does not alias the old execution.
    safe for all engines), governed frontend cursor consumption/acknowledgment,
    retention/deletion coupling, actual PostgreSQL cross-process proof,
    and UI feature/voice/persona/draft/scroll parity.
-5. Govern ledger retention/deletion and inactive-run reconciliation through
-   existing privacy and audit policy before enabling the feature beyond tests.
+5. **CK-07E1 (partial):** Canonical conversation deletion now requires an
+   authenticated owner and performs run-ledger deletion before deleting the
+   conversation in the SAME PostgreSQL transaction. Journal rows cascade
+   from their run records by FK; a failed journal/run deletion rolls back
+   transcript deletion instead of leaving recoverable private output. The
+   repository detects pre-CK-07 databases using `to_regclass` rather than
+   pretending an absent ledger was erased. Unit rollback and tenant/owner
+   contract tests are checked in; **the dedicated real-PostgreSQL explicit
+   deletion assertion is still outstanding**.
+
+   The opt-in CopilotKit gateway also exposes a narrow non-SDK-standard
+   `GET /api/copilotkit/threads/{threadId}/runs/{runId}/events?after=0&limit=50`
+   **JSON observation endpoint** only if the canonical
+   `observed_event_journal` capability is true. It repeats canonical auth,
+   verifies tenant and user identity, bounds the bytes and events, enforces
+   contiguous event cursors, and refuses unsupported tool/action event
+   types rather than dropping private/complex state. This endpoint **does
+   not** reconnect or resume a live model through `agent.connect()`; partial
+   observed content remains labeled interrupted without a synthetic
+   `RUN_FINISHED`. Consumer adoption is still disabled.
+
+   Automatic retention schedules and erasure propagation to any separately
+   governed backup/analytics destinations must follow the existing
+   NeuroVault privacy/retention authority. Neither a hardcoded TTL nor an
+   unaudited background deletion loop is introduced here. Prove the
+   complete retention and legal-hold policy before enabling consumers.
 
 ## Proof entry points
 
