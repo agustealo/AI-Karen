@@ -29,6 +29,7 @@ export const test = base.extend<{ approvedPreviewAccess: void }>({
       const immutableHost = /^[a-z0-9][a-z0-9-]*\.vercel\.app$/;
       if (
         approved.protocol !== 'https:' ||
+        approved.port !== '' ||
         approved.username || approved.password ||
         approved.pathname !== '/' || approved.search || approved.hash ||
         !immutableHost.test(approved.hostname) ||
