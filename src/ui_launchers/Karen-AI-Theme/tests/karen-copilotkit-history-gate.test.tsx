@@ -10,6 +10,7 @@ const backend = vi.hoisted(() => ({
 }));
 
 vi.mock("@copilotkit/react-core/v2", () => ({
+  CopilotChatAssistantMessage: () => null,
   useAgent: (options: {agentId: string;runtimeAgentId: string;threadId: string}) => {
     backend.agentOptions.push(options);
     return { agent: backend.agent, isReady: backend.isReady };
