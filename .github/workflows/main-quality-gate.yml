@@ -134,6 +134,7 @@ jobs:
           pytest tests/architecture/test_chat_transport_authority_closure.py -q
           python scripts/architecture/audit_copilotkit_wiring.py
           pytest tests/architecture/test_copilotkit_migration_wiring.py -q
+          pytest tests/architecture/test_browser_acceptance_dispatch_security.py -q
           pytest tests/architecture/test_deployment_revision_acceptance.py -q
           pytest tests/architecture/test_vercel_deployment_attestation.py -q
           pytest tests/architecture/test_http_transport_authority.py -q

@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   authenticated-history-restoration:
-    if: inputs.scenario == 'history'
+    if: inputs.scenario == 'history' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
@@ -93,7 +93,7 @@ jobs:
       # authenticated test credentials and user conversation content are sensitive.
 
   authenticated-search-replay:
-    if: inputs.scenario == 'search'
+    if: inputs.scenario == 'search' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
