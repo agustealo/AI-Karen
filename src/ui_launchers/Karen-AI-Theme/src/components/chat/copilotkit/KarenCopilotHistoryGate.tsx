@@ -127,6 +127,7 @@ export function KarenCopilotHistoryGate({
         // A thread switch must never retain another conversation's agent state.
         agent.setMessages(messages);
         setVerifiedParts(parts);
+        setError(null);
         setLoaded(conversationId);
       } catch (error: unknown) {
         if (!cancelled) {
