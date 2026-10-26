@@ -68,7 +68,7 @@ describe("CopilotKit canonical conversation hydration", () => {
 
   it("hydrates the signed-in user's owned conversation before mounting chat", async () => {
     backend.fetchConversation.mockResolvedValueOnce({
-      id: CONVERSATION_A,
+      threadId: CONVERSATION_A,
       messages: [
         { id: "m1", role: "user", content: "Hello" },
         { id: "m2", role: "assistant", content: "Karen response" },
@@ -77,7 +77,7 @@ describe("CopilotKit canonical conversation hydration", () => {
     render(guardedHistory());
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
-    expect(backend.fetchConversation).toHaveBeenCalledWith("/api/conversations/" + CONVERSATION_A);
+    expect(backend.fetchConversation).toHaveBeenCalledWith("/api/copilotkit/threads/" + CONVERSATION_A + "/messages");
     expect(backend.agent.setMessages).toHaveBeenCalledWith([
       { id: "m1", role: "user", content: "Hello" },
       { id: "m2", role: "assistant", content: "Karen response" },
@@ -86,7 +86,7 @@ describe("CopilotKit canonical conversation hydration", () => {
 
   it("does not mount a chat when canonical history returns another conversation", async () => {
     backend.fetchConversation.mockResolvedValueOnce({
-      id: CONVERSATION_B,
+      threadId: CONVERSATION_B,
       messages: [{ id: "m1", role: "user", content: "Private" }],
     });
     render(guardedHistory());
@@ -103,7 +103,7 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
     cleanup();
 
-    backend.fetchConversation.mockResolvedValueOnce({ id: CONVERSATION_A });
+    backend.fetchConversation.mockResolvedValueOnce({ threadId: CONVERSATION_A });
     render(guardedHistory());
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
@@ -111,7 +111,7 @@ describe("CopilotKit canonical conversation hydration", () => {
 
   it("rechecks ownership after remount even for the same cached UUID", async () => {
     backend.fetchConversation
-      .mockResolvedValueOnce({ id: CONVERSATION_A, messages: [{ id: "m1", role: "user", content: "Earlier owner" }] })
+      .mockResolvedValueOnce({ threadId: CONVERSATION_A, messages: [{ id: "m1", role: "user", content: "Earlier owner" }] })
       .mockRejectedValueOnce(new Error("owner mismatch"));
     const initial = render(guardedHistory());
     await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
@@ -122,7 +122,7 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
     expect(backend.fetchConversation).toHaveBeenNthCalledWith(
-      2, "/api/conversations/" + CONVERSATION_A,
+      2, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages",
     );
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
   });
@@ -132,14 +132,14 @@ describe("CopilotKit canonical conversation hydration", () => {
     backend.fetchConversation
       .mockImplementationOnce(() => new Promise((resolve) => { finishA = resolve; }))
       .mockResolvedValueOnce({
-        id: CONVERSATION_B,
+        threadId: CONVERSATION_B,
         messages: [{ id: "b1", role: "assistant", content: "B only" }],
       });
     const view = render(guardedHistory(CONVERSATION_A));
     view.rerender(guardedHistory(CONVERSATION_B));
     await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
     finishA({
-      id: CONVERSATION_A,
+      threadId: CONVERSATION_A,
       messages: [{ id: "a1", role: "assistant", content: "Old private history" }],
     });
     await waitFor(() => expect(backend.agent.setMessages).toHaveBeenCalledTimes(1));
