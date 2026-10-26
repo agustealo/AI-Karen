@@ -24,6 +24,7 @@ from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
     ChatRunConflict,
+    ChatRunCancellationRequested,
     ChatRunLease,
     ChatRunLeaseLost,
     get_chat_run_coordinator,
@@ -635,6 +636,15 @@ async def _ag_ui_sse(
                 yield f"data: {json.dumps(event)}\n\n"
             if projection.terminal:
                 break
+    except ChatRunCancellationRequested:
+        error_chunk = ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content="This chat run was cancelled.",
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={"error_code": "CHAT_STREAM_CANCELLED"},
+        )
+        for event in projection.project(error_chunk):
+            yield f"data: {json.dumps(event)}\n\n"
     except ChatRunLeaseLost as exc:
         logger.error(
             "Fenced AG-UI run ended without authorized terminal",
@@ -862,6 +872,93 @@ async def stream_ag_ui_chat(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
+    )
+
+
+@router.post("/chat/ag-ui/runs/{thread_id}/{run_id}/cancel")
+async def cancel_ag_ui_chat_run(
+    thread_id: str,
+    run_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Request exactly one owner-scoped run stop; the worker confirms outcome.
+
+    The SDK thread ID is NOT a bearer capability. The Runtime coordinator
+    revalidates the authenticated principal, conversation ownership, and
+    canonical PostgreSQL principal-scoped row before signaling anything.
+    """
+    features = get_runtime_settings().features
+    if (
+        not features.enable_ag_ui_bridge
+        or not getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Run cancellation unavailable")
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+        raise HTTPException(status_code=422, detail="Invalid run identity")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid conversation identity") from exc
+    request_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user,
+        session_id=thread,
+        conversation_id=thread,
+        request_id=request_id,
+        correlation_id=request_id,
+    )
+    try:
+        status = await get_chat_run_coordinator().request_cancel(
+            context, run_id=run_id,
+        )
+    except PermissionError as exc:
+        # Foreign and absent run IDs must be indistinguishable.
+        raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+        logger.exception("Chat run cancellation unavailable", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Chat cancellation unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid run identity") from exc
+
+    if status is None:
+        raise HTTPException(status_code=404, detail="Chat run unavailable")
+
+    get_structured_logger().log_event(
+        event="chat_run_cancel_requested",
+        user_id=context.user_id,
+        details={
+            "tenant_id": context.tenant_id,
+            "conversation_id": thread,
+            "transport_run_id": run_id,
+            "request_id": request_id,
+            "status": status,
+        },
+    )
+    if status == "cancelling":
+        # This is an accepted intent, NOT proof the model has stopped.
+        return JSONResponse(
+            status_code=202,
+            content={"status": "cancelling", "cancel_requested": True,
+                     "cancellation_confirmed": False},
+            headers={"Cache-Control": "private, no-store"},
+        )
+    if status == "cancelled":
+        return JSONResponse(
+            status_code=200,
+            content={"status": "cancelled", "cancel_requested": True,
+                     "cancellation_confirmed": True},
+            headers={"Cache-Control": "private, no-store"},
+        )
+    # Completed/failed/orphaned cannot be retrospectively reported as stopped.
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "This chat run is no longer cancellable"},
+        headers={"Cache-Control": "private, no-store"},
     )
 
 
