@@ -141,7 +141,6 @@ export async function readKarenOwnedRunEvents(
   }
   const events: Array<{ seq: number; event: Record<string, unknown> }> = [];
   let seq = after;
-  let observedTerminal = false;
   for (const item of data.events) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return refuse(502, "Invalid observed event");
@@ -173,7 +172,6 @@ export async function readKarenOwnedRunEvents(
           (event.type === "RUN_ERROR" && data.runStatus === "completed")) {
         return refuse(502, "Unverified observed terminal");
       }
-      observedTerminal = true;
     }
     seq = record.seq;
     events.push({ seq, event });
