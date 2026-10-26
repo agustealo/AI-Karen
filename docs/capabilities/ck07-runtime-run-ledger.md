@@ -248,20 +248,51 @@ restoration. There is no frontend authority to approve actions, select
 providers, rerun saved tools or manufacture presentation evidence.
 
 **This does not complete consumer parity.** CopilotKit remains unmounted:
-there is no proven suppression of its initial automatic `runAgent` behavior,
-no verified **live** custom-event-to-slot wiring, and no real deployed browser
-proof of the CopilotKit presentation/receipt slot. Persona, voice, attachment,
+native component-level no-auto-run guards exist, but actual deployed browser
+verification, partial-stream/live CUSTOM event parity and restart proof are
+still missing. Persona, voice, attachment,
 draft, responsive-scroll, focus, conversation-switch and cross-workspace
 contracts must be verified against the existing UI before consumer cutover.
 Do not remove assistant-ui or enable new flags on the strength of component
 tests alone.
+
+## CK-07E4: controlled native SDK view and durable post-run read-back
+
+CopilotKit v2 documents that high-level `CopilotChat` invokes `runAgent`
+automatically on first mount. That is unsafe for an already-saved Karen
+conversation. The unmounted shell now instead composes the SDK's
+`CopilotChatView` (native message list, scrolling, input, accessibility and
+assistant-message slots) with `useAgent` and `useCopilotKit`. Only
+`CopilotChatInput.onSubmitMessage`, invoked by explicit composer submission,
+adds a bounded user message and calls `copilotkit.runAgent({ agent })`.
+An unverified thread, blank/oversized input or a currently active agent
+does not execute. The canonical runtime remains the only model, tool,
+memory, policy and persistence owner. SDK stop is requested only if the
+agent reports an active run, but exact durable stop/receipt parity remains
+a separate browser gate.
+
+`KarenCopilotHistoryGate` subscribes to the **real ready agent** through
+the supported AG-UI `onRunFinalized` and `onRunFailed` callbacks. These
+events never become an authority for saved metadata. Instead they trigger
+a fresh authenticated `/api/copilotkit/threads/{id}/messages` read,
+validate all backend-attested `replayEvents`, and replace SDK messages
+only after complete verification. A failed read fails closed. Cleanup
+unsubscribes on thread switch/unmount; stale responses are ignored.
+This intentionally presents rich results **after durable commit/read-back**,
+not prematurely during an unverified stream.
+
+Unit tests prove no `runAgent` on mount, explicit-submit-only execution,
+active/foreign-thread/input rejection, no fake provider errors, SDK stop
+gating, and committed-history recheck on run finalization/failure. The
+existing protected browser scenario remains required for actual SDK
+behavior, keyboard/draft retention and other UI parity before cutover.
 
 ## Proof entry points
 
 ```bash
 python -m compileall src
 pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
-cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
+cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-controlled-chat.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
