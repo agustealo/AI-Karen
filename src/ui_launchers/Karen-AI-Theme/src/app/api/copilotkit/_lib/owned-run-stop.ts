@@ -26,7 +26,10 @@ export async function readKarenScopedStopRunId(
       if (part.done) break;
       bytes += part.value.byteLength;
       if (bytes > MAX_STOP_BYTES) {
-        await reader.cancel().catch(() => undefined);
+        // A cloned NextRequest body uses a tee. Awaiting reader.cancel()
+        // may wait for the original, unconsumed branch and deadlock the
+        // request. Reject immediately; cancellation is best-effort only.
+        void reader.cancel().catch(() => undefined);
         return NextResponse.json({ detail: "Stop request too large" }, { status: 413 });
       }
       body += decoder.decode(part.value, { stream: true });
