@@ -273,7 +273,7 @@ class TestLifecycleFiltering:
 
 class TestWildcardPolicyBoundary:
     @pytest.mark.asyncio
-    async def test_wildcard_expands_to_all_registered_agents(self):
+    async def test_wildcard_cannot_expand_registered_agents(self):
         registry = MedusaRegistry()
         await registry.initialize()
 
@@ -290,17 +290,14 @@ class TestWildcardPolicyBoundary:
         requirements = _make_requirements(required_capabilities=[])
         authorized_plan = _make_authorized_plan(allowed_agents=["*"])
 
-        plan = await planner.create_plan(
-            request_id="req-1",
-            query="test",
-            requirements=requirements,
-            authorized_plan=authorized_plan,
-            registry=registry,
-        )
-        agent_ids = {s.agent_specialist for s in plan.steps}
-        assert "analyst" in agent_ids
-        assert "researcher" in agent_ids
-        assert "custom_agent" in agent_ids
+        with pytest.raises(ValueError, match="PLAN_UNSATISFIABLE"):
+            await planner.create_plan(
+                request_id="req-1",
+                query="test",
+                requirements=requirements,
+                authorized_plan=authorized_plan,
+                registry=registry,
+            )
 
 
 class TestExecutionBudgetMeterConcurrency:

@@ -168,3 +168,36 @@ async def test_external_provider_prohibited():
     assert decision.provider_constraints is not None
     assert decision.provider_constraints.external_allowed is False
     assert "external" in decision.provider_constraints.forbidden_providers
+
+
+@pytest.mark.asyncio
+async def test_untrusted_requested_agents_never_become_execution_grants():
+    """Candidate IDs and delegation flags are not independent RBAC proof."""
+    enforcer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        execution_topology={
+            "agent_delegation": True,
+            "requested_agents": ["researcher", "foreign-tenant-agent"],
+        },
+    )
+    decision = await enforcer.evaluate(request)
+    assert decision.allowed is True
+    assert decision.runtime_constraints["allowed_agents"] == []
+    plan = decision.to_authorized_plan()
+    assert plan.allowed_agents == []
+    assert plan.authorized_user_id == "user-1"
+    assert plan.authorized_tenant_id == "tenant-1"
+
+
+@pytest.mark.asyncio
+async def test_empty_and_duplicate_agent_requests_do_not_create_grants():
+    enforcer = RuntimePolicyEnforcer()
+    for candidates in ([], ["researcher", "researcher"], ["  "], ["unauthorized"]):
+        decision = await enforcer.evaluate(PolicyEvaluationRequest(
+            user_id="user-1",
+            tenant_id="tenant-1",
+            execution_topology={"agent_delegation": True, "requested_agents": candidates},
+        ))
+        assert decision.to_authorized_plan().allowed_agents == []
