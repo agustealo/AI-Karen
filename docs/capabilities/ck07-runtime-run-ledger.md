@@ -287,12 +287,47 @@ gating, and committed-history recheck on run finalization/failure. The
 existing protected browser scenario remains required for actual SDK
 behavior, keyboard/draft retention and other UI parity before cutover.
 
+## CK-07E5: persona and renderer-neutral voice-to-unsent-draft parity
+
+The unmounted controlled CopilotKit view now uses the **existing**
+`KarenPersonaSelector` in its sticky footer. It reads the canonical
+persona catalog/preferences and posts a preference switch only through
+`/api/personas/preferences/switch`, retaining the previous selection
+if server persistence is not confirmed. No new persona store, selection
+registry, role bypass or UI-only "saved" state was created.
+
+Existing `KarenLocalDictation` and optional `KarenBrowserDictation` now
+remain thin **assistant-ui adapters** over `KarenLocalDictationCapture`
+and `KarenBrowserDictationCapture`. The capture implementations share
+`KarenVoiceDraftPort` (`readText/writeText`) and
+`mergeDictatedText`; microphone permission, local WAV encoding, real
+backend transcription, browser-vendor opt-in, stale-generation/cancel
+fencing and no-auto-send behavior were preserved from the incumbent UI.
+
+CopilotKit `CopilotChatView.input` now supplies SDK-supported controlled
+`value/onChange` plus explicit `onSubmitMessage/onStop`; the two
+shared capture components write only the unsent draft, **never** call
+`runAgent`. Blank/oversized drafts are rejected. Submission clears
+the current visible draft; failure restores it only when another draft
+has not been entered. The private view is keyed to the canonical
+conversation UUID so switching conversations unmounts/cancels any old
+microphone capture before it could change another thread's input.
+
+**Not yet claimed:** persistent drafts across reloads/windows/sessions or
+multiple signed-in accounts. The current draft is a per-conversation
+in-memory controlled input and MUST NOT be represented as durable.
+Adding persistent cross-window drafts requires one authenticated,
+tenant/user/conversation-scoped owner with deletion/revocation behavior,
+not an ad-hoc unscoped `localStorage` mirror. Rich live streaming,
+real-browser voice/microphone, keyboard/focus, and SDK stop parity also
+remain release blockers. No consumer feature flags are enabled.
+
 ## Proof entry points
 
 ```bash
 python -m compileall src
 pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
-cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-controlled-chat.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
+cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-controlled-chat.test.tsx tests/karen-voice-draft-port.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
