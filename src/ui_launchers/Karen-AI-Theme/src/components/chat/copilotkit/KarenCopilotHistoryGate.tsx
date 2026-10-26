@@ -5,13 +5,18 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { apiClient } from "@/lib/api";
-import type { ConversationResponse } from "@/lib/types";
+
 
 /**
  * This is an interaction adapter, not an alternate conversation store.
  * The canonical conversation repository owns user/tenant scope, order,
  * message contents, and durable writes.
  */
+type KarenOwnedThreadResponse = {
+  threadId: string;
+  messages: KarenOwnedHistoryMessage[];
+};
+
 export type KarenOwnedHistoryMessage = {
   id: string;
   role: string;
@@ -74,11 +79,11 @@ export function KarenCopilotHistoryGate({
       try {
         // Authorization-sensitive read. Never reuse the process-local UI
         // bootstrap cache across account or tenant transitions.
-        const snapshot = await apiClient.get<ConversationResponse>(
-          "/api/conversations/" + conversationId,
+        const snapshot = await apiClient.get<KarenOwnedThreadResponse>(
+          "/api/copilotkit/threads/" + conversationId + "/messages",
         );
         if (cancelled) return;
-        if (snapshot.id !== conversationId || !Array.isArray(snapshot.messages)) {
+        if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
           throw new Error("Conversation history identity mismatch");
         }
         const messages = toCopilotTextMessages(snapshot.messages);
