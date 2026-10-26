@@ -577,3 +577,117 @@ async def test_ag_ui_stream_cancellation_unwinds_canonical_execution_without_suc
 
     # An aborted transport is not allowed to synthesize RUN_FINISHED.
     assert '"RUN_FINISHED"' not in connect + begin
+
+
+@pytest.mark.asyncio
+async def test_ck07_admits_scoped_lease_before_stream_and_preserves_runtime_owner(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as gateway
+
+    owned_id = "7e76d870-5314-40ae-9478-513b843a9fd0"
+    observed = []
+
+    class OwnedGateway:
+        async def get_owned_snapshot(self, context, *, message_limit):
+            assert context.tenant_id == TENANT_A
+            assert context.user_id == USER
+            assert message_limit == 0
+            return SimpleNamespace(
+                conversation=SimpleNamespace(
+                    id=owned_id, session_id="owned-session"
+                )
+            )
+
+    class Coordinator:
+        async def admit(self, context, run_id):
+            observed.append(("admit", context.user_id, context.tenant_id, run_id))
+            return SimpleNamespace(execution_id="execution-server-generated")
+
+        def stream(self, chunks, *, lease):
+            assert lease.execution_id == "execution-server-generated"
+            observed.append(("stream", lease.execution_id))
+            return chunks
+
+    class Runtime(FakeRuntime):
+        async def execute_stream(self, request):
+            assert observed[0] == ("admit", USER, TENANT_A, "run-scoped")
+            observed.append(("execute", request.context.conversation_id))
+            async for chunk in super().execute_stream(request):
+                yield chunk
+
+    monkeypatch.setattr(
+        chat_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True,
+            enable_ag_ui_durable_runs=True,
+        )),
+    )
+    monkeypatch.setattr(
+        gateway, "get_conversation_runtime_gateway", lambda: OwnedGateway(),
+    )
+    monkeypatch.setattr(chat_ingress, "get_chat_run_coordinator", Coordinator)
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: Runtime())
+
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(threadId=owned_id, runId="run-scoped"),
+        http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    frames = "".join([part async for part in response.body_iterator])
+    assert '"type": "RUN_FINISHED"' in frames
+    assert observed == [
+        ("admit", USER, TENANT_A, "run-scoped"),
+        ("stream", "execution-server-generated"),
+        ("execute", owned_id),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ck07_durable_run_admission_failure_fails_before_model_work(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as gateway
+
+    owned_id = "7e76d870-5314-40ae-9478-513b843a9fd0"
+
+    class OwnedGateway:
+        async def get_owned_snapshot(self, context, *, message_limit):
+            return SimpleNamespace(
+                conversation=SimpleNamespace(
+                    id=owned_id, session_id="owned-session"
+                )
+            )
+
+    class DeniedCoordinator:
+        async def admit(self, *_args, **_kwargs):
+            raise RuntimeError("database_unavailable")
+
+    class NoModel:
+        def execute_stream(self, request):
+            raise AssertionError("Inference must not start on failed admission")
+
+    monkeypatch.setattr(
+        chat_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True,
+            enable_ag_ui_durable_runs=True,
+        )),
+    )
+    monkeypatch.setattr(
+        gateway, "get_conversation_runtime_gateway", lambda: OwnedGateway(),
+    )
+    monkeypatch.setattr(
+        chat_ingress, "get_chat_run_coordinator", lambda: DeniedCoordinator(),
+    )
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: NoModel())
+
+    with pytest.raises(HTTPException) as exc:
+        await chat_ingress.stream_ag_ui_chat(
+            request=agui_run(threadId=owned_id),
+            http_request=SimpleNamespace(headers={}),
+            user={"user_id": USER, "tenant_id": TENANT_A},
+        )
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Chat run admission unavailable"
+
