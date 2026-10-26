@@ -22,6 +22,7 @@ function normalizeSearchResponse(value: unknown): IntelligentSearchResponse {
     // The plugin envelope can be HTTP-successful while capability execution
     // failed. Honor execution truth rather than rendering diagnostics as results.
     const status = typeof value.status === 'string' ? value.status.toLowerCase() : '';
+    if (status === 'needs_location') return value;
     if (status === 'error' || status === 'failed' || value.can_execute === false && value.reason) {
       throw new Error(
         typeof value.reason === 'string' && value.reason.trim()
@@ -73,7 +74,7 @@ export const IntelligentSearchApi = {
 
     // A plugin execution failure may still contain response-shaped diagnostics.
     // Never mistake those diagnostics for successful search evidence.
-    if (envelope?.success === false) {
+    if (envelope?.success === false && !(envelope.result && typeof envelope.result === 'object' && (envelope.result as IntelligentSearchResponse).status === 'needs_location') && !(envelope.data && typeof envelope.data === 'object' && (envelope.data as IntelligentSearchResponse).status === 'needs_location')) {
       throw new Error(envelope.message || 'Search could not be completed. Please try again.');
     }
 
