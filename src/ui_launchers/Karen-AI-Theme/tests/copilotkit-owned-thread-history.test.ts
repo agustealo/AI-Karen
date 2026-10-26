@@ -127,6 +127,37 @@ describe("CopilotKit owned thread history", () => {
     }
   });
 
+  it("refuses text-only hydration when canonical history contains tool or presentation state", async () => {
+    const richMessages: unknown[][] = [
+      [
+        { id: "user-1", role: "user", content: "Weather?" },
+        { id: "assistant-1", role: "assistant", content: "Sunny",
+          structured_content: { schema_version: 1, type: "weather.observation" } },
+      ],
+      [
+        { id: "user-1", role: "user", content: "Execute research" },
+        { id: "tool-1", role: "tool", content: "Sensitive tool output" },
+      ],
+      [
+        { id: "assistant-1", role: "assistant", content: "Done",
+          metadata: { execution_receipt: { response_source: "model" } } },
+      ],
+      [
+        { id: "assistant-1", role: "assistant", content: "Done",
+          attachments: [{ name: "document.pdf" }] },
+      ],
+    ];
+    for (const messages of richMessages) {
+      guardedBackend(() => reply("user-A", messages));
+      const result = await GET(request());
+      expect(result.status).toBe(409);
+      const body = JSON.stringify(await result.json());
+      expect(body).toContain("not yet supported");
+      expect(body).not.toContain("Sensitive tool output");
+      expect(body).not.toContain("weather.observation");
+    }
+  });
+
   it("rejects anonymous history before contacting the backend", async () => {
     const upstream = vi.fn();
     globalThis.fetch = upstream as typeof fetch;
