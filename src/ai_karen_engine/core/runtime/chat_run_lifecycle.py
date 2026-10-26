@@ -22,6 +22,9 @@ from ai_karen_engine.persistence.repositories.chat_run_repository import (
     ChatRunLease,
     SqlChatRunRepository,
 )
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+    get_conversation_runtime_gateway,
+)
 
 logger = logging.getLogger(__name__)
 _HEARTBEAT_INTERVAL_SECONDS = 10
@@ -43,8 +46,9 @@ class ChatRunCoordinator:
 
     async def admit(self, context: ChatExecutionContext, run_id: str) -> ChatRunLease:
         context.require_authenticated_user()
-        # Ownership was checked against ConversationRuntimeGateway by ingress.
-        # No caller-supplied SDK run ID or user header can bypass the scope.
+        # Reauthorize against the canonical repository at run-admission time.
+        # Ingress verification alone must not become the execution authority.
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
         lease = await self._repository.admit(
             tenant_id=context.tenant_id,
             user_id=context.user_id,
