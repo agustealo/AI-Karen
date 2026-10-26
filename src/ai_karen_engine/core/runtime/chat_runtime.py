@@ -821,8 +821,27 @@ class ChatRuntime:
                 )
             )
     
+        verified_presentations: list[dict[str, Any]] = []
+        presentation_replay_incomplete = False
         try:
             async for chunk in gen:
+                if chunk.type == ChatStreamEventType.PRESENTATION:
+                    from ai_karen_engine.core.runtime.presentation_contract import (
+                        validate_presentation,
+                    )
+                    meta = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+                    validated = (
+                        validate_presentation(meta.get("presentation"))
+                        if meta.get("presentation_verified") is True else None
+                    )
+                    if (
+                        validated is None or len(verified_presentations) >= 6
+                        or any(item["presentation_id"] == validated["presentation_id"]
+                               for item in verified_presentations)
+                    ):
+                        presentation_replay_incomplete = True
+                    else:
+                        verified_presentations.append(validated)
                 if chunk.type == "content":
                     streamed_text += chunk.content
                 if chunk.type == ChatStreamEventType.ERROR:
@@ -1094,6 +1113,11 @@ class ChatRuntime:
         if request.runtime_run_lease is None:
             await persist_authorized_memory()
 
+        if verified_presentations:
+            provider_meta["verified_presentations_v1"] = verified_presentations
+        if presentation_replay_incomplete:
+            provider_meta["presentation_replay_incomplete"] = True
+
         transcript_result = TranscriptPersistenceResult(
             status="skipped",
             conversation_id=conversation_id,
@@ -1293,6 +1317,14 @@ class ChatRuntime:
                 **({"pending_clarification": provider_meta["pending_clarification"]}
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
+                **({"verified_presentations_v1": provider_meta["verified_presentations_v1"]}
+                   if request.runtime_run_lease is not None
+                   and isinstance(provider_meta.get("verified_presentations_v1"), list)
+                   else {}),
+                **({"presentation_replay_incomplete": True}
+                   if request.runtime_run_lease is not None
+                   and provider_meta.get("presentation_replay_incomplete") is True
+                   else {}),
             },
             **({"run_lease": request.runtime_run_lease}
                if request.runtime_run_lease is not None else {}),
