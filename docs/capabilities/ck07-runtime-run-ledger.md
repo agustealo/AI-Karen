@@ -227,12 +227,41 @@ deployed revision and a further user-facing CopilotKit visual and
 interaction parity run is green. No screenshot/video/trace artifacts may
 contain account credentials or saved private transcripts.
 
+## CK-07E3: CopilotKit v2 native rich-message slot (unmounted)
+
+The unmounted `KarenCopilotChat` now uses CopilotKit v2's documented
+`messageView.assistantMessage` slot, preserving CopilotKit's original
+assistant bubble, toolbar, composer and scroll components. The slot attaches
+only the backend's verified, saved `replayEvents` to the **matching canonical
+assistant message ID**, through `KarenCopilotHistoryGate`. It reuses the
+existing Karen presentation registry for weather, time, planner and
+compositions, rather than inventing a second renderer or SDK transcript.
+The execution and response-integrity receipts were moved to a **single**
+render-only component shared by the incumbent assistant-ui and CopilotKit.
+
+Rich playback performs full pre-hydration validation of event type,
+assistant-message binding, presentation schema/evidence, size and repetition,
+execution/integrity receipt allowlists, and duplicate presentation IDs.
+Malformed or unsupported content refuses the entire history BEFORE
+`agent.setMessages()`; no partial replay is counted as a successful
+restoration. There is no frontend authority to approve actions, select
+providers, rerun saved tools or manufacture presentation evidence.
+
+**This does not complete consumer parity.** CopilotKit remains unmounted:
+there is no proven suppression of its initial automatic `runAgent` behavior,
+no verified **live** custom-event-to-slot wiring, and no real deployed browser
+proof of the CopilotKit presentation/receipt slot. Persona, voice, attachment,
+draft, responsive-scroll, focus, conversation-switch and cross-workspace
+contracts must be verified against the existing UI before consumer cutover.
+Do not remove assistant-ui or enable new flags on the strength of component
+tests alone.
+
 ## Proof entry points
 
 ```bash
 python -m compileall src
 pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
-cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/copilotkit-observed-run-events.test.ts
+cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
