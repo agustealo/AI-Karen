@@ -163,6 +163,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     }
     busyRef.current = true;
     const generation = generationRef.current;
+    const originalText = textRef.current;
     const expectedRevision = revisionRef.current;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -178,7 +179,7 @@ export function useKarenPersistedDraft(conversationId: string) {
         throw new Error("Invalid draft-clear receipt");
       }
       revisionRef.current = (response as DraftRecord).revision;
-      if (textRef.current.trim() === submittedText.trim()) {
+      if (textRef.current === originalText) {
         textRef.current = "";
         dirtyRef.current = false;
         setDraft("");
