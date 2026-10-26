@@ -79,6 +79,24 @@ jobs:
             --reporter=list \
             --retries=0
 
+      - name: Verify reviewed commit matches actual deployed application
+        if: ${{ inputs.verify_copilotkit_protocol }}
+        shell: bash
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Canonical read-only revision endpoint is owned by PR #550.
+          # Do not create a second endpoint or accept a checkout-only proof.
+          # Missing, malformed, conflicting, or stale deployment metadata
+          # blocks browser acceptance rather than reporting a false pass.
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          curl --fail --silent --show-error --max-time 20 --max-redirs 0 \
+            --header 'Accept: application/json' \
+            --header 'Cache-Control: no-cache' \
+            "${KAREN_BASE_URL%/}/api/deployment-revision" | \
+            python -c 'import json,os,sys; data=json.load(sys.stdin); expected=os.environ["TARGET_SHA"]; assert data.get("status")=="ok" and data.get("revision")==expected, "Deployed revision does not match checked-out PR head"'
+
       - name: Check approved CopilotKit replay fixture
         if: ${{ inputs.verify_copilotkit_protocol }}
         shell: bash
