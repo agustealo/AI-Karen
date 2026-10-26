@@ -94,6 +94,11 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             / "supabase/migrations/20261025050000_46_runtime_chat_event_journal.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(event_migration)
+        draft_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261026010000_47_conversation_composer_drafts.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(draft_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)",
             uuid.UUID(tenant_a), uuid.UUID(tenant_b),
@@ -313,6 +318,53 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         assert terminal_page["continuationAvailable"] is False
         assert terminal_page["events"][0]["event"]["type"] == "RUN_ERROR"
 
+        # CK-07E6: real PostgreSQL compare-and-swap proof for two windows,
+        # tenant/user scope, and parent-conversation erasure (migration 47).
+        draft_thread = str(uuid.uuid4())
+        await raw.execute(
+            "INSERT INTO public.conversations(conversation_id,tenant_id,user_id) "
+            "VALUES ($1,$2,$3)",
+            uuid.UUID(draft_thread), uuid.UUID(tenant_a), uuid.UUID(user_a),
+        )
+        empty = await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )
+        assert empty.success and empty.data == {"text": "", "revision": 0}
+        first = await conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="Unsent across windows", expected_revision=0,
+        )
+        assert first.success and first.data == {
+            "text": "Unsent across windows", "revision": 1,
+        }
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == first.data
+        stale = await conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="Stale tab must not overwrite", expected_revision=0,
+        )
+        assert not stale.success
+        assert stale.error == "composer_draft_revision_conflict"
+        second = await conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="Newer draft", expected_revision=1,
+        )
+        assert second.success and second.data["revision"] == 2
+        foreign = await conversations.get_composer_draft(
+            draft_thread, tenant_b, user_id=user_b,
+        )
+        assert not foreign.success and foreign.error == "conversation_not_found"
+        foreign_write = await conversations.put_composer_draft(
+            draft_thread, tenant_b, user_id=user_b,
+            content="Cross tenant", expected_revision=2,
+        )
+        assert not foreign_write.success
+        assert foreign_write.error == "conversation_not_found"
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data["text"] == "Newer draft"
+
         # Actual PostgreSQL RLS must hold for a least-privilege login;
         # superuser-only repository queries do not prove policy isolation.
         await raw.execute(
@@ -326,7 +378,8 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         )
         await raw.execute(
             "GRANT SELECT ON public.runtime_chat_runs, "
-            "public.runtime_chat_run_events TO karen_ci_chat_reader"
+            "public.runtime_chat_run_events, public.conversation_composer_drafts, "
+            "public.conversations TO karen_ci_chat_reader"
         )
         reader = await asyncpg.connect(
             "postgresql://karen_ci_chat_reader:chat_cursor_ci_only@"
@@ -349,6 +402,10 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
                     "SELECT count(*) FROM public.runtime_chat_run_events"
                 ) == 3
                 assert await reader.fetchval(
+                    "SELECT draft_text FROM public.conversation_composer_drafts "
+                    "WHERE conversation_id=$1", uuid.UUID(draft_thread),
+                ) == "Newer draft"
+                assert await reader.fetchval(
                     "SELECT count(*) FROM public.runtime_chat_runs "
                     "WHERE transport_run_id='run-journal'"
                 ) == 1
@@ -365,11 +422,26 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
                     "SELECT count(*) FROM public.runtime_chat_run_events"
                 ) == 0
                 assert await reader.fetchval(
+                    "SELECT count(*) FROM public.conversation_composer_drafts"
+                ) == 0
+                assert await reader.fetchval(
                     "SELECT count(*) FROM public.runtime_chat_runs "
                     "WHERE transport_run_id='run-journal'"
                 ) == 0
         finally:
             await reader.close()
+
+        deleted_draft_parent = await conversations.delete_conversation(
+            draft_thread, tenant_a, user_id=user_a,
+        )
+        assert deleted_draft_parent.success and deleted_draft_parent.data
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.conversation_composer_drafts "
+            "WHERE conversation_id=$1", uuid.UUID(draft_thread),
+        ) == 0
+        assert not (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).success
 
         expired = await worker_a.admit(
             **identity(run_id="run-expired"),
