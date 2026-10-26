@@ -12,7 +12,7 @@ import pytest
 
 from scripts.ci.verify_deployment_revision import (
     MAX_RESPONSE_BYTES, NoRedirects, RevisionVerificationError,
-    revision_endpoint, verify_deployment_revision,
+    revision_endpoint, verify_deployment_revision, verify_backend_ready,
 )
 
 
@@ -98,3 +98,26 @@ def test_redirect_handler_cannot_follow_another_origin() -> None:
         with pytest.raises(RevisionVerificationError):
             verify_deployment_revision(ORIGIN, SHA)
         assert isinstance(factory.call_args.args[0], NoRedirects)
+
+
+
+def test_live_backend_health_is_required() -> None:
+    response = FakeResponse(json.dumps({"status": "ok", "backend_ready": True}).encode())
+    client = FakeOpener(response)
+    verify_backend_ready(ORIGIN, opener=client)
+    assert client.url == f"{ORIGIN}/api/health"
+    assert client.timeout == 20
+
+
+@pytest.mark.parametrize("response", [
+    FakeResponse(json.dumps({"status": "initializing", "backend_ready": False}).encode()),
+    FakeResponse(json.dumps({"status": "ok", "backend_ready": False}).encode()),
+    FakeResponse(json.dumps({"status": "ok", "backend_ready": "true"}).encode()),
+    FakeResponse(json.dumps({"status": "ok"}).encode()),
+    FakeResponse(b"<html>login</html>", mime="text/html"),
+    FakeResponse(b"not-json"),
+    FakeResponse(b"{}", status=503),
+])
+def test_unavailable_or_spoofed_backend_health_fails_closed(response: FakeResponse) -> None:
+    with pytest.raises(RevisionVerificationError):
+        verify_backend_ready(ORIGIN, opener=FakeOpener(response))
