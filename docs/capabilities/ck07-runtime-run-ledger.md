@@ -92,8 +92,25 @@ tenant or user scope does not alias the old execution.
    **Still unproven**: live dedicated-DB CI execution, post-commit process
    crash/restart reconciliation and atomicity of external tool side effects,
    which are governed separately by their canonical services.
-3. **CK-07D:** Governed, versioned presentation/execution receipt restoration,
-   ordered replay cursor and live-stream continuation.
+3. **CK-07D:** Authenticated completed-history replay now has a backend
+   owned projection under `GET /api/chat/ag-ui/threads/{threadId}/history`,
+   strictly enabled only by the canonical bridge + durable-run feature flags.
+   Forward-only migration 44 binds the exact user and assistant message IDs
+   to a completed run inside the existing canonical transcript transaction.
+   `SqlChatRunRepository.completed_replay_attestations()` verifies both
+   messages, request identity, tenant/user ownership and completed run state.
+   `owned_history_projection.py` reuses AGUIEventProjection and
+   validate_presentation; it publishes only the original saved text,
+   supported versioned presentation and bounded execution/integrity receipts,
+   never raw SQL metadata, tool arguments or unapproved client actions.
+   CopilotKit capability discovery selects either the existing CK-06 plaintext
+   path or the new governed projection; reconnect emits one verified
+   MESSAGES_SNAPSHOT, then associated CUSTOM events and a synthetic
+   replay-only RUN_FINISHED. Nothing invokes a provider during replay.
+   **Still missing:** durable per-event cursor, live provider reattachment,
+   partial-run continuity after worker crash and visual browser parity.
+   The complete replay rejects unverified/legacy rich content instead of
+   silently dropping it.
 4. **CK-07E:** Real PostgreSQL, actual model, multiple workers and browser
    continuity proof; UI feature/voice/persona/draft/scroll parity.
 5. Govern ledger retention/deletion and inactive-run reconciliation through
@@ -103,8 +120,8 @@ tenant or user scope does not alias the old execution.
 
 ```bash
 python -m compileall src
-pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py -q
-cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts
+pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
+cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
@@ -113,7 +130,9 @@ A dedicated non-production PostgreSQL concurrency test is also checked in:
 `tests/integration/test_runtime_chat_stop_concurrency_postgres.py`. It exercises
 the real migration, PostgreSQL row locking, tenant/user scoped cancellation,
 duplicate stop, stop-versus-completion race, lease expiry and fenced finality.
-The test **requires** `CHAT_RUN_TEST_DATABASE_URL` pointing to a disposable
+The test applies migrations 43 and 44 and verifies atomic saved message
+IDs against the authenticated completed-run replay attestation. It
+**requires** `CHAT_RUN_TEST_DATABASE_URL` pointing to a disposable
 database whose name is exactly `karen_chat_run_test`. It skips rather than
 claiming success when that resource is absent. It destroys test tables only in
 that dedicated database. Example execution after provisioning the isolated DB:
