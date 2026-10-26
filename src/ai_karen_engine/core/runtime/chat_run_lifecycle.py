@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import Optional
@@ -96,6 +97,15 @@ class ChatRunCoordinator:
         """
         terminal = False
         next_chunk: Optional[asyncio.Task[ChatStreamChunk]] = None
+        last_heartbeat = time.monotonic()
+
+        async def require_active_lease() -> None:
+            if await self._repository.renew(lease):
+                return
+            if await self._repository.cancel_requested(lease):
+                raise ChatRunCancellationRequested("chat_run_cancel_requested")
+            raise ChatRunLeaseLost("chat_run_lease_lost")
+
         try:
             while True:
                 next_chunk = asyncio.create_task(anext(chunks))
@@ -103,16 +113,21 @@ class ChatRunCoordinator:
                     done, _ = await asyncio.wait(
                         {next_chunk}, timeout=_heartbeat_seconds()
                     )
-                    if not done and not await self._repository.renew(lease):
-                        if await self._repository.cancel_requested(lease):
-                            raise ChatRunCancellationRequested("chat_run_cancel_requested")
-                        raise ChatRunLeaseLost("chat_run_lease_lost")
+                    if not done:
+                        await require_active_lease()
+                        last_heartbeat = time.monotonic()
                 try:
                     chunk = await next_chunk
                 except StopAsyncIteration:
                     break
                 finally:
                     next_chunk = None
+
+                # Fast streams need periodic checks as well as blocked-provider
+                # timeouts; otherwise cancellation may be delayed indefinitely.
+                if time.monotonic() - last_heartbeat >= _heartbeat_seconds():
+                    await require_active_lease()
+                    last_heartbeat = time.monotonic()
 
                 # A stopped task can yield one last chunk while stop wins the
                 # finality race. Do not project its completion or extra data.
