@@ -64,6 +64,9 @@ async function readKarenGovernedHistory(
   if (response.status === 409) {
     return failure("Complete governed replay is unavailable", 409);
   }
+  if (response.status === 502) {
+    return failure("Complete governed replay could not be verified", 502);
+  }
   if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
     return failure("Governed conversation history unavailable", 503);
   }
