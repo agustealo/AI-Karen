@@ -78,6 +78,15 @@ class Transaction:
         if "INSERT INTO public.runtime_chat_run_events" in sql:
             self.cursor = params["seq"]
             return SimpleNamespace(scalar_one_or_none=lambda: self.cursor)
+        if "SELECT event_type FROM public.runtime_chat_run_events" in sql:
+            terminals = [
+                entry["event_payload"]["type"]
+                for entry in self.stored
+                if entry["event_payload"]["type"] in {"RUN_FINISHED", "RUN_ERROR"}
+            ]
+            return SimpleNamespace(
+                scalar_one_or_none=lambda: terminals[0] if terminals else None,
+            )
         if "SELECT 1" in sql:
             return SimpleNamespace(scalar_one_or_none=lambda: (
                 1 if self.status == "running" else None
@@ -180,8 +189,8 @@ async def test_paged_event_read_marks_expired_lease_interrupted_without_success(
                                          "messageId": "a", "delta": "observed"}},
         {"event_seq": 9, "event_payload": {"type": "TEXT_MESSAGE_END",
                                          "messageId": "a"}},
-        {"event_seq": 10, "event_payload": {"type": "RUN_FINISHED",
-                                          "runId": RUN_ID, "threadId": THREAD}},
+        {"event_seq": 10, "event_payload": {"type": "TEXT_MESSAGE_CONTENT",
+                                          "messageId": "a", "delta": "more observed"}},
     ])
     # Our fake clock returns no active lease when the live run is expired.
     original_execute = tx.execute
@@ -199,11 +208,29 @@ async def test_paged_event_read_marks_expired_lease_interrupted_without_success(
     )
     assert result["runStatus"] == "interrupted"
     assert result["terminalConfirmed"] is False
+    assert result["journalTerminalObserved"] is False
     assert result["continuationAvailable"] is False
     assert result["nextCursor"] == 9
     assert result["hasMore"] is True
     assert [p["seq"] for p in result["events"]] == [8, 9]
     assert all(p["event"]["type"] != "RESUME_EXECUTION" for p in result["events"])
+
+
+@pytest.mark.asyncio
+async def test_cursor_rejects_contradictory_terminal_journal_and_running_ledger(
+    monkeypatch,
+):
+    tx = Transaction(status="running", stored=[
+        {"event_seq": 1, "event_payload": {
+            "type": "RUN_FINISHED", "threadId": THREAD, "runId": RUN_ID,
+        }},
+    ])
+    scoped(monkeypatch, tx)
+    with pytest.raises(RuntimeError, match="terminal_state_mismatch"):
+        await repository.SqlChatRunRepository().read_projected_events(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            transport_run_id=RUN_ID,
+        )
 
 
 @pytest.mark.asyncio
