@@ -22,6 +22,16 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const sources = response?.sources ?? [];
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
+  const distinctHosts = new Set(sources.map((source) => {
+    try { return new URL(source.url).hostname.replace(/^www\\./, '').toLowerCase(); }
+    catch { return ''; }
+  }).filter(Boolean)).size;
+  const actualMode = String(response?.mode || 'unknown');
+  const searchProviders = Array.isArray(response?.metadata?.search_providers)
+    ? response.metadata.search_providers.filter((value): value is string => typeof value === 'string')
+    : [];
+  const correlationId = typeof response?.metadata?.correlation_id === 'string'
+    ? response.metadata.correlation_id : null;
   const providerLabel = String(
     response?.provider || response?.metadata?.provider || 'Unknown',
   );
@@ -108,6 +118,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
 
           <div className="flex flex-wrap gap-2">
             <StatBadge label="Sources" value={sourceCount} />
+            <StatBadge label="Distinct websites" value={distinctHosts} />
 
           </div>
         </div>
@@ -115,6 +126,9 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         <details className="mt-5 rounded-xl border border-border/50 bg-card/60 p-3"><summary className="cursor-pointer text-sm font-medium text-muted-foreground">Technical search details</summary><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SignalTile label="Query" value={response.query || 'live request'} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="Provider" value={providerLabel} icon={<Database className="h-4 w-4" />} />
+          <SignalTile label="Actual mode" value={actualMode} icon={<Radar className="h-4 w-4" />} />
+          <SignalTile label="Providers used" value={searchProviders.length ? searchProviders.join(", ") : "Not reported"} icon={<Database className="h-4 w-4" />} />
+          <SignalTile label="Correlation ID" value={correlationId || "Not reported"} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="URLs" value={response.diagnostics?.urlsFound ?? sourceCount} icon={<ArrowUpRight className="h-4 w-4" />} />
           <SignalTile label="Retrieved chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
         </div></details>
