@@ -65,7 +65,7 @@ export function KarenCopilotChat({
     >
       <CopilotKitProvider runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
-          <KarenCopilotControlledChat conversationId={conversationId} />
+          <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} />
           <div data-testid="karen-copilot-persona-footer"
             className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
             <KarenPersonaSelector />
