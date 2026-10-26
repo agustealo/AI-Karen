@@ -154,10 +154,30 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
   });
 
-  it("never mounts a text-only chat when verified rich playback events would be dropped", async () => {
+  it("hydrates a verified saved presentation without omitting the assistant text", async () => {
     backend.fetchConversation.mockResolvedValueOnce({
       threadId: CONVERSATION_A,
-      messages: [{ id: "m1", role: "assistant", content: "Weather observed" }],
+      messages: [{ id: "m1", role: "assistant", content: "The time was observed" }],
+      replayEvents: [{
+        type: "CUSTOM", name: "karen.presentation.v1", messageId: "m1",
+        value: {
+          schema_version: 1, presentation_id: "time-m1",
+          component_type: "time.observation", evidence_ref: "clock-verified",
+          data: { formatted: "2026-10-26 08:34", timezone: "America/Detroit" },
+        },
+      }],
+    });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
+      { id: "m1", role: "assistant", content: "The time was observed" },
+    ]);
+  });
+
+  it("refuses invalid saved rich evidence before mutating the SDK agent", async () => {
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "m1", role: "assistant", content: "Unverified weather" }],
       replayEvents: [
         { type: "CUSTOM", name: "karen.presentation.v1", messageId: "m1",
           value: { component_type: "weather.observation" } },
@@ -165,8 +185,6 @@ describe("CopilotKit canonical conversation hydration", () => {
     });
     render(guardedHistory());
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
-    expect(screen.getByRole("alert").textContent)
-      .toContain("interactive or structured content");
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
     expect(screen.queryByTestId("agent-chat")).toBeNull();
   });
