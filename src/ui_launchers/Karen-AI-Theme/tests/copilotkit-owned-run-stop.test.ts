@@ -111,13 +111,11 @@ describe("CopilotKit v2 exact-run stop uses only Karen runtime", () => {
       { runId: "run-exact", state: { role: "admin" } },
       { runId: "run-exact", user_id: "foreign" },
     ]) {
-      const upstream = vi.fn();
-      globalThis.fetch = upstream as typeof fetch;
+      const seen = backend();
       const response = await POST(stop(payload));
       expect(response.status, JSON.stringify(payload)).toBe(422);
-      // Explicit stop envelope validation happens after session/capability check.
-      // This may hit auth/capabilities in the future; never the actual stop endpoint.
-      expect(upstream.mock.calls.some(([url]) => String(url).includes("/cancel"))).toBe(false);
+      // Authentication and capability discovery are allowed, not execution.
+      expect(seen).toEqual([AUTH, FLAGS]);
     }
   });
 
