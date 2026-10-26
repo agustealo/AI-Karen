@@ -21,7 +21,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ai_karen_engine.persistence.repositories import chat_run_repository as module
 from ai_karen_engine.persistence.repositories.chat_run_repository import SqlChatRunRepository
-from ai_karen_engine.services.database.repositories.conversation_repository import Message
+from ai_karen_engine.services.database.repositories.conversation_repository import (
+    Message, canonical_message_digest,
+)
 from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
     PostgresConversationRepository,
 )
@@ -191,7 +193,7 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             assert stop_result == "completed"
             bound_ids = await raw.fetchrow(
                 """
-                SELECT user_message_id, assistant_message_id
+                SELECT user_message_id, assistant_message_id, assistant_message_digest
                 FROM public.runtime_chat_runs
                 WHERE execution_id=$1 AND status='completed'
                 """,
@@ -200,10 +202,15 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             assert bound_ids is not None
             assert bound_ids["user_message_id"] == uuid.UUID(user_message.id)
             assert bound_ids["assistant_message_id"] == uuid.UUID(assistant_message.id)
+            assert bound_ids["assistant_message_digest"] == canonical_message_digest(
+                assistant_message
+            )
             replay_proof = await worker_b.completed_replay_attestations(
                 tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
             )
-            assert replay_proof.get(assistant_message.id) == race_lease.request_id
+            assert replay_proof.get(assistant_message.id) == (
+                race_lease.request_id, canonical_message_digest(assistant_message),
+            )
             assert await worker_a.committed_turn(
                 race_lease,
                 user_message_id=user_message.id,
