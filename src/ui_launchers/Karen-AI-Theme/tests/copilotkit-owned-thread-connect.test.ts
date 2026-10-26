@@ -171,7 +171,8 @@ describe("CopilotKit completed-history reconnect", () => {
       headers: { cookie: "kari_session=owner", "content-type": "application/json" },
       body: input,
       duplex: "half",
-    } as RequestInit & { duplex: "half" });
+    // Node streaming requests require duplex, which NextRequest typings omit.
+    } as unknown as ConstructorParameters<typeof NextRequest>[1]);
     const result = await POST(request);
     expect(result.status).toBe(413);
     expect(destinations).toEqual([AUTH, FLAGS]);
