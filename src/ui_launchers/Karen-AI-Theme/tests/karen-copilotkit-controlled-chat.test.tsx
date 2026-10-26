@@ -90,7 +90,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
       .toBeDefined();
   });
 
-  it("starts a canonical CopilotKit run only after an explicit nonempty composer submission", () => {
+  it("starts a canonical CopilotKit run only after an explicit nonempty composer submission", async () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     act(() => input().onSubmitMessage("  Send this question  "));
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
@@ -99,8 +99,24 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
       role: "user",
       content: "Send this question",
     });
-    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
     expect(sdk.runAgent).toHaveBeenCalledWith({ agent: sdk.agent });
+  });
+
+  it("rejects rapid duplicate submits until the previous SDK run settles", async () => {
+    let resolveRun!: () => void;
+    sdk.runAgent.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveRun = resolve;
+    }));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onSubmitMessage("Send once");
+      input().onSubmitMessage("Send twice");
+    });
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    await act(async () => resolveRun());
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
   });
 
   it("never triggers inference for blank, oversized, running, or foreign-thread input", () => {
