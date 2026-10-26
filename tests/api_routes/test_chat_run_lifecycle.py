@@ -209,7 +209,7 @@ async def test_heartbeat_continues_during_blocked_upstream_and_can_fence_it(
 ) -> None:
     from ai_karen_engine.core.runtime import chat_run_lifecycle
 
-    monkeypatch.setattr(chat_run_lifecycle, "_HEARTBEAT_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(chat_run_lifecycle, "_heartbeat_seconds", lambda: 0.001)
     repo = MemoryLedger()
     coordinator = ChatRunCoordinator(repo)
     lease = await coordinator.admit(context(), "run-5")
