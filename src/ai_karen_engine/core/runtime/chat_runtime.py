@@ -1279,6 +1279,8 @@ class ChatRuntime:
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
             },
+            **({"run_lease": request.runtime_run_lease}
+               if request.runtime_run_lease is not None else {}),
         )
 
         event_type = (
