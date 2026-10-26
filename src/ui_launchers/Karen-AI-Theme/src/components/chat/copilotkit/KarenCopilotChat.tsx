@@ -3,6 +3,7 @@
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
 import { KarenCopilotControlledChat } from "./KarenCopilotControlledChat";
+import { KarenPersonaSelector } from "../assistant-ui/KarenPersonaSelector";
 
 const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -65,6 +66,10 @@ export function KarenCopilotChat({
       <CopilotKitProvider runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
           <KarenCopilotControlledChat conversationId={conversationId} />
+          <div data-testid="karen-copilot-persona-footer"
+            className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
+            <KarenPersonaSelector />
+          </div>
         </KarenCopilotHistoryGate>
       </CopilotKitProvider>
     </section>
