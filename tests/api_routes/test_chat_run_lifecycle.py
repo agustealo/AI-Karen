@@ -176,6 +176,37 @@ async def test_runtime_terminal_persists_before_success_chunk() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("persistence_status", [None, "failed", "rejected", "skipped"])
+async def test_unverified_transcript_never_emits_run_completion(
+    persistence_status: str | None,
+) -> None:
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-unverified")
+
+    async def upstream():
+        yield content()
+        metadata = (
+            {"transcript_persistence_status": persistence_status}
+            if persistence_status is not None else {}
+        )
+        yield ChatStreamChunk(
+            type=ChatStreamEventType.COMPLETE,
+            content="",
+            metadata=metadata,
+        )
+
+    events = [part async for part in coordinator.stream(upstream(), lease=lease)]
+    assert [part.type for part in events] == [
+        ChatStreamEventType.CONTENT, ChatStreamEventType.ERROR,
+    ]
+    assert events[-1].metadata["error_code"] == "CHAT_TRANSCRIPT_NOT_PERSISTED"
+    assert repo.finalized == [
+        ("run-unverified", "failed", "CHAT_TRANSCRIPT_NOT_PERSISTED")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_failed_terminal_commit_cannot_claim_success() -> None:
     repo = MemoryLedger()
     coordinator = ChatRunCoordinator(repo)
