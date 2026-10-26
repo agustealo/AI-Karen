@@ -8,8 +8,20 @@ export const dynamic = 'force-dynamic';
  * by a browser request, user metadata, or a runtime model response.
  */
 export function GET() {
-  const revision = process.env.VERCEL_GIT_COMMIT_SHA || process.env.KAREN_DEPLOYED_COMMIT_SHA;
-  if (!revision || !/^[a-f0-9]{40}$/.test(revision)) {
+  const platformRevision = process.env.VERCEL_GIT_COMMIT_SHA;
+  const injectedRevision = process.env.KAREN_DEPLOYED_COMMIT_SHA;
+  const revision = platformRevision || injectedRevision;
+  const validSha = (value: string): boolean => /^[a-f0-9]{40}$/.test(value);
+
+  // Never silently trust one claimed build identity over a conflicting or
+  // malformed identity from another configured source.
+  if (
+    !revision ||
+    !validSha(revision) ||
+    (platformRevision && !validSha(platformRevision)) ||
+    (injectedRevision && !validSha(injectedRevision)) ||
+    (platformRevision && injectedRevision && platformRevision !== injectedRevision)
+  ) {
     return NextResponse.json(
       { status: 'unavailable', reason: 'Deployment revision is not configured' },
       { status: 503, headers: { 'Cache-Control': 'no-store' } },
