@@ -97,7 +97,20 @@ ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_e
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
 ```
 
-These component tests use controlled repositories/streams. Their success
-**cannot** substitute for live database migrations, RLS, multiworker tests,
-provider stream cancellation or browser tests. Preserve PR #556 as draft and
-leave the existing assistant-ui mounted until all migration gates pass.
+A dedicated non-production PostgreSQL concurrency test is also checked in:
+`tests/integration/test_runtime_chat_stop_concurrency_postgres.py`. It exercises
+the real migration, PostgreSQL row locking, tenant/user scoped cancellation,
+duplicate stop, stop-versus-completion race, lease expiry and fenced finality.
+The test **requires** `CHAT_RUN_TEST_DATABASE_URL` pointing to a disposable
+database whose name is exactly `karen_chat_run_test`. It skips rather than
+claiming success when that resource is absent. It destroys test tables only in
+that dedicated database. Example execution after provisioning the isolated DB:
+
+```bash
+pytest tests/integration/test_runtime_chat_stop_concurrency_postgres.py -q
+```
+
+These component tests and the dedicated DB test still **cannot** substitute
+for an actual provider abort, a multi-process deployment, SDK browser stop
+flow or read-after-write presentation continuity. Preserve PR #556 as draft
+and leave the existing assistant-ui mounted until all migration gates pass.
