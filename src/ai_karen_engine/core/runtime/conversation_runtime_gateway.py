@@ -427,6 +427,7 @@ class ConversationRuntimeGateway:
         result = await self._repository.delete_conversation(
             conversation_id,
             context.tenant_id,
+            user_id=context.user_id,
         )
         if not result.success:
             raise RuntimeError(result.error or "conversation_delete_failed")
