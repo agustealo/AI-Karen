@@ -516,6 +516,21 @@ class SqlChatRunRepository:
                 {**scope, "execution": str(run["execution_id"])},
             )
             records = events.mappings().all()
+            observed_terminal = await session.execute(
+                text("""
+                    SELECT 1 FROM public.runtime_chat_run_events
+                    WHERE execution_id = CAST(:execution AS uuid)
+                      AND tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+                    LIMIT 1
+                """),
+                {**scope, "execution": str(run["execution_id"])},
+            )
+            journal_terminal_seen = (
+                observed_terminal.scalar_one_or_none() is not None
+            )
             # Snapshot-local DB clock, not a client-supplied time estimate.
             if run["status"] in {"running", "cancelling"}:
                 fresh = await session.execute(
@@ -551,6 +566,7 @@ class SqlChatRunRepository:
             "terminalConfirmed": state in {
                 "completed", "failed", "cancelled", "orphaned",
             },
+            "journalTerminalObserved": journal_terminal_seen,
             "continuationAvailable": False,
             "responseSource": "observed_event_journal",
         }
