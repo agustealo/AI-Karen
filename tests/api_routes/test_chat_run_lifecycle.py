@@ -411,3 +411,30 @@ async def test_concurrent_stop_wins_error_or_missing_terminal_race(
     assert repo.finalized == [
         ("run-fail-race", "cancelled", "CHAT_STREAM_CANCELLED"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_upstream_shutdown_failure_never_confirms_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    monkeypatch.setattr(chat_run_lifecycle, "_heartbeat_seconds", lambda: 0.002)
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-cleanup-fails")
+
+    async def uncooperative_upstream():
+        try:
+            yield content("partial")
+            await asyncio.sleep(1)
+        finally:
+            raise RuntimeError("upstream_cleanup_failed")
+
+    stream = coordinator.stream(uncooperative_upstream(), lease=lease)
+    assert (await anext(stream)).content == "partial"
+    repo.cancel_intent = True
+    with pytest.raises(RuntimeError, match="upstream_cleanup_failed"):
+        async for _ in stream:
+            pass
+    assert repo.finalized == []
