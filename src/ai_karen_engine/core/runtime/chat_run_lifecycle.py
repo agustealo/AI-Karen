@@ -106,6 +106,19 @@ class ChatRunCoordinator:
                 raise ChatRunCancellationRequested("chat_run_cancel_requested")
             raise ChatRunLeaseLost("chat_run_lease_lost")
 
+        async def close_upstream() -> None:
+            nonlocal next_chunk
+            # Stop the actual model generator before confirming its terminal
+            # cancellation. A DB intent alone is not a completed stop.
+            if next_chunk is not None:
+                if not next_chunk.done():
+                    next_chunk.cancel()
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await next_chunk
+                next_chunk = None
+            with suppress(Exception):
+                await chunks.aclose()
+
         try:
             while True:
                 next_chunk = asyncio.create_task(anext(chunks))
@@ -190,6 +203,7 @@ class ChatRunCoordinator:
                 )
                 raise ChatRunLeaseLost("chat_run_missing_terminal")
         except ChatRunCancellationRequested:
+            await close_upstream()
             if not await self._repository.finish(
                 lease, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
             ):
@@ -200,6 +214,7 @@ class ChatRunCoordinator:
             # Connection cancellation must not become a successful assistant
             # turn. The runtime generator itself owns provider cleanup.
             if not terminal:
+                await close_upstream()
                 try:
                     await self._repository.finish(
                         lease,
@@ -223,12 +238,7 @@ class ChatRunCoordinator:
                     )
             raise
         finally:
-            if next_chunk is not None and not next_chunk.done():
-                next_chunk.cancel()
-                with suppress(asyncio.CancelledError, StopAsyncIteration):
-                    await next_chunk
-            with suppress(Exception):
-                await chunks.aclose()
+            await close_upstream()
 
 
 def get_chat_run_coordinator() -> ChatRunCoordinator:
