@@ -580,6 +580,7 @@ class ConversationRuntimeGateway:
         user_text: str,
         assistant_text: str,
         response_metadata: Optional[Dict[str, Any]] = None,
+        run_lease: Optional["ChatRunLease"] = None,
     ) -> TranscriptPersistenceResult:
         """Persist one completed user/assistant turn through canonical storage.
 
@@ -643,9 +644,14 @@ class ConversationRuntimeGateway:
                     "transcript_actor": "assistant",
                 },
             )
-            write_result = await self._repository.add_completed_turn(
-                user_message, assistant_message
-            )
+            if run_lease is not None:
+                write_result = await self._repository.add_completed_turn(
+                    user_message, assistant_message, run_lease=run_lease,
+                )
+            else:
+                write_result = await self._repository.add_completed_turn(
+                    user_message, assistant_message,
+                )
             if not write_result.success:
                 return TranscriptPersistenceResult(
                     status="failed",
