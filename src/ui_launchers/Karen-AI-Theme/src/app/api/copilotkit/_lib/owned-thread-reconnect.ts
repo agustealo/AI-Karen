@@ -31,11 +31,23 @@ export async function readKarenConnectThreadId(
   }
   let input: unknown;
   try {
-    const raw = await request.clone().text();
-    if (new TextEncoder().encode(raw).byteLength > MAX_CONNECT_BYTES) {
-      return refuse("Thread connection request too large", 413);
+    const reader = request.clone().body?.getReader();
+    if (!reader) return refuse("Malformed thread connection request", 400);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let body = "";
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_CONNECT_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return refuse("Thread connection request too large", 413);
+      }
+      body += decoder.decode(value, { stream: true });
     }
-    input = JSON.parse(raw);
+    body += decoder.decode();
+    input = JSON.parse(body);
   } catch {
     return refuse("Malformed thread connection request", 400);
   }
