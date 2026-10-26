@@ -166,3 +166,34 @@ def test_training_worker_is_opt_in_and_uses_api_model_registry_mount() -> None:
     assert "./models:/app/models:rw" in api
     assert "ai_karen_engine.core.intelligence.ml.training.worker_service" in worker
     assert "depends_on:" not in worker
+
+
+
+def test_production_images_carry_explicit_release_revision() -> None:
+    """Both production services must receive the same reviewed build identity."""
+    overlay = PROD_COMPOSE.read_text(encoding="utf-8")
+    required = "KAREN_DEPLOYED_COMMIT_SHA: " + chr(36) + "{KAREN_DEPLOYED_COMMIT_SHA:?"
+    for service, image in (("web", "ai-karen-web:"), ("api", "ai-karen-api:")):
+        block = _service_block(overlay, service)
+        assert block.count(required) == 2
+        assert "image: " + image + chr(36) + "{KAREN_DEPLOYED_COMMIT_SHA:?" in block
+        assert "build:" in block and "args:" in block
+        assert "environment:" in block
+
+    web_dockerfile = WEB_PROD_DOCKERFILE.read_text(encoding="utf-8")
+    assert "ARG KAREN_DEPLOYED_COMMIT_SHA" in web_dockerfile
+    assert "grep -Eq '^[a-f0-9]{40}$'" in web_dockerfile
+    assert 'LABEL org.opencontainers.image.revision="' + chr(36) + '{KAREN_DEPLOYED_COMMIT_SHA}"' in web_dockerfile
+    assert 'ENV KAREN_DEPLOYED_COMMIT_SHA="' + chr(36) + '{KAREN_DEPLOYED_COMMIT_SHA}"' in web_dockerfile
+
+    api_dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert 'LABEL org.opencontainers.image.revision="' + chr(36) + '{KAREN_DEPLOYED_COMMIT_SHA}"' in api_dockerfile
+    web_revision = (
+        WEB_PROD_ROOT / "src/app/api/deployment-revision/route.ts"
+    ).read_text(encoding="utf-8")
+    assert "process.env.KAREN_DEPLOYED_COMMIT_SHA" in web_revision
+
+
+def test_production_template_requires_explicit_revision() -> None:
+    env_text = PROD_ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "KAREN_DEPLOYED_COMMIT_SHA=CHANGE_ME_40_CHARACTER_LOWERCASE_GIT_SHA" in env_text
