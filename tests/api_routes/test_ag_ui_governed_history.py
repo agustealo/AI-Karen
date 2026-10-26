@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from ai_karen_engine.api_routes.chat import runtime as route
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import ConversationSnapshot
 from ai_karen_engine.services.database.repositories.conversation_repository import (
-    Conversation, Message,
+    Conversation, Message, canonical_message_digest,
 )
 
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -68,7 +68,8 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
     class Attestation:
         async def completed_replay_attestations(self, **kwargs):
             calls.append(("attested", kwargs))
-            return {ASSISTANT: REQUEST}
+            saved = snapshot(rich=True).messages[1]
+            return {ASSISTANT: (REQUEST, canonical_message_digest(saved))}
 
     from ai_karen_engine.core.runtime import conversation_runtime_gateway
     monkeypatch.setattr(
