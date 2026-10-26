@@ -17,6 +17,11 @@ type KarenOwnedThreadResponse = {
   messages: KarenOwnedHistoryMessage[];
 };
 
+/** One private local UI agent per owned conversation, all routing to Karen default runtime. */
+export function karenScopedAgentId(conversationId: string): string {
+  return "karen-" + conversationId;
+}
+
 export type KarenOwnedHistoryMessage = {
   id: string;
   role: string;
@@ -65,7 +70,11 @@ export function KarenCopilotHistoryGate({
   conversationId: string;
   children: ReactNode;
 }) {
-  const { agent, isReady } = useAgent({ agentId: "default" });
+  const { agent, isReady } = useAgent({
+    agentId: karenScopedAgentId(conversationId),
+    runtimeAgentId: "default",
+    threadId: conversationId,
+  });
   const [loaded, setLoaded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,7 +97,6 @@ export function KarenCopilotHistoryGate({
         }
         const messages = toCopilotTextMessages(snapshot.messages);
         // A thread switch must never retain another conversation's agent state.
-        agent.threadId = conversationId;
         agent.setMessages(messages);
         setLoaded(conversationId);
       } catch {
