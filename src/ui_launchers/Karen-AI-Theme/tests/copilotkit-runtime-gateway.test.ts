@@ -170,7 +170,7 @@ describe("CopilotKit v2 protected gateway", () => {
     globalThis.fetch = upstream as typeof fetch;
     for (const [method, path] of [
       ["GET", "/api/copilotkit/threads"],
-      ["GET", "/api/copilotkit/threads/8d3f7a11-bc7a-4caa-bf1d-6932891d42d0/messages"],
+      ["GET", "/api/copilotkit/threads/not-a-uuid/messages"],
       ["POST", "/api/copilotkit/threads/clear"],
       ["POST", "/api/copilotkit/agent/default/stop/8d3f7a11-bc7a-4caa-bf1d-6932891d42d0"],
       ["POST", "/api/copilotkit/agent/default/connect"],
