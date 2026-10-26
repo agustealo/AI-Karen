@@ -51,15 +51,43 @@ def revision_endpoint(base_url: str) -> str:
     return urlunsplit(("https", parsed.netloc, "/api/deployment-revision", "", ""))
 
 
+
+VERCEL_HOST_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]*\.vercel\.app\Z")
+
+
+def vercel_deployment_hostname(base_url: str) -> str:
+    """Canonical strict Vercel hostname shared by runtime and platform proof."""
+    hostname = urlsplit(revision_endpoint(base_url)).hostname
+    if not hostname or not VERCEL_HOST_PATTERN.fullmatch(hostname):
+        raise RevisionVerificationError("Expected immutable Vercel deployment hostname")
+    return hostname
+
+
+def _request_headers(base_url: str, bypass_secret: str | None) -> dict[str, str]:
+    headers = {"Accept": "application/json", "Cache-Control": "no-cache"}
+    if bypass_secret is not None:
+        # Bound the token to the approved Vercel hostname only. No redirects.
+        vercel_deployment_hostname(base_url)
+        if (
+            not bypass_secret or bypass_secret != bypass_secret.strip()
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in bypass_secret)
+        ):
+            raise RevisionVerificationError("Invalid protected deployment authorization")
+        headers["x-vercel-protection-bypass"] = bypass_secret
+    return headers
+
+
+
 def verify_deployment_revision(
-    base_url: str, expected_sha: str, *, opener: Any = None
+    base_url: str, expected_sha: str, *, opener: Any = None,
+    bypass_secret: str | None = None,
 ) -> None:
     """Require exact source revision with nonredirecting, uncached JSON evidence."""
     if not SHA_PATTERN.fullmatch(expected_sha):
         raise RevisionVerificationError("Expected revision must be a full lowercase Git SHA")
     request = Request(
         revision_endpoint(base_url),
-        headers={"Accept": "application/json", "Cache-Control": "no-cache"},
+        headers=_request_headers(base_url, bypass_secret),
         method="GET",
     )
     client = opener if opener is not None else build_opener(NoRedirects())
@@ -91,7 +119,9 @@ def verify_deployment_revision(
 
 
 
-def verify_backend_ready(base_url: str, *, opener: Any = None) -> None:
+def verify_backend_ready(
+    base_url: str, *, opener: Any = None, bypass_secret: str | None = None
+) -> None:
     """Prove the web UI can reach its canonical backend before using credentials.
 
     A rendered Next.js page or a working revision endpoint alone is insufficient
@@ -101,7 +131,7 @@ def verify_backend_ready(base_url: str, *, opener: Any = None) -> None:
     health_url = urlunsplit((endpoint.scheme, endpoint.netloc, "/api/health", "", ""))
     request = Request(
         health_url,
-        headers={"Accept": "application/json", "Cache-Control": "no-cache"},
+        headers=_request_headers(base_url, bypass_secret),
         method="GET",
     )
     client = opener if opener is not None else build_opener(NoRedirects())
@@ -131,11 +161,15 @@ def verify_backend_ready(base_url: str, *, opener: Any = None) -> None:
 
 def main() -> int:
     try:
+        bypass_secret = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET")
         verify_deployment_revision(
             os.environ.get("KAREN_BASE_URL", ""),
             os.environ.get("TARGET_SHA", ""),
+            bypass_secret=bypass_secret,
         )
-        verify_backend_ready(os.environ.get("KAREN_BASE_URL", ""))
+        verify_backend_ready(
+            os.environ.get("KAREN_BASE_URL", ""), bypass_secret=bypass_secret
+        )
     except RevisionVerificationError as exc:
         LOGGER.error("Release revision verification failed: %s", exc)
         return 1
