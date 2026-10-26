@@ -863,8 +863,17 @@ class InternetCapabilityService:
 
     def _resolve_mode(self, request: InternetSearchRequest) -> str:
         requested = request.mode or request.requested_mode
-        if requested:
+        if requested and str(requested).strip().lower() != "auto":
             return str(requested).strip().lower()
+
+        # CORTEX owns automatic capability decisions for every entry point.
+        # Calling the InternetCapabilityService directly must not downgrade
+        # a live weather question to the older generic keyword planner.
+        from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+
+        decision = resolve_capability_decision(request.query)
+        if decision.intent == "search.weather":
+            return "weather"
         return str(self.planner.classify_mode(request.query)).strip().lower()
 
     def _resolve_strategy(
