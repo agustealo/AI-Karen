@@ -38,9 +38,18 @@ export function KarenCopilotControlledChat({
     status: draftStatus, synced: draftSynced, clearBeforeSubmit,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
+  const onDraftChange = useCallback((value: string) => {
+    if (typeof value !== "string" || value.length > MAX_INPUT_CHARS ||
+        new TextEncoder().encode(value).length > 262144) {
+      setError("Draft exceeds the supported message length.");
+      return;
+    }
+    setError(null);
+    setDraftText(value);
+  }, [setDraftText]);
   const draftPort: KarenVoiceDraftPort = {
     readText: readDraftText,
-    writeText: setDraftText,
+    writeText: onDraftChange,
   };
   // A second click before SDK state flips to running must not start a
   // concurrent run or produce duplicate user-message writes.
@@ -147,7 +156,7 @@ export function KarenCopilotControlledChat({
         isRunning={agent.isRunning}
         autoScroll
         messageView={{ assistantMessage: KarenCopilotAssistantSlot }}
-        input={{ value: draft, onChange: setDraftText, onSubmitMessage, onStop }}
+        input={{ value: draft, onChange: onDraftChange, onSubmitMessage, onStop }}
       />
       <div data-testid="karen-copilot-voice-controls"
         className="flex shrink-0 items-center gap-2 border-t border-border/50 px-3 py-1">
