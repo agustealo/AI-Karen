@@ -38,10 +38,12 @@ class FakeOpener:
     def __init__(self, value: FakeResponse) -> None:
         self.value = value
         self.url = ""
+        self.request = None
         self.timeout = None
 
     def open(self, request: object, *, timeout: int) -> FakeResponse:
         self.url = request.full_url
+        self.request = request
         self.timeout = timeout
         return self.value
 
@@ -121,3 +123,51 @@ def test_live_backend_health_is_required() -> None:
 def test_unavailable_or_spoofed_backend_health_fails_closed(response: FakeResponse) -> None:
     with pytest.raises(RevisionVerificationError):
         verify_backend_ready(ORIGIN, opener=FakeOpener(response))
+
+
+
+def test_protected_revision_uses_bypass_only_on_trusted_deployment_origin() -> None:
+    url = "https://ai-karen-bc123-zeustheeternal-3982.vercel.app"
+    client = FakeOpener(payload())
+    verify_deployment_revision(
+        url, SHA, opener=client, bypass_secret="protected-test-secret"
+    )
+    assert client.url == url + "/api/deployment-revision"
+    assert client.request.get_header("X-vercel-protection-bypass") == "protected-test-secret"
+
+
+def test_protected_backend_uses_the_same_scoped_header() -> None:
+    url = "https://ai-karen-bc123-zeustheeternal-3982.vercel.app"
+    client = FakeOpener(FakeResponse(
+        json.dumps({"status": "ok", "backend_ready": True}).encode()
+    ))
+    verify_backend_ready(
+        url, opener=client, bypass_secret="protected-test-secret"
+    )
+    assert client.url == url + "/api/health"
+    assert client.request.get_header("X-vercel-protection-bypass") == "protected-test-secret"
+
+
+@pytest.mark.parametrize("base_url", [
+    "https://example.com",
+    "https://vercel.app",
+    "https://vercel.app.example.org",
+    "http://ai-karen-bc123-zeustheeternal-3982.vercel.app",
+    "https://ai-karen-bc123-zeustheeternal-3982.vercel.app/other",
+])
+def test_never_send_protected_bypass_to_unapproved_origin(base_url: str) -> None:
+    with pytest.raises(RevisionVerificationError):
+        verify_deployment_revision(
+            base_url, SHA, opener=FakeOpener(payload()), bypass_secret="secret"
+        )
+
+
+@pytest.mark.parametrize("secret", [
+    "", "  exposed  ", "bad\\nheader", "bad\\rheader",
+])
+def test_malformed_bypass_is_rejected_before_request(secret: str) -> None:
+    with pytest.raises(RevisionVerificationError):
+        verify_deployment_revision(
+            "https://example.vercel.app", SHA,
+            opener=FakeOpener(payload()), bypass_secret=secret
+        )
