@@ -164,7 +164,11 @@ class SqlChatRunRepository:
         error_code: Optional[str] = None,
     ) -> bool:
         """Exactly one fenced terminal transition, before signaling success."""
-        if status not in {"completed", "failed", "cancelled"}:
+        # A successful durable run can only be written by the canonical
+        # conversation repository IN THE SAME transaction as both messages.
+        if status == "completed":
+            raise ValueError("chat_run_completion_requires_atomic_transcript_commit")
+        if status not in {"failed", "cancelled"}:
             raise ValueError("invalid_chat_run_terminal_status")
         if error_code is not None and (
             len(error_code) > 64
@@ -194,6 +198,95 @@ class SqlChatRunRepository:
                     """
                 ),
                 self._scope(lease, status=status, error_code=error_code),
+            )
+            return result.scalar_one_or_none() is not None
+
+    async def committed_turn(
+        self,
+        lease: ChatRunLease,
+        *,
+        user_message_id: str,
+        assistant_message_id: str,
+    ) -> bool:
+        """Read-only proof that the completed run and BOTH messages committed.
+
+        A terminal receipt is not inferred from a model COMPLETE chunk. The
+        repository must have atomically committed the scoped run and the two
+        idempotent canonical transcript messages.
+        """
+        try:
+            user_message = _uuid(user_message_id)
+            assistant_message = _uuid(assistant_message_id)
+        except (TypeError, ValueError, AttributeError):
+            return False
+        async with async_transaction_scope(
+            lease.tenant_id, user_id=lease.user_id,
+        ) as session:
+            result = await session.execute(
+                text("""
+                    SELECT 1
+                    FROM public.runtime_chat_runs r
+                    JOIN conversations c
+                      ON c.conversation_id = r.conversation_id
+                     AND c.tenant_id = r.tenant_id
+                     AND c.user_id = r.user_id
+                    JOIN messages u
+                      ON u.conversation_id = c.conversation_id
+                     AND u.message_id = CAST(:user_message AS uuid)
+                     AND u.role = 'user'
+                    JOIN messages a
+                      ON a.conversation_id = c.conversation_id
+                     AND a.message_id = CAST(:assistant_message AS uuid)
+                     AND a.role = 'assistant'
+                    WHERE r.execution_id = CAST(:execution AS uuid)
+                      AND r.tenant_id = CAST(:tenant AS uuid)
+                      AND r.user_id = CAST(:owner AS uuid)
+                      AND r.conversation_id = CAST(:conversation AS uuid)
+                      AND r.transport_run_id = :transport_run_id
+                      AND r.request_id = :request_id
+                      AND r.correlation_id = :correlation_id
+                      AND r.status = 'completed'
+                      AND r.terminal_at IS NOT NULL
+                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
+                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
+                    LIMIT 1
+                """),
+                {
+                    **self._scope(lease),
+                    "transport_run_id": lease.transport_run_id,
+                    "request_id": lease.request_id,
+                    "correlation_id": lease.correlation_id,
+                    "user_message": user_message,
+                    "assistant_message": assistant_message,
+                },
+            )
+            return result.scalar_one_or_none() is not None
+
+    async def completed(self, lease: ChatRunLease) -> bool:
+        """Check terminal status while upstream finishes post-commit telemetry."""
+        async with async_transaction_scope(
+            lease.tenant_id, user_id=lease.user_id,
+        ) as session:
+            result = await session.execute(
+                text("""
+                    SELECT 1
+                    FROM public.runtime_chat_runs
+                    WHERE execution_id = CAST(:execution AS uuid)
+                      AND tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND transport_run_id = :transport_run_id
+                      AND request_id = :request_id
+                      AND correlation_id = :correlation_id
+                      AND status = 'completed'
+                      AND terminal_at IS NOT NULL
+                """),
+                {
+                    **self._scope(lease),
+                    "transport_run_id": lease.transport_run_id,
+                    "request_id": lease.request_id,
+                    "correlation_id": lease.correlation_id,
+                },
             )
             return result.scalar_one_or_none() is not None
 
