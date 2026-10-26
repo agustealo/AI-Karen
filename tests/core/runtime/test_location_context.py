@@ -39,3 +39,48 @@ def test_weather_clarification_is_preserved_by_capability_adapter():
     from pathlib import Path
     executor = (Path(__file__).resolve().parents[3] / "src/ai_karen_engine/core/runtime/direct_capability_executor.py").read_text()
     assert 'effective_context["pending_clarification"] = pending' in executor
+
+
+def test_authorized_memory_precedes_consented_device_and_system_location():
+    selected = resolve_location(
+        {"location_source": "device_with_consent", "location": "Ann Arbor"},
+        {"weather_location": "Detroit", "system_location_permitted": True,
+         "system_location": "Lansing"},
+        kind="weather",
+    )
+    assert (selected.value, selected.source) == ("Detroit", "authorized_runtime")
+
+
+def test_system_location_requires_explicit_permission():
+    context = {"system_location": "Lansing"}
+    assert resolve_location({}, context, kind="weather") is None
+    selected = resolve_location(
+        {}, {**context, "system_location_permitted": True}, kind="weather"
+    )
+    assert (selected.value, selected.source) == ("Lansing", "system_with_permission")
+
+
+def test_user_selected_place_precedes_every_other_tier():
+    selected = resolve_location(
+        {"location_source": "user_selected", "location": "Chicago"},
+        {"weather_location": "Detroit", "system_location_permitted": True,
+         "system_location": "Lansing"}, kind="weather"
+    )
+    assert (selected.value, selected.source) == ("Chicago", "user_selected")
+
+
+def test_clock_uses_authorized_timezone_before_system_timezone():
+    selected = resolve_location(
+        {}, {"timezone": "America/Detroit", "system_timezone_permitted": True,
+             "system_timezone": "America/Chicago"}, kind="time"
+    )
+    assert (selected.value, selected.source) == ("America/Detroit", "authorized_runtime")
+
+
+def test_clock_only_uses_system_timezone_if_permitted():
+    assert resolve_location({}, {"system_timezone": "America/Detroit"}, kind="time") is None
+    selected = resolve_location(
+        {}, {"system_timezone": "America/Detroit",
+             "system_timezone_permitted": True}, kind="time"
+    )
+    assert (selected.value, selected.source) == ("America/Detroit", "system_with_permission")
