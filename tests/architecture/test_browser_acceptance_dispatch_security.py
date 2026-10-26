@@ -29,6 +29,10 @@ def test_default_branch_only_exposes_reviewed_history_scenario() -> None:
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
     assert "ref: ${{ inputs.target_sha }}" in job
     assert "persist-credentials: false" in job
+    assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
+    assert "gh api repos/${GITHUB_REPOSITORY}/branches/main" in job
+    assert "pulls/550" not in job
+    assert "Require the current reviewed main commit before checkout" in job
 
 
 def test_browser_credentials_never_reach_dependency_setup() -> None:
