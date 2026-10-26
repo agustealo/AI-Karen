@@ -8,6 +8,7 @@ function isSearchResponse(value: unknown): value is IntelligentSearchResponse {
 
   const record = value as Record<string, unknown>;
   return (
+    record.status === 'needs_location' ||
     typeof record.summary === 'string' ||
     Array.isArray(record.sources) ||
     Array.isArray(record.results) ||
@@ -37,10 +38,10 @@ function normalizeSearchResponse(value: unknown): IntelligentSearchResponse {
     const record = value as Record<string, unknown>;
     const candidate = record.result ?? record.data ?? record.payload;
     if (isSearchResponse(candidate)) {
-      return candidate;
+      return normalizeSearchResponse(candidate);
     }
     if (isSearchResponse(record.response)) {
-      return record.response as IntelligentSearchResponse;
+      return normalizeSearchResponse(record.response);
     }
   }
 
@@ -74,7 +75,12 @@ export const IntelligentSearchApi = {
 
     // A plugin execution failure may still contain response-shaped diagnostics.
     // Never mistake those diagnostics for successful search evidence.
-    if (envelope?.success === false && !(envelope.result && typeof envelope.result === 'object' && (envelope.result as IntelligentSearchResponse).status === 'needs_location') && !(envelope.data && typeof envelope.data === 'object' && (envelope.data as IntelligentSearchResponse).status === 'needs_location')) {
+    const responseCandidate = envelope?.result ?? envelope?.data ?? envelope?.payload ??
+      (response && typeof response === 'object' && 'response' in response
+        ? (response as { response?: unknown }).response : response);
+    const locationRequired = isSearchResponse(responseCandidate) &&
+      responseCandidate.status === 'needs_location';
+    if (envelope?.success === false && !locationRequired) {
       throw new Error(envelope.message || 'Search could not be completed. Please try again.');
     }
 
