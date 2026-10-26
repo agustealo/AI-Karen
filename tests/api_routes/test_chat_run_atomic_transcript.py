@@ -86,7 +86,10 @@ class FakeTransaction:
 
 
 def make_repo(tx: FakeTransaction) -> PostgresConversationRepository:
-    async def factory():
+    # Production accepts a synchronous async_sessionmaker factory returning an
+    # async context manager. An async function here returns an un-awaited
+    # coroutine and masks the actual transaction/rollback assertions.
+    def factory():
         return tx
     return PostgresConversationRepository(factory)
 
