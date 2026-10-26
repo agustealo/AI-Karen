@@ -9,7 +9,7 @@ import {
 const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
-const MAX_CONNECT_BYTES = 16 * 1024;
+const MAX_CONNECT_BYTES = 512 * 1024;
 
 function refuse(detail: string, status: number): NextResponse {
   return NextResponse.json({ detail }, {
@@ -43,12 +43,45 @@ export async function readKarenConnectThreadId(
     return refuse("Invalid thread connection request", 422);
   }
   const values = input as Record<string, unknown>;
+  // CopilotKit v2 calls connect() using RunAgentInput. The protocol adds
+  // client-side messages and hints, but none can authorize server operations.
+  // Ignore that transcript entirely; replay comes only from owned history.
+  const allowed = new Set([
+    "threadId", "runId", "messages", "state", "tools",
+    "context", "forwardedProps",
+  ]);
+  const isEmptyRecord = (value: unknown) =>
+    value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length === 0;
+  const allowArray = (value: unknown) => Array.isArray(value) && value.length === 0;
+  const hints = values.forwardedProps;
+  const hintsRecord =
+    hints && typeof hints === "object" && !Array.isArray(hints)
+      ? hints as Record<string, unknown> : null;
+  const provider = hintsRecord?.preferred_llm_provider;
+  const model = hintsRecord?.preferred_model;
+  const hintsValid = hints === undefined || (
+    hintsRecord !== null &&
+    Object.keys(hintsRecord).every((key) =>
+      key === "preferred_llm_provider" || key === "preferred_model") &&
+    (provider === undefined && model === undefined || (
+      typeof provider === "string" && provider.trim().length > 0 &&
+      provider.length <= 100 && typeof model === "string" &&
+      model.trim().length > 0 && model.length <= 200
+    ))
+  );
   if (
-    Object.keys(values).some((key) => key !== "threadId" && key !== "runId") ||
+    Object.keys(values).some((key) => !allowed.has(key)) ||
     typeof values.threadId !== "string" ||
     !CONVERSATION_UUID.test(values.threadId) ||
     (values.runId !== undefined &&
-      (typeof values.runId !== "string" || !RUN_ID.test(values.runId)))
+      (typeof values.runId !== "string" || !RUN_ID.test(values.runId))) ||
+    (values.messages !== undefined &&
+      (!Array.isArray(values.messages) || values.messages.length > 500)) ||
+    (values.tools !== undefined && !allowArray(values.tools)) ||
+    (values.context !== undefined && !allowArray(values.context)) ||
+    (values.state !== undefined && !isEmptyRecord(values.state)) ||
+    !hintsValid
   ) {
     return refuse("Unsupported thread connection fields", 422);
   }
