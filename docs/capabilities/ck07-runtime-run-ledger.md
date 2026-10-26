@@ -182,50 +182,43 @@ tenant or user scope does not alias the old execution.
    unaudited background deletion loop is introduced here. Prove the
    complete retention and legal-hold policy before enabling consumers.
 
-## CK-07E2: protected browser protocol acceptance (not consumer parity)
+## CK-07E2: browser protocol proof and protected dispatch authority
 
-The existing CopilotKit **manual text hydrator** in
-`KarenCopilotHistoryGate` now rejects nonempty `replayEvents`, unsupported
-roles, duplicate message IDs and invalid bounds **before** calling
-`agent.setMessages()`. The canonical backend may attest rich CUSTOM events,
-but a text-only SDK hydration is not permission to silently discard them.
-Those conversations remain available through the mounted assistant-ui until
-an actual CopilotKit presentation renderer is implemented and verified.
+The guarded `KarenCopilotHistoryGate` refuses unsupported roles, duplicate
+message IDs, invalid history bounds, and unverified CUSTOM events **before**
+mutating SDK state. CK-07E3 adds a native CopilotKit assistant-message slot
+for supported attested rich presentations/receipts. All other rich content
+remains fail-closed. The mounted assistant-ui is still the consumer surface.
 
-The existing protected `karen-history-browser-acceptance.yml` workflow
-has **three distinct scenarios**, history, search and `copilotkit`. History
-and the PR #550 search scenario were preserved during the two-parent merge of
-`main` into #556. The new CopilotKit scenario requires a reviewed 40-character
-**current PR #556 head**, an HTTPS sanitized deployment, authenticated
-credentials, an actual canonical conversation UUID, and an actual journaled
-run ID from the same tenant. It **fails**, rather than skips, if a fixture,
-capability, or permission is absent.
+`e2e/karen-copilotkit-protocol-acceptance.spec.ts` is checked in for a
+real HTTPS sanitized deployment: authenticated canonical history and
+`agent/default/connect` must reproduce only persisted messages and
+backend-attested CUSTOM events, and a real event journal cursor must
+report truthful interruption/terminal state with no model replay or
+tool execution. The spec uses no trace, screenshots or video and must
+never run with fabricated credentials or an invented journal run ID.
 
-Before making authenticated browser requests, it compares the actual deployed
-revision with the reviewed checkout via the single read-only
-`/api/deployment-revision` endpoint **owned by PR #550**. Do not create a
-second revision service in #556. Until that route is integrated and the
-deployment serves the exact requested PR commit, the manual acceptance
-remains deliberately blocked.
+**Security update from main (commit 33f60a97):** The canonical protected
+`.github/workflows/karen-history-browser-acceptance.yml` is now
+**default-branch-only** and exposes only its reviewed `history`
+scenario. Its credentials are supplied to just the authorized
+configuration check and real browser test steps, never dependency
+installation or an unreviewed PR checkout. New
+`tests/architecture/test_browser_acceptance_dispatch_security.py`
+enforces that boundary. This takes precedence over an older draft
+workflow from #556 that exposed PR `search/copilotkit` options with
+job-wide secrets. We explicitly removed that unsafe dispatch in the
+forward merge of `main` rather than retaining a second authorization
+owner. Any additional acceptance scenarios must first be reviewed and
+authorized **on the default branch**, with revision attestation and
+step-scoped credentials. Do not create another secret-bearing PR
+workflow to unblock this proof.
 
-The no-recording Playwright spec
-`e2e/karen-copilotkit-protocol-acceptance.spec.ts` reads backend-owned
-CopilotKit message history and verifies the SDK `connect` transport
-returns the same snapshot with any attested CUSTOM events, synthetic
-`replay_only` envelope, and no fabricated client transcript. Its optional
-cursor case reads a real run across contiguous pages and insists on
-`continuationAvailable=false`, correct completed/observed-terminal
-separation, and a 404 for a nonexistent run. These are **real browser/HTTP
-protocol checks**, not proof that `KarenCopilotChat` is the mounted composer
-or that a failed model worker can be revived. The mounted assistant-ui remains
-the user-facing fallback, not a hidden CopilotKit emulation.
-
-After the implementation is deployed, manually dispatch the existing
-workflow with `scenario=copilotkit`, `target_sha=<current PR #556 head>`.
-Do not mark CK-07E2 release ready unless it passes against the same
-deployed revision and a further user-facing CopilotKit visual and
-interaction parity run is green. No screenshot/video/trace artifacts may
-contain account credentials or saved private transcripts.
+The single read-only deployment revision route is owned by PR #550;
+do not duplicate it. Running the CopilotKit protocol/visual parity
+spec on a sanitized exact-revision deployment remains **unverified**
+and is an explicit consumer-cutover and merge-release blocker. The
+presence of a Playwright spec or a skipped workflow is not acceptance.
 
 ## CK-07E3: CopilotKit v2 native rich-message slot (unmounted)
 
