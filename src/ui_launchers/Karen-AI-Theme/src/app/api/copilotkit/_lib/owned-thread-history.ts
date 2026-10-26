@@ -18,6 +18,26 @@ export function ownedThreadHistoryId(request: NextRequest): string | null {
   return match && CONVERSATION_UUID.test(match[1]) ? match[1] : null;
 }
 
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Missing canonical response body");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let length = 0;
+  let content = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > MAX_HISTORY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("Canonical response exceeds limit");
+    }
+    content += decoder.decode(value, { stream: true });
+  }
+  content += decoder.decode();
+  return JSON.parse(content);
+}
+
 function failure(detail: string, status: number): NextResponse {
   return NextResponse.json({ detail }, { status, headers: { "Cache-Control": "no-store" } });
 }
@@ -59,11 +79,7 @@ export async function readKarenOwnedThreadMessages(
   }
   let snapshot: unknown;
   try {
-    const body = await response.text();
-    if (new TextEncoder().encode(body).length > MAX_HISTORY_BYTES) {
-      return failure("Conversation history exceeds limit", 502);
-    }
-    snapshot = JSON.parse(body);
+    snapshot = await readBoundedJson(response);
   } catch {
     return failure("Invalid canonical conversation history", 502);
   }
