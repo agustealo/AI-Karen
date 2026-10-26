@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from ai_karen_engine.services.database.repositories.conversation_repository import (
-    Message,
+    Message, canonical_message_digest,
 )
 from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
     PostgresConversationRepository,
@@ -95,10 +95,19 @@ def make_repo(tx: FakeTransaction) -> PostgresConversationRepository:
 async def test_both_messages_and_run_complete_inside_one_transaction() -> None:
     current = lease()
     tx = FakeTransaction()
+    user_message, assistant_message = messages(current)
     result = await make_repo(tx).add_completed_turn(
-        *messages(current), run_lease=current,
+        user_message, assistant_message, run_lease=current,
     )
     assert result.success and result.data == 2
+    final_sql, final_params = next(
+        (sql, params) for sql, params in tx.calls
+        if "UPDATE public.runtime_chat_runs" in sql
+    )
+    assert "assistant_message_digest = :assistant_message_digest" in final_sql
+    assert final_params["assistant_message_digest"] == canonical_message_digest(
+        assistant_message
+    )
     assert tx.committed and not tx.rolled_back
     joined = "\n".join(sql for sql, _ in tx.calls)
     assert "FOR UPDATE" in joined
