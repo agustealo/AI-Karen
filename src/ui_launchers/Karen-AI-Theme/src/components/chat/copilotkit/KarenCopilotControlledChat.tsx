@@ -10,7 +10,7 @@
  * persistence; there are no frontend tools or client-owned checkpoints.
  */
 import { CopilotChatView, useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { KarenLocalDictationCapture } from "../assistant-ui/KarenLocalDictation";
 import { KarenBrowserDictationCapture } from "../assistant-ui/KarenBrowserDictation";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
@@ -35,7 +35,8 @@ export function KarenCopilotControlledChat({
   const [error, setError] = useState<string | null>(null);
   const {
     draft, setText: setDraftText, readText: readDraftText,
-    status: draftStatus, synced: draftSynced, retry, discardAndReload,
+    status: draftStatus, synced: draftSynced, clearBeforeSubmit,
+    retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
   const draftPort: KarenVoiceDraftPort = {
     readText: readDraftText,
@@ -44,6 +45,11 @@ export function KarenCopilotControlledChat({
   // A second click before SDK state flips to running must not start a
   // concurrent run or produce duplicate user-message writes.
   const submitPending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, [conversationId]);
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
@@ -56,31 +62,44 @@ export function KarenCopilotControlledChat({
     }
     submitPending.current = true;
     setError(null);
-    setDraftText("");
-    // This is an explicit user gesture. No automatic initial greeting/run.
-    try {
-      agent.addMessage({
-        id: crypto.randomUUID(),
-        role: "user",
-        content: text,
-      });
-    } catch {
-      submitPending.current = false;
-      setDraftText(text);
-      setError("Karen could not queue the message. Your unsent draft was retained.");
-      return;
-    }
-    void Promise.resolve().then(() => copilotkit.runAgent({ agent }))
-      .catch(() => {
-        // Do not substitute a canned model answer or pretend persistence.
-        // Preserve the unsent text for retry unless the user started a new draft.
-        if (!readDraftText()) setDraftText(text);
-        setError("Karen could not complete the request. Check the conversation history.");
-      }).finally(() => {
+    // This is an explicit user gesture. Durable draft clearance is a
+    // separate canonical CAS write and must succeed before inference starts.
+    void (async () => {
+      try {
+        if (!await clearBeforeSubmit(text) || !mounted.current ||
+            agent.threadId !== conversationId) {
+          if (mounted.current) {
+            setError("Draft clearance was not confirmed. No message was sent.");
+          }
+          return;
+        }
+        try {
+          agent.addMessage({
+            id: crypto.randomUUID(),
+            role: "user",
+            content: text,
+          });
+        } catch {
+          if (mounted.current) {
+            setDraftText(text);
+            setError("Karen could not queue the message. Your unsent draft was retained.");
+          }
+          return;
+        }
+        try {
+          await copilotkit.runAgent({ agent });
+        } catch {
+          if (mounted.current) {
+            if (!readDraftText()) setDraftText(text);
+            setError("Karen could not complete the request. Check the conversation history.");
+          }
+        }
+      } finally {
         submitPending.current = false;
-      });
+      }
+    })();
   }, [
-    agent, conversationId, copilotkit, isReady,
+    agent, conversationId, copilotkit, isReady, clearBeforeSubmit,
     draftStatus, draftSynced, readDraftText, setDraftText,
   ]);
 
