@@ -127,6 +127,19 @@ class ConversationRepository(Repository):
     ) -> RepositoryResult[bool]:
         """Delete a conversation and its messages."""
 
+    async def get_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Read one owned unsent draft. Missing implementations fail closed."""
+        return RepositoryResult(success=False, error="composer_draft_not_supported")
+
+    async def put_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        content: str, expected_revision: int,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Atomically CAS one owned draft; never append it to the transcript."""
+        return RepositoryResult(success=False, error="composer_draft_not_supported")
+
     @abstractmethod
     async def add_message(self, message: Message) -> RepositoryResult[str]:
         """Append a message to a conversation."""
