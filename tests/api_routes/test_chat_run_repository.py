@@ -271,6 +271,57 @@ async def test_atomic_completion_receipt_checks_scoped_record_and_both_messages(
     assert transaction.parameters[0]["conversation"] == THREAD
 
 
+@pytest.mark.asyncio
+async def test_replay_attestation_has_immutable_digest_and_owner_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assistant_id = "22222222-2222-5222-8222-222222222222"
+    request_id = "request-proof"
+    digest = "a" * 64
+
+    class AttestationTransaction:
+        def __init__(self):
+            self.sql = ""
+            self.scope = {}
+
+        async def execute(self, statement, parameters):
+            self.sql = str(statement)
+            self.scope = parameters
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                all=lambda: [{
+                    "message_id": assistant_id,
+                    "request_id": request_id,
+                    "assistant_message_digest": digest,
+                }],
+            ))
+
+    tx = AttestationTransaction()
+    scoped_transaction(monkeypatch, tx)
+    proof = await repository.SqlChatRunRepository().completed_replay_attestations(
+        tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+    )
+    assert proof == {assistant_id: (request_id, digest)}
+    assert "r.assistant_message_digest" in tx.sql
+    assert "r.user_message_id IS NOT NULL" in tx.sql
+    assert "r.status = 'completed'" in tx.sql
+    assert "JOIN messages a" in tx.sql
+    assert "JOIN messages u" in tx.sql
+    assert tx.scope == {"tenant": TENANT, "owner": OWNER, "conversation": THREAD}
+
+
+def test_replay_digest_migration_preserves_legacy_rows_without_fake_backfill():
+    root = Path(__file__).resolve().parents[2]
+    migration = root / (
+        "supabase/migrations/20261025030000_44_runtime_chat_replay_identity.sql"
+    )
+    sql = migration.read_text(encoding="utf-8")
+    assert "assistant_message_digest CHAR(64)" in sql
+    assert "ck_runtime_chat_completed_message_identity" in sql
+    assert "NOT VALID" in sql
+    assert "user_message_id <> assistant_message_id" in sql
+    assert "UPDATE public.runtime_chat_runs SET" not in sql
+
+
 def test_migration_enforces_both_tenant_and_user_rls() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = root / (
