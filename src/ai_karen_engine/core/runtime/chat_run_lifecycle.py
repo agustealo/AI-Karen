@@ -109,20 +109,30 @@ class ChatRunCoordinator:
                     gated = meta.get("status") == "gate" or meta.get(
                         "error_code"
                     ) == "CHAT_RUNTIME_GATED"
-                    status = "failed" if gated else "completed"
+                    persisted = meta.get("transcript_persistence_status") in {
+                        "persisted", "already_persisted",
+                    }
+                    error_code = (
+                        "CHAT_RUNTIME_GATED" if gated else
+                        "CHAT_TRANSCRIPT_NOT_PERSISTED" if not persisted else None
+                    )
                     if not await self._repository.finish(
                         lease,
-                        status=status,
-                        error_code="CHAT_RUNTIME_GATED" if gated else None,
+                        status="failed" if error_code else "completed",
+                        error_code=error_code,
                     ):
                         raise ChatRunLeaseLost("chat_run_lease_lost")
                     terminal = True
-                    if gated:
+                    if error_code:
                         yield ChatStreamChunk(
                             type=ChatStreamEventType.ERROR,
-                            content="Chat execution was not authorized to complete.",
+                            content=(
+                                "Chat execution was not authorized to complete."
+                                if gated else
+                                "Chat response could not be confirmed in saved history."
+                            ),
                             correlation_id=lease.correlation_id,
-                            metadata={"error_code": "CHAT_RUNTIME_GATED"},
+                            metadata={"error_code": error_code},
                         )
                     else:
                         yield chunk
