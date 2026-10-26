@@ -22,6 +22,11 @@ from pydantic import BaseModel, Field, field_validator
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+from ai_karen_engine.core.runtime.chat_run_lifecycle import (
+    ChatRunConflict,
+    ChatRunLease,
+    get_chat_run_coordinator,
+)
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -610,7 +615,8 @@ async def stream_chat_response(
 
 
 async def _ag_ui_sse(
-    runtime_request: ChatExecutionRequest, *, thread_id: str, run_id: str
+    runtime_request: ChatExecutionRequest, *, thread_id: str, run_id: str,
+    run_lease: Optional[ChatRunLease] = None,
 ):
     """Translate the same authorized runtime stream into AG-UI event framing."""
     projection = AGUIEventProjection(thread_id=thread_id, run_id=run_id)
@@ -618,7 +624,12 @@ async def _ag_ui_sse(
     yield f"data: {json.dumps(projection.begin())}\n\n"
 
     try:
-        async for chunk in get_chat_runtime().execute_stream(runtime_request):
+        canonical_stream = get_chat_runtime().execute_stream(runtime_request)
+        if run_lease is not None:
+            canonical_stream = get_chat_run_coordinator().stream(
+                canonical_stream, lease=run_lease,
+            )
+        async for chunk in canonical_stream:
             for event in projection.project(chunk):
                 yield f"data: {json.dumps(event)}\n\n"
             if projection.terminal:
@@ -777,6 +788,31 @@ async def stream_ag_ui_chat(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # CK-07A: admission is durable, scoped, and must precede any model work.
+    # The legacy bridge remains unchanged until operators enable the opt-in
+    # feature following migration 43. SDK stop remains explicitly denied.
+    run_lease: Optional[ChatRunLease] = None
+    if getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False):
+        try:
+            run_lease = await get_chat_run_coordinator().admit(
+                canonical_request.context, request.runId,
+            )
+        except ChatRunConflict as exc:
+            raise HTTPException(
+                status_code=409, detail="Chat execution has already been admitted",
+            ) from exc
+        except Exception as exc:
+            logger.exception(
+                "Durable chat run admission failed",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(
+                status_code=503, detail="Chat run admission unavailable",
+            ) from exc
+
     get_structured_logger().log_event(
         event="chat_stream_started",
         user_id=user_id,
@@ -795,6 +831,7 @@ async def stream_ag_ui_chat(
             canonical_request,
             thread_id=request.threadId,
             run_id=request.runId,
+            run_lease=run_lease,
         ),
         media_type="text/event-stream",
         headers={
