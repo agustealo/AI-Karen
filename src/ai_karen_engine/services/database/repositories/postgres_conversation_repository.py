@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
 
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Conversation,
@@ -588,6 +589,7 @@ class PostgresConversationRepository(ConversationRepository):
                                 SET status = 'completed',
                                     user_message_id = CAST(:user_message_id AS uuid),
                                     assistant_message_id = CAST(:assistant_message_id AS uuid),
+                                    assistant_message_digest = :assistant_message_digest,
                                     terminal_at = NOW(),
                                     updated_at = NOW(),
                                     lease_token = NULL,
@@ -607,6 +609,7 @@ class PostgresConversationRepository(ConversationRepository):
                             {
                                 "user_message_id": user_message.id,
                                 "assistant_message_id": assistant_message.id,
+                                "assistant_message_digest": canonical_message_digest(assistant_message),
                                 "execution": run_lease.execution_id,
                                 "tenant": run_lease.tenant_id,
                                 "owner": run_lease.user_id,
