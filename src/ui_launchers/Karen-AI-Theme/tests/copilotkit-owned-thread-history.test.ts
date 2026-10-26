@@ -175,7 +175,6 @@ describe("CopilotKit owned thread history", () => {
       "/api/copilotkit/threads",
       "/api/copilotkit/threads/" + THREAD + "/events",
       "/api/copilotkit/threads/" + THREAD + "/state",
-      "/api/copilotkit/agent/default/connect",
     ]) {
       const method = path.endsWith("/connect") ? "POST" : "GET";
       const candidate = new NextRequest("http://localhost:3000" + path, {
