@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
@@ -43,6 +45,27 @@ class Message:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     parent_message_id: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+def canonical_message_digest(message: Message) -> str:
+    """Digest exactly the saved canonical assistant message, not its UI projection.
+
+    The payload is stable across JSONB round trips and binds the id, conversation
+    owner scope, role, text and ALL metadata, including evidence provenance.
+    """
+    payload = {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "tenant_id": message.tenant_id,
+        "role": message.role,
+        "content": message.content,
+        "metadata": message.metadata,
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass
