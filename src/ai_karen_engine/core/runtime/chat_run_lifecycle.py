@@ -105,6 +105,11 @@ class ChatRunCoordinator:
                 return
             if await self._repository.cancel_requested(lease):
                 raise ChatRunCancellationRequested("chat_run_cancel_requested")
+            # Atomic transcript commit may already have completed the run.
+            # Continue waiting for its canonical COMPLETE receipt, and
+            # validate both message identities before RUN_FINISHED.
+            if await self._repository.completed(lease):
+                return
             raise ChatRunLeaseLost("chat_run_lease_lost")
 
         async def close_upstream(*, strict: bool = False) -> None:
@@ -177,10 +182,24 @@ class ChatRunCoordinator:
                         "CHAT_RUNTIME_GATED" if gated else
                         "CHAT_TRANSCRIPT_NOT_PERSISTED" if not persisted else None
                     )
-                    if not await self._repository.finish(
-                        lease,
-                        status="failed" if error_code else "completed",
-                        error_code=error_code,
+                    if not error_code:
+                        user_message_id = meta.get("user_message_id")
+                        assistant_message_id = meta.get("assistant_message_id")
+                        committed = (
+                            isinstance(user_message_id, str)
+                            and isinstance(assistant_message_id, str)
+                            and await self._repository.committed_turn(
+                                lease,
+                                user_message_id=user_message_id,
+                                assistant_message_id=assistant_message_id,
+                            )
+                        )
+                        if not committed:
+                            if await self._repository.cancel_requested(lease):
+                                raise ChatRunCancellationRequested("chat_run_cancel_requested")
+                            raise ChatRunLeaseLost("chat_run_atomic_commit_not_verified")
+                    elif not await self._repository.finish(
+                        lease, status="failed", error_code=error_code,
                     ):
                         if await self._repository.cancel_requested(lease):
                             raise ChatRunCancellationRequested("chat_run_cancel_requested")
