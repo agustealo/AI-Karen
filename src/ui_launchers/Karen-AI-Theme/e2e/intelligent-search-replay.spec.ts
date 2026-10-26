@@ -1,10 +1,12 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/verified-vercel-preview';
 
 /**
  * Release acceptance against a real authenticated installation.
  * No route interception, fabricated model output, or synthetic saved messages.
  * Keep credentials out of traces and screenshots on the approved test system.
  */
+test.use({ trace: 'off', screenshot: 'off', video: 'off' });
+
 test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening', async ({ page }) => {
   test.setTimeout(180_000); // Live retrieval and generation exceed the default 60s browser timeout.
   const required = process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true';
