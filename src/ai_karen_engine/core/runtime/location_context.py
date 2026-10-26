@@ -49,8 +49,20 @@ def resolve_location(
                 value = _bounded(metadata.get(key))
                 if value:
                     return ResolvedLocation(value, str(provenance))
+        # Authorized memory/profile evidence wins over system defaults.
+        # The caller must enforce tenant, identity, consent, and RBAC before
+        # populating this context. Raw client metadata cannot assert this tier.
         value = _bounded(authorized.get("weather_location"))
-        return ResolvedLocation(value, "authorized_runtime") if value else None
+        if value:
+            return ResolvedLocation(value, "authorized_runtime")
+
+        # System location is a *separate*, explicitly permitted context tier.
+        # No guessed timezone-to-city conversion or implicit geolocation.
+        if authorized.get("system_location_permitted") is True:
+            value = _bounded(authorized.get("system_location"))
+            if value:
+                return ResolvedLocation(value, "system_with_permission")
+        return None
     if kind == "time":
         for key in ("timezone", "user_timezone", "local_timezone"):
             value = _bounded(metadata.get(key))
