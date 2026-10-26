@@ -53,15 +53,21 @@ class FakeTransaction:
         self.calls: list[tuple[str, dict]] = []
         self.committed = False
         self.rolled_back = False
+        self._depth = 0
 
     async def __aenter__(self):
+        self._depth += 1
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        if exc_type is not None:
-            self.rolled_back = True
-        else:
-            self.committed = True
+        # Entering a session is not committing a database transaction.
+        # The begin() scope is the only place that can commit or roll back.
+        if self._depth == 2:
+            if exc_type is not None:
+                self.rolled_back = True
+            else:
+                self.committed = True
+        self._depth -= 1
         return False
 
     def begin(self):
