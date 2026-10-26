@@ -10,6 +10,7 @@ import pytest
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
     ChatRunConflict,
+    ChatRunCancellationRequested,
     ChatRunCoordinator,
     ChatRunLeaseLost,
 )
@@ -67,6 +68,8 @@ class MemoryLedger:
         self.heartbeat_count = 0
         self.allow_renew = True
         self.allow_finish = True
+        self.cancel_intent = False
+        self.stop_requests: list[tuple[str, str, str, str]] = []
 
     async def admit(self, **kwargs: Any) -> ChatRunLease | None:
         key = (
@@ -86,7 +89,19 @@ class MemoryLedger:
 
     async def renew(self, lease: ChatRunLease) -> bool:
         self.heartbeat_count += 1
-        return self.allow_renew
+        return self.allow_renew and not self.cancel_intent
+
+    async def cancel_requested(self, lease: ChatRunLease) -> bool:
+        return self.cancel_intent
+
+    async def request_cancel(self, *, tenant_id: str, user_id: str,
+                             conversation_id: str, transport_run_id: str) -> str | None:
+        scope = (tenant_id, user_id, conversation_id, transport_run_id)
+        self.stop_requests.append(scope)
+        if scope not in self.keys:
+            return None
+        self.cancel_intent = True
+        return "cancelling"
 
     async def finish(
         self, lease: ChatRunLease, *, status: str, error_code: str | None = None
@@ -290,4 +305,69 @@ async def test_closed_transport_marks_owned_run_cancelled() -> None:
     await stream.aclose()
     assert repo.finalized == [
         ("run-6", "cancelled", "CHAT_STREAM_CANCELLED")
+    ]
+
+@pytest.mark.asyncio
+async def test_only_owned_run_can_be_cancelled() -> None:
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    await coordinator.admit(context(), "run-a")
+    assert await coordinator.request_cancel(context(user=USER_B), run_id="run-a") is None
+    assert await coordinator.request_cancel(context(tenant=TENANT_B), run_id="run-a") is None
+    assert repo.cancel_intent is False
+    assert await coordinator.request_cancel(context(), run_id="run-a") == "cancelling"
+    assert repo.stop_requests[-1] == (TENANT_A, USER_A, THREAD, "run-a")
+
+
+@pytest.mark.asyncio
+async def test_worker_actually_cancels_blocked_provider_after_foreign_worker_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    monkeypatch.setattr(chat_run_lifecycle, "_heartbeat_seconds", lambda: 0.002)
+    repo = MemoryLedger()
+    coordinator1 = ChatRunCoordinator(repo)
+    coordinator2 = ChatRunCoordinator(repo)
+    lease = await coordinator1.admit(context(), "run-blocked")
+    aborted = asyncio.Event()
+
+    async def blocked_provider():
+        try:
+            yield content("first-token")
+            await asyncio.sleep(1)
+            yield completed()
+        finally:
+            aborted.set()
+
+    stream = coordinator1.stream(blocked_provider(), lease=lease)
+    assert (await anext(stream)).content == "first-token"
+
+    # This coordinator is a different process-equivalent instance sharing
+    # only the canonical PostgreSQL-like repository contract.
+    assert await coordinator2.request_cancel(context(), run_id="run-blocked") == "cancelling"
+    with pytest.raises(ChatRunCancellationRequested):
+        async for _chunk in stream:
+            pass
+    assert aborted.is_set()
+    assert repo.finalized == [
+        ("run-blocked", "cancelled", "CHAT_STREAM_CANCELLED"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stop_winning_terminal_race_never_emits_success() -> None:
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-terminal")
+    repo.cancel_intent = True
+
+    async def almost_complete():
+        yield completed()
+
+    with pytest.raises(ChatRunCancellationRequested):
+        async for chunk in coordinator.stream(almost_complete(), lease=lease):
+            assert chunk.type != ChatStreamEventType.COMPLETE
+    assert repo.finalized == [
+        ("run-terminal", "cancelled", "CHAT_STREAM_CANCELLED"),
     ]
