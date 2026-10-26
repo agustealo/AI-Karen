@@ -107,6 +107,13 @@ describe("CopilotKit owned thread history", () => {
       () => reply("user-A", Array.from({ length: 501 }, (_, index) =>
         ({ id: String(index), role: "user", content: "hello" }))),
       () => new Response("not json", { headers: { "content-type": "application/json" } }),
+      () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1024 * 1024));
+          controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+          controller.close();
+        },
+      }), { headers: { "content-type": "application/json" } }),
       () => new Response("oversized", {
         headers: { "content-type": "application/json", "content-length": "2097153" },
       }),
