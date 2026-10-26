@@ -97,8 +97,16 @@ tenant or user scope does not alias the old execution.
    strictly enabled only by the canonical bridge + durable-run feature flags.
    Forward-only migration 44 binds the exact user and assistant message IDs
    to a completed run inside the existing canonical transcript transaction.
+   Migration 44 also stores SHA-256 of the exact saved assistant message
+   identity, content and complete metadata inside that transaction. Existing
+   completed runs without saved fingerprints remain non-replayable; migration
+   does not backfill inferred proof.
    `SqlChatRunRepository.completed_replay_attestations()` verifies both
    messages, request identity, tenant/user ownership and completed run state.
+   The read-only `owned_history_projection.py` recomputes the canonical
+   assistant digest and fails replay on even a post-commit content, receipt,
+   or verified-presentation metadata change; a matching message ID or claimed
+   runtime `source` is NEVER sufficient attestation.
    `owned_history_projection.py` reuses AGUIEventProjection and
    validate_presentation; it publishes only the original saved text,
    supported versioned presentation and bounded execution/integrity receipts,
