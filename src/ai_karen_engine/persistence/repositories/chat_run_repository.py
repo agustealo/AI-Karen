@@ -6,10 +6,12 @@ untrusted correlation, never a globally authorized task identifier.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import text
 
@@ -17,6 +19,16 @@ from ai_karen_engine.persistence.postgres.transactions import async_transaction_
 from ai_karen_engine.config.runtime import get_runtime_settings
 
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+_EVENT_TYPES = frozenset({
+    "RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+    "TEXT_MESSAGE_END", "ACTIVITY_SNAPSHOT", "TOOL_CALL_START",
+    "TOOL_CALL_END", "SUBAGENT_STARTED", "SUBAGENT_FINISHED",
+    "SUBAGENT_ERROR", "CUSTOM", "RUN_ERROR", "RUN_FINISHED",
+})
+_MAX_EVENT_BYTES = 32768
+_MAX_EVENTS_PER_RUN = 2048
+_MAX_JOURNAL_BYTES = 8 * 1024 * 1024
+_MAX_EVENT_READ = 100
 
 
 @dataclass(frozen=True)
@@ -264,6 +276,260 @@ class SqlChatRunRepository:
                 },
             )
             return result.scalar_one_or_none() is not None
+
+    async def append_projected_event(
+        self, lease: ChatRunLease, *, event: Mapping[str, Any],
+    ) -> int:
+        """Append one actual AG-UI projection under fenced, scoped SQL row lock.
+
+        No provider payload is accepted, and no event can authorize inference,
+        tools, actions or an invented completion. Every sequence number is
+        serialized by locking its parent run, including terminal writers.
+        """
+        event_type = event.get("type") if isinstance(event, Mapping) else None
+        if event_type not in _EVENT_TYPES or not isinstance(event, Mapping):
+            raise ValueError("invalid_chat_projection_event")
+        if not isinstance(event, dict):
+            event = dict(event)
+        if event_type in {"RUN_STARTED", "RUN_FINISHED"} and (
+            event.get("threadId") != lease.conversation_id
+            or event.get("runId") != lease.transport_run_id
+        ):
+            raise ValueError("chat_projection_identity_mismatch")
+        if event_type == "CUSTOM" and event.get("name") not in {
+            "karen.presentation.v1", "karen.execution_receipt.v1",
+            "karen.response_integrity.v1", "karen.citations",
+            "karen.agent_step", "karen.tool_activity", "karen.learning_decision",
+            "karen.approval_required", "karen.status", "karen.warning",
+            "karen.checkpoint",
+        }:
+            raise ValueError("unsupported_chat_projection_custom_event")
+        try:
+            encoded = json.dumps(
+                event, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("unserializable_chat_projection_event") from exc
+        if len(encoded.encode("utf-8")) > _MAX_EVENT_BYTES:
+            raise ValueError("chat_projection_event_size_limit")
+
+        async with async_transaction_scope(
+            lease.tenant_id, user_id=lease.user_id,
+        ) as session:
+            locked = await session.execute(
+                text("""
+                    SELECT status, lease_token, lease_expires_at,
+                           cancel_requested_at, terminal_at,
+                           assistant_message_id, assistant_message_digest
+                    FROM public.runtime_chat_runs
+                    WHERE execution_id = CAST(:execution AS uuid)
+                      AND tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND transport_run_id = :run_id
+                      AND request_id = :request_id
+                      AND correlation_id = :correlation_id
+                    FOR UPDATE
+                """),
+                {
+                    **self._scope(lease),
+                    "run_id": lease.transport_run_id,
+                    "request_id": lease.request_id,
+                    "correlation_id": lease.correlation_id,
+                },
+            )
+            row = locked.mappings().one_or_none()
+            if row is None:
+                raise ValueError("chat_projection_run_unavailable")
+            status = str(row["status"])
+            if event_type == "RUN_FINISHED":
+                allowed = (
+                    status == "completed"
+                    and row["terminal_at"] is not None
+                    and row["assistant_message_id"] is not None
+                    and isinstance(row["assistant_message_digest"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", row["assistant_message_digest"])
+                    is not None
+                )
+            elif event_type == "RUN_ERROR":
+                allowed = (
+                    status in {"failed", "cancelled", "orphaned"}
+                    and row["terminal_at"] is not None
+                )
+            else:
+                allowed = (
+                    status == "running"
+                    and str(row["lease_token"]) == lease.lease_token
+                    and row["cancel_requested_at"] is None
+                    and row["lease_expires_at"] is not None
+                )
+                if allowed:
+                    fresh = await session.execute(
+                        text("""
+                            SELECT 1
+                            FROM public.runtime_chat_runs
+                            WHERE execution_id = CAST(:execution AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                              AND conversation_id = CAST(:conversation AS uuid)
+                              AND lease_token = CAST(:token AS uuid)
+                              AND lease_expires_at > clock_timestamp()
+                              AND status = 'running'
+                              AND cancel_requested_at IS NULL
+                        """),
+                        self._scope(lease),
+                    )
+                    allowed = fresh.scalar_one_or_none() is not None
+            if not allowed:
+                raise ValueError("chat_projection_run_not_active")
+            aggregate = await session.execute(
+                text("""
+                    SELECT COALESCE(MAX(event_seq), 0) AS last_seq,
+                           COALESCE(SUM(octet_length(event_payload::text)), 0) AS bytes
+                    FROM public.runtime_chat_run_events
+                    WHERE execution_id = CAST(:execution AS uuid)
+                      AND tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                """),
+                self._scope(lease),
+            )
+            counter = aggregate.mappings().one()
+            seq = int(counter["last_seq"]) + 1
+            if seq > _MAX_EVENTS_PER_RUN or int(counter["bytes"]) + len(
+                encoded.encode("utf-8")
+            ) > _MAX_JOURNAL_BYTES:
+                raise ValueError("chat_projection_journal_limit")
+            # Terminal events are distinct from the durable status; a retry
+            # cannot duplicate an observed completion/error in the journal.
+            if event_type in {"RUN_FINISHED", "RUN_ERROR"}:
+                prior = await session.execute(
+                    text("""
+                        SELECT 1 FROM public.runtime_chat_run_events
+                        WHERE execution_id = CAST(:execution AS uuid)
+                          AND tenant_id = CAST(:tenant AS uuid)
+                          AND user_id = CAST(:owner AS uuid)
+                          AND conversation_id = CAST(:conversation AS uuid)
+                          AND event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+                        LIMIT 1
+                    """),
+                    self._scope(lease),
+                )
+                if prior.scalar_one_or_none() is not None:
+                    raise ValueError("chat_projection_terminal_already_recorded")
+            written = await session.execute(
+                text("""
+                    INSERT INTO public.runtime_chat_run_events (
+                        execution_id, tenant_id, user_id, conversation_id,
+                        event_seq, event_type, event_payload
+                    ) VALUES (
+                        CAST(:execution AS uuid), CAST(:tenant AS uuid),
+                        CAST(:owner AS uuid), CAST(:conversation AS uuid),
+                        :seq, :event_type, CAST(:event_payload AS jsonb)
+                    ) RETURNING event_seq
+                """),
+                self._scope(
+                    lease, seq=seq, event_type=event_type, event_payload=encoded,
+                ),
+            )
+            saved_seq = written.scalar_one_or_none()
+            if saved_seq != seq:
+                raise RuntimeError("chat_projection_journal_commit_unverified")
+        return seq
+
+    async def read_projected_events(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+        transport_run_id: str, after: int = 0, limit: int = 50,
+    ) -> Optional[dict[str, Any]]:
+        """Return observed events only; recovery never runs inference.
+
+        An expired in-flight run is reported as interrupted. A committed
+        transcript is NOT converted into a synthetic journal terminal.
+        """
+        if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
+            raise ValueError("invalid_transport_run_id")
+        if type(after) is not int or not 0 <= after <= _MAX_EVENTS_PER_RUN:
+            raise ValueError("invalid_chat_event_cursor")
+        if type(limit) is not int or not 1 <= limit <= _MAX_EVENT_READ:
+            raise ValueError("invalid_chat_event_page_limit")
+        scope = {
+            "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+            "run_id": transport_run_id, "after": after, "limit": limit + 1,
+        }
+        async with async_transaction_scope(
+            scope["tenant"], user_id=scope["owner"],
+        ) as session:
+            # SHARE lock gives state and events one coherent snapshot while
+            # serializing against the append and terminal-row write.
+            result = await session.execute(
+                text("""
+                    SELECT execution_id, status, lease_expires_at, terminal_at
+                    FROM public.runtime_chat_runs
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND transport_run_id = :run_id
+                    FOR SHARE
+                """),
+                scope,
+            )
+            run = result.mappings().one_or_none()
+            if run is None:
+                return None
+            events = await session.execute(
+                text("""
+                    SELECT event_seq, event_payload
+                    FROM public.runtime_chat_run_events
+                    WHERE execution_id = CAST(:execution AS uuid)
+                      AND tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND event_seq > :after
+                    ORDER BY event_seq ASC
+                    LIMIT :limit
+                """),
+                {**scope, "execution": str(run["execution_id"])},
+            )
+            records = events.mappings().all()
+            # Snapshot-local DB clock, not a client-supplied time estimate.
+            if run["status"] in {"running", "cancelling"}:
+                fresh = await session.execute(
+                    text("""
+                        SELECT 1 FROM public.runtime_chat_runs
+                        WHERE execution_id = CAST(:execution AS uuid)
+                          AND lease_expires_at > clock_timestamp()
+                    """),
+                    {"execution": str(run["execution_id"])},
+                )
+                alive = fresh.scalar_one_or_none() is not None
+            else:
+                alive = False
+        more = len(records) > limit
+        page = records[:limit]
+        state = str(run["status"])
+        if state in {"running", "cancelling"} and not alive:
+            state = "interrupted"
+        return {
+            "threadId": scope["conversation"],
+            "runId": transport_run_id,
+            "events": [
+                {"seq": int(rec["event_seq"]), "event": (
+                    json.loads(rec["event_payload"])
+                    if isinstance(rec["event_payload"], str)
+                    else rec["event_payload"]
+                )}
+                for rec in page
+            ],
+            "nextCursor": int(page[-1]["event_seq"]) if page else after,
+            "hasMore": more,
+            "runStatus": state,
+            "terminalConfirmed": state in {
+                "completed", "failed", "cancelled", "orphaned",
+            },
+            "continuationAvailable": False,
+            "responseSource": "observed_event_journal",
+        }
 
     async def completed_replay_attestations(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
