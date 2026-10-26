@@ -74,6 +74,17 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   if (state.isLoading) return <LoadingState state={state} />;
   if (state.error) return <ErrorState error={state.error} />;
   if (!response) return <EmptyState />;
+  if (response.status === 'needs_location') return (
+    <section role="status" aria-label="Weather location required"
+      className="rounded-2xl border border-border/60 bg-card p-8 space-y-3">
+      <h2 className="text-lg font-semibold">Which location should I check?</h2>
+      <p className="text-sm text-muted-foreground">
+        Enter a city and state or country in the search field, such as
+        {' "weather in Detroit, MI"'}, then search again.
+        No weather observation has been retrieved yet.
+      </p>
+    </section>
+  );
   if (searchFailure || failedExecution) return <div role="alert" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">Search could not be completed</h2><p className="text-muted-foreground">{failureMessage}</p></div>;
   if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">No sources found</h2><p className="text-muted-foreground">The search did not return usable evidence. Try a broader query or a different search mode.</p></div>;
 
