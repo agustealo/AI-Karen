@@ -703,7 +703,14 @@ async def get_ag_ui_transport_capabilities(
     SDK discovery must not advertise an agent while backend ingress is disabled.
     """
     _require_execution_identity(user)
-    return {"enabled": bool(get_runtime_settings().features.enable_ag_ui_bridge)}
+    features = get_runtime_settings().features
+    return {
+        "enabled": bool(features.enable_ag_ui_bridge),
+        "governed_history": bool(
+            features.enable_ag_ui_bridge
+            and getattr(features, "enable_ag_ui_durable_runs", False)
+        ),
+    }
 
 
 @router.get("/chat/ag-ui/threads/{thread_id}/history")
