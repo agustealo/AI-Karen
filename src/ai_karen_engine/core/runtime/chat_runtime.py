@@ -1057,12 +1057,17 @@ class ChatRuntime:
         ]
 
         memory_persistence_failed = False
-        if (
+        should_persist_memory = (
             decision.memory_write_allowed
             and streamed_text.strip()
             and generation_error is None
             and not self._is_explicit_save_turn(request)
-        ):
+        )
+
+        async def persist_authorized_memory() -> None:
+            nonlocal memory_persistence_failed
+            if not should_persist_memory:
+                return
             persistence_started = time.perf_counter()
             await self._persist_memory(
                 request,
@@ -1081,6 +1086,13 @@ class ChatRuntime:
                 memory_recall_meta.get("memory_persistence_status") == "failed"
                 or bool(memory_recall_meta.get("memory_degraded"))
             )
+
+        # Non-durable chat retains its established ordering. Durable runs
+        # must not remember an answer until transcript + run completion have
+        # committed together; a cancellation winner must leave no answer
+        # in durable memory without a canonical transcript.
+        if request.runtime_run_lease is None:
+            await persist_authorized_memory()
 
         transcript_result = TranscriptPersistenceResult(
             status="skipped",
@@ -1102,6 +1114,9 @@ class ChatRuntime:
                     "source": "runtime_observed",
                 }
             )
+        if request.runtime_run_lease is not None and transcript_result.success:
+            await persist_authorized_memory()
+
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
             "failed",
