@@ -98,7 +98,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "Run-ledger and event-journal PostgreSQL proof uses a disposable `karen_chat_run_test` database, separate from profile-memory state." >> "$GITHUB_STEP_SUMMARY"
+          echo "Run-ledger and event-journal PostgreSQL proof uses a disposable karen_chat_run_test database, separate from profile-memory state." >> "$GITHUB_STEP_SUMMARY"
 
   profile-memory-postgres:
     name: profile-memory-postgres
