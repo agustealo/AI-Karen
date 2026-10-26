@@ -127,7 +127,10 @@ both before and after the browser tests:
    \`READY\` state, nonproduction target, source repository and full reviewed SHA.
 2. \`scripts/ci/verify_deployment_revision.py\`: separately fetches the
    running application's non-cacheable, nonredirecting revision endpoint,
-   requiring exact SHA parity. Neither observation replaces the other.
+   requiring exact SHA parity. It additionally requires a live `/api/health`
+   response with `status=ok` and boolean `backend_ready=true` before any
+   authenticated browser acceptance; frontend-only previews fail closed.
+   Neither observation replaces the other.
 
 The workflow then runs real authenticated user search, source citations,
 weather/location and durable replay. A post-test check requires unchanged
