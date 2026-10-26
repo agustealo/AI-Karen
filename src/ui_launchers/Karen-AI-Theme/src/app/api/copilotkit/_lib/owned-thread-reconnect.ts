@@ -41,7 +41,9 @@ export async function readKarenConnectThreadId(
       if (done) break;
       size += value.byteLength;
       if (size > MAX_CONNECT_BYTES) {
-        await reader.cancel().catch(() => undefined);
+        // request.clone() creates a tee. Waiting for cancellation of only
+        // one branch can deadlock when the original remains unread.
+        void reader.cancel().catch(() => undefined);
         return refuse("Thread connection request too large", 413);
       }
       body += decoder.decode(value, { stream: true });
@@ -113,9 +115,10 @@ export async function connectKarenOwnedThread(
   headers: Record<string, string>,
   principal: KarenVerifiedPrincipal,
   threadId: string,
+  governedHistory = false,
 ): Promise<Response> {
   const stored = await readKarenOwnedThreadMessages(
-    request, backendBaseUrl, headers, principal, threadId,
+    request, backendBaseUrl, headers, principal, threadId, governedHistory,
   );
   if (!stored.ok) return stored;
 
@@ -129,7 +132,8 @@ export async function connectKarenOwnedThread(
     return refuse("Canonical history replay failed", 502);
   }
   const snapshot = body as Record<string, unknown>;
-  if (snapshot.threadId !== threadId || !Array.isArray(snapshot.messages)) {
+  if (snapshot.threadId !== threadId || !Array.isArray(snapshot.messages) ||
+      (governedHistory && !Array.isArray(snapshot.replayEvents))) {
     return refuse("Canonical history replay failed", 502);
   }
 
@@ -146,6 +150,7 @@ export async function connectKarenOwnedThread(
       type: "MESSAGES_SNAPSHOT",
       messages: snapshot.messages,
     },
+    ...(governedHistory ? (snapshot.replayEvents as Record<string, unknown>[]) : []),
     {
       type: "RUN_FINISHED",
       threadId,
