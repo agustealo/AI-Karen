@@ -15,6 +15,7 @@ from contextlib import suppress
 from typing import Optional
 
 from ai_karen_engine.config.runtime import get_runtime_settings
+from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatStreamChunk,
@@ -209,6 +210,18 @@ class ChatRunCoordinator:
             ):
                 raise ChatRunLeaseLost("chat_run_lease_lost")
             terminal = True
+            get_structured_logger().log_event(
+                event="chat_run_cancelled",
+                user_id=lease.user_id,
+                details={
+                    "tenant_id": lease.tenant_id,
+                    "conversation_id": lease.conversation_id,
+                    "execution_id": lease.execution_id,
+                    "request_id": lease.request_id,
+                    "correlation_id": lease.correlation_id,
+                    "status": "cancelled",
+                },
+            )
             raise
         except BaseException as exc:
             # Connection cancellation must not become a successful assistant
