@@ -118,10 +118,11 @@ describe("CopilotKit owned thread history", () => {
         headers: { "content-type": "application/json", "content-length": "2097153" },
       }),
     ];
-    for (const responseOf of cases) {
+    for (const [index, responseOf] of cases.entries()) {
       guardedBackend(responseOf);
       const result = await GET(request());
-      expect(result.status).toBe(502);
+      // A foreign/mismatched thread must be indistinguishable from missing.
+      expect(result.status).toBe(index === 0 ? 404 : 502);
       expect(JSON.stringify(await result.json())).not.toContain("private");
     }
   });
