@@ -563,6 +563,8 @@ class SqlChatRunRepository:
         return {
             "threadId": scope["conversation"],
             "runId": transport_run_id,
+            "owner_user_id": scope["owner"],
+            "owner_tenant_id": scope["tenant"],
             "events": [
                 {"seq": int(rec["event_seq"]), "event": (
                     json.loads(rec["event_payload"])
