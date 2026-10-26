@@ -291,6 +291,8 @@ async def test_heartbeat_continues_during_blocked_upstream_and_can_fence_it(
     assert emitted[-1].type == ChatStreamEventType.COMPLETE
     assert repo.heartbeat_count >= 1
 
+    # A second worker run must not inherit the first run's committed state.
+    blocked_lease = await coordinator.admit(context(), "run-5-blocked")
     repo.allow_renew = False
     closed = asyncio.Event()
 
@@ -302,10 +304,10 @@ async def test_heartbeat_continues_during_blocked_upstream_and_can_fence_it(
             closed.set()
 
     with pytest.raises(ChatRunLeaseLost):
-        async for _ in coordinator.stream(blocked_upstream(), lease=lease):
+        async for _ in coordinator.stream(blocked_upstream(), lease=blocked_lease):
             pass
     assert closed.is_set()
-    assert repo.finalized[-1] == ("run-5", "failed", "CHAT_RUN_LEASE_LOST")
+    assert repo.finalized[-1] == ("run-5-blocked", "failed", "CHAT_RUN_LEASE_LOST")
 
 
 @pytest.mark.asyncio
