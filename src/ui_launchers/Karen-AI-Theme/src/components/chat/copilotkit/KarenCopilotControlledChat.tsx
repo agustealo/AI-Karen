@@ -10,7 +10,7 @@
  * persistence; there are no frontend tools or client-owned checkpoints.
  */
 import { CopilotChatView, useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { karenScopedAgentId } from "./KarenCopilotHistoryGate";
 import { KarenCopilotAssistantSlot } from "./KarenCopilotVerifiedHistory";
@@ -29,14 +29,19 @@ export function KarenCopilotControlledChat({
   });
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
+  // A second click before SDK state flips to running must not start a
+  // concurrent run or produce duplicate user-message writes.
+  const submitPending = useRef(false);
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
-    if (!isReady || agent.isRunning || !text || text.length > MAX_INPUT_CHARS ||
+    if (!isReady || submitPending.current || agent.isRunning ||
+        !text || text.length > MAX_INPUT_CHARS ||
         agent.threadId !== conversationId) {
       setError("Unable to send this message in the verified conversation.");
       return;
     }
+    submitPending.current = true;
     setError(null);
     // This is an explicit user gesture. No automatic initial greeting/run.
     agent.addMessage({
@@ -44,10 +49,13 @@ export function KarenCopilotControlledChat({
       role: "user",
       content: text,
     });
-    void copilotkit.runAgent({ agent }).catch(() => {
-      // Do not substitute a canned model answer or pretend persistence.
-      setError("Karen could not complete the request. Check the conversation history.");
-    });
+    void Promise.resolve().then(() => copilotkit.runAgent({ agent }))
+      .catch(() => {
+        // Do not substitute a canned model answer or pretend persistence.
+        setError("Karen could not complete the request. Check the conversation history.");
+      }).finally(() => {
+        submitPending.current = false;
+      });
   }, [agent, conversationId, copilotkit, isReady]);
 
   const onStop = useCallback(() => {
