@@ -533,6 +533,10 @@ async def update_session_activity(
 async def get_conversation(
     conversation_id: str,
     include_context: bool = Query(True, description="Compatibility flag; transcript is canonical"),
+    message_limit: int = Query(
+        100, ge=1, le=501,
+        description="Maximum canonical messages; 501 permits overflow detection during replay",
+    ),
     conversation_gateway: ConversationRuntimeGateway = Depends(
         get_conversation_runtime_gateway
     ),
@@ -546,7 +550,8 @@ async def get_conversation(
                 tenant_id=tenant_id,
                 user_id=user_id,
                 conversation_id=conversation_id,
-            )
+            ),
+            message_limit=message_limit,
         )
         return _canonical_snapshot_to_response(snapshot)
     except HTTPException:
