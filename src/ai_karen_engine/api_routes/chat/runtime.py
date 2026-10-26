@@ -763,9 +763,15 @@ async def get_ag_ui_owned_history(
         )
         history = project_owned_history(snapshot, attestations=attestations)
     except UnreplayableHistory as exc:
-        # Nothing is streamed until the full owned-history verification passes.
+        # A truncated/oversized history is an incomplete backend projection,
+        # while unknown rich content is intentionally not yet replayable.
+        # Neither is ever framed as a successful SSE snapshot.
+        status = (
+            502 if str(exc) in {"history_message_limit", "history_byte_limit"}
+            else 409
+        )
         raise HTTPException(
-            status_code=409, detail="Complete governed replay is unavailable",
+            status_code=status, detail="Complete governed replay is unavailable",
         ) from exc
     except Exception as exc:
         logger.exception("History attestation unavailable", extra={
