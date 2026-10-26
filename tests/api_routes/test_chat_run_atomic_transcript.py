@@ -168,3 +168,91 @@ async def test_foreign_run_lease_never_reaches_message_insert() -> None:
     assert result.error == "chat_run_transcript_scope_mismatch"
     assert tx.rolled_back
     assert not any("INSERT INTO messages" in sql for sql, _ in tx.calls)
+
+
+@pytest.mark.asyncio
+async def test_canonical_owned_delete_erases_run_journal_in_same_transaction() -> None:
+    class ErasureSession(FakeTransaction):
+        async def execute(self, sql, args=None):
+            statement = str(sql)
+            self.calls.append((statement, args or {}))
+            if "to_regclass('public.runtime_chat_runs')" in statement:
+                return SimpleNamespace(scalar_one_or_none=lambda: "runtime_chat_runs")
+            if "DELETE FROM public.runtime_chat_runs" in statement:
+                return SimpleNamespace(rowcount=3)
+            if "DELETE FROM conversations" in statement:
+                return SimpleNamespace(rowcount=1)
+            return SimpleNamespace()
+
+    tx = ErasureSession()
+    result = await make_repo(tx).delete_conversation(
+        THREAD, TENANT, user_id=OWNER,
+    )
+    assert result.success and result.data is True
+    assert tx.committed and not tx.rolled_back
+    statements = [sql for sql, _ in tx.calls]
+    assert statements.index(next(s for s in statements if "runtime_chat_runs" in s
+                                 and "DELETE FROM" in s)) < statements.index(
+        next(s for s in statements if "DELETE FROM conversations" in s)
+    )
+    assert any("app.current_tenant_id" in s for s in statements)
+    assert any("app.current_user_id" in s for s in statements)
+    assert any("r.user_id = CAST(:user_id AS uuid)" in s for s in statements)
+    assert any("c.user_id = r.user_id" in s for s in statements)
+    assert any("user_id = :user_id" in s
+               for s in statements if "DELETE FROM conversations" in s)
+
+
+@pytest.mark.asyncio
+async def test_canonical_delete_rolls_back_if_run_journal_erasure_fails() -> None:
+    class ErasureFailure(FakeTransaction):
+        async def execute(self, sql, args=None):
+            statement = str(sql)
+            self.calls.append((statement, args or {}))
+            if "to_regclass('public.runtime_chat_runs')" in statement:
+                return SimpleNamespace(scalar_one_or_none=lambda: "runtime_chat_runs")
+            if "DELETE FROM public.runtime_chat_runs" in statement:
+                raise RuntimeError("journal_erasure_failed")
+            if "DELETE FROM conversations" in statement:
+                raise AssertionError("Transcript deleted despite journal erasure failure")
+            return SimpleNamespace()
+
+    tx = ErasureFailure()
+    result = await make_repo(tx).delete_conversation(
+        THREAD, TENANT, user_id=OWNER,
+    )
+    assert not result.success
+    assert tx.rolled_back and not tx.committed
+    assert not any("DELETE FROM conversations" in s for s, _ in tx.calls)
+
+
+@pytest.mark.asyncio
+async def test_canonical_delete_supports_pre_migration_database_without_faking_erasure() -> None:
+    class PreLedger(FakeTransaction):
+        async def execute(self, sql, args=None):
+            statement = str(sql)
+            self.calls.append((statement, args or {}))
+            if "to_regclass('public.runtime_chat_runs')" in statement:
+                return SimpleNamespace(scalar_one_or_none=lambda: None)
+            if "DELETE FROM conversations" in statement:
+                return SimpleNamespace(rowcount=1)
+            return SimpleNamespace()
+
+    tx = PreLedger()
+    result = await make_repo(tx).delete_conversation(
+        THREAD, TENANT, user_id=OWNER,
+    )
+    assert result.success and result.data is True
+    assert not any("DELETE FROM public.runtime_chat_runs" in s for s, _ in tx.calls)
+    assert tx.committed
+
+
+@pytest.mark.asyncio
+async def test_canonical_delete_requires_server_verified_owner() -> None:
+    tx = FakeTransaction()
+    result = await make_repo(tx).delete_conversation(
+        THREAD, TENANT, user_id="",
+    )
+    assert not result.success
+    assert "conversation_deletion_owner_required" in result.error
+    assert tx.calls == []
