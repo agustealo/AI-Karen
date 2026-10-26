@@ -147,6 +147,19 @@ jobs:
             *) echo "::error::Acceptance URL must use HTTPS"; exit 1 ;;
           esac
 
+      - name: Verify deployed application revision matches reviewed PR head
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          # Read the live deployment, not repository code or client metadata.
+          curl --fail --silent --show-error --location --max-time 20 \
+            --header 'Accept: application/json' \
+            --header 'Cache-Control: no-cache' \
+            "${KAREN_BASE_URL%/}/api/deployment-revision" | \
+            python -c 'import json,os,sys; payload=json.load(sys.stdin); observed=payload.get("revision"); target=os.environ["TARGET_SHA"]; assert payload.get("status")=="ok" and observed==target, "Deployed revision does not match reviewed PR head"'
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
