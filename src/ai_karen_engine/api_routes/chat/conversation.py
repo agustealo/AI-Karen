@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+
+from fastapi.responses import JSONResponse
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.logging import get_logger
@@ -605,7 +607,11 @@ async def get_composer_draft(
                 conversation_id=conversation_id,
             )
         )
-        return ComposerDraftResponse(**data)
+        result = ComposerDraftResponse(**data)
+        return JSONResponse(
+            content=result.model_dump(mode="json"),
+            headers={"Cache-Control": "private, no-store"},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid draft request") from exc
     except PermissionError as exc:
@@ -637,7 +643,11 @@ async def put_composer_draft(
             ),
             text=request.text, expected_revision=request.expected_revision,
         )
-        return ComposerDraftResponse(**data)
+        result = ComposerDraftResponse(**data)
+        return JSONResponse(
+            content=result.model_dump(mode="json"),
+            headers={"Cache-Control": "private, no-store"},
+        )
     except ValueError as exc:
         if str(exc) == "composer_draft_revision_conflict":
             raise HTTPException(
