@@ -16,6 +16,7 @@ from ai_karen_engine.core.runtime.owned_history_projection import (
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Conversation,
     Message,
+    canonical_message_digest,
 )
 
 THREAD = "44444444-4444-4444-8444-444444444444"
@@ -41,6 +42,18 @@ def assistant(meta=None, *, message_id=ASSISTANT_ID) -> Message:
         role="assistant", content="Verified original answer",
         metadata=meta or {},
     )
+
+
+def attested(snapshot: ConversationSnapshot) -> dict[str, tuple[str, str]]:
+    return {
+        item.id: (REQUEST_ID, canonical_message_digest(item))
+        for item in snapshot.messages
+        if item.role == "assistant"
+    }
+
+
+def project_attested(snapshot: ConversationSnapshot):
+    return project_owned_history(snapshot, attestations=attested(snapshot))
 
 
 def presentation():
@@ -79,9 +92,7 @@ def test_attested_saved_presentation_and_execution_receipt_replay_without_raw_me
             "private_tool_payload": "do-not-export",
         }),
     ]
-    result = project_owned_history(
-        saved(messages), attestations={ASSISTANT_ID: REQUEST_ID},
-    )
+    result = project_attested(saved(messages))
     assert result["schema_version"] == 1
     assert result["response_source"] == "persisted_history"
     assert result["replay_only"] is True
@@ -100,7 +111,8 @@ def test_attested_saved_presentation_and_execution_receipt_replay_without_raw_me
 
 
 @pytest.mark.parametrize("proof", [
-    {}, {"wrong": REQUEST_ID}, {ASSISTANT_ID: "different-request"},
+    {}, {"wrong": (REQUEST_ID, "0" * 64)},
+    {ASSISTANT_ID: ("different-request", "0" * 64)},
 ])
 def test_fake_runtime_metadata_is_not_a_replay_capability(proof):
     with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
@@ -120,19 +132,39 @@ def test_fake_runtime_metadata_is_not_a_replay_capability(proof):
 ])
 def test_unsupported_or_incomplete_rich_content_aborts_whole_snapshot(metadata):
     with pytest.raises(UnreplayableHistory):
-        project_owned_history(
-            saved([assistant({**receipt(), **metadata})]),
-            attestations={ASSISTANT_ID: REQUEST_ID},
-        )
+        project_attested(saved([assistant({**receipt(), **metadata})]))
 
 
 def test_invalid_saved_presentation_cannot_be_revalidated_into_new_evidence():
     bad = {**presentation(), "data": {"formatted": "10:42 PM", "secret": "x"}}
     with pytest.raises(UnreplayableHistory, match="invalid_persisted_presentation"):
-        project_owned_history(
-            saved([assistant({**receipt(), "verified_presentations_v1": [bad]})]),
-            attestations={ASSISTANT_ID: REQUEST_ID},
-        )
+        project_attested(saved([
+            assistant({**receipt(), "verified_presentations_v1": [bad]})
+        ]))
+
+
+def test_edited_attested_message_is_never_restored_as_verified_rich_evidence():
+    original = assistant({
+        **receipt(), "verified_presentations_v1": [presentation()],
+    })
+    original_proof = (REQUEST_ID, canonical_message_digest(original))
+    for mutate in (
+        {"content": "forged assistant content"},
+        {"metadata": {**original.metadata, "actual_model": "attacker-model"}},
+        {"metadata": {**original.metadata,
+                      "verified_presentations_v1": [
+                          {**presentation(), "data": {"formatted": "11:15 PM"}}
+                      ]}},
+    ):
+        revised = assistant(dict(original.metadata))
+        if "content" in mutate:
+            revised.content = mutate["content"]
+        if "metadata" in mutate:
+            revised.metadata = mutate["metadata"]
+        with pytest.raises(UnreplayableHistory, match="modified_attested_message"):
+            project_owned_history(
+                saved([revised]), attestations={ASSISTANT_ID: original_proof},
+            )
 
 
 def test_plaintext_history_remains_compatible_without_model_or_run_receipts():
