@@ -22,6 +22,7 @@ vi.mock("@copilotkit/react-core/v2", () => ({
 // history-gate suite covers canonical message loading and access failures.
 vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => ({
   KarenCopilotHistoryGate: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  karenScopedAgentId: (conversationId: string) => "karen-" + conversationId,
 }));
 
 import { KarenCopilotChat } from "@/components/chat/copilotkit/KarenCopilotChat";
@@ -43,6 +44,7 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     render(<KarenCopilotChat conversationId={CONVERSATION} />);
     expect(screen.getByTestId("copilot-chat")).toBeTruthy();
     expect(sdk.chat[0].threadId).toBe(CONVERSATION);
+    expect(sdk.chat[0].agentId).toBe("karen-" + CONVERSATION);
     expect(sdk.provider[0].runtimeUrl).toBe("/api/copilotkit");
     expect(sdk.provider[0].properties).toBeUndefined();
   });
