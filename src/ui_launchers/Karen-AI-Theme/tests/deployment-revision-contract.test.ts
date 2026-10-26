@@ -37,4 +37,28 @@ describe('deployment revision release contract', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({ status: 'ok', revision: expected });
   });
+
+  it('fails closed when revision sources disagree', async () => {
+    process.env.VERCEL_GIT_COMMIT_SHA = 'a'.repeat(40);
+    process.env.KAREN_DEPLOYED_COMMIT_SHA = 'b'.repeat(40);
+    const response = GET();
+    expect(response.status).toBe(503);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('fails closed on a malformed platform revision even with a valid fallback', () => {
+    process.env.VERCEL_GIT_COMMIT_SHA = 'main';
+    process.env.KAREN_DEPLOYED_COMMIT_SHA = 'a'.repeat(40);
+    expect(GET().status).toBe(503);
+  });
+
+  it('accepts equal verified-format platform and injected revisions', async () => {
+    const expected = 'c'.repeat(40);
+    process.env.VERCEL_GIT_COMMIT_SHA = expected;
+    process.env.KAREN_DEPLOYED_COMMIT_SHA = expected;
+    const response = GET();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok', revision: expected });
+  });
+
 });
