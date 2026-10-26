@@ -10,7 +10,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
