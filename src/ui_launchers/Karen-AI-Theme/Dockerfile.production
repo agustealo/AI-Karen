@@ -17,22 +17,7 @@ WORKDIR /app
 
 # Reject missing or malformed public source identity at production build time.
 ARG KAREN_DEPLOYED_COMMIT_SHA
-RUN printf '%s' "$KAREN_DEPLOYED_COMMIT_SHA" | grep -Eq '^[a-f0-9]{40}ENV NODE_ENV=production \
-    NEXT_TELEMETRY_DISABLED=1 \
-    PORT=8010 \
-    WEB_HOST=0.0.0.0
-RUN groupadd --system --gid 1001 nodejs \
-    && useradd --system --uid 1001 --gid nodejs nextjs
-COPY --from=builder --chown=nextjs:nodejs /app/package.json /app/package-lock.json ./
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/next.config.ts ./next.config.ts
-COPY --from=builder --chown=nextjs:nodejs /app/server.mjs ./server.mjs
-USER nextjs
-EXPOSE 8010
-CMD ["node", "server.mjs"]
-
+RUN printf '%s' "$KAREN_DEPLOYED_COMMIT_SHA" | grep -Eq '^[a-f0-9]{40}$'
 LABEL org.opencontainers.image.revision="${KAREN_DEPLOYED_COMMIT_SHA}"
 ENV KAREN_DEPLOYED_COMMIT_SHA="${KAREN_DEPLOYED_COMMIT_SHA}"
 ENV NODE_ENV=production \
