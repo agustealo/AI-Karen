@@ -343,3 +343,107 @@ def test_cursor_schema_is_principal_scoped_and_bounded():
     assert "octet_length(event_payload::text) <= 32768" in sql
     assert "event_seq <= 2048" in sql
     assert "CREATE TABLE public.runtime_chat_run_events" in sql
+
+
+@pytest.mark.asyncio
+async def test_cursor_ingress_is_authenticated_owner_scoped_and_never_calls_model(
+    monkeypatch,
+):
+    received = []
+    class ReadOnlyCoordinator:
+        async def read_observed_events(self, ctx, *, run_id, after, limit):
+            received.append((
+                ctx.tenant_id, ctx.user_id, ctx.conversation_id,
+                run_id, after, limit,
+            ))
+            return {
+                "threadId": THREAD, "runId": run_id, "events": [],
+                "nextCursor": after, "hasMore": False,
+                "runStatus": "interrupted", "terminalConfirmed": False,
+                "continuationAvailable": False,
+                "responseSource": "observed_event_journal",
+            }
+    class ForbiddenRuntime:
+        def execute_stream(self, request):
+            raise AssertionError("Cursor read must not execute inference")
+    monkeypatch.setattr(
+        ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True,
+            enable_ag_ui_durable_runs=True,
+            enable_ag_ui_event_journal=True,
+        )),
+    )
+    monkeypatch.setattr(
+        ingress, "get_chat_run_coordinator", lambda: ReadOnlyCoordinator(),
+    )
+    monkeypatch.setattr(
+        ingress, "get_chat_runtime", lambda: ForbiddenRuntime(),
+    )
+    response = await ingress.get_ag_ui_run_observed_events(
+        thread_id=THREAD, run_id=RUN_ID, after=7, limit=25,
+        user={"user_id": OWNER, "tenant_id": TENANT},
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    body = json.loads(response.body)
+    assert body["runStatus"] == "interrupted"
+    assert body["terminalConfirmed"] is False
+    assert received == [(TENANT, OWNER, THREAD, RUN_ID, 7, 25)]
+
+
+@pytest.mark.asyncio
+async def test_event_read_refuses_flag_off_foreign_run_and_unbounded_cursors(
+    monkeypatch,
+):
+    calls = []
+    class NoOwnRun:
+        async def read_observed_events(self, *args, **kwargs):
+            calls.append(kwargs)
+            return None
+    monkeypatch.setattr(
+        ingress, "get_chat_run_coordinator", lambda: NoOwnRun(),
+    )
+    monkeypatch.setattr(
+        ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True,
+            enable_ag_ui_durable_runs=True,
+            enable_ag_ui_event_journal=False,
+        )),
+    )
+    user = {"user_id": OWNER, "tenant_id": TENANT}
+    with pytest.raises(HTTPException) as blocked:
+        await ingress.get_ag_ui_run_observed_events(
+            thread_id=THREAD, run_id=RUN_ID, user=user,
+        )
+    assert blocked.value.status_code == 404
+    assert calls == []
+    monkeypatch.setattr(
+        ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True,
+            enable_ag_ui_durable_runs=True,
+            enable_ag_ui_event_journal=True,
+        )),
+    )
+    for parameters in [
+        {"thread_id": "not-uuid", "run_id": RUN_ID},
+        {"thread_id": THREAD, "run_id": "wrong run ID"},
+        {"thread_id": THREAD, "run_id": RUN_ID, "after": -1},
+        {"thread_id": THREAD, "run_id": RUN_ID, "after": 2049},
+        {"thread_id": THREAD, "run_id": RUN_ID, "limit": 101},
+        {"thread_id": THREAD, "run_id": RUN_ID, "limit": 0},
+    ]:
+        with pytest.raises(HTTPException) as denied:
+            await ingress.get_ag_ui_run_observed_events(
+                **parameters, user=user,
+            )
+        assert denied.value.status_code == 422
+    assert calls == []
+    with pytest.raises(HTTPException) as absent:
+        await ingress.get_ag_ui_run_observed_events(
+            thread_id=THREAD, run_id=RUN_ID, user=user,
+        )
+    assert absent.value.status_code == 404
+    assert len(calls) == 1
