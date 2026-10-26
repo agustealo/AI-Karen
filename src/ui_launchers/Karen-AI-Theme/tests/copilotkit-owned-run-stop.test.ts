@@ -141,6 +141,27 @@ describe("CopilotKit v2 exact-run stop uses only Karen runtime", () => {
     }
   });
 
+  it("rejects oversized stop payloads before dispatching a model or cancellation", async () => {
+    const seen = backend();
+    const oversized = stop({ runId: "run-exact", extra: "x".repeat(4096) });
+    const response = await POST(oversized);
+    expect(response.status).toBe(413);
+    expect(seen).toEqual([AUTH, FLAGS]);
+  });
+
+  it("rejects oversized backend receipts without buffering a full response", async () => {
+    const seen = backend(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(4096));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    }), { status: 202, headers: { "content-type": "application/json" } }));
+    const response = await POST(stop());
+    expect(response.status).toBe(503);
+    expect(seen).toEqual([AUTH, FLAGS, BACKEND_STOP]);
+  });
+
   it("fails closed when canonical transport is disabled or auth is missing", async () => {
     const urls: string[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
