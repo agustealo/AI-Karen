@@ -194,6 +194,113 @@ class SqlChatRunRepository:
             )
             return result.scalar_one_or_none() is not None
 
+    async def request_cancel(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        conversation_id: str,
+        transport_run_id: str,
+    ) -> Optional[str]:
+        """Atomically request stop for ONE owned run; never cancel by thread alone.
+
+        Row locking serializes stop with terminal transition. A repeated stop
+        returns 'cancelling', not a second side effect. Terminal statuses are
+        immutable. A missing or foreign run returns None without disclosure.
+        """
+        if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
+            raise ValueError("invalid_transport_run_id")
+        scope = {
+            "tenant": _uuid(tenant_id),
+            "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+            "run_id": transport_run_id,
+        }
+        async with async_transaction_scope(scope["tenant"], user_id=scope["owner"]) as session:
+            locked = await session.execute(
+                text(
+                    """
+                    SELECT status, lease_expires_at
+                    FROM public.runtime_chat_runs
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND transport_run_id = :run_id
+                    FOR UPDATE
+                    """
+                ),
+                scope,
+            )
+            row = locked.mappings().one_or_none()
+            if row is None:
+                return None
+            status = str(row["status"])
+            if status != "running":
+                return status
+            # Lease expiry is checked inside the transaction: a dead worker is
+            # not reported as successfully stopped.
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE public.runtime_chat_runs
+                    SET status = CASE
+                            WHEN lease_expires_at > NOW() THEN 'cancelling'
+                            ELSE 'orphaned'
+                        END,
+                        cancel_requested_at = CASE
+                            WHEN lease_expires_at > NOW() THEN NOW()
+                            ELSE NULL
+                        END,
+                        terminal_at = CASE
+                            WHEN lease_expires_at > NOW() THEN NULL
+                            ELSE NOW()
+                        END,
+                        terminal_error_code = CASE
+                            WHEN lease_expires_at > NOW() THEN NULL
+                            ELSE 'CHAT_RUN_LEASE_EXPIRED'
+                        END,
+                        lease_token = CASE
+                            WHEN lease_expires_at > NOW() THEN lease_token
+                            ELSE NULL
+                        END,
+                        updated_at = NOW()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND transport_run_id = :run_id
+                      AND status = 'running'
+                    RETURNING status
+                    """
+                ),
+                scope,
+            )
+            next_status = result.scalar_one_or_none()
+            if next_status is None:
+                raise RuntimeError("chat_run_cancel_concurrent_state_changed")
+            return str(next_status)
+
+    async def cancel_requested(self, lease: ChatRunLease) -> bool:
+        """Observe an authorized stop without accepting a caller's SDK token."""
+        async with async_transaction_scope(lease.tenant_id, user_id=lease.user_id) as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT status
+                    FROM public.runtime_chat_runs
+                    WHERE execution_id = CAST(:execution AS uuid)
+                      AND tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND lease_token = CAST(:token AS uuid)
+                      AND lease_expires_at > NOW()
+                      AND status = 'cancelling'
+                      AND cancel_requested_at IS NOT NULL
+                    """
+                ),
+                self._scope(lease),
+            )
+            return result.scalar_one_or_none() == "cancelling"
+
     @staticmethod
     def _scope(lease: ChatRunLease, **extra: object) -> dict[str, object]:
         return {
