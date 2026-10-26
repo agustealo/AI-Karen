@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Conversation,
     ConversationQuery,
@@ -444,7 +446,8 @@ class PostgresConversationRepository(ConversationRepository):
         operation="add_completed_turn", repository="PostgresConversationRepository"
     )
     async def add_completed_turn(
-        self, user_message: Message, assistant_message: Message
+        self, user_message: Message, assistant_message: Message,
+        *, run_lease: Optional[ChatRunLease] = None,
     ) -> RepositoryResult[int]:
         """Commit both messages under one locked, tenant-owned transaction."""
         if (
@@ -459,6 +462,56 @@ class PostgresConversationRepository(ConversationRepository):
         try:
             async with await self._session() as session:
                 async with session.begin():
+                    if run_lease is not None:
+                        # Set the canonical RLS scope ON THIS transaction.
+                        # No independent run-ledger session is opened.
+                        await session.execute(
+                            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+                            {"tid": run_lease.tenant_id},
+                        )
+                        await session.execute(
+                            text("SELECT set_config('app.current_user_id', :uid, true)"),
+                            {"uid": run_lease.user_id},
+                        )
+                        if (
+                            user_message.tenant_id != run_lease.tenant_id
+                            or user_message.conversation_id != run_lease.conversation_id
+                            or user_message.metadata.get("authorized_user_id") != run_lease.user_id
+                            or user_message.metadata.get("request_id") != run_lease.request_id
+                            or assistant_message.metadata.get("request_id") != run_lease.request_id
+                        ):
+                            raise ValueError("chat_run_transcript_scope_mismatch")
+                        # Lock run FIRST, then conversation. The stop endpoint
+                        # locks the same row. The winner defines linearizable
+                        # terminal truth for both transcript messages.
+                        authorized = await session.execute(
+                            text("""
+                                SELECT execution_id
+                                FROM public.runtime_chat_runs
+                                WHERE execution_id = CAST(:execution AS uuid)
+                                  AND tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND conversation_id = CAST(:conversation AS uuid)
+                                  AND request_id = :request_id
+                                  AND correlation_id = :correlation_id
+                                  AND lease_token = CAST(:token AS uuid)
+                                  AND lease_expires_at > NOW()
+                                  AND status = 'running'
+                                  AND cancel_requested_at IS NULL
+                                FOR UPDATE
+                            """),
+                            {
+                                "execution": run_lease.execution_id,
+                                "tenant": run_lease.tenant_id,
+                                "owner": run_lease.user_id,
+                                "conversation": run_lease.conversation_id,
+                                "request_id": run_lease.request_id,
+                                "correlation_id": run_lease.correlation_id,
+                                "token": run_lease.lease_token,
+                            },
+                        )
+                        if authorized.scalar_one_or_none() is None:
+                            raise ValueError("chat_run_commit_not_authorized")
                     # Serialize concurrent replay attempts on the parent row.
                     owner = await session.execute(
                         text("""
@@ -525,6 +578,41 @@ class PostgresConversationRepository(ConversationRepository):
                         # A complete turn is never allowed to repair an orphan
                         # from the obsolete non-atomic write path implicitly.
                         raise ValueError("incomplete_turn_replay")
+                    if run_lease is not None:
+                        # Same PostgreSQL transaction as both message inserts.
+                        # A concurrent stop must win BEFORE this commit or it
+                        # returns 409 after the completed record is durable.
+                        finished = await session.execute(
+                            text("""
+                                UPDATE public.runtime_chat_runs
+                                SET status = 'completed',
+                                    terminal_at = NOW(),
+                                    updated_at = NOW(),
+                                    lease_token = NULL,
+                                    lease_expires_at = NULL
+                                WHERE execution_id = CAST(:execution AS uuid)
+                                  AND tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND conversation_id = CAST(:conversation AS uuid)
+                                  AND request_id = :request_id
+                                  AND correlation_id = :correlation_id
+                                  AND lease_token = CAST(:token AS uuid)
+                                  AND status = 'running'
+                                  AND cancel_requested_at IS NULL
+                                RETURNING execution_id
+                            """),
+                            {
+                                "execution": run_lease.execution_id,
+                                "tenant": run_lease.tenant_id,
+                                "owner": run_lease.user_id,
+                                "conversation": run_lease.conversation_id,
+                                "request_id": run_lease.request_id,
+                                "correlation_id": run_lease.correlation_id,
+                                "token": run_lease.lease_token,
+                            },
+                        )
+                        if finished.scalar_one_or_none() is None:
+                            raise ValueError("chat_run_commit_not_authorized")
                 return RepositoryResult(
                     success=True, data=persisted,
                     metadata={"idempotent_replay": persisted == 0},
