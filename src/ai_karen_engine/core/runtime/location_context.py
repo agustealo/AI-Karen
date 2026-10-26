@@ -56,6 +56,11 @@ def resolve_location(
         if value:
             return ResolvedLocation(value, "authorized_runtime")
 
+        if metadata.get("location_source") == "device_with_consent":
+            value = _bounded(metadata.get("weather_location") or metadata.get("location"))
+            if value:
+                return ResolvedLocation(value, "device_with_consent")
+
         # System location is a *separate*, explicitly permitted context tier.
         # No guessed timezone-to-city conversion or implicit geolocation.
         if authorized.get("system_location_permitted") is True:
@@ -71,6 +76,10 @@ def resolve_location(
         value = _bounded(authorized.get("timezone"))
         if value:
             return ResolvedLocation(value, "authorized_runtime")
+        if metadata.get("timezone_source") == "device_with_consent":
+            value = _bounded(metadata.get("timezone"))
+            if value:
+                return ResolvedLocation(value, "device_with_consent")
         if authorized.get("system_timezone_permitted") is True:
             value = _bounded(authorized.get("system_timezone"))
             if value:
