@@ -83,9 +83,11 @@ export const IntelligentSearchApi = {
       response && typeof response === 'object' && 'response' in response
         ? (response as { response?: unknown }).response : undefined,
     ].filter((candidate) => candidate !== undefined);
-    const locationRequired = responseCandidates.length > 0 &&
+    const directResponse = isSearchResponse(response) &&
+      (response as IntelligentSearchResponse).status === 'needs_location';
+    const locationRequired = directResponse || (responseCandidates.length > 0 &&
       responseCandidates.every((candidate) =>
-        isSearchResponse(candidate) && candidate.status === 'needs_location');
+        isSearchResponse(candidate) && candidate.status === 'needs_location'));
     if (envelope?.success === false && !locationRequired) {
       throw new Error(envelope.message || 'Search could not be completed. Please try again.');
     }
