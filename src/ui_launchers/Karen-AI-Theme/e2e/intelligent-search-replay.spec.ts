@@ -6,6 +6,7 @@ import { expect, test } from '@playwright/test';
  * Keep credentials out of traces and screenshots on the approved test system.
  */
 test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening', async ({ page }) => {
+  test.setTimeout(180_000); // Live retrieval and generation exceed the default 60s browser timeout.
   const required = process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true';
   const email = process.env.KAREN_UX_EMAIL;
   const password = process.env.KAREN_UX_PASSWORD;
