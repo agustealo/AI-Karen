@@ -1,8 +1,8 @@
 "use client";
 
-import { CopilotChat, CopilotKitProvider } from "@copilotkit/react-core/v2";
-import { KarenCopilotHistoryGate, karenScopedAgentId } from "./KarenCopilotHistoryGate";
-import { KarenCopilotAssistantSlot } from "./KarenCopilotVerifiedHistory";
+import { CopilotKitProvider } from "@copilotkit/react-core/v2";
+import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
+import { KarenCopilotControlledChat } from "./KarenCopilotControlledChat";
 
 const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -13,8 +13,9 @@ const CONVERSATION_UUID =
  * history and feature-parity tests have been completed.
  *
  * The dashboard retains the current assistant-ui implementation for now.
- * CopilotChat may issue an initial run on mount. That behavior must be
- * suppressed or reconciled with SessionProvider before production cutover.
+ * The high-level CopilotChat starts inference on first mount. This shell
+ * uses the native controlled CopilotChatView with explicit submit-only runs.
+ * Consumer cutover still requires exact-revision browser and UX acceptance.
  */
 export interface KarenCopilotChatProps {
   /** Canonical persisted conversation ID, obtained through SessionProvider. */
@@ -63,14 +64,7 @@ export function KarenCopilotChat({
     >
       <CopilotKitProvider runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
-          <CopilotChat
-            agentId={karenScopedAgentId(conversationId)}
-            threadId={conversationId}
-            labels={{
-              chatInputPlaceholder: "Message Karen...",
-            }}
-            messageView={{ assistantMessage: KarenCopilotAssistantSlot }}
-          />
+          <KarenCopilotControlledChat conversationId={conversationId} />
         </KarenCopilotHistoryGate>
       </CopilotKitProvider>
     </section>
