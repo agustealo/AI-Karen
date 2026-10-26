@@ -1,10 +1,12 @@
 import React from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backend = vi.hoisted(() => ({
   fetchConversation: vi.fn(),
-  agent: { threadId: "", setMessages: vi.fn() },
+  agent: { threadId: "", setMessages: vi.fn(), subscribe: vi.fn() },
+  callbacks: null as null | { onRunFinalized: () => void; onRunFailed: () => void },
+  unsubscribe: vi.fn(),
   isReady: true,
   agentOptions: [] as Array<{agentId: string;runtimeAgentId: string;threadId: string}>,
 }));
@@ -36,6 +38,12 @@ beforeEach(() => {
   backend.agent.threadId = "";
   backend.fetchConversation.mockReset();
   backend.agent.setMessages.mockReset();
+  backend.callbacks = null;
+  backend.unsubscribe.mockReset();
+  backend.agent.subscribe.mockReset().mockImplementation((callbacks) => {
+    backend.callbacks = callbacks;
+    return { unsubscribe: backend.unsubscribe };
+  });
 });
 
 afterEach(() => {
@@ -217,6 +225,56 @@ describe("CopilotKit canonical conversation hydration", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
     expect(screen.queryByTestId("agent-chat")).toBeNull();
+  });
+
+  it("rereads canonical saved evidence after SDK run finalizes instead of trusting streaming metadata", async () => {
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "u1", role: "user", content: "Before" }],
+      replayEvents: [],
+    }).mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [
+        { id: "u1", role: "user", content: "Before" },
+        { id: "a2", role: "assistant", content: "Verified after commit" },
+      ],
+      replayEvents: [{
+        type: "CUSTOM", name: "karen.execution_receipt.v1",
+        messageId: "a2",
+        value: { actual_provider: "local", actual_model: "verified",
+          response_source: "local_inference" },
+      }],
+    });
+    const view = render(guardedHistory());
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.agent.subscribe).toHaveBeenCalledTimes(1);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(1);
+    act(() => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(backend.agent.setMessages).toHaveBeenCalledTimes(2));
+    expect(backend.agent.setMessages).toHaveBeenLastCalledWith([
+      { id: "u1", role: "user", content: "Before" },
+      { id: "a2", role: "assistant", content: "Verified after commit" },
+    ]);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    view.unmount();
+    expect(backend.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fabricate a saved reply if the post-run attestation fails", async () => {
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "u1", role: "user", content: "Before" }],
+      replayEvents: [],
+    }).mockRejectedValueOnce(
+      Object.assign(new Error("unsupported content"), { status: 409 }),
+    );
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    act(() => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
   });
 
   it("ignores an obsolete conversation snapshot after switching threads", async () => {
