@@ -247,6 +247,8 @@ class SqlChatRunRepository:
                       AND r.correlation_id = :correlation_id
                       AND r.status = 'completed'
                       AND r.terminal_at IS NOT NULL
+                      AND r.user_message_id = CAST(:user_message AS uuid)
+                      AND r.assistant_message_id = CAST(:assistant_message AS uuid)
                       AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
                       AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
                     LIMIT 1
@@ -261,6 +263,61 @@ class SqlChatRunRepository:
                 },
             )
             return result.scalar_one_or_none() is not None
+
+    async def completed_replay_attestations(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+    ) -> dict[str, str]:
+        """Read completed run-to-assistant bindings under canonical owner RLS.
+
+        The result maps only exact assistant message UUIDs to the request ID
+        whose transcript and completion committed in the same transaction.
+        No message payload, hidden tool content, or SDK state is returned.
+        """
+        scope = {
+            "tenant": _uuid(tenant_id),
+            "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+        }
+        async with async_transaction_scope(
+            scope["tenant"], user_id=scope["owner"],
+        ) as session:
+            result = await session.execute(
+                text("""
+                    SELECT r.assistant_message_id::text AS message_id, r.request_id
+                    FROM public.runtime_chat_runs r
+                    JOIN conversations c
+                      ON c.conversation_id = r.conversation_id
+                     AND c.tenant_id = r.tenant_id
+                     AND c.user_id = r.user_id
+                    JOIN messages a
+                      ON a.conversation_id = c.conversation_id
+                     AND a.message_id::text = r.assistant_message_id::text
+                     AND a.role = 'assistant'
+                    JOIN messages u
+                      ON u.conversation_id = c.conversation_id
+                     AND u.message_id::text = r.user_message_id::text
+                     AND u.role = 'user'
+                    WHERE r.tenant_id = CAST(:tenant AS uuid)
+                      AND r.user_id = CAST(:owner AS uuid)
+                      AND r.conversation_id = CAST(:conversation AS uuid)
+                      AND r.status = 'completed'
+                      AND r.terminal_at IS NOT NULL
+                      AND r.user_message_id IS NOT NULL
+                      AND r.assistant_message_id IS NOT NULL
+                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
+                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
+                    ORDER BY r.created_at, r.execution_id
+                    LIMIT 501
+                """),
+                scope,
+            )
+            rows = result.mappings().all()
+            if len(rows) > 500:
+                raise RuntimeError("chat_replay_attestation_limit_exceeded")
+            return {
+                str(row["message_id"]): str(row["request_id"])
+                for row in rows
+            }
 
     async def completed(self, lease: ChatRunLease) -> bool:
         """Check terminal status while upstream finishes post-commit telemetry."""
