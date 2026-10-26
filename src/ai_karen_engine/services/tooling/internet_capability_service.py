@@ -1437,7 +1437,6 @@ class InternetCapabilityService:
                     "publishedDate": metadata.get("published_date")
                     or metadata.get("date")
                     or metadata.get("article:published_time"),
-                    "relevanceScore": round(max(0.0, 1.0 - (len(sources) * 0.08)), 2),
                     "links": [],
                     "media": {},
                 }
