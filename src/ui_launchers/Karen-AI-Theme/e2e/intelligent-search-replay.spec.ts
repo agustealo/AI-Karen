@@ -89,6 +89,20 @@ test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surfac
   const query = page.getByLabel('Query', { exact: true });
   await expect(query).toBeVisible({ timeout: 30_000 });
   await page.getByLabel('Search mode').selectOption('auto');
+
+  // A location-free query may use an authorized profile/device/system location.
+  // Otherwise the consumer must request one. Wikipedia snippets cannot count
+  // as weather observations in either case.
+  await query.fill("What's the weather?");
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  const clarification = page.getByRole('heading', { name: 'Which location should I check?' });
+  const initialObservation = page.locator('section[aria-label="Weather observation"]');
+  await expect(clarification.or(initialObservation)).toBeVisible({ timeout: 120_000 });
+  if (await clarification.isVisible()) {
+    await expect(initialObservation).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'No sources found' })).toHaveCount(0);
+  }
+
   await query.fill('What is the weather in Detroit, MI?');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
 
