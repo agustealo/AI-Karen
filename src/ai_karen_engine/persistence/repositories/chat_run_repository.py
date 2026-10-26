@@ -238,10 +238,10 @@ class SqlChatRunRepository:
             if row is None:
                 return None
             status = str(row["status"])
-            if status != "running":
+            if status not in {"running", "cancelling"}:
                 return status
-            # Lease expiry is checked inside the transaction: a dead worker is
-            # not reported as successfully stopped.
+            # Repeated stops on an expired cancelling worker must not lie.
+            # Lease expiry is checked inside the same transaction.
             result = await session.execute(
                 text(
                     """
@@ -271,7 +271,7 @@ class SqlChatRunRepository:
                       AND user_id = CAST(:owner AS uuid)
                       AND conversation_id = CAST(:conversation AS uuid)
                       AND transport_run_id = :run_id
-                      AND status = 'running'
+                      AND status IN ('running', 'cancelling')
                     RETURNING status
                     """
                 ),
