@@ -25,6 +25,7 @@ from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProject
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
     ChatRunConflict,
     ChatRunLease,
+    ChatRunLeaseLost,
     get_chat_run_coordinator,
 )
 from ai_karen_engine.config.runtime import get_runtime_settings
@@ -634,6 +635,27 @@ async def _ag_ui_sse(
                 yield f"data: {json.dumps(event)}\n\n"
             if projection.terminal:
                 break
+    except ChatRunLeaseLost as exc:
+        logger.error(
+            "Fenced AG-UI run ended without authorized terminal",
+            extra={
+                "correlation_id": runtime_request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        code = (
+            "CHAT_SSE_MISSING_TERMINAL"
+            if str(exc) == "chat_run_missing_terminal"
+            else "CHAT_RUN_LEASE_LOST"
+        )
+        error_chunk = ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content="Chat execution ended without verified completion.",
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={"error_code": code},
+        )
+        for event in projection.project(error_chunk):
+            yield f"data: {json.dumps(event)}\\n\\n"
     except Exception as exc:
         logger.exception(
             "AG-UI runtime projection failed",
