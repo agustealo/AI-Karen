@@ -187,3 +187,32 @@ The fixture has no mock responses and no request interception. All
 actual user/application interactions continue through the real backend
 under normal RBAC and tenant policies. Until the preview is READY and
 its runtime metadata and backend are attested, acceptance remains RED.
+
+
+## Final reviewed-source execution rule (October 26, 2026)
+
+The secret-bearing search browser harness is **post-integration only**.
+GitHub workflow dispatch must originate from `refs/heads/main`, and
+`target_sha` must equal both `GITHUB_SHA` and the current default-branch
+head read from GitHub before source checkout. The same main-head check runs
+after browser testing, alongside independent Vercel deployment identity,
+the running application's revision, and backend readiness.
+
+The previous approach, checking out the head of PR #550 during a
+`workflow_dispatch` from main, is rejected. A dispatch from a trusted
+workflow file does **not** make unmerged source code safe to execute with
+browser identity credentials. PR #550 source checks stay in ordinary
+non-credentialed CI until the feature is integrated into main.
+
+Release flow: approve and integrate source under the canonical security
+and feature gates, deploy an immutable sanitized consumer environment from
+that exact reviewed main source, attest the platform and live revision,
+perform protected authenticated browser acceptance, and promote only a
+human-approved production-equivalent build. If an immutable sanitized
+deployment with the same main SHA is not available, the acceptance job must
+fail closed. A green source CI job is not a release receipt.
+
+The separate security hotfix PR #558 was merged into main as
+`33f60a97c050fbe42ca58619941b1286935f4c5e` and its history
+default-branch restrictions were reconciled without overwriting this
+consumer search attestation. No consumer release approval is implied.
