@@ -24,6 +24,8 @@ on:
       - "tests/integration/test_live_automation_task_claims.py"
       - "tests/integration/test_runtime_chat_stop_concurrency_postgres.py"
       - "tests/api_routes/test_chat_run_event_journal.py"
+      - "tests/api_routes/test_composer_drafts.py"
+      - "src/ai_karen_engine/services/database/repositories/**"
       - "tests/integration/test_persona_activation_postgres.py"
       - "tests/integration/test_live_persona_memory_provenance.py"
       - "tests/integration/test_live_persona_vault_neurorecall.py"
@@ -92,7 +94,7 @@ jobs:
       - name: Prove atomic stop and observed-event replay on actual PostgreSQL
         run: |
           python -m compileall -q src/ai_karen_engine/core/runtime src/ai_karen_engine/persistence/repositories
-          pytest tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_run_repository.py -q -rs
+          pytest tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_composer_drafts.py -q -rs
           pytest tests/integration/test_runtime_chat_stop_concurrency_postgres.py -q -rs
       - name: Record dedicated database proof
         if: always()
