@@ -157,6 +157,26 @@ describe("CopilotKit completed-history reconnect", () => {
     }
   });
 
+  it("rejects unbounded streaming connect requests without trusting Content-Length", async () => {
+    const destinations = mockBackend();
+    const input = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(512 * 1024));
+        controller.enqueue(new Uint8Array([32]));
+        controller.close();
+      },
+    });
+    const request = new NextRequest(ENDPOINT, {
+      method: "POST",
+      headers: { cookie: "kari_session=owner", "content-type": "application/json" },
+      body: input,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const result = await POST(request);
+    expect(result.status).toBe(413);
+    expect(destinations).toEqual([AUTH, FLAGS]);
+  });
+
   it("fails closed when backend transport is disabled without accessing history", async () => {
     const destinations: string[] = [];
     globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
