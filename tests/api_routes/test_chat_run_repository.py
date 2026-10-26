@@ -143,6 +143,92 @@ async def test_invalid_identifiers_do_not_open_a_transaction(
             await repo.admit(**supplied)
 
 
+@pytest.mark.asyncio
+async def test_cancel_locks_only_the_owned_row_and_reuses_the_scoped_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LockedTransaction:
+        def __init__(self):
+            self.sql: list[str] = []
+            self.params: list[dict[str, Any]] = []
+
+        async def execute(self, statement, parameters):
+            sql = str(statement)
+            self.sql.append(sql)
+            self.params.append(parameters)
+            if "FOR UPDATE" in sql:
+                return SimpleNamespace(
+                    mappings=lambda: SimpleNamespace(
+                        one_or_none=lambda: {
+                            "status": "running", "lease_expires_at": object(),
+                        },
+                    ),
+                )
+            return SimpleNamespace(scalar_one_or_none=lambda: "cancelling")
+
+    tx = LockedTransaction()
+    scoped_transaction(monkeypatch, tx)
+    state = await repository.SqlChatRunRepository().request_cancel(
+        tenant_id=TENANT,
+        user_id=OWNER,
+        conversation_id=THREAD,
+        transport_run_id="run-a",
+    )
+    assert state == "cancelling"
+    assert len(tx.sql) == 2
+    assert "FOR UPDATE" in tx.sql[0]
+    assert "cancel_requested_at" in tx.sql[1]
+    assert "status IN ('running', 'cancelling')" in tx.sql[1]
+    for args in tx.params:
+        assert args == {
+            "tenant": TENANT, "owner": OWNER,
+            "conversation": THREAD, "run_id": "run-a",
+        }
+
+
+@pytest.mark.asyncio
+async def test_stop_rejects_absent_scoped_record_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingTransaction:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, statement, parameters):
+            self.calls += 1
+            return SimpleNamespace(
+                mappings=lambda: SimpleNamespace(one_or_none=lambda: None),
+            )
+
+    tx = MissingTransaction()
+    scoped_transaction(monkeypatch, tx)
+    result = await repository.SqlChatRunRepository().request_cancel(
+        tenant_id=TENANT, user_id=OWNER,
+        conversation_id=THREAD, transport_run_id="run-missing",
+    )
+    assert result is None
+    assert tx.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_cancel_observation_is_scoped_to_its_fencing_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tx = Transaction(["cancelling"])
+    scoped_transaction(monkeypatch, tx)
+    lease = repository.ChatRunLease(
+        execution_id=str(uuid.uuid4()),
+        lease_token=str(uuid.uuid4()),
+        tenant_id=TENANT, user_id=OWNER,
+        conversation_id=THREAD, transport_run_id="run-a",
+        request_id="request-a", correlation_id="correlation-a",
+    )
+    assert await repository.SqlChatRunRepository().cancel_requested(lease) is True
+    assert "lease_token = CAST(:token AS uuid)" in tx.sql[0]
+    assert "cancel_requested_at IS NOT NULL" in tx.sql[0]
+    assert tx.parameters[0]["token"] == lease.lease_token
+
+
 def test_migration_enforces_both_tenant_and_user_rls() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = root / (
