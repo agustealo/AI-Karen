@@ -26,10 +26,10 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   await page.getByRole('button', { name: 'Ask Karen', exact: true }).click();
   await expect(panel).toHaveAttribute('aria-hidden', 'false');
   const prompt = `Research acceptance ${Date.now()}: Search the web for an official source describing the history of the Python programming language. Answer with a verified URL citation.`;
+  const assistantCount = await panel.getByTestId('chat-message-assistant').count();
   await panel.getByTestId('chat-input').fill(prompt);
   await panel.getByRole('button', { name: 'Send message' }).click();
 
-  const assistantCount = await panel.getByTestId('chat-message-assistant').count();
   const assistantMessage = panel.getByTestId('chat-message-assistant').last();
   await expect.poll(() => panel.getByTestId('chat-message-assistant').count(), { timeout: 90_000 }).toBeGreaterThan(assistantCount);
   const assistant = assistantMessage.getByTestId('chat-evidence-status').filter({ hasText: 'Verified grounded answer' });
