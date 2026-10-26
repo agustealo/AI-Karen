@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getBackendBaseUrl } from "../../_lib/backend-proxy";
 import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilotkit/_lib/owned-thread-history";
+import { connectKarenOwnedThread, readKarenConnectThreadId } from "../../copilotkit/_lib/owned-thread-reconnect";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,7 +90,9 @@ export function validateCopilotRoute(request: NextRequest): NextResponse | null 
   const path = request.nextUrl.pathname;
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
   if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
-  if (request.method !== "POST" || path !== "/api/copilotkit/agent/default/run") {
+  if (request.method !== "POST" ||
+      (path !== "/api/copilotkit/agent/default/run" &&
+       path !== "/api/copilotkit/agent/default/connect")) {
     return NextResponse.json({ detail: "CopilotKit route is unavailable" }, { status: 404 });
   }
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
@@ -104,7 +107,8 @@ export function validateCopilotRoute(request: NextRequest): NextResponse | null 
 
 /** Transport validation only. Final thread ownership belongs to ChatRuntime. */
 async function validateRunEnvelope(request: NextRequest): Promise<NextResponse | null> {
-  if (request.method !== "POST") return null;
+  if (request.method !== "POST" ||
+      request.nextUrl.pathname !== "/api/copilotkit/agent/default/run") return null;
   let body: string;
   try {
     body = await request.clone().text();
@@ -193,6 +197,14 @@ async function handle(request: NextRequest): Promise<Response> {
   if (requestedHistoryId) {
     return readKarenOwnedThreadMessages(
       request, backendBaseUrl, auth.headers, auth.principal, requestedHistoryId,
+    );
+  }
+  if (request.method === "POST" &&
+      request.nextUrl.pathname === "/api/copilotkit/agent/default/connect") {
+    const threadId = await readKarenConnectThreadId(request);
+    if (typeof threadId !== "string") return threadId;
+    return connectKarenOwnedThread(
+      request, backendBaseUrl, auth.headers, auth.principal, threadId,
     );
   }
 
