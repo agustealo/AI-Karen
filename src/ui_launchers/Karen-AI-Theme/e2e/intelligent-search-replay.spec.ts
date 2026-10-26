@@ -120,3 +120,36 @@ test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surfac
   await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
   await expect(page.getByText('Provider', { exact: true }).first()).toBeVisible();
 });
+
+
+test('SEARCH-PLUGIN-03: general web retrieval proves independent source domains', async ({ page }) => {
+  test.setTimeout(180_000);
+  test.skip(process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== 'true',
+    'Authenticated consumer release proof is opt-in');
+  const email = process.env.KAREN_UX_EMAIL;
+  const password = process.env.KAREN_UX_PASSWORD;
+  if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
+
+  await page.goto('/login');
+  await page.getByRole('textbox', { name: 'Email' }).fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+
+  await page.getByText('Intelligent Search', { exact: true }).first().click();
+  const query = page.getByLabel('Query', { exact: true });
+  await expect(query).toBeVisible({ timeout: 30_000 });
+  await page.getByLabel('Search mode').selectOption('general');
+  await query.fill('Python programming language official documentation and history');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+
+  await expect(page.getByText('Technical search details')).toBeVisible({ timeout: 120_000 });
+  await page.getByText('Technical search details').click();
+  await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
+  const websites = page.getByText('Distinct websites', { exact: true }).locator('..');
+  await expect(websites).toBeVisible();
+  const text = await websites.innerText();
+  const number = Number(text.match(/\b\d+\b/)?.[0]);
+  expect(Number.isFinite(number) && number >= 2,
+    'Five pages from one website do not prove independent web retrieval').toBe(true);
+});
