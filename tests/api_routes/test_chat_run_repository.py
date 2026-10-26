@@ -43,7 +43,9 @@ def scoped_transaction(monkeypatch, transaction):
 async def test_admit_only_in_authenticated_rls_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    transaction = Transaction([None, str(uuid.uuid4())])
+    # The orphan-reconciliation UPDATE does not read a scalar result.
+    # The next scalar is from INSERT ... RETURNING execution_id.
+    transaction = Transaction([str(uuid.uuid4())])
     scoped_transaction(monkeypatch, transaction)
     lease = await repository.SqlChatRunRepository().admit(
         tenant_id=TENANT,
