@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 function input() {
-  const props = sdk.views.at(-1)?.inputProps as Record<string, unknown> | undefined;
+  const props = sdk.views.at(-1)?.input as Record<string, unknown> | undefined;
   expect(props).toBeDefined();
   return props as {
     onSubmitMessage: (text: string) => void;
