@@ -155,6 +155,55 @@ export function useKarenPersistedDraft(conversationId: string) {
     return () => window.clearTimeout(timeout);
   }, [draft, version, save, status]);
 
+  const clearBeforeSubmit = useCallback(async (submittedText: string): Promise<boolean> => {
+    if (!activeRef.current || busyRef.current || dirtyRef.current ||
+        revisionRef.current === null ||
+        textRef.current.trim() !== submittedText.trim()) {
+      return false;
+    }
+    busyRef.current = true;
+    const generation = generationRef.current;
+    const expectedRevision = revisionRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const response: unknown = await apiClient.put<DraftRecord>(
+        endpoint, { text: "", expected_revision: expectedRevision },
+        { signal: controller.signal },
+      );
+      if (!activeRef.current || generationRef.current !== generation ||
+          controller.signal.aborted) return false;
+      if (!validDraft(response) || (response as DraftRecord).text !== "" ||
+          (response as DraftRecord).revision !== expectedRevision + 1) {
+        throw new Error("Invalid draft-clear receipt");
+      }
+      revisionRef.current = (response as DraftRecord).revision;
+      if (textRef.current.trim() === submittedText.trim()) {
+        textRef.current = "";
+        dirtyRef.current = false;
+        setDraft("");
+        setSynced(true);
+      } else {
+        // Concurrent editing during the durable clear remains unsent and
+        // will be saved under the new revision after the clear completes.
+        setVersion(v => v + 1);
+      }
+      setStatus("ready");
+      return true;
+    } catch (error) {
+      if (activeRef.current && generationRef.current === generation &&
+          !controller.signal.aborted) {
+        setSynced(false);
+        setStatus(error instanceof ApiError && error.status === 409 ?
+          "conflict" : "unavailable");
+      }
+      return false;
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      busyRef.current = false;
+    }
+  }, [endpoint]);
+
   const retry = useCallback(() => {
     if (status !== "unavailable" || revisionRef.current === null) {
       return;
@@ -172,5 +221,8 @@ export function useKarenPersistedDraft(conversationId: string) {
     void refresh(true);
   }, [refresh, status]);
 
-  return { draft, setText, readText, status, synced, retry, discardAndReload };
+  return {
+    draft, setText, readText, status, synced,
+    clearBeforeSubmit, retry, discardAndReload,
+  };
 }
