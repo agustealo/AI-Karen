@@ -83,3 +83,69 @@ This is runtime self-reported revision evidence, not independent platform
 build attestation. Vercel deployment ID, commit, READY status and immutable
 URL must be verified separately. Manual workflow runs on another branch
 without these guards are not PR #550 release receipts.
+
+
+## SR-01 verified deployment topology and independent attestation (October 26, 2026)
+
+**Consumer release: RED; repository checks: green at previous reviewed head.**
+
+### Observed Vercel problem
+
+Vercel project \`ai-karen\` currently selects framework \`python\` at repository root.
+The preview built from the reviewed PR head
+\`27cc86232b383b82688f068ebefb0247cbdc20a7\`
+ended with \`PYTHON_ENTRYPOINT_NOT_FOUND\` and state \`ERROR\`.
+This is a concrete project/runtime mismatch, not proof of a Python source defect.
+Do not select an arbitrary \`server/app.py\` file or claim consumer readiness
+from a superficially successful Python deployment.
+
+### Canonical deployed consumer application
+
+- \`deploy/compose/docker-compose.prod.yml\` owns the supported production
+  \`web\` + \`api\` topology. The frontend is a Next.js application rooted at
+  \`src/ui_launchers/Karen-AI-Theme\`.
+- \`server.mjs\` is the canonical production web ingress and overwrites
+  forwarded transport headers before backend proxying. Vercel's native Next.js
+  runtime will not execute that custom ingress. A Vercel preview is therefore
+  **not automatically equivalent** to the production Docker consumer stack.
+- The frontend's API route handlers proxy to the Python backend. Running only
+  the frontend with an inaccessible backend may build but cannot pass
+  authenticated search, persistence, provider routing or health acceptance.
+- Changes to the Vercel project framework/root must not be used as a proxy for
+  full-stack release readiness. Preserve environment protection and production
+  security requirements; do not publish a reduced-auth release for a green badge.
+
+### Acceptance contract for a Vercel preview
+
+The protected \`search\` workflow executes two **separate** sources of evidence
+both before and after the browser tests:
+
+1. \`scripts/ci/verify_vercel_deployment.py\`: independently fetches platform
+   deployment metadata using the protected \`VERCEL_TOKEN\` and configured
+   \`VERCEL_PROJECT_ID\` and \`VERCEL_ORG_ID\`. Requires a canonical HTTPS
+   \`.vercel.app\` immutable deployment URL, project identity, \`git\` source,
+   \`READY\` state, nonproduction target, source repository and full reviewed SHA.
+2. \`scripts/ci/verify_deployment_revision.py\`: separately fetches the
+   running application's non-cacheable, nonredirecting revision endpoint,
+   requiring exact SHA parity. Neither observation replaces the other.
+
+The workflow then runs real authenticated user search, source citations,
+weather/location and durable replay. A post-test check requires unchanged
+platform deployment, running revision and PR head.
+
+**Required protected environment configuration:** \`KAREN_SEARCH_ACCEPTANCE_URL\`
+must be the deployment's immutable HTTPS URL; \`VERCEL_PROJECT_ID\` and
+\`VERCEL_ORG_ID\` must be protected environment variables; \`VERCEL_TOKEN\`
+must be a least-privilege environment secret. Existing acceptance credentials
+remain environment secrets, never committed or printed.
+
+A separate provider-specific provenance adapter is required for self-hosted
+Docker deployments. Never silently skip independent attestation, fabricate
+provider readiness, or mark the consumer release green on frontend-only evidence.
+
+### Proof remaining
+
+- Verify a supported full-stack deployment with working canonical ingress,
+  backend /api/health, model execution receipts, persistence and citations.
+- Confirm exact deployment attestation and authenticated browser tests.
+- Conduct human consumer UX acceptance on the same reviewed release image.
