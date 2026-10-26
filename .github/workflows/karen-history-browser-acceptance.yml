@@ -156,6 +156,7 @@ jobs:
         shell: bash
         env:
           TARGET_SHA: ${{ inputs.target_sha }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
           python ../../../scripts/ci/verify_deployment_revision.py
@@ -189,6 +190,7 @@ jobs:
         env:
           KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
           KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
           npm run test:e2e:search-release -- --reporter=list --retries=0
@@ -197,6 +199,7 @@ jobs:
         shell: bash
         env:
           TARGET_SHA: ${{ inputs.target_sha }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           GH_TOKEN: ${{ github.token }}
           PYTHONPATH: ${{ github.workspace }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
