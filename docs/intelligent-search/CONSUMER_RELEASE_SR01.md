@@ -66,3 +66,20 @@ These commands are **required**, not asserted to have passed.
 P0: routing, truthful sourced answer, live provider verification, RBAC and provenance. P1: consumer answer-first layout, cancel/state preservation, research continuity, accessible source navigation. P2: comparison templates, source quality analytics and deeper research collections.
 
 Consumer release stays **RED** until real provider + runtime + browser scenarios pass and human verification confirms the workflow. Never equate a green mocked component suite with real consumer readiness.
+
+
+## Deployment verification update (October 26, 2026)
+
+Repository quality checks were green at b0d4d9dddcfe05409673207fce6ccae2d0bfc63d.
+Consumer release remains RED pending authenticated deployment acceptance.
+
+The canonical scripts/ci/verify_deployment_revision.py fails closed for
+non-HTTPS or redirected origins, missing or inconsistent revision metadata,
+cacheable responses, oversized bodies and malformed JSON. The same verifier
+runs before and after browser acceptance, with a final GitHub PR-head check.
+All acceptance login scenarios reject unexpected origin redirects.
+
+This is runtime self-reported revision evidence, not independent platform
+build attestation. Vercel deployment ID, commit, READY status and immutable
+URL must be verified separately. Manual workflow runs on another branch
+without these guards are not PR #550 release receipts.

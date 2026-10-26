@@ -147,18 +147,13 @@ jobs:
             *) echo "::error::Acceptance URL must use HTTPS"; exit 1 ;;
           esac
 
-      - name: Verify deployed application revision matches reviewed PR head
+      - name: Verify deployed revision before browser acceptance
         shell: bash
         env:
-          TARGET_SHA: ${{ inputs.target_sha }}
+          TARGET_SHA: \${{ inputs.target_sha }}
         run: |
           set -euo pipefail
-          # Read the live deployment, not repository code or client metadata.
-          curl --fail --silent --show-error --location --max-time 20 \
-            --header 'Accept: application/json' \
-            --header 'Cache-Control: no-cache' \
-            "${KAREN_BASE_URL%/}/api/deployment-revision" | \
-            python -c 'import json,os,sys; payload=json.load(sys.stdin); observed=payload.get("revision"); target=os.environ["TARGET_SHA"]; assert payload.get("status")=="ok" and observed==target, "Deployed revision does not match reviewed PR head"'
+          python ../../../scripts/ci/verify_deployment_revision.py
 
       - uses: actions/setup-node@v5
         with:
@@ -177,5 +172,20 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:e2e:search-release -- --reporter=list --retries=0
+
+      - name: Revalidate deployment and reviewed PR head after browser acceptance
+        shell: bash
+        env:
+          TARGET_SHA: \${{ inputs.target_sha }}
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          set -euo pipefail
+          python ../../../scripts/ci/verify_deployment_revision.py
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          actual_sha="$(gh api repos/\${GITHUB_REPOSITORY}/pulls/550 --jq '.head.sha')"
+          test "$actual_sha" = "$TARGET_SHA" || {
+            echo "::error::PR head changed during browser acceptance"
+            exit 1
+          }
 
       # Never upload traces, videos, screenshots, or credential-bearing reports.

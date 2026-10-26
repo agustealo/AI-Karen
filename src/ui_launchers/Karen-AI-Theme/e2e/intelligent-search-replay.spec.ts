@@ -16,11 +16,17 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   test.skip(!required, 'Opt-in live release acceptance on a sanitized authenticated deployment');
   if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
 
+  // Protect release-test credentials from cross-origin login redirects.
+  const approvedDeployment = process.env.KAREN_BASE_URL;
+  if (!approvedDeployment) throw new Error('Approved deployment URL is required');
+  const approvedOrigin = new URL(approvedDeployment).origin;
   await page.goto('/login');
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
   await page.getByRole('textbox', { name: 'Email' }).fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
 
   const panel = page.getByTestId('persistent-karen-conversation');
   await page.getByRole('button', { name: 'Ask Karen', exact: true }).click();
@@ -77,11 +83,17 @@ test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surfac
   const password = process.env.KAREN_UX_PASSWORD;
   if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
 
+  // Protect release-test credentials from cross-origin login redirects.
+  const approvedDeployment = process.env.KAREN_BASE_URL;
+  if (!approvedDeployment) throw new Error('Approved deployment URL is required');
+  const approvedOrigin = new URL(approvedDeployment).origin;
   await page.goto('/login');
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
   await page.getByRole('textbox', { name: 'Email' }).fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
 
   // Locate the installed plugin through the consumer navigation. No private
   // route, response interception, or synthetic provider values are permitted.
@@ -130,11 +142,17 @@ test('SEARCH-PLUGIN-03: general web retrieval proves independent source domains'
   const password = process.env.KAREN_UX_PASSWORD;
   if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
 
+  // Protect release-test credentials from cross-origin login redirects.
+  const approvedDeployment = process.env.KAREN_BASE_URL;
+  if (!approvedDeployment) throw new Error('Approved deployment URL is required');
+  const approvedOrigin = new URL(approvedDeployment).origin;
   await page.goto('/login');
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
   await page.getByRole('textbox', { name: 'Email' }).fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
 
   await page.getByText('Intelligent Search', { exact: true }).first().click();
   const query = page.getByLabel('Query', { exact: true });
