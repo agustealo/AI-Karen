@@ -92,8 +92,7 @@ test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surfac
   await query.fill('What is the weather in Detroit, MI?');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
 
-  const observation = page.getByRole('region', { name: 'Weather observation' })
-    .or(page.locator('section[aria-label="Weather observation"]'));
+  const observation = page.locator('section[aria-label="Weather observation"]');
   await expect(observation).toBeVisible({ timeout: 120_000 });
   await expect(observation).toContainText('Detroit');
   await expect(observation).toContainText('°F');
