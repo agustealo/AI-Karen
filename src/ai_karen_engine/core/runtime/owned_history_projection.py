@@ -134,6 +134,8 @@ def project_owned_history(
     result = {
         "schema_version": 1,
         "threadId": thread_id,
+        "owner_user_id": str(snapshot.conversation.user_id),
+        "owner_tenant_id": str(snapshot.conversation.tenant_id),
         "messages": messages,
         "replayEvents": events,
         "response_source": "persisted_history",
