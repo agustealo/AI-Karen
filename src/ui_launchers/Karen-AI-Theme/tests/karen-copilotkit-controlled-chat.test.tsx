@@ -30,6 +30,13 @@ vi.mock("@copilotkit/react-core/v2", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/assistant-ui/KarenLocalDictation", () => ({
+  KarenLocalDictationCapture: () => <div data-testid="shared-local-dictation" />,
+}));
+vi.mock("@/components/chat/assistant-ui/KarenBrowserDictation", () => ({
+  KarenBrowserDictationCapture: () => <div data-testid="shared-browser-dictation" />,
+}));
+
 vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedHistory", () => ({
   KarenCopilotAssistantSlot: () => null,
 }));
@@ -69,6 +76,8 @@ function input() {
   return props as {
     onSubmitMessage: (text: string) => void;
     onStop: () => void;
+    onChange: (text: string) => void;
+    value: string;
   };
 }
 
@@ -76,6 +85,8 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
   it("does not start a provider, append a message or overwrite saved history on mount", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     expect(screen.getByTestId("native-copilot-view")).toBeTruthy();
+    expect(screen.getByTestId("shared-local-dictation")).toBeTruthy();
+    expect(screen.getByTestId("shared-browser-dictation")).toBeTruthy();
     expect(sdk.useAgentOptions).toEqual([{
       agentId: "karen-" + THREAD,
       runtimeAgentId: "default",
@@ -88,6 +99,24 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.views.at(-1)?.autoScroll).toBe(true);
     expect((sdk.views.at(-1)?.messageView as Record<string, unknown>).assistantMessage)
       .toBeDefined();
+  });
+
+  it("keeps an unsent native draft controlled and never starts inference while typing", () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(input().value).toBe("");
+    act(() => input().onChange("private unsent draft"));
+    expect(input().value).toBe("private unsent draft");
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses an oversized draft without adding a user message", () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange("x".repeat(65537)));
+    expect(input().value).toBe("");
+    expect(screen.getByRole("alert").textContent).toContain("message length");
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
   });
 
   it("starts a canonical CopilotKit run only after an explicit nonempty composer submission", async () => {
