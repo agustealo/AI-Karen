@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBackendBaseUrl } from "../../_lib/backend-proxy";
 import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilotkit/_lib/owned-thread-history";
 import { connectKarenOwnedThread, readKarenConnectThreadId } from "../../copilotkit/_lib/owned-thread-reconnect";
+import { readKarenScopedStopRunId, stopKarenOwnedRun } from "../../copilotkit/_lib/owned-run-stop";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,6 +84,8 @@ export async function verifyKarenCopilotSession(
 const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
+const STOP_ROUTE =
+  /^\/api\/copilotkit\/agent\/default\/stop\/([0-9a-f-]{36})$/i;
 const MAX_RUN_BYTES = 524288;
 
 /** Refuse SDK endpoints without canonical thread authorization or durability. */
@@ -90,6 +93,13 @@ export function validateCopilotRoute(request: NextRequest): NextResponse | null 
   const path = request.nextUrl.pathname;
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
   if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
+  // Exact-run stop is handled by Karen's runtime rather than SDK in-memory
+  // agent state. Thread-only/missing-body stops remain denied before auth.
+  const stop = STOP_ROUTE.exec(path);
+  if (request.method === "POST" && stop && CONVERSATION_UUID.test(stop[1]) &&
+      request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+    return null;
+  }
   if (request.method !== "POST" ||
       (path !== "/api/copilotkit/agent/default/run" &&
        path !== "/api/copilotkit/agent/default/connect")) {
@@ -197,6 +207,15 @@ async function handle(request: NextRequest): Promise<Response> {
   if (requestedHistoryId) {
     return readKarenOwnedThreadMessages(
       request, backendBaseUrl, auth.headers, auth.principal, requestedHistoryId,
+    );
+  }
+  const scopedStop = request.method === "POST"
+    ? STOP_ROUTE.exec(request.nextUrl.pathname) : null;
+  if (scopedStop && CONVERSATION_UUID.test(scopedStop[1])) {
+    const runId = await readKarenScopedStopRunId(request);
+    if (typeof runId !== "string") return runId;
+    return stopKarenOwnedRun(
+      request, backendBaseUrl, auth.headers, scopedStop[1], runId,
     );
   }
   if (request.method === "POST" &&
