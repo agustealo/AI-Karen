@@ -818,3 +818,48 @@ async def test_ck07b_run_stop_runtime_error_cannot_claim_success(monkeypatch):
             user={"user_id": USER, "tenant_id": TENANT_A},
         )
     assert unavailable.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_ck07b_worker_stop_projects_run_error_not_run_finished(monkeypatch):
+    from ai_karen_engine.core.runtime.chat_run_lifecycle import (
+        ChatRunCancellationRequested,
+    )
+
+    class StopObservedCoordinator:
+        async def stream(self, chunks, *, lease):
+            raise ChatRunCancellationRequested("chat_run_cancel_requested")
+            yield  # pragma: no cover
+
+    fake_runtime = FakeRuntime()
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: fake_runtime)
+    monkeypatch.setattr(
+        chat_ingress, "get_chat_run_coordinator",
+        lambda: StopObservedCoordinator(),
+    )
+    runtime_request = chat_ingress._stream_execution_request(
+        request=chat_ingress.ChatStreamRequest(
+            message="Hello", session_id="owned_session"
+        ),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+        session_id="owned_session",
+        correlation_id="correlation-7b",
+        response_id="request-7b",
+    )
+    frames = "".join([
+        chunk async for chunk in chat_ingress._ag_ui_sse(
+            runtime_request,
+            thread_id="8d3f7a11-bc7a-4caa-bf1d-6932891d42d0",
+            run_id="run-exact",
+            run_lease=SimpleNamespace(execution_id="server-issued"),
+        )
+    ])
+    events = [
+        json.loads(line[6:])
+        for line in frames.splitlines() if line.startswith("data: ")
+    ]
+    assert events[0]["type"] == "RUN_STARTED"
+    assert events[-1]["type"] == "RUN_ERROR"
+    assert events[-1]["code"] == "CHAT_STREAM_CANCELLED"
+    assert not any(e["type"] == "RUN_FINISHED" for e in events)
+    assert fake_runtime.requests == []
