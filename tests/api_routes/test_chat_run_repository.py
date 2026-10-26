@@ -312,13 +312,13 @@ async def test_replay_attestation_has_immutable_digest_and_owner_scope(
 def test_replay_digest_migration_preserves_legacy_rows_without_fake_backfill():
     root = Path(__file__).resolve().parents[2]
     migration = root / (
-        "supabase/migrations/20261025030000_44_runtime_chat_replay_identity.sql"
+        "supabase/migrations/20261025040000_45_runtime_chat_replay_digest.sql"
     )
     sql = migration.read_text(encoding="utf-8")
     assert "assistant_message_digest CHAR(64)" in sql
-    assert "ck_runtime_chat_completed_message_identity" in sql
+    assert "ck_runtime_chat_completed_digest" in sql
     assert "NOT VALID" in sql
-    assert "user_message_id <> assistant_message_id" in sql
+    assert "assistant_message_digest" in sql
     assert "UPDATE public.runtime_chat_runs SET" not in sql
 
 
