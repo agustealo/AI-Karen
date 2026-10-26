@@ -19,7 +19,7 @@ orchestrator and no legacy cancellation authority was imported.
 
 ## Operator activation (do not enable for consumer traffic yet)
 
-1. Apply and verify migration 43 using the canonical Supabase PostgreSQL migration pipeline; ensure tenant/user RLS is effective for runtime transactions.
+1. Apply and verify migrations 43, 44 and 45 in order through the canonical Supabase PostgreSQL migration pipeline; ensure tenant/user RLS is effective for runtime transactions.
 2. Set `KARI_ENABLE_AG_UI_BRIDGE=true` only in a scoped integration environment.
 3. Set `KARI_ENABLE_AG_UI_DURABLE_RUNS=true` there, never on an unverified installation.
 4. The validated timing options are `KARI_CHAT_RUN_LEASE_SECONDS=120` (30–3600) and `KARI_CHAT_RUN_HEARTBEAT_SECONDS=10` (1 to a third of the lease).
@@ -97,7 +97,7 @@ tenant or user scope does not alias the old execution.
    strictly enabled only by the canonical bridge + durable-run feature flags.
    Forward-only migration 44 binds the exact user and assistant message IDs
    to a completed run inside the existing canonical transcript transaction.
-   Migration 44 also stores SHA-256 of the exact saved assistant message
+   Migration 45 separately stores SHA-256 of the exact saved assistant message
    identity, content and complete metadata inside that transaction. Existing
    completed runs without saved fingerprints remain non-replayable; migration
    does not backfill inferred proof.
@@ -138,7 +138,7 @@ A dedicated non-production PostgreSQL concurrency test is also checked in:
 `tests/integration/test_runtime_chat_stop_concurrency_postgres.py`. It exercises
 the real migration, PostgreSQL row locking, tenant/user scoped cancellation,
 duplicate stop, stop-versus-completion race, lease expiry and fenced finality.
-The test applies migrations 43 and 44 and verifies atomic saved message
+The test applies migrations 43, 44 and 45 and verifies atomic saved message
 IDs against the authenticated completed-run replay attestation. It
 **requires** `CHAT_RUN_TEST_DATABASE_URL` pointing to a disposable
 database whose name is exactly `karen_chat_run_test`. It skips rather than
