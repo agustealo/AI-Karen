@@ -655,7 +655,7 @@ async def _ag_ui_sse(
             metadata={"error_code": code},
         )
         for event in projection.project(error_chunk):
-            yield f"data: {json.dumps(event)}\\n\\n"
+            yield f"data: {json.dumps(event)}\n\n"
     except Exception as exc:
         logger.exception(
             "AG-UI runtime projection failed",
