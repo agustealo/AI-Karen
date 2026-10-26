@@ -5,6 +5,11 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { apiClient } from "@/lib/api";
+import {
+  KarenVerifiedHistoryProvider,
+  parseKarenVerifiedHistory,
+  type VerifiedHistoryParts,
+} from "./KarenCopilotVerifiedHistory";
 
 
 /**
@@ -86,12 +91,14 @@ export function KarenCopilotHistoryGate({
   });
   const [loaded, setLoaded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [verifiedParts, setVerifiedParts] = useState<VerifiedHistoryParts>(new Map());
 
   useEffect(() => {
     if (!isReady) return;
     let cancelled = false;
     setLoaded(null);
     setError(null);
+    setVerifiedParts(new Map());
 
     void (async () => {
       try {
@@ -104,22 +111,16 @@ export function KarenCopilotHistoryGate({
         if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
           throw new Error("Conversation history identity mismatch");
         }
-        // The backed-owned read path may include attested rich events. Manual
-        // agent.setMessages() cannot restore these. Reject before mutating
-        // agent state, rather than claiming the conversation is restored.
-        if (snapshot.replayEvents !== undefined) {
-          if (!Array.isArray(snapshot.replayEvents)) {
-            throw new Error("Canonical conversation history has invalid replay metadata");
-          }
-          if (snapshot.replayEvents.length > 0) {
-            throw Object.assign(new Error("unsupported_rich_replay"), {
-              status: 409,
-            });
-          }
-        }
+        // Validate the ENTIRE verified presentation/receipt set before
+        // mutating the SDK agent. Unsupported events fail the whole playback,
+        // never a plausible-looking partial history.
         const messages = toCopilotTextMessages(snapshot.messages);
+        const parts = parseKarenVerifiedHistory(
+          snapshot.replayEvents ?? [], messages,
+        );
         // A thread switch must never retain another conversation's agent state.
         agent.setMessages(messages);
+        setVerifiedParts(parts);
         setLoaded(conversationId);
       } catch (error: unknown) {
         if (!cancelled) {
@@ -144,5 +145,9 @@ export function KarenCopilotHistoryGate({
   if (error) {
     return <p role="alert" className="text-sm text-destructive">{error}</p>;
   }
-  return <>{children}</>;
+  return (
+    <KarenVerifiedHistoryProvider parts={verifiedParts}>
+      {children}
+    </KarenVerifiedHistoryProvider>
+  );
 }
