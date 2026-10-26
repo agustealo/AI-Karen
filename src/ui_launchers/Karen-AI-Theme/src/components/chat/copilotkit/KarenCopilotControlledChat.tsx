@@ -10,7 +10,10 @@
  * persistence; there are no frontend tools or client-owned checkpoints.
  */
 import { CopilotChatView, useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { KarenLocalDictationCapture } from "../assistant-ui/KarenLocalDictation";
+import { KarenBrowserDictationCapture } from "../assistant-ui/KarenBrowserDictation";
+import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 
 import { karenScopedAgentId } from "./KarenCopilotHistoryGate";
 import { KarenCopilotAssistantSlot } from "./KarenCopilotVerifiedHistory";
@@ -29,6 +32,27 @@ export function KarenCopilotControlledChat({
   });
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const draftRef = useRef("");
+  const setDraftText = useCallback((text: string) => {
+    if (text.length > MAX_INPUT_CHARS) {
+      setError("Draft exceeds the supported message length.");
+      return;
+    }
+    draftRef.current = text;
+    setDraft(text);
+  }, []);
+  const draftPort: KarenVoiceDraftPort = {
+    readText: () => draftRef.current,
+    writeText: setDraftText,
+  };
+  useEffect(() => {
+    // Drafts are intentionally not inherited by a different conversation.
+    // A future durable draft owner must use authenticated user/tenant scope.
+    draftRef.current = "";
+    setDraft("");
+    setError(null);
+  }, [conversationId]);
   // A second click before SDK state flips to running must not start a
   // concurrent run or produce duplicate user-message writes.
   const submitPending = useRef(false);
@@ -43,6 +67,7 @@ export function KarenCopilotControlledChat({
     }
     submitPending.current = true;
     setError(null);
+    setDraftText("");
     // This is an explicit user gesture. No automatic initial greeting/run.
     agent.addMessage({
       id: crypto.randomUUID(),
@@ -52,11 +77,13 @@ export function KarenCopilotControlledChat({
     void Promise.resolve().then(() => copilotkit.runAgent({ agent }))
       .catch(() => {
         // Do not substitute a canned model answer or pretend persistence.
+        // Preserve the unsent text for retry unless the user started a new draft.
+        if (!draftRef.current) setDraftText(text);
         setError("Karen could not complete the request. Check the conversation history.");
       }).finally(() => {
         submitPending.current = false;
       });
-  }, [agent, conversationId, copilotkit, isReady]);
+  }, [agent, conversationId, copilotkit, isReady, setDraftText]);
 
   const onStop = useCallback(() => {
     if (!agent.isRunning) return;
@@ -78,8 +105,13 @@ export function KarenCopilotControlledChat({
         isRunning={agent.isRunning}
         autoScroll
         messageView={{ assistantMessage: KarenCopilotAssistantSlot }}
-        input={{ onSubmitMessage, onStop }}
+        input={{ value: draft, onChange: setDraftText, onSubmitMessage, onStop }}
       />
+      <div data-testid="karen-copilot-voice-controls"
+        className="flex shrink-0 items-center gap-2 border-t border-border/50 px-3 py-1">
+        <KarenLocalDictationCapture port={draftPort} />
+        <KarenBrowserDictationCapture port={draftPort} />
+      </div>
     </div>
   );
 }
