@@ -20,6 +20,23 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 
+@pytest.fixture(autouse=True)
+def owned_runtime_conversation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reuse canonical ownership check, without a test-only DB substitute in production."""
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    class ScopedGateway:
+        async def require_owned_conversation(self, execution_context: ChatExecutionContext):
+            assert execution_context.conversation_id == THREAD
+            return {"id": THREAD}
+
+    monkeypatch.setattr(
+        chat_run_lifecycle,
+        "get_conversation_runtime_gateway",
+        lambda: ScopedGateway(),
+    )
+
+
 USER_A = "11111111-1111-1111-1111-111111111111"
 USER_B = "22222222-2222-2222-2222-222222222222"
 TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -112,6 +129,26 @@ async def test_forged_principal_cannot_admit_run() -> None:
     )
     with pytest.raises(PermissionError, match="scope_mismatch"):
         await ChatRunCoordinator(repo).admit(invalid, "run-1")
+    assert not repo.keys
+
+
+@pytest.mark.asyncio
+async def test_repository_owner_denial_precedes_ledger_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    class ForeignGateway:
+        async def require_owned_conversation(self, _context: ChatExecutionContext):
+            raise PermissionError("conversation_user_mismatch")
+
+    monkeypatch.setattr(
+        chat_run_lifecycle, "get_conversation_runtime_gateway",
+        lambda: ForeignGateway(),
+    )
+    repo = MemoryLedger()
+    with pytest.raises(PermissionError):
+        await ChatRunCoordinator(repo).admit(context(), "run-foreign")
     assert not repo.keys
 
 
