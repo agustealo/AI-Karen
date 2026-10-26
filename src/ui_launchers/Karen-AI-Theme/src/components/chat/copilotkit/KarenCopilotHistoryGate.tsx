@@ -100,7 +100,13 @@ export function KarenCopilotHistoryGate({
     setError(null);
     setVerifiedParts(new Map());
 
-    void (async () => {
+    // Run events merely trigger another authenticated read; they do not
+    // authorize a client CUSTOM event as a saved execution receipt.
+    let unsubscribe: (() => void) | undefined;
+    let restoring = false;
+    const restore = async () => {
+      if (restoring || cancelled) return;
+      restoring = true;
       try {
         // Authorization-sensitive read. Never reuse the process-local UI
         // bootstrap cache across account or tenant transitions.
@@ -133,10 +139,33 @@ export function KarenCopilotHistoryGate({
             ? "This conversation contains interactive or structured content that CopilotKit cannot restore yet. Use the existing conversation view."
             : "Karen could not verify or restore this conversation.");
         }
+      } finally {
+        restoring = false;
       }
-    })();
+    };
 
-    return () => { cancelled = true; };
+    // Subscribe only to the real, ready agent and only after installing
+    // verified history. SDK finalization is a signal to reread Karen's
+    // committed transcript, never permission to invent a terminal event.
+    const start = async () => {
+      await restore();
+      if (cancelled || typeof agent.subscribe !== "function") return;
+      const subscription = agent.subscribe({
+        onRunFinalized: () => {
+          if (!cancelled) void restore();
+        },
+        onRunFailed: () => {
+          if (!cancelled) void restore();
+        },
+      });
+      unsubscribe = subscription.unsubscribe;
+    };
+    void start();
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, [agent, conversationId, isReady]);
 
   if (!isReady || (loaded !== conversationId && !error)) {
