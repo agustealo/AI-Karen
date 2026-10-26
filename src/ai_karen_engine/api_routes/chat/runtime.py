@@ -763,6 +763,71 @@ async def get_ag_ui_transport_capabilities(
     }
 
 
+@router.get("/chat/ag-ui/runs/{thread_id}/{run_id}/events")
+async def get_ag_ui_run_observed_events(
+    thread_id: str,
+    run_id: str,
+    after: int = 0,
+    limit: int = 50,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Read exactly one owner's observed AG-UI cursor, never execute/resume AI.
+
+    A crashed or expired worker is disclosed as interrupted; missing terminal
+    events are never invented from model intent or a UI-selected label.
+    """
+    features = get_runtime_settings().features
+    if not (
+        features.enable_ag_ui_bridge
+        and getattr(features, "enable_ag_ui_durable_runs", False)
+        and getattr(features, "enable_ag_ui_event_journal", False)
+    ):
+        raise HTTPException(status_code=404, detail="Run event history unavailable")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+        raise HTTPException(status_code=422, detail="Invalid run identity")
+    if type(after) is not int or not 0 <= after <= 2048:
+        raise HTTPException(status_code=422, detail="Invalid event cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise HTTPException(status_code=422, detail="Invalid event page limit")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Invalid conversation identity",
+        ) from exc
+    request_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user, session_id=thread, conversation_id=thread,
+        request_id=request_id, correlation_id=request_id,
+    )
+    try:
+        result = await get_chat_run_coordinator().read_observed_events(
+            context, run_id=run_id, after=after, limit=limit,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+        logger.exception("Observed run-event read failed", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Run event history unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid run event query") from exc
+    except Exception as exc:
+        logger.exception("Observed run-event storage failed", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Run event history unavailable") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Chat run unavailable")
+    return JSONResponse(
+        status_code=200, content=result,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @router.get("/chat/ag-ui/threads/{thread_id}/history")
 async def get_ag_ui_owned_history(
     thread_id: str,
