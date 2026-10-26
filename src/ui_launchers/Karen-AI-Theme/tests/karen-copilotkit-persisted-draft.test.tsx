@@ -22,7 +22,12 @@ const TARGET = "/api/conversations/" + CONV + "/draft";
 
 function Surface() {
   const draft = useKarenPersistedDraft(CONV);
+  const [clearConfirmed, setClearConfirmed] = React.useState<boolean | null>(null);
   return <div>
+    <span data-testid="clear-confirmed">{String(clearConfirmed)}</span>
+    <button onClick={() => {
+      void draft.clearBeforeSubmit(draft.draft).then(setClearConfirmed);
+    }}>Confirm durable clear</button>
     <span data-testid="draft-status">{draft.status}</span>
     <span data-testid="draft-synced">{String(draft.synced)}</span>
     <textarea aria-label="Saved draft" value={draft.draft}
@@ -92,6 +97,35 @@ describe("CK-07E6 authenticated composer draft hook", () => {
       (screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value,
     ).toBe("Edited from second tab"));
     expect(backend.put).not.toHaveBeenCalled();
+  });
+
+  it("confirms a revision-fenced empty draft before permitting inference", async () => {
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm durable clear" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledWith(
+      TARGET, { text: "", expected_revision: 4 },
+      expect.objectContaining({ signal: expect.any(Object) }),
+    ));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent)
+      .toBe("true"));
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
+      .toBe("");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+  });
+
+  it("refuses send clearance when another window already advanced the revision", async () => {
+    backend.put.mockRejectedValueOnce(new ApiError(409, "another window wrote"));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm durable clear" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent)
+      .toBe("false"));
+    expect(screen.getByTestId("draft-status").textContent).toBe("conflict");
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
+      .toBe("Persisted earlier");
   });
 
   it("fails closed when draft storage cannot be read; never fakes a save", async () => {
