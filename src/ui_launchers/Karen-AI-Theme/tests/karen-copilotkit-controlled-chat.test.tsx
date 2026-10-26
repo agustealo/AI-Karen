@@ -93,12 +93,14 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
   it("starts a canonical CopilotKit run only after an explicit nonempty composer submission", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     act(() => input().onSubmitMessage("  Send this question  "));
-    expect(sdk.agent.addMessage).toHaveBeenCalledExactlyOnceWith({
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.agent.addMessage).toHaveBeenCalledWith({
       id: "2dab411c-640e-4206-909b-6783e32c7da0",
       role: "user",
       content: "Send this question",
     });
-    expect(sdk.runAgent).toHaveBeenCalledExactlyOnceWith({ agent: sdk.agent });
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.runAgent).toHaveBeenCalledWith({ agent: sdk.agent });
   });
 
   it("never triggers inference for blank, oversized, running, or foreign-thread input", () => {
@@ -141,6 +143,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.stopAgent).not.toHaveBeenCalled();
     sdk.agent.isRunning = true;
     act(() => input().onStop());
-    expect(sdk.stopAgent).toHaveBeenCalledExactlyOnceWith({ agent: sdk.agent });
+    expect(sdk.stopAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.stopAgent).toHaveBeenCalledWith({ agent: sdk.agent });
   });
 });
