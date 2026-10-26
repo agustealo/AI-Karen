@@ -36,7 +36,8 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   const sourceToggle = panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).last();
   await expect(sourceToggle).toBeVisible();
   await sourceToggle.click();
-  const originalSources = await panel.locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
+  await expect(panel.getByTestId('chat-source-list')).toBeVisible();
+  const originalSources = await panel.getByTestId('chat-source-list').locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
     (links) => links.map((link) => (link as HTMLAnchorElement).href).filter(Boolean),
   );
   expect(originalSources.length, 'Grounded answers must expose a real source URL').toBeGreaterThan(0);
@@ -51,7 +52,8 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   await expect(restoredBadge).toBeVisible();
   await restoredBadge.click();
   await panel.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).last().click();
-  const restoredSources = await panel.locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
+  await expect(panel.getByTestId('chat-source-list')).toBeVisible();
+  const restoredSources = await panel.getByTestId('chat-source-list').locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
     (links) => links.map((link) => (link as HTMLAnchorElement).href).filter(Boolean),
   );
   expect(restoredSources).toEqual(originalSources);
