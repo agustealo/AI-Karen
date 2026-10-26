@@ -74,3 +74,29 @@ def test_synthesizer_rechecks_after_retry_before_returning():
            / "src/ai_karen_engine/services/response/response_synthesizer.py").read_text()
     assert "verified = self.validator.validate(text, contract)" in src
     assert 'metadata["response_source"] = "citation_validation_failure"' in src
+
+
+def test_observation_rejects_unverified_urls():
+    """Model-authored weather/time text cannot cite URLs from raw observations."""
+    validator = ResponseValidator()
+    cases = [
+        ("search.weather", {"temperature_f": 75}, "It is 75 Fahrenheit. See https://made-up.example/weather."),
+        ("search.weather", {"temperature_f": 75}, "It is 75 Fahrenheit (http://made-up.example/weather)."),
+        ("search.weather", {"temperature_f": 75}, "It is 75 Fahrenheit. HTTPS://MADE-UP.EXAMPLE/weather"),
+        ("time.current", {"timezone": "America/Detroit"}, "Time in America/Detroit: https://made-up.example/clock"),
+    ]
+    for intent, evidence, text in cases:
+        result = validator.validate_observation(text, intent, evidence)
+        assert not result.valid, (intent, text)
+        assert result.reason == "unverified_observation_url"
+
+
+def test_observation_without_url_remains_valid():
+    """The citation restriction must not block supported plain observations."""
+    validator = ResponseValidator()
+    assert validator.validate_observation(
+        "It is 75 Fahrenheit.", "search.weather", {"temperature_f": 75}
+    ).valid
+    assert validator.validate_observation(
+        "The timezone is America/Detroit.", "time.current", {"timezone": "America/Detroit"}
+    ).valid
