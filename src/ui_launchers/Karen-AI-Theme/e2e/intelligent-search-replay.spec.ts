@@ -25,13 +25,17 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   const panel = page.getByTestId('persistent-karen-conversation');
   await page.getByRole('button', { name: 'Ask Karen', exact: true }).click();
   await expect(panel).toHaveAttribute('aria-hidden', 'false');
-  const prompt = 'Search the web for an official source describing the history of the Python programming language. Answer with a verified URL citation.';
+  const prompt = `Research acceptance ${Date.now()}: Search the web for an official source describing the history of the Python programming language. Answer with a verified URL citation.`;
   await panel.getByTestId('chat-input').fill(prompt);
   await panel.getByRole('button', { name: 'Send message' }).click();
 
+  const assistantCount = await panel.getByTestId('chat-message-assistant').count();
   const assistantMessage = panel.getByTestId('chat-message-assistant').last();
+  await expect.poll(() => panel.getByTestId('chat-message-assistant').count(), { timeout: 90_000 }).toBeGreaterThan(assistantCount);
   const assistant = assistantMessage.getByTestId('chat-evidence-status').filter({ hasText: 'Verified grounded answer' });
   await expect(assistant).toBeVisible({ timeout: 90_000 });
+  const originalAnswer = await assistantMessage.getByTestId('chat-message-content').innerText();
+  expect(originalAnswer.trim().length).toBeGreaterThan(0);
   const citationBadge = assistantMessage.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).first();
   await expect(citationBadge).toBeVisible();
   await citationBadge.click();
@@ -51,6 +55,7 @@ test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening',
   await expect(panel.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
   const restoredMessage = panel.getByTestId('chat-message-assistant').last();
   await expect(restoredMessage.getByTestId('chat-evidence-status').filter({ hasText: 'Verified grounded answer' })).toBeVisible();
+  await expect(restoredMessage.getByTestId('chat-message-content')).toHaveText(originalAnswer);
   const assistantMessageAfterReload = restoredMessage;
   const restoredBadge = assistantMessageAfterReload.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).first();
   await expect(restoredBadge).toBeVisible();
