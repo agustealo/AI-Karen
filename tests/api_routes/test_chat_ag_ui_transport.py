@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -530,3 +531,49 @@ async def test_ag_ui_capabilities_reject_missing_principal_or_tenant():
         with pytest.raises(HTTPException) as exc:
             await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
         assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_stream_cancellation_unwinds_canonical_execution_without_success(monkeypatch):
+    """Transport disconnect must cancel, not fabricate terminal completion.
+
+    This proves cancellation propagation for the single active SSE request.
+    It does not implement or claim cross-worker SDK stop/resume semantics.
+    """
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    class BlockingRuntime:
+        async def execute_stream(self, request):
+            try:
+                started.set()
+                await asyncio.Event().wait()
+                yield ChatStreamChunk(
+                    type=ChatStreamEventType.COMPLETE,
+                    content="",
+                    correlation_id=request.context.correlation_id,
+                )
+            finally:
+                released.set()
+
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: BlockingRuntime())
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(),
+        http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    stream = response.body_iterator
+    connect = await anext(stream)
+    begin = await anext(stream)
+    assert connect.startswith(": stream_connected")
+    assert '"RUN_STARTED"' in begin
+
+    pending = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    await asyncio.wait_for(released.wait(), timeout=1)
+
+    # An aborted transport is not allowed to synthesize RUN_FINISHED.
+    assert '"RUN_FINISHED"' not in connect + begin
