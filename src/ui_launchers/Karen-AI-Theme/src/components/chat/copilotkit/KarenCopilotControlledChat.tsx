@@ -69,11 +69,18 @@ export function KarenCopilotControlledChat({
     setError(null);
     setDraftText("");
     // This is an explicit user gesture. No automatic initial greeting/run.
-    agent.addMessage({
-      id: crypto.randomUUID(),
-      role: "user",
-      content: text,
-    });
+    try {
+      agent.addMessage({
+        id: crypto.randomUUID(),
+        role: "user",
+        content: text,
+      });
+    } catch {
+      submitPending.current = false;
+      setDraftText(text);
+      setError("Karen could not queue the message. Your unsent draft was retained.");
+      return;
+    }
     void Promise.resolve().then(() => copilotkit.runAgent({ agent }))
       .catch(() => {
         // Do not substitute a canned model answer or pretend persistence.
