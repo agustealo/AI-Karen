@@ -211,6 +211,7 @@ def test_ci_production_image_builds_bind_checked_out_commit() -> None:
         ".github/workflows/beta-release-gate.yml",
         ".github/workflows/beta-live-model-smoke.yml",
         ".github/workflows/ollama-settings-live-e2e.yml",
+        ".github/workflows/presentation-capture.yml",
     )
     for workflow in workflows:
         source = (REPO_ROOT / workflow).read_text(encoding="utf-8")
@@ -222,3 +223,20 @@ def test_ci_production_image_builds_bind_checked_out_commit() -> None:
             assert "--build-arg KAREN_DEPLOYED_COMMIT_SHA" in block, (
                 f"Production Docker build omitted reviewed source SHA: {workflow}"
             )
+
+
+
+def test_trusted_presentation_capture_stamps_target_not_workflow_sha() -> None:
+    """Candidate and orchestrator have distinct identities in presentation proof."""
+    source = (
+        REPO_ROOT / ".github/workflows/presentation-capture.yml"
+    ).read_text(encoding="utf-8")
+    assert "Attest exact trusted checkout and target ancestry" in source
+    assert "Attest exact candidate checkout" in source
+    for name in ("Build exact candidate production API image", "Build exact candidate production web image"):
+        build = source.split("      - name: " + name, 1)[1].split("\n      - name:", 1)[0]
+        assert "working-directory: .presentation-target" in build
+        assert "KAREN_SHOWCASE_TARGET_REVISION: " + chr(36) + "{{ needs.prepare.outputs.target_revision }}" in build
+        assert 'test "$(git rev-parse HEAD)" = "$KAREN_SHOWCASE_TARGET_REVISION"' in build
+        assert '--build-arg KAREN_DEPLOYED_COMMIT_SHA="$KAREN_SHOWCASE_TARGET_REVISION"' in build
+        assert '--build-arg KAREN_DEPLOYED_COMMIT_SHA="$GITHUB_SHA"' not in build
