@@ -197,3 +197,28 @@ def test_production_images_carry_explicit_release_revision() -> None:
 def test_production_template_requires_explicit_revision() -> None:
     env_text = PROD_ENV_EXAMPLE.read_text(encoding="utf-8")
     assert "KAREN_DEPLOYED_COMMIT_SHA=CHANGE_ME_40_CHARACTER_LOWERCASE_GIT_SHA" in env_text
+
+
+
+def test_ci_production_image_builds_bind_checked_out_commit() -> None:
+    """Every CI build of the production Dockerfiles must stamp source identity.
+
+    Pull requests may test a synthetic merge commit; its checked-out SHA is
+    valid for the CI image, not an attestation for a production promotion.
+    """
+    workflows = (
+        ".github/workflows/production-first-boot-smoke.yml",
+        ".github/workflows/beta-release-gate.yml",
+        ".github/workflows/beta-live-model-smoke.yml",
+        ".github/workflows/ollama-settings-live-e2e.yml",
+    )
+    for workflow in workflows:
+        source = (REPO_ROOT / workflow).read_text(encoding="utf-8")
+        assert "git rev-parse HEAD" in source
+        blocks = source.split("\n      - name: ")
+        builds = [block for block in blocks if "docker build" in block]
+        assert builds, f"No production image build found in {workflow}"
+        for block in builds:
+            assert "--build-arg KAREN_DEPLOYED_COMMIT_SHA" in block, (
+                f"Production Docker build omitted reviewed source SHA: {workflow}"
+            )
