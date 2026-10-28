@@ -164,6 +164,16 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         )) is None
         assert await worker_a.renew(lease)
         assert await worker_b.request_cancel(**identity()) == "cancelling"
+        # A second independent repository instance reads the actual committed
+        # SQL state, not a process-local boolean or an SDK transport guess.
+        assert await worker_b.read_status(**identity()) == {
+            "status": "cancelling",
+            "cancel_requested": True,
+            "cancellation_confirmed": False,
+        }
+        assert await worker_b.read_status(**identity(
+            owner=user_b, tenant=tenant_b,
+        )) is None
         assert await worker_b.request_cancel(**identity()) == "cancelling"
         assert not await worker_a.renew(lease)
         assert await worker_a.cancel_requested(lease)
@@ -173,6 +183,14 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             lease, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
         )
         assert await worker_b.request_cancel(**identity()) == "cancelled"
+        assert await worker_b.read_status(**identity()) == {
+            "status": "cancelled",
+            "cancel_requested": True,
+            "cancellation_confirmed": True,
+        }
+        assert await worker_a.read_status(**identity(
+            run_id="run-does-not-exist",
+        )) is None
         assert not await worker_b.finish(lease, status="cancelled")
 
         # Simultaneous stop/completion on two independent connections:
@@ -259,6 +277,12 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             uuid.UUID(race_lease.execution_id),
         )
         assert observed in {"completed", "cancelled"}
+        race_status = await worker_b.read_status(**identity(run_id="run-race"))
+        assert race_status == {
+            "status": observed,
+            "cancel_requested": observed == "cancelled",
+            "cancellation_confirmed": observed == "cancelled",
+        }
 
         # Event cursor persisted by one worker is readable by another.
         journal = await worker_a.admit(
@@ -456,9 +480,21 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             """,
             uuid.UUID(expired.execution_id),
         )
+        # An expired lease must be an interruption, never a terminal
+        # cancellation confirmation, even before an operator asks to stop.
+        assert await worker_b.read_status(**identity(run_id="run-expired")) == {
+            "status": "interrupted",
+            "cancel_requested": False,
+            "cancellation_confirmed": False,
+        }
         assert await worker_b.request_cancel(
             **identity(run_id="run-expired")
         ) == "orphaned"
+        assert await worker_b.read_status(**identity(run_id="run-expired")) == {
+            "status": "orphaned",
+            "cancel_requested": False,
+            "cancellation_confirmed": False,
+        }
         assert not await worker_a.finish(expired, status="cancelled")
         assert not await worker_a.cancel_requested(expired)
 
