@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ChatMessage } from '@/lib/types';
+import type { ChatMessage, Citation } from '@/lib/types';
 import type { SuggestedAction } from '@/lib/agent-ui/service';
 import { apiClient } from '@/lib/api';
 import Image from 'next/image';
@@ -156,6 +156,17 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
 
   const responseDetailsId = `response-details-${message.id}`;
   const feedbackTrajectoryId = String(message.metadata?.trajectory_id || '').trim();
+  const compositionStatus = isAssistant && typeof message.metadata?.answer_composition_status === 'string'
+    ? message.metadata.answer_composition_status : '';
+  const compositionLabel: Record<string, string> = {
+    grounded_model: 'Verified grounded answer',
+    retrieved_evidence: 'Retrieved evidence only',
+    source_observation: 'Provider observation',
+    capability_unavailable: 'Live capability unavailable',
+  };
+  const evidenceLabel = Object.prototype.hasOwnProperty.call(compositionLabel, compositionStatus)
+    ? compositionLabel[compositionStatus] : null;
+
   const normalizedContent = useMemo(
     () => sanitizeChatContent(message.content),
     [message.content],
@@ -214,8 +225,19 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
     Boolean(normalizedDegradedNotice) &&
     normalizedDegradedNotice.toLowerCase() !== normalizedContent.toLowerCase();
 
-  const hasCitations =
-    !isUser && Array.isArray(message.citations) && message.citations.length > 0;
+  // Replay uses the canonical persisted metadata when the transport did not
+  // promote citations into the message view model. Never synthesize citations.
+  const restoredCitations = message.metadata?.citations;
+  const citations: Citation[] = Array.isArray(message.citations)
+    ? message.citations
+    : Array.isArray(restoredCitations)
+      ? restoredCitations.filter(
+          (item): item is Citation =>
+            Boolean(item) && typeof item === 'object' &&
+            typeof item.url === 'string' && /^https?:\/\//i.test(item.url),
+        )
+      : [];
+  const hasCitations = !isUser && citations.length > 0;
 
   const hasStructuredContent =
     Boolean(message.structuredContent) &&
@@ -367,6 +389,12 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                     emphasize={isSystemMessage}
                   />
                 </div>
+              )}
+
+              {evidenceLabel && (
+                <p data-testid="chat-evidence-status" className="mt-2 text-xs text-muted-foreground">
+                  {evidenceLabel}
+                </p>
               )}
 
               {/*
@@ -597,13 +625,13 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
 
               {hasCitations && (
                 <CitationBadge
-                  citations={message.citations}
+                  citations={citations}
                   onClick={() => setShowDetails((current) => !current)}
                 />
               )}
 
               {showDetails && hasCitations && (
-                <SourceList citations={message.citations || []} />
+                <SourceList citations={citations} />
               )}
 
               {message.actions && message.actions.length > 0 && (

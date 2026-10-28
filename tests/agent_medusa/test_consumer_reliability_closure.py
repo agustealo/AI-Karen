@@ -420,3 +420,84 @@ def test_durable_terminal_outcome_is_written_in_same_owner_fenced_transition() -
     durable_transition_section = manager_source.split("if run.shared_registered:", 1)[0]
     assert "set_outcome_status" not in durable_transition_section
     assert "outcome_status=outcome_status" in manager_source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["agent", "tool", "plugin"])
+async def test_specialist_cannot_widen_parent_authorization_before_side_effects(kind):
+    registry = SimpleNamespace(get_agent=AsyncMock(), get_agent_health=AsyncMock())
+    factory = SimpleNamespace(resolve=Mock())
+    coordinator = MedusaCoordinator(registry=registry, factory=factory)
+    step = PlanStep(
+        id="step-denied",
+        agent_specialist="foreign-agent" if kind == "agent" else "researcher",
+        required_tools=["unapproved-tool"] if kind == "tool" else [],
+        required_plugins=["unapproved-plugin"] if kind == "plugin" else [],
+    )
+    plan = _plan()
+    with pytest.raises(PermissionError, match="medusa_step_exceeds_authorized_plan"):
+        await coordinator._execute_step(
+            step,
+            DeepExecutionPlan(request_id="req-1", steps=[step]),
+            _request(),
+            plan,
+        )
+    registry.get_agent.assert_not_awaited()
+    registry.get_agent_health.assert_not_awaited()
+    factory.resolve.assert_not_called()
+    assert step.status is StepStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_approved_specialist_keeps_parent_grants_narrowed():
+    """A valid parent grant must execute without widening specialist permissions."""
+    specialist = SimpleNamespace(run=AsyncMock(return_value={"ok": True}))
+    registration = SimpleNamespace(capabilities=[], lifecycle_state="active")
+    registry = SimpleNamespace(
+        get_agent=AsyncMock(return_value=registration),
+        get_agent_health=AsyncMock(return_value={
+            "exists": True,
+            "healthy": True,
+            "readiness_reason": "ready",
+            "unknown_dependencies": [],
+            "missing_dependencies": [],
+        }),
+    )
+    coordinator = MedusaCoordinator(
+        registry=registry,
+        factory=SimpleNamespace(resolve=Mock(return_value=specialist)),
+    )
+    step = PlanStep(id="step-approved", agent_specialist="researcher")
+    result = await coordinator._execute_step(
+        step,
+        DeepExecutionPlan(request_id="req-1", steps=[step]),
+        _request(),
+        _plan(),
+    )
+    assert result == {"ok": True}
+    assert step.status is StepStatus.COMPLETED
+    execution_plan = specialist.run.await_args.kwargs["execution"].authorized_plan
+    assert execution_plan.allowed_agents == ["researcher"]
+    assert execution_plan.allowed_tools == []
+    assert execution_plan.allowed_plugins == []
+
+
+@pytest.mark.asyncio
+async def test_wildcard_parent_agent_grant_does_not_authorize_specialist():
+    registry = SimpleNamespace(get_agent=AsyncMock(), get_agent_health=AsyncMock())
+    coordinator = MedusaCoordinator(
+        registry=registry,
+        factory=SimpleNamespace(resolve=Mock()),
+    )
+    step = PlanStep(id="step-wildcard", agent_specialist="researcher")
+    plan = _plan()
+    plan.allowed_agents = ["*"]
+    with pytest.raises(PermissionError, match="medusa_step_exceeds_authorized_plan"):
+        await coordinator._execute_step(
+            step,
+            DeepExecutionPlan(request_id="req-1", steps=[step]),
+            _request(),
+            plan,
+        )
+    registry.get_agent.assert_not_awaited()
+    assert step.status is StepStatus.PENDING

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
 from typing import Any, Dict, List
 from urllib.parse import urlparse
@@ -115,4 +116,14 @@ class SearchResultProcessor:
         frequencies: Dict[str, int] = {}
         for word in _WORD.findall(content.casefold()):
             frequencies[word] = frequencies.get(word, 0) + 1
-        return float(sum(min(frequencies.get(word, 0), 5) for word in query_words))
+        if not query_words:
+            return 0.0
+        matched = sum(1 for word in query_words if frequencies.get(word, 0))
+        if not matched:
+            return 0.0
+        # Favor coverage of the whole query, then damp repetition; normalize
+        # long pages so repeated incidental words cannot saturate a fixed cap.
+        term_signal = sum(math.log1p(frequencies.get(word, 0)) for word in query_words)
+        total_terms = sum(frequencies.values())
+        return round((matched / len(query_words)) * term_signal /
+                     math.sqrt(max(1.0, total_terms / 100.0)), 6)

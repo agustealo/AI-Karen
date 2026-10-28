@@ -811,3 +811,35 @@ async def test_response_metadata_cannot_override_authorized_transcript_identity(
     assert assistant.metadata["transcript_actor"] == "assistant"
     assert assistant.metadata["actual_provider"] == "ollama"
     assert assistant.metadata["actual_model"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_restored_turn_retains_grounded_search_execution_receipt() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    receipt = {
+        "answer_composition_status": "grounded_model",
+        "response_source": "grounded_search_model",
+        "actual_provider": "local",
+        "actual_model": "verified-model",
+    }
+    saved = await gateway.persist_completed_turn(
+        _context(request_id="research-1"),
+        user_text="Explain the retrieved article with citations.",
+        assistant_text="Grounded response with source citation.",
+        response_metadata=receipt,
+    )
+    assert saved.status == "persisted"
+
+    restored = await gateway.load_history(
+        _context(request_id="research-2"),
+        limit=10,
+    )
+    assert restored.status == "loaded"
+    assistant = next(message for message in restored.messages if message.role == "assistant")
+    for key, value in receipt.items():
+        assert assistant.metadata[key] == value
+    assert all(
+        "answer_composition_status" not in message.metadata
+        for message in restored.messages if message.role == "user"
+    )

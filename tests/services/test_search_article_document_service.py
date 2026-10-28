@@ -88,3 +88,112 @@ async def test_article_detects_tampered_content_and_rejects_missing_identity():
     store.items[saved.artifact_id] = (artifact, b"Tampered content")
     with pytest.raises(RuntimeError, match="integrity"):
         await service.read(tenant_id="tenant-a", user_id="user-a", article_id=saved.artifact_id)
+
+
+@pytest.mark.asyncio
+async def test_chat_reference_read_enforces_actual_artifact_owner_and_tenant():
+    from types import SimpleNamespace
+
+    store = ArtifactDouble()
+    service = SearchArticleService(store)
+    saved = await service.save(
+        tenant_id="tenant-a", user_id="user-a",
+        source_url="https://example.org/research", title="Research",
+        document="Private source content",
+    )
+
+    class Context:
+        def __init__(self, tenant_id, user_id):
+            self.tenant_id = tenant_id
+            self.user_id = user_id
+
+        def require_authenticated_user(self):
+            return SimpleNamespace(user_id=self.user_id, tenant_id=self.tenant_id)
+
+    assert await service.read_for_chat(
+        execution_context=Context("tenant-a", "user-a"),
+        article_id=saved.artifact_id,
+        source_url="https://example.org/research",
+    ) == "Private source content"
+    assert await service.read_for_chat(
+        execution_context=Context("tenant-a", "user-b"),
+        article_id=saved.artifact_id,
+        source_url="https://example.org/research",
+    ) is None
+    assert await service.read_for_chat(
+        execution_context=Context("tenant-b", "user-a"),
+        article_id=saved.artifact_id,
+        source_url="https://example.org/research",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_chat_reference_rejects_misattributed_saved_source_url():
+    from types import SimpleNamespace
+
+    store = ArtifactDouble()
+    service = SearchArticleService(store)
+    saved = await service.save(
+        tenant_id="tenant-a", user_id="user-a",
+        source_url="https://example.org/original", title="Original",
+        document="Scoped trusted evidence",
+    )
+
+    class Context:
+        tenant_id = "tenant-a"
+        user_id = "user-a"
+
+        def require_authenticated_user(self):
+            return SimpleNamespace(tenant_id=self.tenant_id, user_id=self.user_id)
+
+    context = Context()
+    assert await service.read_for_chat(
+        execution_context=context, article_id=saved.artifact_id,
+        source_url="https://example.org/original",
+    ) == "Scoped trusted evidence"
+    assert await service.read_for_chat(
+        execution_context=context, article_id=saved.artifact_id,
+        source_url="https://example.org/forged-citation",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_chat_reference_requires_source_url_and_rejects_deleted_or_tampered_article():
+    from types import SimpleNamespace
+
+    store = ArtifactDouble()
+    service = SearchArticleService(store)
+    saved = await service.save(
+        tenant_id="tenant-a", user_id="user-a",
+        source_url="https://example.org/provenance", title="Provenance",
+        document="Verified saved text",
+    )
+
+    class Context:
+        tenant_id = "tenant-a"
+        user_id = "user-a"
+
+        def require_authenticated_user(self):
+            return SimpleNamespace(tenant_id=self.tenant_id, user_id=self.user_id)
+
+    context = Context()
+    assert await service.read_for_chat(
+        execution_context=context, article_id=saved.artifact_id,
+    ) is None
+    assert await service.read_for_chat(
+        execution_context=context, article_id=saved.artifact_id,
+        source_url="",
+    ) is None
+
+    artifact, document = store.items[saved.artifact_id]
+    store.items[saved.artifact_id] = (replace(artifact, deleted_at=__import__("datetime").datetime.utcnow()), document)
+    assert await service.read_for_chat(
+        execution_context=context, article_id=saved.artifact_id,
+        source_url="https://example.org/provenance",
+    ) is None
+    store.items[saved.artifact_id] = (artifact, b"tampered body")
+    with pytest.raises(RuntimeError, match="integrity"):
+        await service.read_for_chat(
+            execution_context=context, article_id=saved.artifact_id,
+            source_url="https://example.org/provenance",
+        )

@@ -87,16 +87,40 @@ jobs:
         env:
           KAREN_CI_PYTHON_BASE_IMAGE: ${{ vars.KAREN_CI_PYTHON_BASE_IMAGE || 'python:3.11-slim' }}
         run: |
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
           docker build --target app --build-arg PROFILE=runtime \
             --build-arg KAREN_PYTHON_BASE_IMAGE="$KAREN_CI_PYTHON_BASE_IMAGE" \
+            --build-arg KAREN_DEPLOYED_COMMIT_SHA="$GITHUB_SHA" \
             -t ai-karen-api:beta .
 
       - name: Build production web image
         run: |
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
           docker build \
+            --build-arg KAREN_DEPLOYED_COMMIT_SHA="$GITHUB_SHA" \
             -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production \
             -t ai-karen-web:beta \
             src/ui_launchers/Karen-AI-Theme
+
+      - name: Prove both built images carry the checked-out CI source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          for service in api web; do
+            image="ai-karen-${service}:beta"
+            revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+            image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+            test "$revision" = "$GITHUB_SHA" || {
+              echo "::error::Image revision does not match the checked-out CI SHA"
+              exit 1
+            }
+            [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+              echo "::error::Built image has no immutable local image ID"
+              exit 1
+            }
+            printf '%s image ID: %s\n' "$service" "$image_id" >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Prove web ingress rejects missing public scheme
         shell: bash

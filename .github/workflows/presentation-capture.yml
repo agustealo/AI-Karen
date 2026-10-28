@@ -157,12 +157,24 @@ jobs:
 
       - name: Build exact candidate production API image
         working-directory: .presentation-target
-        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-presentation-api:candidate .
+        env:
+          KAREN_SHOWCASE_TARGET_REVISION: ${{ needs.prepare.outputs.target_revision }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$KAREN_SHOWCASE_TARGET_REVISION"
+          docker build --target app --build-arg PROFILE=runtime \
+            --build-arg KAREN_DEPLOYED_COMMIT_SHA="$KAREN_SHOWCASE_TARGET_REVISION" \
+            -t ai-karen-presentation-api:candidate .
 
       - name: Build exact candidate production web image
         working-directory: .presentation-target
+        env:
+          KAREN_SHOWCASE_TARGET_REVISION: ${{ needs.prepare.outputs.target_revision }}
         run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$KAREN_SHOWCASE_TARGET_REVISION"
           docker build \
+            --build-arg KAREN_DEPLOYED_COMMIT_SHA="$KAREN_SHOWCASE_TARGET_REVISION" \
             -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production \
             -t ai-karen-presentation-web:candidate \
             src/ui_launchers/Karen-AI-Theme

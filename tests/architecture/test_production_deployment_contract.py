@@ -166,3 +166,77 @@ def test_training_worker_is_opt_in_and_uses_api_model_registry_mount() -> None:
     assert "./models:/app/models:rw" in api
     assert "ai_karen_engine.core.intelligence.ml.training.worker_service" in worker
     assert "depends_on:" not in worker
+
+
+
+def test_production_images_carry_explicit_release_revision() -> None:
+    """Both production services must receive the same reviewed build identity."""
+    overlay = PROD_COMPOSE.read_text(encoding="utf-8")
+    required = "KAREN_DEPLOYED_COMMIT_SHA: " + chr(36) + "{KAREN_DEPLOYED_COMMIT_SHA:?"
+    for service, image in (("web", "ai-karen-web:"), ("api", "ai-karen-api:")):
+        block = _service_block(overlay, service)
+        assert block.count(required) == 2
+        assert "image: " + image + chr(36) + "{KAREN_DEPLOYED_COMMIT_SHA:?" in block
+        assert "build:" in block and "args:" in block
+        assert "environment:" in block
+
+    web_dockerfile = WEB_PROD_DOCKERFILE.read_text(encoding="utf-8")
+    assert "ARG KAREN_DEPLOYED_COMMIT_SHA" in web_dockerfile
+    assert "grep -Eq '^[a-f0-9]{40}$'" in web_dockerfile
+    assert 'LABEL org.opencontainers.image.revision="' + chr(36) + '{KAREN_DEPLOYED_COMMIT_SHA}"' in web_dockerfile
+    assert 'ENV KAREN_DEPLOYED_COMMIT_SHA="' + chr(36) + '{KAREN_DEPLOYED_COMMIT_SHA}"' in web_dockerfile
+
+    api_dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert 'LABEL org.opencontainers.image.revision="' + chr(36) + '{KAREN_DEPLOYED_COMMIT_SHA}"' in api_dockerfile
+    web_revision = (
+        WEB_PROD_ROOT / "src/app/api/deployment-revision/route.ts"
+    ).read_text(encoding="utf-8")
+    assert "process.env.KAREN_DEPLOYED_COMMIT_SHA" in web_revision
+
+
+def test_production_template_requires_explicit_revision() -> None:
+    env_text = PROD_ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "KAREN_DEPLOYED_COMMIT_SHA=CHANGE_ME_40_CHARACTER_LOWERCASE_GIT_SHA" in env_text
+
+
+
+def test_ci_production_image_builds_bind_checked_out_commit() -> None:
+    """Every CI build of the production Dockerfiles must stamp source identity.
+
+    Pull requests may test a synthetic merge commit; its checked-out SHA is
+    valid for the CI image, not an attestation for a production promotion.
+    """
+    workflows = (
+        ".github/workflows/production-first-boot-smoke.yml",
+        ".github/workflows/beta-release-gate.yml",
+        ".github/workflows/beta-live-model-smoke.yml",
+        ".github/workflows/ollama-settings-live-e2e.yml",
+        ".github/workflows/presentation-capture.yml",
+    )
+    for workflow in workflows:
+        source = (REPO_ROOT / workflow).read_text(encoding="utf-8")
+        assert "git rev-parse HEAD" in source
+        blocks = source.split("\n      - name: ")
+        builds = [block for block in blocks if "docker build" in block]
+        assert builds, f"No production image build found in {workflow}"
+        for block in builds:
+            assert "--build-arg KAREN_DEPLOYED_COMMIT_SHA" in block, (
+                f"Production Docker build omitted reviewed source SHA: {workflow}"
+            )
+
+
+
+def test_trusted_presentation_capture_stamps_target_not_workflow_sha() -> None:
+    """Candidate and orchestrator have distinct identities in presentation proof."""
+    source = (
+        REPO_ROOT / ".github/workflows/presentation-capture.yml"
+    ).read_text(encoding="utf-8")
+    assert "Attest exact trusted checkout and target ancestry" in source
+    assert "Attest exact candidate checkout" in source
+    for name in ("Build exact candidate production API image", "Build exact candidate production web image"):
+        build = source.split("      - name: " + name, 1)[1].split("\n      - name:", 1)[0]
+        assert "working-directory: .presentation-target" in build
+        assert "KAREN_SHOWCASE_TARGET_REVISION: " + chr(36) + "{{ needs.prepare.outputs.target_revision }}" in build
+        assert 'test "$(git rev-parse HEAD)" = "$KAREN_SHOWCASE_TARGET_REVISION"' in build
+        assert '--build-arg KAREN_DEPLOYED_COMMIT_SHA="$KAREN_SHOWCASE_TARGET_REVISION"' in build
+        assert '--build-arg KAREN_DEPLOYED_COMMIT_SHA="$GITHUB_SHA"' not in build

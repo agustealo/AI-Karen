@@ -23,11 +23,23 @@ test("reopening an owned conversation preserves its saved answer and execution r
   test.skip(!email || !password || !conversationId, "Requires an approved sanitized conversation fixture");
   if (!email || !password || !conversationId) return;
 
+  // Block cross-origin redirects before entering approved acceptance credentials.
+  const approvedUrl = process.env.KAREN_BASE_URL;
+  if (!approvedUrl) throw new Error("Approved history deployment URL is required");
+  const approved = new URL(approvedUrl);
+  if (
+    approved.protocol !== "https:" || approved.username || approved.password ||
+    approved.pathname !== "/" || approved.search || approved.hash
+  ) {
+    throw new Error("Approved history deployment must be a clean HTTPS origin");
+  }
   await page.goto("/login");
+  expect(new URL(page.url()).origin).toBe(approved.origin);
   await page.getByRole("textbox", { name: "Email" }).fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(new RegExp("/dashboard(?:[/?#]|$)"), { timeout: 30_000 });
+  expect(new URL(page.url()).origin).toBe(approved.origin);
 
   const response = await page.request.get(
     `/api/conversations/${encodeURIComponent(conversationId)}`,

@@ -1,0 +1,181 @@
+import { expect, test } from './fixtures/verified-search-deployment';
+
+/**
+ * Release acceptance against a real authenticated installation.
+ * No route interception, fabricated model output, or synthetic saved messages.
+ * Keep credentials out of traces and screenshots on the approved test system.
+ */
+test.use({ trace: 'off', screenshot: 'off', video: 'off' });
+
+test('SEARCH-REPLAY-01: live grounded citations survive conversation reopening', async ({ page }) => {
+  test.setTimeout(180_000); // Live retrieval and generation exceed the default 60s browser timeout.
+  const required = process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true';
+  const email = process.env.KAREN_UX_EMAIL;
+  const password = process.env.KAREN_UX_PASSWORD;
+  if (required && (!email || !password)) {
+    throw new Error('Live search replay acceptance requires KAREN_UX_EMAIL and KAREN_UX_PASSWORD');
+  }
+  test.skip(!required, 'Opt-in live release acceptance on a sanitized authenticated deployment');
+  if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
+
+  // Protect release-test credentials from cross-origin login redirects.
+  const approvedDeployment = process.env.KAREN_BASE_URL;
+  if (!approvedDeployment) throw new Error('Approved deployment URL is required');
+  const approvedOrigin = new URL(approvedDeployment).origin;
+  await page.goto('/login');
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
+  await page.getByRole('textbox', { name: 'Email' }).fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
+
+  const panel = page.getByTestId('persistent-karen-conversation');
+  await page.getByRole('button', { name: 'Ask Karen', exact: true }).click();
+  await expect(panel).toHaveAttribute('aria-hidden', 'false');
+  const prompt = `Research acceptance ${Date.now()}: Search the web for an official source describing the history of the Python programming language. Answer with a verified URL citation.`;
+  const assistantCount = await panel.getByTestId('chat-message-assistant').count();
+  await panel.getByTestId('chat-input').fill(prompt);
+  await panel.getByRole('button', { name: 'Send message' }).click();
+
+  const assistantMessage = panel.getByTestId('chat-message-assistant').last();
+  await expect.poll(() => panel.getByTestId('chat-message-assistant').count(), { timeout: 90_000 }).toBeGreaterThan(assistantCount);
+  const assistant = assistantMessage.getByTestId('chat-evidence-status').filter({ hasText: 'Verified grounded answer' });
+  await expect(assistant).toBeVisible({ timeout: 90_000 });
+  const originalAnswer = await assistantMessage.getByTestId('chat-message-content').innerText();
+  expect(originalAnswer.trim().length).toBeGreaterThan(0);
+  const citationBadge = assistantMessage.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).first();
+  await expect(citationBadge).toBeVisible();
+  await citationBadge.click();
+  const sourceToggle = assistantMessage.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).last();
+  await expect(sourceToggle).toBeVisible();
+  await sourceToggle.click();
+  await expect(assistantMessage.getByTestId('chat-source-list')).toBeVisible();
+  const originalSources = await assistantMessage.getByTestId('chat-source-list').locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
+    (links) => links.map((link) => (link as HTMLAnchorElement).href).filter(Boolean),
+  );
+  expect(originalSources.length, 'Grounded answers must expose a real source URL').toBeGreaterThan(0);
+
+  // Navigation reload must read the durable conversation, not just the
+  // previously rendered React state.
+  await page.reload();
+  await page.getByRole('button', { name: 'Ask Karen', exact: true }).click();
+  await expect(panel.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
+  const restoredMessage = panel.getByTestId('chat-message-assistant').last();
+  await expect(restoredMessage.getByTestId('chat-evidence-status').filter({ hasText: 'Verified grounded answer' })).toBeVisible();
+  await expect(restoredMessage.getByTestId('chat-message-content')).toHaveText(originalAnswer);
+  const assistantMessageAfterReload = restoredMessage;
+  const restoredBadge = assistantMessageAfterReload.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).first();
+  await expect(restoredBadge).toBeVisible();
+  await restoredBadge.click();
+  await assistantMessageAfterReload.getByRole('button', { name: /Show [1-9][0-9]* sources?/ }).last().click();
+  await expect(assistantMessageAfterReload.getByTestId('chat-source-list')).toBeVisible();
+  const restoredSources = await assistantMessageAfterReload.getByTestId('chat-source-list').locator('a[href^="https://"], a[href^="http://"]').evaluateAll(
+    (links) => links.map((link) => (link as HTMLAnchorElement).href).filter(Boolean),
+  );
+  expect(restoredSources).toEqual(originalSources);
+});
+
+
+test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surface', async ({ page }) => {
+  test.setTimeout(180_000);
+  const required = process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true';
+  test.skip(!required, 'Authenticated consumer release proof is opt-in');
+  const email = process.env.KAREN_UX_EMAIL;
+  const password = process.env.KAREN_UX_PASSWORD;
+  if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
+
+  // Protect release-test credentials from cross-origin login redirects.
+  const approvedDeployment = process.env.KAREN_BASE_URL;
+  if (!approvedDeployment) throw new Error('Approved deployment URL is required');
+  const approvedOrigin = new URL(approvedDeployment).origin;
+  await page.goto('/login');
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
+  await page.getByRole('textbox', { name: 'Email' }).fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
+
+  // Locate the installed plugin through the consumer navigation. No private
+  // route, response interception, or synthetic provider values are permitted.
+  await page.getByText('Intelligent Search', { exact: true }).first().click();
+  const query = page.getByLabel('Query', { exact: true });
+  await expect(query).toBeVisible({ timeout: 30_000 });
+  await page.getByLabel('Search mode').selectOption('auto');
+
+  // A location-free query may use an authorized profile/device/system location.
+  // Otherwise the consumer must request one. Wikipedia snippets cannot count
+  // as weather observations in either case.
+  await query.fill("What's the weather?");
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  const clarification = page.getByRole('heading', { name: 'Which location should I check?' });
+  const initialObservation = page.locator('section[aria-label="Weather observation"]');
+  await expect.poll(async () => (await clarification.isVisible()) || (await initialObservation.isVisible()),
+    { timeout: 120_000 }).toBe(true);
+  if (await clarification.isVisible()) {
+    await expect(initialObservation).toHaveCount(0);
+  } else {
+    await expect(initialObservation).toContainText('Provider timestamp:');
+  }
+  await expect(page.getByRole('heading', { name: 'No sources found' })).toHaveCount(0);
+
+  await query.fill('What is the weather in Detroit, MI?');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+
+  const observation = page.locator('section[aria-label="Weather observation"]');
+  await expect(observation).toBeVisible({ timeout: 120_000 });
+  await expect(observation).toContainText('Detroit');
+  await expect(observation).toContainText('°F');
+  await expect(observation).toContainText('Provider timestamp:');
+  await expect(page.getByRole('heading', { name: 'No sources found' })).toHaveCount(0);
+
+  await page.getByText('Technical search details').click();
+  await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
+  await expect(page.getByText('Provider', { exact: true }).first()).toBeVisible();
+});
+
+
+test('SEARCH-PLUGIN-03: general web retrieval proves independent source domains', async ({ page }) => {
+  test.setTimeout(180_000);
+  test.skip(process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== 'true',
+    'Authenticated consumer release proof is opt-in');
+  const email = process.env.KAREN_UX_EMAIL;
+  const password = process.env.KAREN_UX_PASSWORD;
+  if (!email || !password) throw new Error('Missing authenticated acceptance credentials');
+
+  // Protect release-test credentials from cross-origin login redirects.
+  const approvedDeployment = process.env.KAREN_BASE_URL;
+  if (!approvedDeployment) throw new Error('Approved deployment URL is required');
+  const approvedOrigin = new URL(approvedDeployment).origin;
+  await page.goto('/login');
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
+  await page.getByRole('textbox', { name: 'Email' }).fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30_000 });
+  expect(new URL(page.url()).origin).toBe(approvedOrigin);
+
+  await page.getByText('Intelligent Search', { exact: true }).first().click();
+  const query = page.getByLabel('Query', { exact: true });
+  await expect(query).toBeVisible({ timeout: 30_000 });
+  await page.getByLabel('Search mode').selectOption('general');
+  await query.fill('Python programming language official documentation and history');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+
+  await expect(page.getByText('Technical search details')).toBeVisible({ timeout: 120_000 });
+  await page.getByText('Technical search details').click();
+  await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
+  const websites = page.getByText('Distinct websites', { exact: true }).locator('..');
+  await expect(websites).toBeVisible();
+  // Provider diversity is an outcome of the live retrieval, not a static
+  // render assertion. Poll the completed UI value without intercepting HTTP.
+  await expect.poll(async () => {
+    const label = await websites.innerText();
+    const matched = label.match(/Distinct websites\s+(\d+)/i);
+    return matched ? Number(matched[1]) : 0;
+  }, {
+    timeout: 30_000,
+    message: 'At least two independent websites must be represented in live search evidence',
+  }).toBeGreaterThanOrEqual(2);
+});
