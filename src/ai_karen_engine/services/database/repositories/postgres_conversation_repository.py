@@ -392,6 +392,9 @@ class PostgresConversationRepository(ConversationRepository):
             )
             return RepositoryResult(success=False, error=str(exc))
 
+    @instrument_repository(
+        operation="get_composer_draft", repository="PostgresConversationRepository"
+    )
     async def get_composer_draft(
         self, conversation_id: str, tenant_id: str, *, user_id: str,
     ) -> RepositoryResult[Dict[str, Any]]:
@@ -447,6 +450,9 @@ class PostgresConversationRepository(ConversationRepository):
             })
             return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
 
+    @instrument_repository(
+        operation="put_composer_draft", repository="PostgresConversationRepository"
+    )
     async def put_composer_draft(
         self, conversation_id: str, tenant_id: str, *, user_id: str,
         content: str, expected_revision: int,
