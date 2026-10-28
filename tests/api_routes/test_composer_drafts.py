@@ -83,6 +83,45 @@ async def test_owned_draft_uses_only_canonical_repository_not_model_or_memory():
 
 
 @pytest.mark.asyncio
+async def test_structured_draft_logs_preserve_scope_but_never_contain_private_text(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as module
+
+    events = []
+    def record(event, *, extra):
+        events.append((event, extra))
+    monkeypatch.setattr(module.logger, "info", record)
+
+    repo = OwnedDraftRepo()
+    gateway = ConversationRuntimeGateway(repo)
+    secret = "UNSENT_PRIVATE_DRAFT_MUST_NOT_APPEAR"
+    updated = await gateway.write_composer_draft(
+        context(), text=secret, expected_revision=0,
+    )
+    assert updated["text"] == secret
+    await gateway.read_composer_draft(context())
+    with pytest.raises(ValueError, match="revision_conflict"):
+        await gateway.write_composer_draft(
+            context(), text="second private attempt", expected_revision=0,
+        )
+    assert [name for name, _ in events] == [
+        "conversation_draft_write_completed",
+        "conversation_draft_read_completed",
+        "conversation_draft_write_conflict",
+    ]
+    for _, fields in events:
+        assert fields["tenant_id"] == TENANT
+        assert fields["user_id"] == USER
+        assert fields["conversation_id"] == CONV
+        assert fields["request_id"]
+        assert fields["correlation_id"]
+        assert "text" not in fields
+        assert secret not in str(fields)
+        assert "second private attempt" not in str(fields)
+
+
+@pytest.mark.asyncio
 async def test_stale_window_must_not_overwrite_confirmed_revision():
     repo = OwnedDraftRepo()
     gateway = ConversationRuntimeGateway(repo)
