@@ -283,18 +283,21 @@ async def rate_limit_middleware(request: Request, call_next):
         return response
 
     except Exception as exc:
-        error_message = str(exc).lower()
-        if "authentication required" in error_message or "authentication" in error_message:
-            logger.debug(
-                "Rate limiting middleware encountered authentication dependency: %s",
-                exc,
-            )
-            return await call_next(request)
-
-        logger.error("Rate limiting middleware error: %s", exc, exc_info=True)
-        logger.error("Error type: %s", type(exc).__name__)
-        logger.error("Error args: %s", exc.args)
-        return await call_next(request)
+        # Storage failures must not turn a protected request into an
+        # unthrottled request. Do not expose Redis connection details.
+        logger.error(
+            "Rate limit enforcement unavailable: %s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Rate limit enforcement unavailable",
+                "message": "Service temporarily unavailable. Please retry later.",
+            },
+            headers={"Retry-After": "5"},
+        )
 
 
 async def legacy_rate_limit_middleware(request: Request, call_next):
