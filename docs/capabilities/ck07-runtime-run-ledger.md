@@ -537,6 +537,18 @@ canonical draft was unchanged. An environment reporting disabled
 transcription marks that scenario as *skipped/unverified*, not passing
 voice parity. Browser-vendor dictation is not enabled or tested here.
 
+Persona mutation acceptance is **separately opt-in** with the protected
+environment variable `KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED=true`
+and a sanitized dedicated principal. The native selector must submit a
+real revision-fenced backend preference update, receive an incremented
+revision, survive browser reload, and trigger no model execution.
+The browser test then uses the same canonical CAS endpoint to restore
+the principal's original persona only if its own revision still wins.
+Missing opt-in is explicitly marked skipped/unverified. A competing
+persona writer is never overwritten to make acceptance artificially green.
+This reuses the same Persona Studio revision owner, rather than
+implementing another persona persistence API or preference store.
+
 The suite **has not been executed against a deployed preview** merely
 because it is present in the repository. Feature parity remains
 incomplete: no genuine native Send-to-persisted-response, multi-tab

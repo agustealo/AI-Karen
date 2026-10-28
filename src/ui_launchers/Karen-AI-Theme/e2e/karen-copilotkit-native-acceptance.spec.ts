@@ -292,3 +292,105 @@ test("CK-07E8 denied local microphone permission never transcribes or starts an 
   expect(await draftAfter.json(), "Microphone denial must not modify the canonical draft")
     .toEqual(savedBefore);
 });
+
+/**
+ * This is a deliberate mutation of the sanitized acceptance principal's own
+ * persona preference, so it requires a separate explicit operator opt-in.
+ * Never mutate a consumer's persona and never infer a model response here.
+ */
+test("CK-07E8 native persona selection persists a canonical revision and restores it", async ({ page }) => {
+  requireApprovedNativeFixture();
+  test.skip(process.env.KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED !== "true",
+    "Persona write acceptance requires explicit sanitized-principal approval");
+  if (!email || !password || !conversationId) return;
+
+  await signInApprovedKaren(page, email, password);
+  const endpoint = "/api/personas/preferences/me";
+  const originalResponse = await page.request.get(endpoint);
+  expect(originalResponse.status()).toBe(200);
+  const original = await originalResponse.json() as {
+    revision: number; active_persona_id: string | null; show_persona_selector: boolean;
+  };
+  expect(Number.isSafeInteger(original.revision)).toBe(true);
+  expect(original.show_persona_selector,
+    "The approved persona acceptance principal must permit the selector").toBe(true);
+
+  const catalogResponse = await page.request.get("/api/personas/");
+  expect(catalogResponse.status()).toBe(200);
+  const catalog = await catalogResponse.json() as Array<{
+    id: string; name: string; is_active: boolean;
+  }>;
+  expect(Array.isArray(catalog)).toBe(true);
+  const alternative = catalog.find(persona =>
+    persona.is_active === true && typeof persona.id === "string" &&
+    persona.id.length > 0 && persona.id !== original.active_persona_id);
+  expect(alternative,
+    "Approved persona acceptance needs a different active catalog persona").toBeDefined();
+  if (!alternative) return;
+
+  let runs = 0;
+  page.context().on("request", request => {
+    if (request.method() === "POST" && isInferenceRequest(request.url())) runs++;
+  });
+  await page.goto("/acceptance/copilotkit/" + encodeURIComponent(conversationId));
+  const selector = page.getByRole("combobox", { name: "Active Karen persona" });
+  await expect(selector).toHaveValue(original.active_persona_id ?? "");
+
+  try {
+    // Observe the actual unmocked browser PUT, not only a React state change.
+    const written = page.waitForResponse(response =>
+      response.request().method() === "PUT" &&
+      new URL(response.url()).pathname === endpoint,
+      { timeout: 15000 },
+    );
+    await selector.selectOption(alternative.id);
+    const savedResponse = await written;
+    expect(savedResponse.status(), "Persona switch must be accepted by canonical CAS").toBe(200);
+    const saved = await savedResponse.json() as {
+      revision: number; active_persona_id: string | null;
+    };
+    expect(saved.revision).toBe(original.revision + 1);
+    expect(saved.active_persona_id).toBe(alternative.id);
+    await expect(selector).toHaveValue(alternative.id);
+    await page.reload();
+    await expect(page.getByRole("combobox", { name: "Active Karen persona" }))
+      .toHaveValue(alternative.id, { timeout: 30000 });
+    const persisted = await page.request.get(endpoint);
+    expect(persisted.status()).toBe(200);
+    const confirmed = await persisted.json() as {
+      revision: number; active_persona_id: string | null;
+    };
+    expect(confirmed.revision).toBe(saved.revision);
+    expect(confirmed.active_persona_id).toBe(alternative.id);
+    expect(runs, "Persona changes must never start a model").toBe(0);
+  } finally {
+    // Restore only if this test's own revision is still current. Never
+    // overwrite a newer preference written by another window or actor.
+    const latest = await page.request.get(endpoint);
+    expect(latest.status(), "Persona cleanup requires verified current state").toBe(200);
+    const value = await latest.json() as {
+      revision: number; active_persona_id: string | null;
+    };
+    if (value.active_persona_id === alternative.id &&
+        value.revision === original.revision + 1) {
+      const restored = await page.request.put(endpoint, {
+        data: {
+          active_persona_id: original.active_persona_id,
+          expected_revision: value.revision,
+        },
+      });
+      expect(restored.status(), "Persona restoration must be CAS-confirmed").toBe(200);
+      const confirmed = await restored.json() as {
+        revision: number; active_persona_id: string | null;
+      };
+      expect(confirmed.active_persona_id).toBe(original.active_persona_id);
+      expect(confirmed.revision).toBe(value.revision + 1);
+    } else {
+      // A concurrent new writer won. Do not falsely report this test's
+      // preference restoration or clobber that newer user's choice.
+      expect(value.active_persona_id,
+        "Persona changed concurrently: refusing to overwrite the newer selection")
+        .toBe(original.active_persona_id);
+    }
+  }
+});

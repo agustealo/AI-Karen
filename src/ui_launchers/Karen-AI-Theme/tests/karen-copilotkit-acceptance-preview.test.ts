@@ -73,6 +73,9 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).toContain('name: "Start local dictation"');
     expect(nativeBrowser).toContain('path.startsWith("/api/voice/")');
     expect(nativeBrowser).toContain("savedBefore");
+    expect(nativeBrowser).toContain("KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED");
+    expect(nativeBrowser).toContain("expected_revision: value.revision");
+    expect(nativeBrowser).toContain("Persona restoration must be CAS-confirmed");
   });
 
   it("does not disturb the sole consumer chat mount", () => {
