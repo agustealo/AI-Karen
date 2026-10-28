@@ -1,6 +1,7 @@
 "use client";
 
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
+import { useAuth } from "@/lib/useAuth";
 import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
 import { KarenCopilotControlledChat } from "./KarenCopilotControlledChat";
 import { KarenPersonaSelector } from "../assistant-ui/KarenPersonaSelector";
@@ -31,6 +32,15 @@ export function KarenCopilotChat({
   preferredProvider = null,
   preferredModel = null,
 }: KarenCopilotChatProps) {
+  const { user, isAuthenticated, isLoading } = useAuth();
+  if (isLoading || !isAuthenticated || !user ||
+      typeof user.user_id !== "string" || !user.user_id.trim() ||
+      typeof user.tenant_id !== "string" || !user.tenant_id.trim()) {
+    // Never retain another account's provider, agent, draft, or voice state.
+    return <p role="status" className="text-sm text-muted-foreground">
+      Authenticated conversation unavailable.
+    </p>;
+  }
   if (!CONVERSATION_UUID.test(conversationId)) {
     return (
       <p role="alert" className="text-sm text-destructive">
@@ -58,12 +68,13 @@ export function KarenCopilotChat({
       }
     : undefined;
 
+  const scopeKey = [user.tenant_id, user.user_id, conversationId].join(":");
   return (
     <section
       aria-label="Karen CopilotKit conversation"
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
     >
-      <CopilotKitProvider runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
+      <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
           <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} />
           <div data-testid="karen-copilot-persona-footer"
