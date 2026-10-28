@@ -11,6 +11,9 @@ on:
       - "src/ai_karen_engine/api_routes/monitoring/health.py"
       - "tests/architecture/test_production_deployment_contract.py"
       - "tests/architecture/test_docker_release_attestation.py"
+      - "tests/architecture/test_signed_docker_release_provenance.py"
+      - ".github/workflows/karen-consumer-image-provenance.yml"
+      - "deploy/compose/docker-compose.signed-release.yml"
       - "scripts/ci/verify_docker_release.py"
       - "tests/architecture/test_operational_health_authority.py"
       - ".github/workflows/production-deployment-contract.yml"
@@ -24,6 +27,9 @@ on:
       - "src/ai_karen_engine/api_routes/monitoring/health.py"
       - "tests/architecture/test_production_deployment_contract.py"
       - "tests/architecture/test_docker_release_attestation.py"
+      - "tests/architecture/test_signed_docker_release_provenance.py"
+      - ".github/workflows/karen-consumer-image-provenance.yml"
+      - "deploy/compose/docker-compose.signed-release.yml"
       - "scripts/ci/verify_docker_release.py"
       - "tests/architecture/test_operational_health_authority.py"
       - ".github/workflows/production-deployment-contract.yml"
@@ -53,6 +59,7 @@ jobs:
         run: |
           pytest tests/architecture/test_production_deployment_contract.py -q
           pytest tests/architecture/test_docker_release_attestation.py -q
+          pytest tests/architecture/test_signed_docker_release_provenance.py -q
           pytest tests/architecture/test_operational_health_authority.py -q
 
       - name: Prove production compose renders
@@ -70,6 +77,37 @@ jobs:
             config --format json >/tmp/ai-karen-production-compose.json
           test -s /tmp/ai-karen-production-compose.yml
           test -s /tmp/ai-karen-production-compose.json
+
+
+      - name: Prove signed images replace local builds without relaxing private ports
+        shell: bash
+        run: |
+          set -euo pipefail
+          export KAREN_SIGNED_API_IMAGE_REF="ghcr.io/test/release-api@sha256:$(printf 'a%.0s' {1..64})"
+          export KAREN_SIGNED_WEB_IMAGE_REF="ghcr.io/test/release-web@sha256:$(printf 'b%.0s' {1..64})"
+          docker compose \
+            --env-file .env.production \
+            -f docker-compose.yml \
+            -f deploy/compose/docker-compose.prod.yml \
+            -f deploy/compose/docker-compose.signed-release.yml \
+            config --format json > /tmp/ai-karen-signed-release-compose.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          services = json.loads(
+              Path("/tmp/ai-karen-signed-release-compose.json").read_text()
+          )["services"]
+          for service in ("api", "web"):
+              entry = services[service]
+              expected = os.environ[f"KAREN_SIGNED_{service.upper()}_IMAGE_REF"]
+              assert entry["image"] == expected
+              assert not entry.get("build"), f"{service} still permits local rebuild"
+              assert entry["pull_policy"] == "always"
+          assert not services["api"].get("ports")
+          assert services["web"]["environment"]["KAREN_BACKEND_URL"] == "http://api:8000"
+          PY
 
       - name: Prove development auth bypass is disabled in rendered config
         run: |

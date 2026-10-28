@@ -1,0 +1,15 @@
+# Canonical production overlay extension for approved signed release images.
+# Use AFTER docker-compose.yml and deploy/compose/docker-compose.prod.yml.
+# Never rebuild from mutable host checkout during signed release deployment.
+# Image variables MUST be full digest-pinned GHCR references attested against
+# current main and approved by the release operator. No fallback images.
+services:
+  api:
+    build: !reset null
+    image: ${KAREN_SIGNED_API_IMAGE_REF:?Signed immutable API image reference required}
+    pull_policy: always
+
+  web:
+    build: !reset null
+    image: ${KAREN_SIGNED_WEB_IMAGE_REF:?Signed immutable web image reference required}
+    pull_policy: always
