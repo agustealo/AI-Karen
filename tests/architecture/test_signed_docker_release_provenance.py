@@ -180,6 +180,7 @@ def test_signed_workflow_never_auto_deploys_or_signs_pr_source():
     assert workflow.count("uses: actions/attest@v4") == 2
     assert workflow.count("uses: docker/build-push-action@v7") == 2
     assert workflow.count("push-to-registry: true") == 2
+    assert workflow.count("create-storage-record: false") == 2
     for marker in ("id-token: write", "attestations: write", "packages: write"):
         assert marker in workflow
     assert workflow.count("KAREN_DEPLOYED_COMMIT_SHA=" + chr(36) + "{{ github.sha }}") == 2
