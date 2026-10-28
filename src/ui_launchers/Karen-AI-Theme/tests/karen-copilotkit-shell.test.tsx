@@ -5,14 +5,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sdk = vi.hoisted(() => ({
   provider: [] as Array<Record<string, unknown>>,
   controlled: [] as Array<Record<string, unknown>>,
+  providerMounts: 0,
+  providerUnmounts: 0,
+  auth: {
+    user: {
+      user_id: "11111111-1111-4111-8111-111111111111",
+      tenant_id: "22222222-2222-4222-8222-222222222222",
+    },
+    isAuthenticated: true,
+    isLoading: false,
+  },
+}));
+
+vi.mock("@/lib/useAuth", () => ({
+  useAuth: () => sdk.auth,
 }));
 
 vi.mock("@copilotkit/react-core/v2", () => ({
   CopilotKitProvider: (props: Record<string, unknown>) => {
+    React.useEffect(() => {
+      sdk.providerMounts += 1;
+      return () => { sdk.providerUnmounts += 1; };
+    }, []);
     sdk.provider.push(props);
     return <div data-testid="copilot-provider">{props.children as React.ReactNode}</div>;
   },
-
 }));
 
 vi.mock("@/components/chat/assistant-ui/KarenPersonaSelector", () => ({
@@ -40,6 +57,14 @@ const CONVERSATION = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 beforeEach(() => {
   sdk.provider.length = 0;
   sdk.controlled.length = 0;
+  sdk.providerMounts = 0;
+  sdk.providerUnmounts = 0;
+  sdk.auth.user = {
+    user_id: "11111111-1111-4111-8111-111111111111",
+    tenant_id: "22222222-2222-4222-8222-222222222222",
+  };
+  sdk.auth.isAuthenticated = true;
+  sdk.auth.isLoading = false;
 });
 
 afterEach(() => {
@@ -71,6 +96,40 @@ describe("Karen CopilotKit chat compatibility shell", () => {
       preferred_model: "selected-model",
     });
     expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
+  });
+
+  it("never mounts a provider when authentication is unresolved or invalidated", () => {
+    sdk.auth.isLoading = true;
+    const view = render(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(screen.queryByTestId("copilot-provider")).toBeNull();
+    expect(sdk.providerMounts).toBe(0);
+    sdk.auth.isLoading = false;
+    sdk.auth.isAuthenticated = true;
+    view.rerender(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(sdk.providerMounts).toBe(1);
+    sdk.auth.isAuthenticated = false;
+    view.rerender(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(screen.queryByTestId("copilot-provider")).toBeNull();
+    expect(sdk.providerUnmounts).toBe(1);
+  });
+
+  it("unmounts the private SDK agent on tenant or principal switch even if thread ID matches", () => {
+    const view = render(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(sdk.providerMounts).toBe(1);
+    sdk.auth.user = {
+      user_id: "33333333-3333-4333-8333-333333333333",
+      tenant_id: "22222222-2222-4222-8222-222222222222",
+    };
+    view.rerender(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(sdk.providerUnmounts).toBe(1);
+    expect(sdk.providerMounts).toBe(2);
+    sdk.auth.user = {
+      user_id: "33333333-3333-4333-8333-333333333333",
+      tenant_id: "44444444-4444-4444-8444-444444444444",
+    };
+    view.rerender(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(sdk.providerUnmounts).toBe(2);
+    expect(sdk.providerMounts).toBe(3);
   });
 
   it("does not mount an agent with an unverified conversation", () => {
