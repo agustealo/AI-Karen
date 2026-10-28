@@ -313,6 +313,78 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
+  it("coalesces a second SDK completion during a pending canonical refresh", async () => {
+    let resolvePending!: (value: unknown) => void;
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "u1", role: "user", content: "Initial" }],
+      replayEvents: [],
+    }).mockImplementationOnce(() => new Promise(resolve => {
+      resolvePending = resolve;
+    })).mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [
+        { id: "u1", role: "user", content: "Initial" },
+        { id: "a3", role: "assistant", content: "Latest saved completion" },
+      ],
+      replayEvents: [],
+    });
+    render(guardedHistory());
+    await waitFor(() => expect(backend.agent.subscribe).toHaveBeenCalledTimes(1));
+    act(() => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(backend.fetchConversation).toHaveBeenCalledTimes(2));
+    act(() => {
+      backend.callbacks?.onRunFinalized();
+      backend.callbacks?.onRunFailed();
+    });
+    // Repeated notifications during one pending read are collapsed.
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+
+    await act(async () => resolvePending({
+      threadId: CONVERSATION_A,
+      messages: [
+        { id: "u1", role: "user", content: "Initial" },
+        { id: "a2", role: "assistant", content: "Stale intermediate reply" },
+      ],
+      replayEvents: [],
+    }));
+    await waitFor(() => expect(backend.fetchConversation).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(backend.agent.setMessages).toHaveBeenCalledTimes(2));
+    expect(backend.agent.setMessages).toHaveBeenLastCalledWith([
+      { id: "u1", role: "user", content: "Initial" },
+      { id: "a3", role: "assistant", content: "Latest saved completion" },
+    ]);
+    expect(backend.agent.setMessages).not.toHaveBeenCalledWith(
+      expect.arrayContaining([{ id: "a2", role: "assistant", content: "Stale intermediate reply" }]),
+    );
+  });
+
+  it("fails closed when a queued newest read cannot attest saved history", async () => {
+    let resolvePending!: (value: unknown) => void;
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "u1", role: "user", content: "Initial" }],
+      replayEvents: [],
+    }).mockImplementationOnce(() => new Promise(resolve => {
+      resolvePending = resolve;
+    })).mockRejectedValueOnce(new Error("private unavailable history"));
+    render(guardedHistory());
+    await waitFor(() => expect(backend.agent.subscribe).toHaveBeenCalledTimes(1));
+    act(() => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(backend.fetchConversation).toHaveBeenCalledTimes(2));
+    act(() => backend.callbacks?.onRunFinalized());
+    await act(async () => resolvePending({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "a2", role: "assistant", content: "Not the latest" }],
+      replayEvents: [],
+    }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.getByRole("alert").textContent).not.toContain("private");
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(3);
+  });
+
   it("does not fabricate a saved reply if the post-run attestation fails", async () => {
     backend.fetchConversation.mockResolvedValueOnce({
       threadId: CONVERSATION_A,

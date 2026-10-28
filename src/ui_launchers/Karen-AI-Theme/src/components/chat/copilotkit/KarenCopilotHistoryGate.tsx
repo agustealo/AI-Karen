@@ -105,44 +105,55 @@ export function KarenCopilotHistoryGate({
     // authorize a client CUSTOM event as a saved execution receipt.
     let unsubscribe: (() => void) | undefined;
     let restoring = false;
-    const restore = async () => {
-      if (restoring || cancelled) return false;
-      restoring = true;
-      try {
-        // Authorization-sensitive read. Never reuse the process-local UI
-        // bootstrap cache across account or tenant transitions.
-        const snapshot = await apiClient.get<KarenOwnedThreadResponse>(
-          "/api/copilotkit/threads/" + conversationId + "/messages",
-        );
-        if (cancelled) return false;
-        if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
-          throw new Error("Conversation history identity mismatch");
-        }
-        // Validate the ENTIRE verified presentation/receipt set before
-        // mutating the SDK agent. Unsupported events fail the whole playback,
-        // never a plausible-looking partial history.
-        const messages = toCopilotTextMessages(snapshot.messages);
-        const parts = parseKarenVerifiedHistory(
-          snapshot.replayEvents ?? [], messages,
-        );
-        // A thread switch must never retain another conversation's agent state.
-        agent.setMessages(messages);
-        setVerifiedParts(parts);
-        setError(null);
-        setLoaded(conversationId);
-        return true;
-      } catch (error: unknown) {
-        if (!cancelled) {
-          // A verified conversation can still require an unsupported rich
-          // renderer. Explain the limitation rather than presenting partial
-          // history as successfully restored.
-          const status = error && typeof error === "object" && "status" in error
-            ? (error as { status?: unknown }).status : undefined;
-          setError(status === 409
-            ? "This conversation contains interactive or structured content that CopilotKit cannot restore yet. Use the existing conversation view."
-            : "Karen could not verify or restore this conversation.");
-        }
+    // A run can finalize while its prior canonical read is still in flight.
+    // Coalesce repeated notifications into one additional authorized read.
+    // Never display the earlier snapshot if a newer notification is queued.
+    let restoreQueued = false;
+    const restore = async (): Promise<boolean> => {
+      if (cancelled) return false;
+      if (restoring) {
+        restoreQueued = true;
         return false;
+      }
+      restoring = true;
+      let restored = false;
+      try {
+        do {
+          restoreQueued = false;
+          try {
+            // Authorization-sensitive read. Never reuse process-local UI
+            // bootstrap cache across account or tenant transitions.
+            const snapshot = await apiClient.get<KarenOwnedThreadResponse>(
+              "/api/copilotkit/threads/" + conversationId + "/messages",
+            );
+            if (cancelled) return false;
+            if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
+              throw new Error("Conversation history identity mismatch");
+            }
+            // Validate the complete backend-verified rich replay before
+            // installing it. A newer event invalidates this read's freshness.
+            const messages = toCopilotTextMessages(snapshot.messages);
+            const parts = parseKarenVerifiedHistory(
+              snapshot.replayEvents ?? [], messages,
+            );
+            if (restoreQueued) continue;
+            agent.setMessages(messages);
+            setVerifiedParts(parts);
+            setError(null);
+            setLoaded(conversationId);
+            restored = true;
+          } catch (error: unknown) {
+            if (!cancelled && !restoreQueued) {
+              const status = error && typeof error === "object" && "status" in error
+                ? (error as { status?: unknown }).status : undefined;
+              setError(status === 409
+                ? "This conversation contains interactive or structured content that CopilotKit cannot restore yet. Use the existing conversation view."
+                : "Karen could not verify or restore this conversation.");
+              restored = false;
+            }
+          }
+        } while (restoreQueued && !cancelled);
+        return restored && !cancelled;
       } finally {
         restoring = false;
       }
