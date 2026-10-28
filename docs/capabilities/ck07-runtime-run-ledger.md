@@ -453,6 +453,60 @@ with their already confirmed CAS revision. Neither path invents a
 "saved" receipt. New tests cover first-read outage recovery, stale
 clean refresh and failed-write recovery without discarding text.
 
+## CK-07E8: isolated, server-disabled native browser acceptance
+
+**Acceptance-only, not a consumer feature:** the Next.js App Router page at
+`/acceptance/copilotkit/{owned-conversation-uuid}` mounts the existing
+`KarenCopilotChat` candidate with its actual CopilotKit v2 stylesheet
+**only** when the deployment explicitly sets both
+`KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED=true` and
+`KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_HOST=<exact-hostname>`.
+Any missing flag, incorrect HTTP Host header, invalid configured host
+or invalid UUID yields 404. These are server-only environment variables;
+a URL parameter or browser cookie cannot activate the page. It is
+excluded from search indexing. `AuthWrapper` and the normal
+CopilotKit canonical history/run/draft APIs retain their existing
+tenant/user authorization; the page does not introduce a privileged
+execution, history or persistence service.
+
+The normal dashboard still mounts exactly one assistant-ui chat. An
+acceptance page is **not** proof that CopilotKit is usable or ready.
+Never enable the preview on a consumer deployment or broad production
+hostname. Use an approved immutable, sanitized, revision-matched
+Vercel preview for the specific reviewed `main` commit; disable the
+preview environment variables when acceptance ends.
+
+The existing `KAREN Browser Acceptance` workflow now accepts
+`scenario=copilotkit-native` and reuses the same main-only SHA pin,
+independent Vercel provenance and public running revision checks
+before and after browser execution. The sibling
+`copilotkit-protocol` scenario remains read-only and requires an
+observed run cursor. For the native scenario,
+`KAREN_COPILOTKIT_ACCEPTANCE_URL` must point to the exact preview,
+`KAREN_COPILOTKIT_CONVERSATION_ID` must be a dedicated owned
+sanitized conversation, and the canonical draft for that fixture
+must initially be empty. Browser credentials and the Vercel bypass
+are used only in approved test steps; no screenshots, traces,
+videos, stored auth state, HTTP request interception or artificial
+AI results. The test verifies:
+
+- Real authenticated controlled view, SDK message area and persona
+  footer are visible while the current dashboard remains assistant-ui.
+- No `/api/copilotkit/agent/default/run` POST on mount, typing,
+  draft saving, or reload.
+- An unsent draft is actually committed to the canonical draft
+  endpoint, restored across page refresh, then cleared.
+- Input can receive keyboard focus. It does not invoke a model,
+  click Send, alter a real user conversation or claim agent completion.
+
+The suite **has not been executed against a deployed preview** merely
+because it is present in the repository. Feature parity remains
+incomplete: no genuine native Send-to-persisted-response, multi-tab
+CAS conflict, browser microphone permission, speech cancellation,
+persona-switch side effects, scroll-stickiness, mobile viewport and
+cross-worker cancellation burn have been proven. Those need scoped
+real-browser tests and human aesthetic review before consumer cutover.
+
 ## Proof entry points
 
 ```bash

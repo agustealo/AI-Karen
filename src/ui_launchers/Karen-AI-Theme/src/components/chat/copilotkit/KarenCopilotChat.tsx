@@ -15,7 +15,9 @@ const CONVERSATION_UUID =
  * history and feature-parity tests have been completed.
  *
  * The dashboard retains the current assistant-ui implementation for now.
- * The high-level CopilotChat starts inference on first mount. This shell
+ * The isolated acceptance-only route may mount this candidate if its server-
+ * side exact-host gate is explicitly enabled; it is not a consumer cutover.
+ * The high-level CopilotChat starts inference on first mount, so this shell
  * uses the native controlled CopilotChatView with explicit submit-only runs.
  * Consumer cutover still requires exact-revision browser and UX acceptance.
  */
