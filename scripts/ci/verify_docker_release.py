@@ -165,11 +165,12 @@ def verify_signed_docker_release(
     """
     if not SHA_PATTERN.fullmatch(expected_sha):
         raise RevisionVerificationError("Reviewed source must be a full lowercase SHA")
-    if not REPOSITORY_PATTERN.fullmatch(repository) or repository.lower() != repository:
-        raise RevisionVerificationError("Approved source repository must be canonical lowercase")
+    if not REPOSITORY_PATTERN.fullmatch(repository):
+        raise RevisionVerificationError("Approved source repository identity is invalid")
     for service in SERVICES:
         ref = signed_image_refs.get(service, "")
-        prefix = f"ghcr.io/{repository}-{service}@"
+        # GHCR paths must be lowercase; preserve case in the GitHub signer identity.
+        prefix = f"ghcr.io/{repository.lower()}-{service}@"
         if not ref.startswith(prefix) or not IMAGE_ID_PATTERN.fullmatch(ref[len(prefix):]):
             raise RevisionVerificationError("Approved signed image reference must be a digest-pinned canonical GHCR subject")
         if not IMAGE_ID_PATTERN.fullmatch(expected_image_ids.get(service, "")):
