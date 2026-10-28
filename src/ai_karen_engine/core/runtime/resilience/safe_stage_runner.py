@@ -9,6 +9,7 @@ Emits observability events for attempts, retries, and fallbacks.
 """
 
 import asyncio
+import threading
 from typing import Callable, Any, Dict, Optional
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.logging.events import ProviderEvents, RuntimeEvents
@@ -41,6 +42,8 @@ class SafeStageRunner:
         self.breakers = get_breaker_registry()
         self.fallbacks = get_fallback_manager()
         self.policies = get_pipeline_policy()
+        # Capacity is held until the underlying thread actually exits.
+        self._sync_slots = threading.BoundedSemaphore(value=4)
 
     async def run_stage(
         self,
@@ -109,11 +112,22 @@ class SafeStageRunner:
                     result = await asyncio.wait_for(func(*args, **kwargs), timeout=remaining)
                 else:
                     # For sync functions, we use run_in_executor to avoid blocking the event loop
+                    if not self._sync_slots.acquire(blocking=False):
+                        raise RuntimeError("synchronous_stage_capacity_exhausted")
                     loop = asyncio.get_running_loop()
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(None, lambda: func(*args, **kwargs)),
-                        timeout=remaining
-                    )
+
+                    def execute_and_release():
+                        try:
+                            return func(*args, **kwargs)
+                        finally:
+                            self._sync_slots.release()
+
+                    try:
+                        future = loop.run_in_executor(None, execute_and_release)
+                    except BaseException:
+                        self._sync_slots.release()
+                        raise
+                    result = await asyncio.wait_for(future, timeout=remaining)
 
                 breaker.record_success()
                 _emit_resilience_event(
