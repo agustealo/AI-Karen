@@ -16,7 +16,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from scripts.ci.verify_deployment_revision import RevisionVerificationError, SHA_PATTERN
+from scripts.ci.verify_deployment_revision import (
+    RevisionVerificationError, SHA_PATTERN,
+    verify_deployment_revision, verify_backend_ready,
+)
 
 LOGGER = logging.getLogger("karen.release.docker")
 IMAGE_ID_PATTERN = re.compile(r"sha256:[a-f0-9]{64}\Z")
@@ -220,9 +223,44 @@ def verify_signed_docker_release(
 
 
 
+def verify_signed_consumer_deployment(
+    repo_root: Path,
+    expected_sha: str,
+    repository: str,
+    signed_image_refs: Mapping[str, str],
+    expected_image_ids: Mapping[str, str],
+    public_url: str,
+    *,
+    gh_runner: Callable[[Sequence[str], Path], None] = _gh_verify,
+    docker_runner: Callable[[Sequence[str], Path], str] = _docker_stdout,
+    opener: Any = None,
+) -> None:
+    """Prove signed live Docker identity AND consumer-visible HTTPS ingress.
+
+    The public origin is operator-approved and uses the existing revision and
+    backend health validators. No Vercel bypass secret is allowed on Docker.
+    Do not treat a healthy Docker image as equivalent to a working web/API path.
+    """
+    if not public_url:
+        raise RevisionVerificationError(
+            "Approved HTTPS public deployment URL is required"
+        )
+    # Validate the URL before any network, GitHub or Docker subprocesses.
+    # Reuse the single canonical clean-origin validator and reject redirects.
+    from scripts.ci.verify_deployment_revision import revision_endpoint
+    revision_endpoint(public_url)
+
+    verify_signed_docker_release(
+        repo_root, expected_sha, repository, signed_image_refs,
+        expected_image_ids, gh_runner=gh_runner, docker_runner=docker_runner,
+    )
+    verify_deployment_revision(public_url, expected_sha, opener=opener)
+    verify_backend_ready(public_url, opener=opener)
+
+
 def main() -> int:
     try:
-        verify_signed_docker_release(
+        verify_signed_consumer_deployment(
             Path(os.environ.get("KAREN_RELEASE_REPO_ROOT", ".")).resolve(),
             os.environ.get("TARGET_SHA", ""),
             os.environ.get("KAREN_RELEASE_REPOSITORY", ""),
@@ -234,11 +272,12 @@ def main() -> int:
                 "api": os.environ.get("KAREN_EXPECTED_API_IMAGE_ID", ""),
                 "web": os.environ.get("KAREN_EXPECTED_WEB_IMAGE_ID", ""),
             },
+            os.environ.get("KAREN_BASE_URL", ""),
         )
     except RevisionVerificationError as exc:
         LOGGER.error("Docker release identity proof failed: %s", exc)
         return 1
-    LOGGER.info("Signed GHCR provenance and running production web/API images verified")
+    LOGGER.info("Signed Docker images, HTTPS deployment revision and canonical backend readiness verified")
     return 0
 
 
