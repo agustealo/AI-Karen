@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures/verified-vercel-preview';
+import { expect, test } from './fixtures/verified-search-deployment';
 
 /**
  * Release acceptance against a real authenticated installation.

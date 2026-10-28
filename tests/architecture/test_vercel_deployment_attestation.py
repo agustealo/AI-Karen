@@ -219,7 +219,7 @@ def test_automation_bypass_is_step_scoped_and_browser_cookie_only():
         assert secret not in block
 
     fixture = (
-        root / "src/ui_launchers/Karen-AI-Theme/e2e/fixtures/verified-vercel-preview.ts"
+        root / "src/ui_launchers/Karen-AI-Theme/e2e/fixtures/verified-search-deployment.ts"
     ).read_text(encoding="utf-8")
     suite = (
         root / "src/ui_launchers/Karen-AI-Theme/e2e/intelligent-search-replay.spec.ts"
@@ -230,7 +230,7 @@ def test_automation_bypass_is_step_scoped_and_browser_cookie_only():
     assert "cookie.name === '_vercel_jwt'" in fixture
     assert "extraHTTPHeaders" not in fixture
     assert "page.route(" not in fixture
-    assert "fixtures/verified-vercel-preview" in suite
+    assert "fixtures/verified-search-deployment" in suite
     assert "trace: 'off'" in suite
     assert "screenshot: 'off'" in suite
     assert "video: 'off'" in suite
