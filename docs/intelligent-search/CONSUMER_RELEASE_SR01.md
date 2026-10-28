@@ -308,7 +308,8 @@ signed candidate **digest-pinned** image references and corresponding local
 Docker config image IDs, and pull the images by immutable digest. Then set:
 
 - `TARGET_SHA`: reviewed, full lowercase commit SHA
-- `KAREN_RELEASE_REPOSITORY`: lowercase `owner/repository`
+- `KAREN_RELEASE_REPOSITORY`: exact case-preserving GitHub `owner/repository`
+  identity (e.g. `agustealo/AI-Karen`); GHCR subject paths use lowercase
 - `KAREN_SIGNED_API_IMAGE_REF` and `KAREN_SIGNED_WEB_IMAGE_REF`:
   exact `ghcr.io/owner/repository-{api,web}@sha256:...` registry references
 - `KAREN_EXPECTED_API_IMAGE_ID` and `KAREN_EXPECTED_WEB_IMAGE_ID`:
