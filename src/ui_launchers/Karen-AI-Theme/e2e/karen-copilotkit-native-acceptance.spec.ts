@@ -189,7 +189,14 @@ test("CK-07E8 a stale second browser tab cannot overwrite an authenticated draft
       status: 200, text: elsewhere, revision: base.revision + 1,
     });
 
+    const rejectedStalePut = tab.waitForResponse(response =>
+      response.request().method() === "PUT" &&
+      new URL(response.url()).pathname === draftUrl &&
+      response.status() === 409,
+      { timeout: 15000 },
+    );
     await composer.fill(competing);
+    await rejectedStalePut;
     await expect(tab.getByTestId("karen-copilot-unsynced-draft"))
       .toBeVisible({ timeout: 15000 });
     await expect(tab.getByRole("alert"))
