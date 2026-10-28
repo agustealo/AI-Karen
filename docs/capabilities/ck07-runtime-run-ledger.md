@@ -379,9 +379,14 @@ responses, and a confirmed CAS write or durable submit-clear invalidates
 all pre-write reads. A regressed revision or changed text without a new
 revision fails closed instead of replacing verified content. Focus-order,
 post-write stale-read and revision-regression tests verify that protection.
-The canonical repository's read and CAS operations now use the same
-instrumented telemetry path as its other conversation operations, without
-logging draft text.
+The runtime gateway now emits structured, correlated read/success,
+CAS/success and stale-window conflict log events with request, correlation,
+tenant, user, conversation and revision metadata, **never draft contents**.
+The draft repository methods also use the canonical
+`instrument_repository` wrapper. That wrapper currently has its event-emitter
+call commented out, so Prometheus/emitter integration is still an existing
+observability debt and **is not** claimed as proven by these logs. A unit
+test asserts the events omit private text.
 
 **Privacy/acceptance limits**: no dedicated background purge of abandoned
 draft rows is claimed; retention follows the canonical parent conversation,
