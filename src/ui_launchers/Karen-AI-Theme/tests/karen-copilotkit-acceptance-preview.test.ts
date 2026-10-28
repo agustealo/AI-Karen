@@ -76,6 +76,11 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).toContain("KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED");
     expect(nativeBrowser).toContain("expected_revision: value.revision");
     expect(nativeBrowser).toContain("Persona restoration must be CAS-confirmed");
+    expect(nativeBrowser).toContain("CK-07F rejects runless and nonexistent stop requests");
+    expect(nativeBrowser).toContain('"ck07_absent_" + crypto.randomUUID()');
+    expect(nativeBrowser).toContain("runless.status()).toBe(422)");
+    expect(nativeBrowser).toContain("unknown.status()");
+    expect(nativeBrowser).toContain("toEqual(history)");
   });
 
   it("does not disturb the sole consumer chat mount", () => {

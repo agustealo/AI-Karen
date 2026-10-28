@@ -549,6 +549,18 @@ persona writer is never overwritten to make acceptance artificially green.
 This reuses the same Persona Studio revision owner, rather than
 implementing another persona persistence API or preference store.
 
+CK-07F native cancellation acceptance now includes an authenticated
+**negative-path gateway probe** in the protected browser suite. It obtains
+canonical history/draft from a dedicated owned conversation, rejects a
+thread-only stop with HTTP 422, and rejects a cryptographically fresh,
+nonexistent run ID with HTTP 404. Rechecking both canonical resources and
+the browser request journal proves no draft or transcript mutation and
+no inference request. It does **not** simulate a RUN_STARTED event,
+manufacture a successful stop receipt, or claim a model worker cancelled.
+Real cross-worker cancellation, final PostgreSQL terminal evidence and
+rendered pending/confirmed UI require a separate operator-approved
+live execution with a disposable test conversation.
+
 The suite **has not been executed against a deployed preview** merely
 because it is present in the repository. Feature parity remains
 incomplete: no genuine native Send-to-persisted-response, multi-tab

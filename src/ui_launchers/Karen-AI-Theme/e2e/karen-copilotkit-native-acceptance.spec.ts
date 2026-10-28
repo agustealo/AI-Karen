@@ -394,3 +394,60 @@ test("CK-07E8 native persona selection persists a canonical revision and restore
     }
   }
 });
+
+/**
+ * Negative-path live cancellation proof only. A fresh absent transport run ID
+ * cannot refer to any approved model execution and must not mutate history.
+ * This deliberately does NOT prove a real worker was cancelled.
+ */
+test("CK-07F rejects runless and nonexistent stop requests without changing saved conversation", async ({ page }) => {
+  requireApprovedNativeFixture();
+  if (!email || !password || !conversationId) return;
+  await signInApprovedKaren(page, email, password);
+
+  const threadUrl = "/api/copilotkit/threads/" +
+    encodeURIComponent(conversationId) + "/messages";
+  const draftUrl = "/api/conversations/" +
+    encodeURIComponent(conversationId) + "/draft";
+  const stopUrl = "/api/copilotkit/agent/default/stop/" +
+    encodeURIComponent(conversationId);
+  const beforeThread = await page.request.get(threadUrl);
+  const beforeDraft = await page.request.get(draftUrl);
+  expect(beforeThread.status(), "Requires an authenticated owned canonical thread").toBe(200);
+  expect(beforeDraft.status(), "Requires authenticated canonical draft").toBe(200);
+  const history = await beforeThread.json();
+  const draft = await beforeDraft.json();
+
+  const forbidden: string[] = [];
+  page.context().on("request", request => {
+    if (request.method() === "POST" && isInferenceRequest(request.url())) {
+      forbidden.push(new URL(request.url()).pathname);
+    }
+  });
+
+  // Missing exact run identity is rejected before backend cancellation.
+  const runless = await page.request.post(stopUrl, {
+    data: { threadId: conversationId },
+  });
+  expect(runless.status()).toBe(422);
+  expect(JSON.stringify(await runless.json())).not.toContain("cancelled");
+
+  // Use a high-entropy absent identifier, not an arbitrary known run.
+  // The canonical backend still repeats tenant, user and conversation checks.
+  const impossibleId = "ck07_absent_" + crypto.randomUUID().replace(/-/g, "");
+  const unknown = await page.request.post(stopUrl, {
+    data: { runId: impossibleId },
+  });
+  expect(unknown.status(), "Absent scoped run must not appear cancellable").toBe(404);
+  expect(JSON.stringify(await unknown.json())).not.toContain("cancellation_confirmed");
+
+  const afterThread = await page.request.get(threadUrl);
+  const afterDraft = await page.request.get(draftUrl);
+  expect(afterThread.status()).toBe(200);
+  expect(afterDraft.status()).toBe(200);
+  expect(await afterThread.json(), "Rejected stop must not fabricate a history change")
+    .toEqual(history);
+  expect(await afterDraft.json(), "Rejected stop must not alter any unsent draft")
+    .toEqual(draft);
+  expect(forbidden, "Invalid stop must never execute inference").toEqual([]);
+});
