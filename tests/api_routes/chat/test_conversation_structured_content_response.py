@@ -50,9 +50,10 @@ class _ScopedGateway:
     def __init__(self, snapshot):
         self.snapshot = snapshot
 
-    async def get_owned_snapshot(self, context):
+    async def get_owned_snapshot(self, context, *, message_limit=100):
         if str(context.user_id) != "owner" or str(context.tenant_id) != "tenant-a":
             raise PermissionError("conversation_user_mismatch")
+        assert isinstance(message_limit, int) and 0 < message_limit <= 500
         return self.snapshot
 
 
