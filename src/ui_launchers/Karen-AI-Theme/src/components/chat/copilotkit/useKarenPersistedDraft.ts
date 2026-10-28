@@ -36,6 +36,9 @@ export function useKarenPersistedDraft(conversationId: string) {
   const busyRef = useRef(false);
   const activeRef = useRef(false);
   const generationRef = useRef(0);
+  // Parallel focus/interval reads may complete out of order. Invalidate all
+  // older reads after each new read or confirmed write.
+  const readSequenceRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
   const endpoint = "/api/conversations/" + encodeURIComponent(conversationId) + "/draft";
@@ -58,12 +61,24 @@ export function useKarenPersistedDraft(conversationId: string) {
     if (!activeRef.current || busyRef.current ||
         (dirtyRef.current && !force)) return;
     const generation = generationRef.current;
+    const readSequence = ++readSequenceRef.current;
     try {
       const response: unknown = await apiClient.get<DraftRecord>(endpoint);
-      if (!activeRef.current || generationRef.current !== generation) return;
+      if (!activeRef.current || generationRef.current !== generation ||
+          readSequenceRef.current !== readSequence) return;
       if (!validDraft(response)) throw new Error("Invalid server draft receipt");
       if (dirtyRef.current && !force) return;
       const saved = response as DraftRecord;
+      const knownRevision = revisionRef.current;
+      if (knownRevision !== null && saved.revision < knownRevision) {
+        // This GET was snapshot before a confirmed CAS write or another
+        // worker's latest state. Never replace newer canonical evidence.
+        return;
+      }
+      if (knownRevision !== null && saved.revision === knownRevision &&
+          !dirtyRef.current && textRef.current !== saved.text) {
+        throw new Error("Canonical draft changed without a new revision");
+      }
       revisionRef.current = saved.revision;
       textRef.current = saved.text;
       dirtyRef.current = false;
@@ -71,7 +86,8 @@ export function useKarenPersistedDraft(conversationId: string) {
       setSynced(true);
       setStatus("ready");
     } catch {
-      if (!activeRef.current || generationRef.current !== generation) return;
+      if (!activeRef.current || generationRef.current !== generation ||
+          readSequenceRef.current !== readSequence) return;
       // Never pass off a local draft as saved after an API failure.
       setStatus("unavailable");
       setSynced(false);
@@ -81,6 +97,7 @@ export function useKarenPersistedDraft(conversationId: string) {
   useEffect(() => {
     activeRef.current = true;
     generationRef.current += 1;
+    readSequenceRef.current += 1;
     revisionRef.current = null;
     textRef.current = "";
     dirtyRef.current = false;
@@ -97,6 +114,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     return () => {
       activeRef.current = false;
       generationRef.current += 1;
+      readSequenceRef.current += 1;
       abortRef.current?.abort();
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
@@ -128,6 +146,7 @@ export function useKarenPersistedDraft(conversationId: string) {
         throw new Error("Invalid draft persistence receipt");
       }
       revisionRef.current = (response as DraftRecord).revision;
+      readSequenceRef.current += 1;
       if (textRef.current === sentText) {
         dirtyRef.current = false;
         setSynced(true);
@@ -179,6 +198,7 @@ export function useKarenPersistedDraft(conversationId: string) {
         throw new Error("Invalid draft-clear receipt");
       }
       revisionRef.current = (response as DraftRecord).revision;
+      readSequenceRef.current += 1;
       if (textRef.current === originalText) {
         textRef.current = "";
         dirtyRef.current = false;
