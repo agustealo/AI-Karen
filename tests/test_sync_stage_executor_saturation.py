@@ -59,7 +59,6 @@ async def test_cancelled_queued_executor_work_releases_capacity(monkeypatch):
     def occupy():
         occupying.set()
         release.wait(timeout=2)
-    previous_executor = loop._default_executor
     loop.set_default_executor(executor)
     try:
         blocker = loop.run_in_executor(None, occupy)
@@ -71,5 +70,5 @@ async def test_cancelled_queued_executor_work_releases_capacity(monkeypatch):
         assert await runner.run_stage("spacy", "spacy", lambda: "recovered") == "recovered"
     finally:
         release.set()
-        loop.set_default_executor(previous_executor or ThreadPoolExecutor(max_workers=4))
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=4))
         executor.shutdown(wait=True)
