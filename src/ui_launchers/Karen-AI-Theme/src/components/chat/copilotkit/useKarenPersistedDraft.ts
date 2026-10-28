@@ -226,12 +226,22 @@ export function useKarenPersistedDraft(conversationId: string) {
   }, [endpoint]);
 
   const retry = useCallback(() => {
-    if (status !== "unavailable" || revisionRef.current === null) {
+    if (!activeRef.current || status !== "unavailable" || busyRef.current) return;
+
+    if (dirtyRef.current) {
+      // Keep unsent edits intact and retry the existing revision-fenced write.
+      // No known revision means we must not invent a safe CAS base.
+      if (revisionRef.current === null) return;
+      setStatus("ready");
+      setVersion(v => v + 1);
       return;
     }
-    setStatus("ready");
-    setVersion(v => v + 1);
-  }, [status]);
+
+    // An initial read failure has no revision. A later clean refresh failure
+    // also needs an authenticated reread, never a pretend "saved" receipt.
+    setStatus("loading");
+    void refresh(false);
+  }, [refresh, status]);
 
   // Conflict refresh explicitly replaces the local draft. Never do this
   // automatically while unsent edits may still be present.

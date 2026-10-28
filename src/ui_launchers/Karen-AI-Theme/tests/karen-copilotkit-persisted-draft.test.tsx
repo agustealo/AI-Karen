@@ -217,6 +217,65 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     expect(backend.put).not.toHaveBeenCalled();
   });
 
+  it("recovers from a failed first read using an authenticated reread, without a fake save", async () => {
+    backend.get.mockRejectedValueOnce(new ApiError(503, "temporarily unavailable"))
+      .mockResolvedValueOnce({ text: "Saved after recovery", revision: 3 });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    expect(backend.get).toHaveBeenCalledTimes(2);
+    expect(backend.put).not.toHaveBeenCalled();
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
+      .toBe("Saved after recovery");
+  });
+
+  it("rereads a clean draft after refresh failure rather than claiming a save", async () => {
+    backend.get.mockResolvedValueOnce({ text: "Known", revision: 5 })
+      .mockRejectedValueOnce(new ApiError(503, "read unavailable"))
+      .mockResolvedValueOnce({ text: "Changed elsewhere", revision: 6 });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("unavailable"));
+    expect(screen.getByTestId("draft-synced").textContent).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    expect(backend.get).toHaveBeenCalledTimes(3);
+    expect(backend.put).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
+      .toBe("Changed elsewhere");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+  });
+
+  it("retries a rejected dirty CAS write without discarding unsent edits", async () => {
+    backend.put.mockRejectedValueOnce(new ApiError(503, "write unavailable"));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Unsent preserved" },
+    });
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("unavailable"), { timeout: 4000 });
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
+      .toBe("Unsent preserved");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(backend.put).toHaveBeenLastCalledWith(
+      TARGET, { text: "Unsent preserved", expected_revision: 4 },
+      expect.objectContaining({ signal: expect.any(Object) }),
+    );
+    await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
+      .toBe("true"));
+  });
+
   it("refuses invalid backend receipt before trusting any saved text", async () => {
     backend.get.mockResolvedValueOnce({
       text: "Untrusted long content", revision: -3,

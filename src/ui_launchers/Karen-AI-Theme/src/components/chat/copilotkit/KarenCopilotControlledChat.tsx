@@ -146,7 +146,7 @@ export function KarenCopilotControlledChat({
           value={draft} className="min-h-24 w-full rounded-lg border border-input p-2 text-sm" />
         <div className="flex gap-2">
           {draftStatus === "unavailable" &&
-            <button type="button" onClick={retry}>Retry saving draft</button>}
+            <button type="button" onClick={retry}>Retry draft synchronization</button>}
           <button type="button" onClick={discardAndReload}>
             Reload saved draft (discard local changes)
           </button>
