@@ -419,6 +419,17 @@ class ConversationRuntimeGateway:
             raise RuntimeError("conversation_not_found")
         return updated
 
+    @staticmethod
+    def _composer_draft_log_fields(context: ChatExecutionContext) -> Dict[str, Any]:
+        """Trace draft authority without emitting private draft text."""
+        return {
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id,
+            "user_id": context.user_id,
+            "conversation_id": context.conversation_id,
+        }
+
     async def read_composer_draft(
         self, context: ChatExecutionContext,
     ) -> Dict[str, Any]:
@@ -433,6 +444,11 @@ class ConversationRuntimeGateway:
             raise RuntimeError(result.error or "composer_draft_read_failed")
         if not isinstance(result.data, dict):
             raise RuntimeError("composer_draft_invalid_storage_response")
+        logger.info("conversation_draft_read_completed", extra={
+            **self._composer_draft_log_fields(context),
+            "status": "success",
+            "revision": result.data.get("revision"),
+        })
         return result.data
 
     async def write_composer_draft(
@@ -454,6 +470,11 @@ class ConversationRuntimeGateway:
         )
         if not result.success:
             if result.error == "composer_draft_revision_conflict":
+                logger.info("conversation_draft_write_conflict", extra={
+                    **self._composer_draft_log_fields(context),
+                    "status": "conflict",
+                    "expected_revision": expected_revision,
+                })
                 raise ValueError("composer_draft_revision_conflict")
             if result.error == "conversation_not_found":
                 raise RuntimeError("conversation_not_found")
@@ -462,6 +483,11 @@ class ConversationRuntimeGateway:
             raise RuntimeError(result.error or "composer_draft_write_failed")
         if not isinstance(result.data, dict):
             raise RuntimeError("composer_draft_invalid_storage_response")
+        logger.info("conversation_draft_write_completed", extra={
+            **self._composer_draft_log_fields(context),
+            "status": "success",
+            "revision": result.data.get("revision"),
+        })
         return result.data
 
     async def delete_conversation(self, context: ChatExecutionContext) -> bool:
