@@ -66,6 +66,10 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).toContain('"/api/personas/preferences/me"');
     expect(nativeBrowser).toContain('trace: "off", screenshot: "off", video: "off"');
     expect(nativeBrowser).toContain("expect(runs");
+    expect(nativeBrowser).toContain("grantPermissions([], { origin })");
+    expect(nativeBrowser).toContain('name: "Start local dictation"');
+    expect(nativeBrowser).toContain('path.startsWith("/api/voice/")');
+    expect(nativeBrowser).toContain("savedBefore");
   });
 
   it("does not disturb the sole consumer chat mount", () => {

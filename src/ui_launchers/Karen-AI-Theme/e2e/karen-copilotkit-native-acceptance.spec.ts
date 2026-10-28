@@ -226,3 +226,64 @@ test("CK-07E8 a stale second browser tab cannot overwrite an authenticated draft
     await clearOnlyOwnAcceptanceDraft(page.request, draftUrl, [elsewhere, competing]);
   }
 });
+
+// A microphone-permission denial is a browser-level safety scenario, not a
+// simulated transcript. Do not record or send any audio, start an LLM, or
+// change a user's persona/draft state.
+test("CK-07E8 denied local microphone permission never transcribes or starts an agent", async ({ page }) => {
+  requireApprovedNativeFixture();
+  if (!email || !password || !conversationId) return;
+  await signInApprovedKaren(page, email, password);
+
+  const capabilities = await page.request.get("/api/voice/capabilities");
+  expect(capabilities.status(), "Voice capability must be reported by Karen's real backend").toBe(200);
+  const voice: unknown = await capabilities.json();
+  expect(voice && typeof voice === "object" && !Array.isArray(voice)).toBe(true);
+  const advertised = voice as { status?: unknown; transcription_available?: unknown };
+  expect(typeof advertised.status).toBe("string");
+  expect(typeof advertised.transcription_available).toBe("boolean");
+
+  // An intentionally disabled backend is not a voice parity success.
+  test.skip(advertised.status !== "ready" || advertised.transcription_available !== true,
+    "Local transcription is disabled on this approved deployment; permission proof remains unverified");
+
+  const origin = new URL(process.env.KAREN_BASE_URL!).origin;
+  await page.context().grantPermissions([], { origin });
+  const forbidden: string[] = [];
+  page.context().on("request", request => {
+    if (request.method() !== "POST") return;
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/copilotkit/agent/default/run" ||
+        path === "/api/chat/ag-ui" ||
+        path === "/api/chat/stream" ||
+        path.startsWith("/api/voice/")) {
+      forbidden.push(path);
+    }
+  });
+
+  await page.goto("/acceptance/copilotkit/" + encodeURIComponent(conversationId));
+  await expect(page.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+  const controls = page.getByTestId("karen-copilot-voice-controls");
+  await expect(controls).toBeVisible();
+  const start = controls.getByRole("button", { name: "Start local dictation" });
+  await expect(start).toBeEnabled();
+
+  const draftUrl = "/api/conversations/" + encodeURIComponent(conversationId) + "/draft";
+  const draftBefore = await page.request.get(draftUrl);
+  expect(draftBefore.status()).toBe(200);
+  const savedBefore = await draftBefore.json() as { text: string; revision: number };
+  expect(typeof savedBefore.text).toBe("string");
+  expect(Number.isSafeInteger(savedBefore.revision)).toBe(true);
+
+  await start.click();
+  await expect(controls.getByRole("alert"))
+    .toContainText("Microphone access was denied or unavailable.");
+  await expect(controls.getByRole("button", { name: "Start local dictation" }))
+    .toHaveAttribute("aria-pressed", "false");
+  expect(forbidden, "Permission denial must not submit audio or trigger a model").toEqual([]);
+
+  const draftAfter = await page.request.get(draftUrl);
+  expect(draftAfter.status()).toBe(200);
+  expect(await draftAfter.json(), "Microphone denial must not modify the canonical draft")
+    .toEqual(savedBefore);
+});

@@ -528,6 +528,15 @@ These tests remain *written, not executed* in the approved protected browser
 environment as long as the candidate remains draft and main-only dispatch
 cannot be run against the same exact reviewed deployment.
 
+A third native browser scenario checks real local microphone permission
+denial only where the backend explicitly advertises transcription as
+available. The browser explicitly denies permission for the approved
+origin, requires a visible error and inactive recording state, and proves
+that no audio upload or model execution POST occurred and that the
+canonical draft was unchanged. An environment reporting disabled
+transcription marks that scenario as *skipped/unverified*, not passing
+voice parity. Browser-vendor dictation is not enabled or tested here.
+
 The suite **has not been executed against a deployed preview** merely
 because it is present in the repository. Feature parity remains
 incomplete: no genuine native Send-to-persisted-response, multi-tab
