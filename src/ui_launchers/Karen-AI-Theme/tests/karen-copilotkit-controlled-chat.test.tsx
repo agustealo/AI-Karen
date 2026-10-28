@@ -16,6 +16,7 @@ const sdk = vi.hoisted(() => ({
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
   post: vi.fn(),
+  get: vi.fn(),
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   lifecycle: null as null | {
@@ -41,7 +42,7 @@ vi.mock("@copilotkit/react-core/v2", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  apiClient: { post: sdk.post },
+  apiClient: { post: sdk.post, get: sdk.get },
 }));
 
 vi.mock("@/components/chat/assistant-ui/KarenLocalDictation", () => ({
@@ -98,6 +99,9 @@ beforeEach(() => {
   sdk.runAgent.mockReset().mockResolvedValue(undefined);
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
+  sdk.get.mockReset().mockResolvedValue({
+    status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+  });
   sdk.post.mockReset().mockResolvedValue({
     status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
   });
@@ -418,6 +422,91 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     }));
     expect(screen.queryByTestId("karen-copilot-stop-status")).toBeNull();
     expect(sdk.stopAgent).not.toHaveBeenCalled();
+  });
+
+  it("checks backend status read-only and only confirms a persisted terminal cancellation", async () => {
+    sdk.agent.isRunning = true;
+    sdk.get.mockResolvedValueOnce({
+      status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("button", {
+      name: "Check cancellation status",
+    })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Check cancellation status" }));
+    await waitFor(() => expect(sdk.get).toHaveBeenCalledWith(
+      "/api/copilotkit/agent/default/runs/" + THREAD + "/run-1/status",
+    ));
+    await waitFor(() => expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmed this run was cancelled"));
+    expect(screen.queryByRole("button", { name: "Check cancellation status" })).toBeNull();
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps pending stop pending until read-only backend confirms its terminal status", async () => {
+    sdk.agent.isRunning = true;
+    sdk.get.mockResolvedValueOnce({
+      status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Check cancellation status" }));
+    await waitFor(() => expect(sdk.get).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmation is still pending");
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects forged terminal claims and preserves the ability to check again", async () => {
+    sdk.agent.isRunning = true;
+    sdk.get.mockResolvedValueOnce({
+      status: "completed", cancel_requested: false, cancellation_confirmed: true,
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Check cancellation status" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("could not verify the run"));
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .not.toContain("confirmed this run");
+    expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeTruthy();
+  });
+
+  it("distinguishes completed execution from a requested but unconfirmed stop", async () => {
+    sdk.agent.isRunning = true;
+    sdk.get.mockResolvedValueOnce({
+      status: "completed", cancel_requested: false, cancellation_confirmed: false,
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Check cancellation status" }));
+    await waitFor(() => expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("ended without a confirmed stop"));
+    expect(screen.queryByRole("button", { name: "Check cancellation status" })).toBeNull();
+  });
+
+  it("discards late status from an older run after a new RUN_STARTED", async () => {
+    let finish!: (result: unknown) => void;
+    sdk.agent.isRunning = true;
+    sdk.get.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-old" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Check cancellation status" }));
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-new" } }));
+    await act(async () => finish({
+      status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+    }));
+    expect(screen.queryByTestId("karen-copilot-stop-status")).toBeNull();
   });
 
   it("reports local transport failure without downgrading canonical accepted cancellation", async () => {

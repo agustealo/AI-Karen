@@ -27,6 +27,22 @@ type StopReceipt = {
   cancel_requested: true;
   cancellation_confirmed: boolean;
 };
+type RunStatus = {
+  status: "running" | "cancelling" | "cancelled" |
+    "completed" | "failed" | "orphaned" | "interrupted";
+  cancel_requested: boolean;
+  cancellation_confirmed: boolean;
+};
+function validRunStatus(value: unknown): value is RunStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const info = value as Record<string, unknown>;
+  return ["running", "cancelling", "cancelled", "completed",
+    "failed", "orphaned", "interrupted"].includes(String(info.status)) &&
+    typeof info.cancel_requested === "boolean" &&
+    typeof info.cancellation_confirmed === "boolean" &&
+    (!info.cancellation_confirmed ||
+      (info.status === "cancelled" && info.cancel_requested === true));
+}
 
 function validStopReceipt(value: unknown): value is StopReceipt {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -49,6 +65,10 @@ export function KarenCopilotControlledChat({
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
   const [stopStatus, setStopStatus] = useState<string | null>(null);
+  const [checkableRunId, setCheckableRunId] = useState<string | null>(null);
+  const [checkingStatus, setCheckingStatus] = useState(false);
+  const lastStopRunId = useRef<string | null>(null);
+  const checkingStatusRef = useRef(false);
   const activeRunId = useRef<string | null>(null);
   const pendingStopId = useRef<string | null>(null);
   // Copyable only in this authenticated component, not an additional draft store.
@@ -91,7 +111,9 @@ export function KarenCopilotControlledChat({
         // never the composer, local state, or guessed SDK stop arguments.
         if (event.threadId !== conversationId || !RUN_ID.test(event.runId)) return;
         activeRunId.current = event.runId;
+        lastStopRunId.current = null;
         setStopStatus(null);
+        setCheckableRunId(null);
       },
       onRunFinalized: () => { activeRunId.current = null; },
       onRunFailed: () => { activeRunId.current = null; },
@@ -99,6 +121,7 @@ export function KarenCopilotControlledChat({
     return () => {
       activeRunId.current = null;
       pendingStopId.current = null;
+      lastStopRunId.current = null;
       subscription.unsubscribe();
     };
   }, [agent, conversationId, isReady]);
@@ -185,6 +208,8 @@ export function KarenCopilotControlledChat({
         );
         if (!validStopReceipt(receipt)) throw new Error("Invalid stop receipt");
         if (!mounted.current || activeRunId.current !== runId) return;
+        lastStopRunId.current = runId;
+        setCheckableRunId(receipt.cancellation_confirmed ? null : runId);
         setStopStatus(receipt.cancellation_confirmed
           ? "Karen confirmed this run was cancelled."
           : "Cancellation requested. Backend confirmation is still pending.");
@@ -204,6 +229,43 @@ export function KarenCopilotControlledChat({
       }
     })();
   }, [agent, conversationId, copilotkit, isReady]);
+
+
+  const checkCancellationStatus = useCallback(() => {
+    const runId = checkableRunId;
+    if (!runId || !RUN_ID.test(runId) || lastStopRunId.current !== runId ||
+        checkingStatusRef.current || agent.threadId !== conversationId) return;
+    checkingStatusRef.current = true;
+    setCheckingStatus(true);
+    setError(null);
+    void (async () => {
+      try {
+        const result: unknown = await apiClient.get<RunStatus>(
+          "/api/copilotkit/agent/default/runs/" + conversationId +
+            "/" + runId + "/status",
+        );
+        if (!validRunStatus(result)) throw new Error("Invalid runtime status");
+        if (!mounted.current || lastStopRunId.current !== runId) return;
+        if (result.cancellation_confirmed) {
+          setStopStatus("Karen confirmed this run was cancelled.");
+          setCheckableRunId(null);
+        } else if (["completed", "failed", "orphaned", "interrupted", "cancelled"]
+            .includes(result.status)) {
+          setStopStatus("Run ended without a confirmed stop. Review verified conversation history.");
+          setCheckableRunId(null);
+        } else {
+          setStopStatus("Cancellation requested. Backend confirmation is still pending.");
+        }
+      } catch {
+        if (mounted.current && lastStopRunId.current === runId) {
+          setError("Karen could not verify the run's final status. Try checking again.");
+        }
+      } finally {
+        checkingStatusRef.current = false;
+        if (mounted.current) setCheckingStatus(false);
+      }
+    })();
+  }, [agent, checkableRunId, conversationId]);
 
   const copyFailedMessage = useCallback(async () => {
     if (failedSubmission === null) return;
@@ -247,8 +309,15 @@ export function KarenCopilotControlledChat({
     <div data-testid="karen-copilot-controlled-chat"
       className="flex min-h-0 min-w-0 flex-1 flex-col">
       {error && <p role="alert" className="border-b border-destructive/40 px-3 py-2 text-sm text-destructive">{error}</p>}
-      {stopStatus && <p role="status" data-testid="karen-copilot-stop-status"
-        className="border-b border-border/40 px-3 py-2 text-sm text-muted-foreground">{stopStatus}</p>}
+      {stopStatus && <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2">
+        <p role="status" data-testid="karen-copilot-stop-status"
+          className="text-sm text-muted-foreground">{stopStatus}</p>
+        {checkableRunId && <button type="button" disabled={checkingStatus}
+          onClick={checkCancellationStatus}
+          className="rounded-md border border-input px-2 py-1 text-xs">
+          {checkingStatus ? "Checking run status…" : "Check cancellation status"}
+        </button>}
+      </div>}
       {failedSubmission !== null && (
         <div data-testid="karen-copilot-failed-submission"
           className="flex flex-col gap-2 border-b border-destructive/40 px-3 py-2">

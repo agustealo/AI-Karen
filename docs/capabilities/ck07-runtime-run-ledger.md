@@ -17,6 +17,30 @@ The ledger stores **no transcript, prompt, provider payload, tool arguments,
 session state or SDK thread store**. No service is registered as a second
 orchestrator and no legacy cancellation authority was imported.
 
+## CK-07F3: Canonical read-only terminal status (candidate)
+
+The native Stop control originally received a `202 cancelling` receipt
+but had no way to verify terminal cancellation without repeating the
+mutating stop request or enabling the optional event journal.
+
+The canonical run repository now exposes a read-only, owner/tenant/
+conversation/run scoped SELECT under existing PostgreSQL RLS, re-authorized
+by ChatRunCoordinator. This reports `interrupted` for expired in-flight
+leases and reports `cancellation_confirmed=true` **only** when an
+explicit cancel marker and persisted terminal `cancelled` state agree.
+The backend `GET /api/chat/ag-ui/runs/:threadId/:runId/status` remains
+feature-gated by AG-UI and durable-run config. The existing authenticated
+CopilotKit gateway exposes only the validated, sanitized status through
+`GET /api/copilotkit/agent/default/runs/:threadId/:runId/status`.
+It does not invoke the SDK runner, write a second ledger, or resend stop.
+
+The native view provides a deliberate **Check cancellation status** action
+after an accepted pending stop. It reports confirmed only from the
+authenticated backend read, distinguishes other terminal states, and
+retains pending status through transient errors. This is a committed
+implementation, **not** proof of real cross-worker model cancellation
+until the protected browser and live PostgreSQL test are executed.
+
 ## Operator activation (do not enable for consumer traffic yet)
 
 1. Apply and verify migrations 43, 44, 45 and 46 in order through the canonical Supabase PostgreSQL migration pipeline; ensure tenant/user RLS is effective for runtime transactions.
