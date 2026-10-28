@@ -1,5 +1,5 @@
 import React from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backend = vi.hoisted(() => ({
@@ -161,6 +161,56 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(screen.getByRole("alert").textContent).toContain("interactive or structured content");
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
+  });
+
+  it("recovers from a transient history outage only after a new authenticated read", async () => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(new Error("private storage error"))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A,
+        messages: [{ id: "m1", role: "assistant", content: "Verified after recovery" }],
+        replayEvents: [],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(screen.getByRole("alert").textContent).not.toContain("private");
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry verified conversation" }));
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
+      { id: "m1", role: "assistant", content: "Verified after recovery" },
+    ]);
+    expect(backend.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reopen failed rich replay unless a subsequent read attests all content", async () => {
+    backend.fetchConversation
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A,
+        messages: [{ id: "m1", role: "assistant", content: "Unsupported" }],
+        replayEvents: [{ type: "CUSTOM", name: "unknown.evidence",
+          messageId: "m1", value: {} }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A,
+        messages: [{ id: "m2", role: "user", content: "Valid canonical history" }],
+        replayEvents: [],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry verified conversation" }));
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
+      { id: "m2", role: "user", content: "Valid canonical history" },
+    ]);
   });
 
   it("hydrates a verified saved presentation without omitting the assistant text", async () => {

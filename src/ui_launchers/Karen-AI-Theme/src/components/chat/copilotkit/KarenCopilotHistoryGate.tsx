@@ -91,6 +91,7 @@ export function KarenCopilotHistoryGate({
   });
   const [loaded, setLoaded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState(0);
   const [verifiedParts, setVerifiedParts] = useState<VerifiedHistoryParts>(new Map());
 
   useEffect(() => {
@@ -167,13 +168,21 @@ export function KarenCopilotHistoryGate({
       cancelled = true;
       unsubscribe?.();
     };
-  }, [agent, conversationId, isReady]);
+  }, [agent, conversationId, isReady, retryAttempt]);
 
   if (!isReady || (loaded !== conversationId && !error)) {
     return <p role="status" className="text-sm text-muted-foreground">Restoring conversation...</p>;
   }
   if (error) {
-    return <p role="alert" className="text-sm text-destructive">{error}</p>;
+    return (
+      <div className="flex flex-col items-start gap-2 p-3">
+        <p role="alert" className="text-sm text-destructive">{error}</p>
+        <button type="button" className="rounded-md border border-input px-3 py-2 text-sm"
+          onClick={() => setRetryAttempt(attempt => attempt + 1)}>
+          Retry verified conversation
+        </button>
+      </div>
+    );
   }
   return (
     <KarenVerifiedHistoryProvider parts={verifiedParts}>
