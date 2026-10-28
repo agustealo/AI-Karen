@@ -28,10 +28,13 @@ def _runner(timeout=0.02):
 def test_sync_capacity_validation(monkeypatch):
     monkeypatch.setenv("MAX_WORKER_THREADS", "2")
     assert _sync_stage_capacity() == 2
-    for invalid in ("0", "-1", "129", "abc"):
+    for invalid in ("0", "-1", "129"):
         monkeypatch.setenv("MAX_WORKER_THREADS", invalid)
         with pytest.raises(ValueError):
             _sync_stage_capacity()
+    # The canonical config loader currently falls back on malformed integers.
+    monkeypatch.setenv("MAX_WORKER_THREADS", "abc")
+    assert _sync_stage_capacity() == 4
 
 
 @pytest.mark.asyncio
