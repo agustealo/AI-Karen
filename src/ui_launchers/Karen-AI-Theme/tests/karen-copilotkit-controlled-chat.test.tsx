@@ -183,8 +183,9 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
       input().onChange("Retain my question");
       input().onSubmitMessage("Retain my question");
     });
-    await waitFor(() => expect(input().value).toBe("Retain my question"));
-    expect(screen.getByRole("alert").textContent).toContain("unsent draft was retained");
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("unsent draft was retained"));
+    expect(input().value).toBe("Retain my question");
     expect(screen.getByRole("alert").textContent).not.toContain("private");
     expect(sdk.runAgent).not.toHaveBeenCalled();
     act(() => input().onSubmitMessage("Retry after recovery"));
