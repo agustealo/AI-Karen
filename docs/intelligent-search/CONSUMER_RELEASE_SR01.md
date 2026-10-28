@@ -1,6 +1,6 @@
 # Intelligent Search Consumer Release: SR-01
 
-Status: **RED, implementation pending**. Branch: `work/intelligent-search-consumer-release`.
+Status: **RED, source implementation merged; actual signed deployment and acceptance pending**. Source baseline: merged PRs #550 and #559.
 
 ## Verified failure
 
@@ -363,3 +363,42 @@ digest-pinned images are already pulled and running. Never run a
 fall back to images compiled from mutable host source. The verifier checks
 the same three-layer Compose service configuration and the running image
 identity, but does not create or deploy containers.
+
+
+## Live signed-Docker consumer ingress verification
+
+A signed image is not an operational consumer application. The existing
+`scripts/ci/verify_docker_release.py` CLI now performs the complete,
+read-only identity and ingress proof on an authorized deployment host:
+
+1. Validate the **approved** `KAREN_BASE_URL` as a clean HTTPS origin with
+   no userinfo, path, query, fragment or nonstandard port before any Docker
+   or GitHub calls. The URL must identify the real public web ingress, not a
+   build runner or Docker daemon endpoint.
+2. Verify the API and web GHCR Sigstore attestations against the exact source
+   revision, GitHub repository and signing workflow.
+3. Verify the digest-pinned OCI registry manifests and approved image config
+   IDs against the actual running healthy Compose services, reusing the
+   canonical three-layer production service configuration.
+4. Query the public `/api/deployment-revision` endpoint through HTTPS,
+   requiring a nonredirecting, uncached `200 application/json` response
+   with exactly the reviewed source SHA.
+5. Query the public `/api/health` endpoint through the same approved HTTPS
+   ingress and require `200 application/json` with
+   `status=ok` and `backend_ready=true`.
+
+The CLI requires the existing signed-artifact variables plus
+`KAREN_BASE_URL` and fails closed if *any* gate rejects the live runtime.
+It deliberately does not use Vercel automation-bypass credentials: the
+Docker full-stack ingress must be independently accessible to the authorized
+host. The CLI does not alter deployment state, fetch source, run untrusted
+user scripts, or read end-user credentials.
+
+**Important:** A public health check is necessary but not sufficient for
+consumer approval. After this proof, run the protected authenticated
+search/replay test against the same approved immutable revision and repeat
+the provenance, revision and backend checks. Human acceptance and
+authorization boundaries remain required. The current browser search
+workflow is Vercel-specific and must not be misrepresented as a Docker
+acceptance workflow until a Docker-capable protected harness is implemented
+and independently verified.
