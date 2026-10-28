@@ -33,6 +33,8 @@ export function KarenCopilotControlledChat({
   });
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
+  // Copyable only in this authenticated component, not an additional draft store.
+  const [failedSubmission, setFailedSubmission] = useState<string | null>(null);
   const {
     draft, setText: setDraftText, readText: readDraftText,
     status: draftStatus, synced: draftSynced, clearBeforeSubmit,
@@ -62,6 +64,10 @@ export function KarenCopilotControlledChat({
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
+    if (failedSubmission !== null) {
+      setError("Copy, restore or dismiss the failed unsent message before sending another.");
+      return;
+    }
     if (!isReady || draftStatus !== "ready" ||
         !draftSynced || submitPending.current || agent.isRunning ||
         !text || text.length > MAX_INPUT_CHARS ||
@@ -90,7 +96,12 @@ export function KarenCopilotControlledChat({
           });
         } catch {
           if (mounted.current) {
-            setDraftText(text);
+            if (!readDraftText()) {
+              setDraftText(text);
+            } else {
+              // Never clobber a newer edit while a durable clear is in flight.
+              setFailedSubmission(text);
+            }
             setError("Karen could not queue the message. Your unsent draft was retained.");
           }
           return;
@@ -109,7 +120,7 @@ export function KarenCopilotControlledChat({
     })();
   }, [
     agent, conversationId, copilotkit, isReady, clearBeforeSubmit,
-    draftStatus, draftSynced, readDraftText, setDraftText,
+    draftStatus, draftSynced, readDraftText, setDraftText, failedSubmission,
   ]);
 
   const onStop = useCallback(() => {
@@ -148,6 +159,29 @@ export function KarenCopilotControlledChat({
     <div data-testid="karen-copilot-controlled-chat"
       className="flex min-h-0 min-w-0 flex-1 flex-col">
       {error && <p role="alert" className="border-b border-destructive/40 px-3 py-2 text-sm text-destructive">{error}</p>}
+      {failedSubmission !== null && (
+        <div data-testid="karen-copilot-failed-submission"
+          className="flex flex-col gap-2 border-b border-destructive/40 px-3 py-2">
+          <p role="status" className="text-sm text-muted-foreground">
+            The earlier message was not queued. Copy or restore it before continuing.
+          </p>
+          <textarea aria-label="Unsent failed message" readOnly value={failedSubmission}
+            className="min-h-16 w-full rounded-lg border border-input p-2 text-sm" />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={Boolean(draft)}
+              onClick={() => {
+                if (readDraftText()) return;
+                setDraftText(failedSubmission);
+                setFailedSubmission(null);
+              }}>
+              Restore to empty composer
+            </button>
+            <button type="button" onClick={() => setFailedSubmission(null)}>
+              Dismiss failed message
+            </button>
+          </div>
+        </div>
+      )}
       {!draftSynced && <p role="status" className="px-3 text-xs text-muted-foreground">
         Saving draft to your conversation…
       </p>}

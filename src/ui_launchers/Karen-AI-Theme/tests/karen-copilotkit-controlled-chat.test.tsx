@@ -192,6 +192,39 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     await waitFor(() => expect(sdk.agent.addMessage).toHaveBeenCalledTimes(2));
   });
 
+  it("preserves newer edits and a copyable failed submission when SDK append fails after clear", async () => {
+    let confirmClear!: (result: boolean) => void;
+    sdk.clearDraft.mockImplementationOnce(() => new Promise<boolean>(resolve => {
+      confirmClear = resolve;
+    }));
+    sdk.agent.addMessage.mockImplementationOnce(() => {
+      throw new Error("private SDK append failure");
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original unsent message");
+      input().onSubmitMessage("Original unsent message");
+    });
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    act(() => input().onChange("Newer unsent text"));
+    await act(async () => confirmClear(true));
+    await waitFor(() => expect(screen.getByTestId("karen-copilot-failed-submission"))
+      .toBeTruthy());
+    expect(input().value).toBe("Newer unsent text");
+    const failedMessage = screen.getByRole("textbox", {
+      name: "Unsent failed message",
+    }) as HTMLTextAreaElement;
+    expect(failedMessage.readOnly).toBe(true);
+    expect(failedMessage.value).toBe("Original unsent message");
+    expect((screen.getByRole("button", {
+      name: "Restore to empty composer",
+    }) as HTMLButtonElement).disabled).toBe(true);
+    act(() => input().onSubmitMessage("Newer unsent text"));
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).not.toContain("private");
+  });
+
   it("blocks inference until canonical draft clearance is confirmed", async () => {
     sdk.clearDraft.mockResolvedValueOnce(false);
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
