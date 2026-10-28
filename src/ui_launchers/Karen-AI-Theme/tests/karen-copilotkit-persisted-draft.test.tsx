@@ -99,6 +99,66 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     expect(backend.put).not.toHaveBeenCalled();
   });
 
+  it("never lets an older focus read overwrite a later authenticated response", async () => {
+    let finishOld!: (result: { text: string; revision: number }) => void;
+    backend.get.mockResolvedValueOnce({ text: "Initial", revision: 1 })
+      .mockImplementationOnce(() => new Promise(resolve => {
+        finishOld = resolve;
+      }))
+      .mockResolvedValueOnce({ text: "Newer cross-window state", revision: 2 });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(backend.get).toHaveBeenCalledTimes(2));
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(backend.get).toHaveBeenCalledTimes(3));
+    const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.value).toBe("Newer cross-window state"));
+    await act(async () => finishOld({ text: "Older response", revision: 1 }));
+    expect(input.value).toBe("Newer cross-window state");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+  });
+
+  it("ignores a read started before a successfully committed draft write", async () => {
+    let finishOld!: (result: { text: string; revision: number }) => void;
+    backend.get.mockResolvedValueOnce({ text: "Initial", revision: 4 })
+      .mockImplementationOnce(() => new Promise(resolve => {
+        finishOld = resolve;
+      }));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(backend.get).toHaveBeenCalledTimes(2));
+    const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "Locally confirmed revision five" } });
+    await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
+      .toBe("true"), { timeout: 4000 });
+    expect(backend.put).toHaveBeenCalledWith(
+      TARGET, { text: "Locally confirmed revision five", expected_revision: 4 },
+      expect.objectContaining({ signal: expect.any(Object) }),
+    );
+    await act(async () => finishOld({ text: "Obsolete revision four", revision: 4 }));
+    expect(input.value).toBe("Locally confirmed revision five");
+    expect(screen.getByTestId("draft-status").textContent).toBe("ready");
+  });
+
+  it("fails closed if a new server read regresses a confirmed CAS revision", async () => {
+    backend.get.mockResolvedValueOnce({ text: "Current revision", revision: 9 })
+      .mockResolvedValueOnce({ text: "Rolled-back data", revision: 8 });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("unavailable"));
+    const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+    expect(input.value).toBe("Current revision");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("false");
+    expect(backend.put).not.toHaveBeenCalled();
+  });
+
   it("confirms a revision-fenced empty draft before permitting inference", async () => {
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
