@@ -469,6 +469,20 @@ CopilotKit canonical history/run/draft APIs retain their existing
 tenant/user authorization; the page does not introduce a privileged
 execution, history or persistence service.
 
+The CopilotKit v2 stylesheet is a compiled **Tailwind v4** browser asset.
+Importing it directly into Karen's **Tailwind v3** PostCSS build caused
+an observed Web pnpm 11 Build Proof failure (`@layer base` without a
+matching v3 `@tailwind base` directive). Do not bypass the error or
+replace the consumer design system to accommodate an acceptance page.
+Instead, `tools/prepare-copilotkit-styles.mjs` resolves the exact
+installed, locked CopilotKit package CSS locally, validates its content
+and generates `public/vendor/copilotkit-v2.css` at `npm/pnpm run dev`
+and `npm/pnpm run build`. That generated asset is gitignored, loaded
+only by the acceptance route, and the browser scenario insists that
+its URL returns HTTP 200 with a CSS content type. There is no runtime
+CDN, checked-in vendor fork, global Tailwind upgrade or separate UI
+renderer. This fix still requires a fresh exact-head build check.
+
 The normal dashboard still mounts exactly one assistant-ui chat. An
 acceptance page is **not** proof that CopilotKit is usable or ready.
 Never enable the preview on a consumer deployment or broad production
