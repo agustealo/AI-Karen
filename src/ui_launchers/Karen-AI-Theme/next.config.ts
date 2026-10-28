@@ -121,7 +121,7 @@ const nextConfig: NextConfig = {
     config.plugins ??= [];
     config.plugins.push(new webpack.NormalModuleReplacementPlugin(
       /^\.\/index\.css$/,
-      (resource) => {
+      (resource: { context: string; request: string }) => {
         if (/[\\/]@copilotkit[\\/]react-core[\\/]dist[\\/]v2$/.test(resource.context)) {
           resource.request = path.resolve(__dirname,
             'src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css');
