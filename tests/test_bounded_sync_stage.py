@@ -26,17 +26,17 @@ def _runner(timeout=0.02):
 
 
 def test_sync_capacity_validation(monkeypatch):
-    monkeypatch.setenv("KAREN_SYNC_STAGE_MAX_WORKERS", "2")
+    monkeypatch.setenv("MAX_WORKER_THREADS", "2")
     assert _sync_stage_capacity() == 2
     for invalid in ("0", "-1", "129", "abc"):
-        monkeypatch.setenv("KAREN_SYNC_STAGE_MAX_WORKERS", invalid)
+        monkeypatch.setenv("MAX_WORKER_THREADS", invalid)
         with pytest.raises(ValueError):
             _sync_stage_capacity()
 
 
 @pytest.mark.asyncio
 async def test_timeout_holds_capacity_until_worker_finishes(monkeypatch):
-    monkeypatch.setenv("KAREN_SYNC_STAGE_MAX_WORKERS", "1")
+    monkeypatch.setenv("MAX_WORKER_THREADS", "1")
     runner = _runner()
     started = threading.Event()
     release = threading.Event()
