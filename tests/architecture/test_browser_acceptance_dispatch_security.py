@@ -23,7 +23,9 @@ def test_default_branch_only_exposes_reviewed_history_scenario() -> None:
 
     # Once SR-01 is integrated, search must be protected and attested.
     assert "          - search" in workflow
-    job = workflow.split("  authenticated-search-replay:", 1)[1]
+    job = workflow.split("  authenticated-search-replay:", 1)[1].split(
+        "\n  # Read-only SDK-protocol proof only.", 1
+    )[0]
     assert "if: inputs.scenario == 'search' && github.ref == 'refs/heads/main'" in job
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
