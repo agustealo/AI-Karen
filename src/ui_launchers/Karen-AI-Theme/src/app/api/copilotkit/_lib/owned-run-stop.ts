@@ -55,6 +55,30 @@ export async function readKarenScopedStopRunId(
   return values.runId;
 }
 
+
+/** Shared bounded parser for trusted backend run receipts and read-only status.
+ * Never buffer arbitrary upstream JSON, follow redirects or expose raw errors.
+ */
+async function readBoundedRunJson(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("missing receipt");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let body = "";
+  while (true) {
+    const part = await reader.read();
+    if (part.done) break;
+    bytes += part.value.byteLength;
+    if (bytes > MAX_STOP_BYTES) {
+      void reader.cancel().catch(() => undefined);
+      throw new Error("oversized receipt");
+    }
+    body += decoder.decode(part.value, { stream: true });
+  }
+  body += decoder.decode();
+  return JSON.parse(body);
+}
+
 /**
  * Canonical FastAPI still enforces user, tenant, thread ownership and RLS.
  * The SDK runner is NOT invoked; it has no Karen chat cancellation authority.
@@ -95,24 +119,7 @@ export async function stopKarenOwnedRun(
   }
   let receipt: unknown;
   try {
-    // Bound the actual byte stream, not only Content-Length or text decoding.
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("missing receipt");
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    let bytes = 0;
-    let body = "";
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      bytes += part.value.byteLength;
-      if (bytes > MAX_STOP_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("oversized receipt");
-      }
-      body += decoder.decode(part.value, { stream: true });
-    }
-    body += decoder.decode();
-    receipt = JSON.parse(body);
+    receipt = await readBoundedRunJson(response);
   } catch {
     return NextResponse.json({ detail: "Invalid cancellation receipt" }, { status: 503 });
   }
@@ -135,4 +142,65 @@ export async function stopKarenOwnedRun(
     );
   }
   return NextResponse.json({ detail: "Invalid cancellation receipt" }, { status: 503 });
+}
+
+/**
+ * Read the canonical owned run state without resending a stop mutation.
+ * The server still reauthorizes tenant, user, conversation and run row.
+ */
+export async function readKarenOwnedRunStatus(
+  request: NextRequest,
+  backendBaseUrl: string,
+  verifiedHeaders: Record<string, string>,
+  threadId: string,
+  runId: string,
+): Promise<Response> {
+  if (!RUN_ID.test(runId)) {
+    return NextResponse.json({ detail: "Invalid run identity" }, { status: 422 });
+  }
+  let response: Response;
+  try {
+    response = await fetch(
+      backendBaseUrl + "/api/chat/ag-ui/runs/" + threadId + "/" + runId + "/status",
+      {
+        method: "GET",
+        headers: verifiedHeaders,
+        cache: "no-store",
+        redirect: "manual",
+        signal: request.signal,
+      },
+    );
+  } catch {
+    return NextResponse.json({ detail: "Chat run status unavailable" }, { status: 503 });
+  }
+  if ([401, 403, 404].includes(response.status)) {
+    return NextResponse.json({ detail: "Chat run unavailable" }, { status: 404 });
+  }
+  if (response.status !== 200 ||
+      !response.headers.get("content-type")?.includes("application/json")) {
+    return NextResponse.json({ detail: "Chat run status unavailable" }, { status: 503 });
+  }
+  let data: unknown;
+  try {
+    data = await readBoundedRunJson(response);
+  } catch {
+    return NextResponse.json({ detail: "Invalid run status receipt" }, { status: 503 });
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return NextResponse.json({ detail: "Invalid run status receipt" }, { status: 503 });
+  }
+  const record = data as Record<string, unknown>;
+  if (!["running", "cancelling", "cancelled", "completed", "failed",
+        "orphaned", "interrupted"].includes(String(record.status)) ||
+      typeof record.cancel_requested !== "boolean" ||
+      typeof record.cancellation_confirmed !== "boolean" ||
+      (record.cancellation_confirmed === true &&
+        (record.status !== "cancelled" || record.cancel_requested !== true))) {
+    return NextResponse.json({ detail: "Invalid run status receipt" }, { status: 503 });
+  }
+  return NextResponse.json({
+    status: record.status,
+    cancel_requested: record.cancel_requested,
+    cancellation_confirmed: record.cancellation_confirmed,
+  }, { status: 200, headers: { "Cache-Control": "private, no-store" } });
 }

@@ -5,7 +5,7 @@ vi.mock("@/app/api/_lib/backend-proxy", () => ({
   getBackendBaseUrl: () => "http://api:8000",
 }));
 
-import { POST } from "@/app/api/copilotkit/[[...slug]]/route";
+import { GET, POST } from "@/app/api/copilotkit/[[...slug]]/route";
 
 const originalFetch = globalThis.fetch;
 const THREAD = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
@@ -183,5 +183,110 @@ describe("CopilotKit v2 exact-run stop uses only Karen runtime", () => {
     });
     expect((await POST(noAuth)).status).toBe(401);
     expect(none).not.toHaveBeenCalled();
+  });
+});
+
+describe("CopilotKit v2 canonical read-only run status", () => {
+  const statusUrl = "http://localhost:3000/api/copilotkit/agent/default/runs/" +
+    THREAD + "/run-exact/status";
+  const upstreamUrl = "http://api:8000/api/chat/ag-ui/runs/" +
+    THREAD + "/run-exact/status";
+
+  function read(cookie = "kari_session=owner") {
+    return new NextRequest(statusUrl, {
+      method: "GET",
+      headers: { cookie, "x-user-id": "forged-owner", "x-tenant-id": "forged-tenant" },
+    });
+  }
+
+  function mockStatus(result: () => Response) {
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      seen.push(url);
+      expect(init?.cache).toBe("no-store");
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).has("x-user-id")).toBe(false);
+      expect(new Headers(init?.headers).has("x-tenant-id")).toBe(false);
+      if (url === AUTH) return Response.json({
+        user_id: "user-owner", tenant_id: "tenant-A", is_active: true,
+      });
+      if (url === FLAGS) return Response.json({
+        enabled: true, governed_history: true,
+      });
+      if (url === upstreamUrl) {
+        expect(init?.method).toBe("GET");
+        expect(init?.body).toBeUndefined();
+        return result();
+      }
+      throw new Error("Unexpected request: " + url);
+    }) as typeof fetch;
+    return seen;
+  }
+
+  it("reports a pending stop without inventing confirmation or mutation", async () => {
+    const seen = mockStatus(() => Response.json({
+      status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+    }));
+    const response = await GET(read());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(await response.json()).toEqual({
+      status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+    });
+    expect(seen).toEqual([AUTH, FLAGS, upstreamUrl]);
+  });
+
+  it("only reports confirmed cancellation from the backend's complete evidence", async () => {
+    mockStatus(() => Response.json({
+      status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+      private_tenant_token: "never-forward",
+    }));
+    const response = await GET(read());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+    });
+  });
+
+  it("fails closed on malformed confirmation, redirect, missing run and disabled durability", async () => {
+    for (const invalid of [
+      Response.json({ status: "completed", cancel_requested: false,
+        cancellation_confirmed: true }),
+      Response.json({ status: "cancelled", cancel_requested: false,
+        cancellation_confirmed: true }),
+      new Response(null, { status: 307, headers: { location: "https://forged.test" } }),
+    ]) {
+      mockStatus(() => invalid);
+      const response = await GET(read());
+      expect(response.status).toBe(503);
+      expect(JSON.stringify(await response.json())).not.toContain("confirmed");
+    }
+    mockStatus(() => Response.json({ detail: "private foreign user" }, { status: 403 }));
+    const foreign = await GET(read());
+    expect(foreign.status).toBe(404);
+    expect(JSON.stringify(await foreign.json())).not.toContain("private");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === AUTH) return Response.json({
+        user_id: "user-owner", tenant_id: "tenant-A", is_active: true,
+      });
+      if (url === FLAGS) return Response.json({
+        enabled: true, governed_history: false,
+      });
+      throw new Error("Disabled durability must not reach a run");
+    }) as typeof fetch;
+    expect((await GET(read())).status).toBe(404);
+  });
+
+  it("does not let a runless or invalid thread status reach backend", async () => {
+    const spy = vi.fn();
+    globalThis.fetch = spy as typeof fetch;
+    const invalid = new NextRequest(
+      "http://localhost:3000/api/copilotkit/agent/default/runs/" +
+      THREAD + "/invalid%20run/status",
+    );
+    expect((await GET(invalid)).status).toBe(404);
+    expect(spy).not.toHaveBeenCalled();
   });
 });

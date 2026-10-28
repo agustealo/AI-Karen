@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBackendBaseUrl } from "../../_lib/backend-proxy";
 import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilotkit/_lib/owned-thread-history";
 import { connectKarenOwnedThread, readKarenConnectThreadId } from "../../copilotkit/_lib/owned-thread-reconnect";
-import { readKarenScopedStopRunId, stopKarenOwnedRun } from "../../copilotkit/_lib/owned-run-stop";
+import { readKarenScopedStopRunId, stopKarenOwnedRun, readKarenOwnedRunStatus } from "../../copilotkit/_lib/owned-run-stop";
 import { ownedRunEventTarget, readKarenOwnedRunEvents } from "../../copilotkit/_lib/owned-run-events";
 
 export const runtime = "nodejs";
@@ -87,6 +87,8 @@ const CONVERSATION_UUID =
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const STOP_ROUTE =
   /^\/api\/copilotkit\/agent\/default\/stop\/([0-9a-f-]{36})$/i;
+const RUN_STATUS_ROUTE =
+  /^\/api\/copilotkit\/agent\/default\/runs\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{1,100})\/status$/i;
 const MAX_RUN_BYTES = 524288;
 
 /** Refuse SDK endpoints without canonical thread authorization or durability. */
@@ -95,6 +97,9 @@ export function validateCopilotRoute(request: NextRequest): NextResponse | null 
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
   if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
   if (request.method === "GET" && ownedRunEventTarget(request)) return null;
+  const statusMatch = RUN_STATUS_ROUTE.exec(path);
+  if (request.method === "GET" && statusMatch &&
+      CONVERSATION_UUID.test(statusMatch[1])) return null;
   // Exact-run stop is handled by Karen's runtime rather than SDK in-memory
   // agent state. Thread-only/missing-body stops remain denied before auth.
   const stop = STOP_ROUTE.exec(path);
@@ -221,6 +226,17 @@ async function handle(request: NextRequest): Promise<Response> {
   if (auth instanceof NextResponse) return auth;
   const capabilities = await readKarenAgUiCapabilities(request, backendBaseUrl, auth.headers);
   if (capabilities instanceof NextResponse) return capabilities;
+
+  const statusTarget = request.method === "GET"
+    ? RUN_STATUS_ROUTE.exec(request.nextUrl.pathname) : null;
+  if (statusTarget && CONVERSATION_UUID.test(statusTarget[1])) {
+    if (!capabilities.governedHistory) {
+      return NextResponse.json({ detail: "Durable run status is unavailable" }, { status: 404 });
+    }
+    return readKarenOwnedRunStatus(
+      request, backendBaseUrl, auth.headers, statusTarget[1], statusTarget[2],
+    );
+  }
 
   const requestedCursor = request.method === "GET"
     ? ownedRunEventTarget(request) : null;
