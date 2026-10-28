@@ -12,6 +12,7 @@ This module provides a comprehensive rate limiting system with:
 import asyncio
 import logging
 import time
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -232,7 +233,6 @@ class RedisRateLimitStorage(RateLimitStorage):
         redis.call('EXPIRE', key, math.ceil(window * 2))
         return {1, count, 0}
         """
-        import uuid
         now = time.time()
         result = await self.redis.eval(
             script, 1, self._make_key(key, ":timestamps"), now,
