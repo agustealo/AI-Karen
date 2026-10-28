@@ -9,6 +9,7 @@ Emits observability events for attempts, retries, and fallbacks.
 """
 
 import asyncio
+import os
 import threading
 from typing import Callable, Any, Dict, Optional
 from ai_karen_engine.core.logging import get_logger
@@ -20,6 +21,18 @@ from .fallback_manager import get_fallback_manager
 from .pipeline_policy import get_pipeline_policy
 
 logger = get_logger(__name__)
+
+
+def _sync_stage_capacity() -> int:
+    """Validated runtime capacity; configurable through the process environment."""
+    raw = os.getenv("KAREN_SYNC_STAGE_MAX_WORKERS", "4")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("KAREN_SYNC_STAGE_MAX_WORKERS must be an integer") from exc
+    if not 1 <= value <= 128:
+        raise ValueError("KAREN_SYNC_STAGE_MAX_WORKERS must be between 1 and 128")
+    return value
 
 
 def _emit_resilience_event(event_name: str, **kwargs):
@@ -43,7 +56,7 @@ class SafeStageRunner:
         self.fallbacks = get_fallback_manager()
         self.policies = get_pipeline_policy()
         # Capacity is held until the underlying thread actually exits.
-        self._sync_slots = threading.BoundedSemaphore(value=4)
+        self._sync_slots = threading.BoundedSemaphore(value=_sync_stage_capacity())
 
     async def run_stage(
         self,
