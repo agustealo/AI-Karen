@@ -106,7 +106,7 @@ export function KarenCopilotHistoryGate({
     let unsubscribe: (() => void) | undefined;
     let restoring = false;
     const restore = async () => {
-      if (restoring || cancelled) return;
+      if (restoring || cancelled) return false;
       restoring = true;
       try {
         // Authorization-sensitive read. Never reuse the process-local UI
@@ -114,7 +114,7 @@ export function KarenCopilotHistoryGate({
         const snapshot = await apiClient.get<KarenOwnedThreadResponse>(
           "/api/copilotkit/threads/" + conversationId + "/messages",
         );
-        if (cancelled) return;
+        if (cancelled) return false;
         if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
           throw new Error("Conversation history identity mismatch");
         }
@@ -130,6 +130,7 @@ export function KarenCopilotHistoryGate({
         setVerifiedParts(parts);
         setError(null);
         setLoaded(conversationId);
+        return true;
       } catch (error: unknown) {
         if (!cancelled) {
           // A verified conversation can still require an unsupported rich
@@ -141,6 +142,7 @@ export function KarenCopilotHistoryGate({
             ? "This conversation contains interactive or structured content that CopilotKit cannot restore yet. Use the existing conversation view."
             : "Karen could not verify or restore this conversation.");
         }
+        return false;
       } finally {
         restoring = false;
       }
@@ -150,8 +152,8 @@ export function KarenCopilotHistoryGate({
     // verified history. SDK finalization is a signal to reread Karen's
     // committed transcript, never permission to invent a terminal event.
     const start = async () => {
-      await restore();
-      if (cancelled || typeof agent.subscribe !== "function") return;
+      const restored = await restore();
+      if (!restored || cancelled || typeof agent.subscribe !== "function") return;
       const subscription = agent.subscribe({
         onRunFinalized: () => {
           if (!cancelled) void restore();

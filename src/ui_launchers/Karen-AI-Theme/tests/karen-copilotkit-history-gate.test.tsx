@@ -176,6 +176,7 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(screen.getByRole("alert").textContent).not.toContain("private");
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.subscribe).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry verified conversation" }));
     await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
@@ -184,7 +185,9 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).toHaveBeenCalledWith([
       { id: "m1", role: "assistant", content: "Verified after recovery" },
     ]);
-    expect(backend.unsubscribe).toHaveBeenCalledTimes(1);
+    // Failed initial history cannot install an SDK run subscription.
+    expect(backend.agent.subscribe).toHaveBeenCalledTimes(1);
+    expect(backend.unsubscribe).not.toHaveBeenCalled();
   });
 
   it("does not reopen failed rich replay unless a subsequent read attests all content", async () => {
