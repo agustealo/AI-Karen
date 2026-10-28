@@ -14,12 +14,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { KarenLocalDictationCapture } from "../assistant-ui/KarenLocalDictation";
 import { KarenBrowserDictationCapture } from "../assistant-ui/KarenBrowserDictation";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
+import { apiClient } from "@/lib/api";
 
 import { karenScopedAgentId } from "./KarenCopilotHistoryGate";
 import { KarenCopilotAssistantSlot } from "./KarenCopilotVerifiedHistory";
 import { useKarenPersistedDraft } from "./useKarenPersistedDraft";
 
 const MAX_INPUT_CHARS = 65536;
+const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
+type StopReceipt = {
+  status: "cancelling" | "cancelled";
+  cancel_requested: true;
+  cancellation_confirmed: boolean;
+};
+
+function validStopReceipt(value: unknown): value is StopReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const receipt = value as Record<string, unknown>;
+  return receipt.cancel_requested === true &&
+    ((receipt.status === "cancelling" && receipt.cancellation_confirmed === false) ||
+     (receipt.status === "cancelled" && receipt.cancellation_confirmed === true));
+}
 
 export function KarenCopilotControlledChat({
   conversationId,
@@ -33,6 +48,9 @@ export function KarenCopilotControlledChat({
   });
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
+  const [stopStatus, setStopStatus] = useState<string | null>(null);
+  const activeRunId = useRef<string | null>(null);
+  const pendingStopId = useRef<string | null>(null);
   // Copyable only in this authenticated component, not an additional draft store.
   const [failedSubmission, setFailedSubmission] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
@@ -62,6 +80,28 @@ export function KarenCopilotControlledChat({
     mounted.current = true;
     return () => { mounted.current = false; };
   }, [conversationId]);
+
+  useEffect(() => {
+    if (!isReady || typeof agent.subscribe !== "function") return;
+    activeRunId.current = null;
+    pendingStopId.current = null;
+    const subscription = agent.subscribe({
+      onRunStartedEvent: ({ event }) => {
+        // Run identity is received from authenticated AG-UI lifecycle events,
+        // never the composer, local state, or guessed SDK stop arguments.
+        if (event.threadId !== conversationId || !RUN_ID.test(event.runId)) return;
+        activeRunId.current = event.runId;
+        setStopStatus(null);
+      },
+      onRunFinalized: () => { activeRunId.current = null; },
+      onRunFailed: () => { activeRunId.current = null; },
+    });
+    return () => {
+      activeRunId.current = null;
+      pendingStopId.current = null;
+      subscription.unsubscribe();
+    };
+  }, [agent, conversationId, isReady]);
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
@@ -126,21 +166,44 @@ export function KarenCopilotControlledChat({
   ]);
 
   const onStop = useCallback(() => {
-    if (!agent.isRunning) return;
-    // SDK stop is a transport operation. Final durable cancellation and
-    // its receipt must still be proven by the backend owned-run contract.
-    try {
-      void Promise.resolve(copilotkit.stopAgent({ agent })).catch(() => {
-        if (mounted.current) {
-          setError("Karen could not confirm the stop request. Check run status before retrying.");
-        }
-      });
-    } catch {
-      if (mounted.current) {
-        setError("Karen could not confirm the stop request. Check run status before retrying.");
-      }
+    if (!isReady || !agent.isRunning) return;
+    const runId = activeRunId.current;
+    if (!runId || !RUN_ID.test(runId) || agent.threadId !== conversationId) {
+      setError("Karen has not verified an exact active run for cancellation. Check run status.");
+      return;
     }
-  }, [agent, copilotkit]);
+    if (pendingStopId.current === runId) return;
+    pendingStopId.current = runId;
+    setError(null);
+    void (async () => {
+      try {
+        // Backend run ownership and cancellation authority live behind this
+        // already-existing authenticated exact-run gateway. An SDK abort alone
+        // can stop browser streaming without stopping the durable worker.
+        const receipt: unknown = await apiClient.post<StopReceipt>(
+          "/api/copilotkit/agent/default/stop/" + conversationId, { runId },
+        );
+        if (!validStopReceipt(receipt)) throw new Error("Invalid stop receipt");
+        if (!mounted.current || activeRunId.current !== runId) return;
+        setStopStatus(receipt.cancellation_confirmed
+          ? "Karen confirmed this run was cancelled."
+          : "Cancellation requested. Backend confirmation is still pending.");
+        try {
+          await copilotkit.stopAgent({ agent });
+        } catch {
+          if (mounted.current && activeRunId.current === runId) {
+            setError("Karen accepted the cancellation request, but local streaming could not stop. Check run status.");
+          }
+        }
+      } catch {
+        if (mounted.current && activeRunId.current === runId) {
+          setError("Karen could not verify the cancellation request. Check run status before retrying.");
+        }
+      } finally {
+        if (pendingStopId.current === runId) pendingStopId.current = null;
+      }
+    })();
+  }, [agent, conversationId, copilotkit, isReady]);
 
   const copyFailedMessage = useCallback(async () => {
     if (failedSubmission === null) return;
@@ -184,6 +247,8 @@ export function KarenCopilotControlledChat({
     <div data-testid="karen-copilot-controlled-chat"
       className="flex min-h-0 min-w-0 flex-1 flex-col">
       {error && <p role="alert" className="border-b border-destructive/40 px-3 py-2 text-sm text-destructive">{error}</p>}
+      {stopStatus && <p role="status" data-testid="karen-copilot-stop-status"
+        className="border-b border-border/40 px-3 py-2 text-sm text-muted-foreground">{stopStatus}</p>}
       {failedSubmission !== null && (
         <div data-testid="karen-copilot-failed-submission"
           className="flex flex-col gap-2 border-b border-destructive/40 px-3 py-2">

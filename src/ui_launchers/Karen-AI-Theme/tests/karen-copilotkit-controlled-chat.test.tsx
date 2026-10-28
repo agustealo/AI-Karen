@@ -9,11 +9,20 @@ const sdk = vi.hoisted(() => ({
     isRunning: false,
     threadId: "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0",
     addMessage: vi.fn(),
+    subscribe: vi.fn(),
   },
   isReady: true,
   runAgent: vi.fn(),
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
+  post: vi.fn(),
+  subscribe: vi.fn(),
+  unsubscribe: vi.fn(),
+  lifecycle: null as null | {
+    onRunStartedEvent: (args: { event: { threadId: string; runId: string } }) => void;
+    onRunFinalized: () => void;
+    onRunFailed: () => void;
+  },
   useAgentOptions: [] as Array<Record<string, unknown>>,
 }));
 
@@ -29,6 +38,10 @@ vi.mock("@copilotkit/react-core/v2", () => ({
   useCopilotKit: () => ({
     copilotkit: { runAgent: sdk.runAgent, stopAgent: sdk.stopAgent },
   }),
+}));
+
+vi.mock("@/lib/api", () => ({
+  apiClient: { post: sdk.post },
 }));
 
 vi.mock("@/components/chat/assistant-ui/KarenLocalDictation", () => ({
@@ -85,6 +98,15 @@ beforeEach(() => {
   sdk.runAgent.mockReset().mockResolvedValue(undefined);
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
+  sdk.post.mockReset().mockResolvedValue({
+    status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+  });
+  sdk.unsubscribe.mockReset();
+  sdk.lifecycle = null;
+  sdk.agent.subscribe.mockReset().mockImplementation((callbacks) => {
+    sdk.lifecycle = callbacks;
+    return { unsubscribe: sdk.unsubscribe };
+  });
   vi.stubGlobal("crypto", { randomUUID: () => "2dab411c-640e-4206-909b-6783e32c7da0" });
 });
 afterEach(() => {
@@ -294,15 +316,121 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     }) as HTMLTextAreaElement).value).toBe("Keep this text");
   });
 
-  it("reports a rejected native stop without claiming durable cancellation", async () => {
+  it("uses exact AG-UI run identity to request canonical cancellation before stopping transport", async () => {
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(sdk.agent.subscribe).toHaveBeenCalledTimes(1);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: {
+      threadId: THREAD, runId: "run-exact",
+    } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(sdk.post).toHaveBeenCalledWith(
+      "/api/copilotkit/agent/default/stop/" + THREAD, { runId: "run-exact" },
+    ));
+    await waitFor(() => expect(sdk.stopAgent).toHaveBeenCalledWith({ agent: sdk.agent }));
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmation is still pending");
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .not.toContain("confirmed this run was cancelled");
+  });
+
+  it("shows confirmed cancellation only when exact backend receipt confirms termination", async () => {
+    sdk.post.mockResolvedValueOnce({
+      status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+    });
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmed this run was cancelled"));
+    expect(sdk.stopAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses thread-only or foreign-run stop without calling SDK or backend", () => {
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onStop());
+    expect(sdk.post).not.toHaveBeenCalled();
+    expect(sdk.stopAgent).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("exact active run");
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: {
+      threadId: "a7d4ed43-2c3a-4d91-afc4-82e5e4811c56", runId: "foreign",
+    } }));
+    act(() => input().onStop());
+    expect(sdk.post).not.toHaveBeenCalled();
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: {
+      threadId: THREAD, runId: "invalid space",
+    } }));
+    act(() => input().onStop());
+    expect(sdk.post).not.toHaveBeenCalled();
+  });
+
+  it("does not call SDK stop or claim cancellation when the backend request fails", async () => {
+    sdk.post.mockRejectedValueOnce(new Error("private service failure"));
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("could not verify the cancellation request"));
+    expect(screen.getByRole("alert").textContent).not.toContain("private");
+    expect(sdk.stopAgent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("karen-copilot-stop-status")).toBeNull();
+  });
+
+  it("does not turn an unverified backend payload into a cancellation receipt", async () => {
+    sdk.post.mockResolvedValueOnce({ status: "cancelled", cancellation_confirmed: true });
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("could not verify"));
+    expect(sdk.stopAgent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("karen-copilot-stop-status")).toBeNull();
+  });
+
+  it("coalesces repeated stop clicks while canonical cancellation is pending", async () => {
+    let finish!: (receipt: unknown) => void;
+    sdk.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-1" } }));
+    act(() => { input().onStop(); input().onStop(); });
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+    await act(async () => finish({
+      status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+    }));
+    expect(sdk.stopAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply a late cancellation receipt to another run", async () => {
+    let finish!: (receipt: unknown) => void;
+    sdk.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-old" } }));
+    act(() => input().onStop());
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-new" } }));
+    await act(async () => finish({
+      status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+    }));
+    expect(screen.queryByTestId("karen-copilot-stop-status")).toBeNull();
+    expect(sdk.stopAgent).not.toHaveBeenCalled();
+  });
+
+  it("reports local transport failure without downgrading canonical accepted cancellation", async () => {
     sdk.agent.isRunning = true;
     sdk.stopAgent.mockRejectedValueOnce(new Error("private cancellation error"));
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "run-exact" } }));
     act(() => input().onStop());
     await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("could not confirm the stop request"));
+      .toContain("local streaming could not stop"));
     expect(screen.getByRole("alert").textContent).not.toContain("private");
-    expect(sdk.stopAgent).toHaveBeenCalledWith({ agent: sdk.agent });
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmation is still pending");
   });
 
   it("blocks inference until canonical draft clearance is confirmed", async () => {
@@ -356,13 +484,11 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.agent.messages).toHaveLength(2);
   });
 
-  it("routes stop through the SDK only for an observed active run", () => {
+  it("refuses cancellation for a non-running run even if a stale run ID exists", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "stale" } }));
     act(() => input().onStop());
+    expect(sdk.post).not.toHaveBeenCalled();
     expect(sdk.stopAgent).not.toHaveBeenCalled();
-    sdk.agent.isRunning = true;
-    act(() => input().onStop());
-    expect(sdk.stopAgent).toHaveBeenCalledTimes(1);
-    expect(sdk.stopAgent).toHaveBeenCalledWith({ agent: sdk.agent });
   });
 });
