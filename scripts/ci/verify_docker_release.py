@@ -126,11 +126,105 @@ def verify_docker_release(
         validate_service(service, container, image, expected_sha, expected_image_ids[service])
 
 
+# Release promotion requires cryptographically verified *registry manifest*
+# digests, not just local Docker config image IDs. Keep this in the existing
+# Docker release verifier so ownership and runtime checks remain canonical.
+REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+SIGNER_WORKFLOW = ".github/workflows/karen-consumer-image-provenance.yml"
+
+
+def _gh_verify(args: Sequence[str], cwd: Path) -> None:
+    """Verify Sigstore/GitHub provenance without printing attestation contents."""
+    try:
+        result = subprocess.run(
+            list(args), cwd=cwd, timeout=45, check=False,
+            capture_output=True, text=True,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        raise RevisionVerificationError("Signed release provenance verification unavailable") from exc
+    if result.returncode != 0 or len(result.stdout.encode()) > MAX_OUTPUT_BYTES:
+        raise RevisionVerificationError("Signed release provenance rejected")
+
+
+def verify_signed_docker_release(
+    repo_root: Path,
+    expected_sha: str,
+    repository: str,
+    signed_image_refs: Mapping[str, str],
+    expected_image_ids: Mapping[str, str],
+    *,
+    gh_runner: Callable[[Sequence[str], Path], None] = _gh_verify,
+    docker_runner: Callable[[Sequence[str], Path], str] = _docker_stdout,
+) -> None:
+    """Verify signed registry subjects and their exact running Docker image IDs.
+
+    The host must have pre-pulled both digest-pinned images, and the approved
+    config image IDs must come from a separately reviewed release receipt.
+    The GitHub certificate identity, repository, source SHA, ref and signer
+    workflow are verified cryptographically, not inferred from OCI labels.
+    """
+    if not SHA_PATTERN.fullmatch(expected_sha):
+        raise RevisionVerificationError("Reviewed source must be a full lowercase SHA")
+    if not REPOSITORY_PATTERN.fullmatch(repository) or repository.lower() != repository:
+        raise RevisionVerificationError("Approved source repository must be canonical lowercase")
+    for service in SERVICES:
+        ref = signed_image_refs.get(service, "")
+        prefix = f"ghcr.io/{repository}-{service}@"
+        if not ref.startswith(prefix) or not IMAGE_ID_PATTERN.fullmatch(ref[len(prefix):]):
+            raise RevisionVerificationError("Approved signed image reference must be a digest-pinned canonical GHCR subject")
+        if not IMAGE_ID_PATTERN.fullmatch(expected_image_ids.get(service, "")):
+            raise RevisionVerificationError("Approved Docker image config ID is required")
+
+    # Validate every input before making network or Docker calls.
+    for service in SERVICES:
+        ref = signed_image_refs[service]
+        gh_runner(
+            [
+                "gh", "attestation", "verify", f"oci://{ref}",
+                "--repo", repository,
+                "--signer-workflow", f"{repository}/{SIGNER_WORKFLOW}",
+                "--source-digest", expected_sha,
+                "--source-ref", "refs/heads/main",
+                "--deny-self-hosted-runners",
+                "--format", "json",
+            ],
+            repo_root,
+        )
+
+    # Bind the *signed registry manifest* to the local image config ID.
+    # RepoDigests can be absent for locally built or retagged images; reject.
+    for service in SERVICES:
+        ref = signed_image_refs[service]
+        image = _one_object(
+            docker_runner(["docker", "image", "inspect", ref], repo_root)
+        )
+        repo_digests = image.get("RepoDigests")
+        if (
+            not isinstance(repo_digests, list)
+            or any(not isinstance(item, str) for item in repo_digests)
+            or ref not in repo_digests
+            or image.get("Id") != expected_image_ids[service]
+        ):
+            raise RevisionVerificationError("Signed image is not the approved local registry image")
+
+    # Reuse the original canonical running-container, health, tenant-safe
+    # ingress and revision checks. A signed image that isn't running fails.
+    verify_docker_release(
+        repo_root, expected_sha, expected_image_ids, runner=docker_runner
+    )
+
+
+
 def main() -> int:
     try:
-        verify_docker_release(
+        verify_signed_docker_release(
             Path(os.environ.get("KAREN_RELEASE_REPO_ROOT", ".")).resolve(),
             os.environ.get("TARGET_SHA", ""),
+            os.environ.get("KAREN_RELEASE_REPOSITORY", ""),
+            {
+                "api": os.environ.get("KAREN_SIGNED_API_IMAGE_REF", ""),
+                "web": os.environ.get("KAREN_SIGNED_WEB_IMAGE_REF", ""),
+            },
             {
                 "api": os.environ.get("KAREN_EXPECTED_API_IMAGE_ID", ""),
                 "web": os.environ.get("KAREN_EXPECTED_WEB_IMAGE_ID", ""),
@@ -139,7 +233,7 @@ def main() -> int:
     except RevisionVerificationError as exc:
         LOGGER.error("Docker release identity proof failed: %s", exc)
         return 1
-    LOGGER.info("Running production web/API images match the approved release image IDs")
+    LOGGER.info("Signed GHCR provenance and running production web/API images verified")
     return 0
 
 
