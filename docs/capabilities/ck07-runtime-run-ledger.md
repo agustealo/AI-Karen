@@ -365,6 +365,24 @@ loading, autosave acknowledgments, conflicts, cross-window refresh,
 unavailable storage and invalid receipts. Additional controlled view
 tests verify no inference unless clear is durably confirmed.
 
+**CK-07E6 adversarial follow-up:** the private CopilotKit SDK provider is
+now keyed by the authenticated `tenant_id`, `user_id` and canonical
+conversation UUID. If authentication is loading, revoked, or incomplete,
+no provider, agent, draft or recorder mounts. Switching user/tenant with
+the same conversation ID destroys the previous SDK tree and its unsent
+local state. Component tests prove logout and both scope changes remount
+and clear the old provider rather than reusing it.
+
+The authenticated draft hook additionally fences parallel focus/interval
+reads with monotonic read generations. Any new read invalidates older
+responses, and a confirmed CAS write or durable submit-clear invalidates
+all pre-write reads. A regressed revision or changed text without a new
+revision fails closed instead of replacing verified content. Focus-order,
+post-write stale-read and revision-regression tests verify that protection.
+The canonical repository's read and CAS operations now use the same
+instrumented telemetry path as its other conversation operations, without
+logging draft text.
+
 **Privacy/acceptance limits**: no dedicated background purge of abandoned
 draft rows is claimed; retention follows the canonical parent conversation,
 including explicit conversation/user erasure. Unsent drafts intentionally
@@ -380,7 +398,7 @@ remain required before the still-unmounted CopilotKit cutover.
 
 ```bash
 python -m compileall src
-pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
+pytest tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py tests/api_routes/test_chat_run_atomic_transcript.py tests/api_routes/test_chat_ag_ui_transport.py tests/api_routes/test_chat_run_event_journal.py tests/api_routes/test_composer_drafts.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_ag_ui_governed_history.py -q
 cd src/ui_launchers/Karen-AI-Theme && pnpm exec vitest run tests/copilotkit-owned-run-stop.test.ts tests/copilotkit-owned-thread-history.test.ts tests/copilotkit-owned-thread-connect.test.ts tests/copilotkit-governed-history.test.ts tests/karen-copilotkit-history-gate.test.tsx tests/karen-copilotkit-rich-history.test.tsx tests/karen-copilotkit-controlled-chat.test.tsx tests/karen-copilotkit-persisted-draft.test.tsx tests/karen-voice-draft-port.test.tsx tests/karen-copilotkit-shell.test.tsx tests/copilotkit-observed-run-events.test.ts
 ruff check src/ai_karen_engine/core/runtime/chat_run_lifecycle.py src/ai_karen_engine/persistence/repositories/chat_run_repository.py src/ai_karen_engine/api_routes/chat/runtime.py tests/api_routes/test_chat_run_lifecycle.py tests/api_routes/test_chat_run_repository.py
 pytest tests/architecture/test_copilotkit_migration_wiring.py -q
@@ -390,7 +408,7 @@ A dedicated non-production PostgreSQL concurrency test is also checked in:
 `tests/integration/test_runtime_chat_stop_concurrency_postgres.py`. It exercises
 the real migration, PostgreSQL row locking, tenant/user scoped cancellation,
 duplicate stop, stop-versus-completion race, lease expiry and fenced finality.
-The test applies migrations 43, 44, 45 and 46 and verifies atomic saved message
+The test applies migrations 43, 44, 45, 46 and 47 and verifies atomic saved message
 IDs against the authenticated completed-run replay attestation, plus
 principal-scoped event cursors across simulated independent worker instances. It
 **requires** `CHAT_RUN_TEST_DATABASE_URL` pointing to a disposable
