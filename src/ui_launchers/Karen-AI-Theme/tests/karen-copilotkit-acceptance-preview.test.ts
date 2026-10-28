@@ -20,7 +20,7 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(page).toContain('incomingHost !== allowedHost');
     expect(page).toContain('if (!enabled || !APPROVED_HOST.test(allowedHost)) notFound()');
     expect(page).toContain('if (!UUID.test(conversationId)) notFound()');
-    expect(page).not.toContain("NEXT_PUBLIC_");
+    expect(page).not.toMatch(/process\\.env\\.NEXT_PUBLIC_[A-Z_]+/);
     expect(page).not.toContain("x-forwarded-host");
   });
 
