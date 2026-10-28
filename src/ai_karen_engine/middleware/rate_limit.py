@@ -59,11 +59,11 @@ def configure_rate_limiter(
         )
         logger.info("Rate limiter configured with %s storage", storage_type)
     except Exception as exc:
-        logger.error("Failed to configure rate limiter: %s", exc)
-        # Fallback to memory storage. This keeps the limiter active rather than
-        # silently disabling transport throttling when Redis is unavailable.
-        _rate_limiter = create_rate_limiter(storage_type="memory")
-        logger.info("Rate limiter configured with memory storage (fallback)")
+        # Never silently downgrade distributed throttling to per-worker memory.
+        # Such a downgrade breaks cross-instance security guarantees.
+        _rate_limiter = None
+        logger.error("Rate limiter configuration failed: %s", type(exc).__name__)
+        raise RuntimeError("Rate limiter configuration unavailable") from exc
 
 
 def get_rate_limiter() -> EnhancedRateLimiter:
