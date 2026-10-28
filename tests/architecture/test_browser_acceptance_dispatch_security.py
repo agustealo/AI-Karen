@@ -95,9 +95,17 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
         assert "secrets.KAREN_UX_PASSWORD" not in step
         assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in step
 
-    native = job.split(
-        "      - name: Prove the isolated native CopilotKit UX draft and no-auto-run contract", 1
-    )[1].split("\n      - name:", 1)[0]
+    # Anchor to the protected scenario expression, not a human-readable step
+    # label. Renaming the step must not weaken or silently break this guard.
+    native_if = "        if: inputs.scenario == 'copilotkit-native'"
+    assert job.count(native_if) == 1
+    condition_at = job.index(native_if)
+    step_at = job.rfind("      - name: ", 0, condition_at)
+    next_step_at = job.find("\n      - name:", condition_at)
+    assert step_at >= 0
+    assert next_step_at > condition_at
+    native = job[step_at:next_step_at]
+    assert "npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts" in native
     assert "secrets.KAREN_UX_EMAIL" in native
     assert "secrets.KAREN_UX_PASSWORD" in native
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in native
