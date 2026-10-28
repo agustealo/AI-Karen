@@ -56,7 +56,7 @@ export const test = base.extend<{ approvedDeploymentAccess: void }>({
         await use();
         return;
       }
-      const immutableHost = /^[a-z0-9][a-z0-9-]*\\.vercel\\.app$/;
+      const immutableHost = /^[a-z0-9][a-z0-9-]*\.vercel\.app$/;
       if (!bypassSecret || !immutableHost.test(approved.hostname)) {
         throw new Error('Missing reviewed Vercel preview or automation authorization');
       }
