@@ -9,6 +9,8 @@ const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf
 const prep = readFileSync(resolve(root, "tools/prepare-copilotkit-styles.mjs"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const ignore = readFileSync(resolve(root, ".gitignore"), "utf8");
+const nativeBrowser = readFileSync(resolve(root,
+  "e2e/karen-copilotkit-native-acceptance.spec.ts"), "utf8");
 const nextConfig = readFileSync(resolve(root, "next.config.ts"), "utf8");
 const shim = readFileSync(resolve(root,
   "src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css"), "utf8");
@@ -53,6 +55,17 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nextConfig).toContain("copilotkit-v2-style-import-shim.css");
     expect(nextConfig).not.toContain("postcss: false");
     expect(shim.trim()).toBe("/* CopilotKit v2 CSS is loaded from the approved local static asset. */");
+  });
+
+  it("proves canonical cross-tab CAS and mobile read-only acceptance without model sends", () => {
+    expect(nativeBrowser).toContain("page.context().newPage()");
+    expect(nativeBrowser).toContain("expected_revision: revision");
+    expect(nativeBrowser).toContain("karen-copilot-unsynced-draft");
+    expect(nativeBrowser).toContain("Reload saved draft (discard local changes)");
+    expect(nativeBrowser).toContain("page.setViewportSize({ width: 375, height: 812 })");
+    expect(nativeBrowser).toContain('"/api/personas/preferences/me"');
+    expect(nativeBrowser).toContain('trace: "off", screenshot: "off", video: "off"');
+    expect(nativeBrowser).toContain("expect(runs");
   });
 
   it("does not disturb the sole consumer chat mount", () => {

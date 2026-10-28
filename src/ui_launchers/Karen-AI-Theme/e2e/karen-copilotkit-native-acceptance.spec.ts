@@ -11,6 +11,9 @@ const password = process.env.KAREN_UX_PASSWORD;
 const conversationId = process.env.KAREN_HISTORY_CONVERSATION_ID;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const text = "CK-07E8 approved unsent draft verification";
+const elsewhere = "CK-07E8 verified other-tab CAS change";
+const competing = "CK-07E8 local stale unsent text";
+test.setTimeout(120000);
 
 function requireApprovedNativeFixture() {
   if (required && (!email || !password || !conversationId || !UUID.test(conversationId))) {
@@ -79,7 +82,129 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
   }, { timeout: 15000 }).toBe("");
   expect(runs).toBe(0);
 
+  // The same authenticated backend preference must govern the native footer.
+  const personaResponse = await page.request.get("/api/personas/preferences/me");
+  expect(personaResponse.status(), "Native persona preference must be backend-owned").toBe(200);
+  const persona = await personaResponse.json() as {
+    active_persona_id: string | null; show_persona_selector: boolean;
+  };
+  expect(typeof persona.show_persona_selector).toBe("boolean");
+  const selector = page.getByRole("combobox", { name: "Active Karen persona" });
+  if (persona.show_persona_selector) {
+    await expect(selector).toBeVisible();
+    await expect(selector).toHaveValue(persona.active_persona_id ?? "");
+  } else {
+    await expect(selector).toHaveCount(0);
+  }
+
+  // Responsive geometry is read-only and must not submit, reflow offscreen or
+  // hide access to the shared native composer at a mobile viewport width.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(restored).toBeVisible();
+  await expect(page.getByTestId("karen-copilot-persona-footer")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(375);
+  expect(runs).toBe(0);
+
   // Current consumer route remains unchanged after visiting candidate.
   await page.goto("/dashboard");
   await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
+});
+
+test("CK-07E8 a stale second browser tab cannot overwrite an authenticated draft", async ({ page }) => {
+  requireApprovedNativeFixture();
+  if (!email || !password || !conversationId) return;
+  await signInApprovedKaren(page, email, password);
+  const draftUrl = "/api/conversations/" + encodeURIComponent(conversationId) + "/draft";
+  const candidateUrl = "/acceptance/copilotkit/" + encodeURIComponent(conversationId);
+  const initial = await page.request.get(draftUrl);
+  expect(initial.status()).toBe(200);
+  const base = await initial.json() as { text: string; revision: number };
+  expect(base.text, "Use an isolated empty sanitized test draft").toBe("");
+  expect(Number.isSafeInteger(base.revision)).toBe(true);
+
+  let runs = 0;
+  page.context().on("request", request => {
+    if (request.method() === "POST" &&
+        new URL(request.url()).pathname === "/api/copilotkit/agent/default/run") {
+      runs += 1;
+    }
+  });
+  await page.goto(candidateUrl);
+  await expect(page.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+
+  const tab = await page.context().newPage();
+  try {
+    await tab.goto(candidateUrl);
+    const native = tab.getByTestId("karen-copilot-controlled-chat");
+    await expect(native).toBeVisible();
+    const composer = native.locator("textarea").first();
+    await expect(composer).toHaveValue("");
+    await tab.bringToFront();
+    await composer.focus();
+    await expect(composer).toBeFocused();
+
+    // A real authenticated same-origin request from the FIRST browser tab
+    // advances the canonical revision while the SECOND tab remains focused.
+    // This guarantees the second tab's loaded revision is stale without mock
+    // responses, artificial delays or an unauthorized forged server receipt.
+    const otherTabWrite = await page.evaluate(async ({ url, value, revision }) => {
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ text: value, expected_revision: revision }),
+      });
+      if (!response.ok) return { status: response.status, text: "", revision: -1 };
+      const result = await response.json() as { text: string; revision: number };
+      return { status: response.status, ...result };
+    }, { url: draftUrl, value: elsewhere, revision: base.revision });
+    expect(otherTabWrite).toEqual({
+      status: 200, text: elsewhere, revision: base.revision + 1,
+    });
+
+    await composer.fill(competing);
+    await expect(tab.getByTestId("karen-copilot-unsynced-draft"))
+      .toBeVisible({ timeout: 15000 });
+    await expect(tab.getByRole("alert"))
+      .toContainText("Draft changed in another window");
+    await expect(tab.getByRole("textbox", { name: "Unsynced draft, copy before reload" }))
+      .toHaveValue(competing);
+    const saved = await page.request.get(draftUrl);
+    expect(saved.status()).toBe(200);
+    const savedValue = await saved.json() as { text: string; revision: number };
+    expect(savedValue).toEqual({
+      text: elsewhere, revision: base.revision + 1,
+    });
+    expect(runs, "Draft conflict cannot trigger an AI run").toBe(0);
+
+    // Recovery must be an explicit user decision, with a fresh authenticated
+    // read rather than silently overwriting the other tab's saved text.
+    await tab.getByRole("button", {
+      name: "Reload saved draft (discard local changes)",
+    }).click();
+    await expect(tab.getByTestId("karen-copilot-controlled-chat"))
+      .toBeVisible({ timeout: 15000 });
+    await expect(tab.getByTestId("karen-copilot-controlled-chat").locator("textarea").first())
+      .toHaveValue(elsewhere);
+    expect(runs).toBe(0);
+  } finally {
+    await tab.close();
+    // CAS-safe cleanup only our own unique test text; do not wipe another
+    // session's concurrent edit or claim a successful persistence without a
+    // real server confirmation.
+    const now = await page.request.get(draftUrl);
+    if (now.status() === 200) {
+      const value = await now.json() as { text: string; revision: number };
+      if (value.text === elsewhere && Number.isSafeInteger(value.revision)) {
+        const removed = await page.request.put(draftUrl, {
+          data: { text: "", expected_revision: value.revision },
+        });
+        expect(removed.status(), "Canonical sanitized draft cleanup must succeed").toBe(200);
+        const cleared = await removed.json() as { text: string; revision: number };
+        expect(cleared.text).toBe("");
+        expect(cleared.revision).toBe(value.revision + 1);
+      }
+    }
+  }
 });
