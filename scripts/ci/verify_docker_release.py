@@ -99,6 +99,7 @@ def verify_docker_release(
     expected_image_ids: Mapping[str, str],
     *,
     runner: Callable[[Sequence[str], Path], str] = _docker_stdout,
+    signed_release: bool = False,
 ) -> None:
     """Inspect exactly one healthy web/API container per canonical Compose service."""
     if not SHA_PATTERN.fullmatch(expected_sha):
@@ -113,6 +114,8 @@ def verify_docker_release(
         "-f", "docker-compose.yml",
         "-f", "deploy/compose/docker-compose.prod.yml",
     ]
+    if signed_release:
+        compose_args.extend(["-f", "deploy/compose/docker-compose.signed-release.yml"])
     for service in SERVICES:
         stdout = runner([*compose_args, "ps", "-q", service], repo_root)
         ids = [line.strip() for line in stdout.splitlines() if line.strip()]
@@ -211,7 +214,8 @@ def verify_signed_docker_release(
     # Reuse the original canonical running-container, health, tenant-safe
     # ingress and revision checks. A signed image that isn't running fails.
     verify_docker_release(
-        repo_root, expected_sha, expected_image_ids, runner=docker_runner
+        repo_root, expected_sha, expected_image_ids,
+        runner=docker_runner, signed_release=True
     )
 
 
