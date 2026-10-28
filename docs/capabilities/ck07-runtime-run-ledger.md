@@ -399,6 +399,60 @@ an uninstalled migration fails closed. Real-browser account switching,
 logout, network loss, conflicting tabs and keyboard/focus/voice parity
 remain required before the still-unmounted CopilotKit cutover.
 
+## CK-07E7: default-branch protected CopilotKit protocol acceptance
+
+The existing `KAREN Browser Acceptance` workflow now offers a separate
+`copilotkit-protocol` scenario. This is a **read-only protocol proof**,
+not a CopilotKit consumer UI cutover. Its exact reviewed `target_sha` must
+match both the dispatched **current `main`** revision and the running Vercel
+deployment, verified through both the canonical revision endpoint and
+independent platform provenance **before and after** authentication.
+
+This uses the existing sanitized-credential environment, immutable-host
+deployment-bypass-cookie fixture, no-redirect preview authorization and
+read-only `karen-copilotkit-protocol-acceptance.spec.ts`. Credentials are
+scoped to validation and browser proof steps, never job-wide or dependency
+installation. Browser navigation verifies the approved HTTPS origin
+**before typing the password** and after sign-in. Browser traces,
+screenshots, videos and uploads are disabled for the authenticated proof.
+No PR-ref credential dispatch, unreviewed deployment or extra workflow
+was introduced.
+
+Required operator-controlled environment variables are
+`KAREN_COPILOTKIT_ACCEPTANCE_URL`,
+`KAREN_COPILOTKIT_CONVERSATION_ID` and
+`KAREN_COPILOTKIT_OBSERVED_RUN_ID`; the protected workflow also
+requires its existing `KAREN_UX_EMAIL`/`KAREN_UX_PASSWORD`,
+Vercel verification and bypass credentials. Missing or mismatched
+source, deployment, credentials, saved conversation or actual observed
+run **fails closed**. The source spec never manufactures a provider
+run or saved assistant content. It checks owned history snapshots,
+attested replay-only CUSTOM events, ordered journal cursor and
+absence of invented RUN_FINISHED for incomplete runs.
+
+The Docker acceptance contract now verifies **each job's** protected
+environment, rather than enforcing a fixed job count. The existing
+signed Docker host proof and its credentials-on-host prohibition
+remain unchanged.
+
+**Unproven:** This scenario does not mount the CopilotKit view.
+SDK-native composer/keyboard/focus/scroll/voice/persona/attachment
+UX, multiwindow interactive CAS, actual model start/stop and human
+visual parity need their own approved browser verification. Do not
+enable AG-UI/consumer flags, delete assistant-ui or merge #556
+based on this read-only protocol scenario.
+
+## CK-07E6 follow-up: honest composer recovery
+
+When an SDK message append fails after a successful durable draft
+clear, newer text typed during the await is preserved, and the failed
+original remains explicitly copyable until acknowledged. Retry tests
+require a conscious user action. Clean draft read failures now require
+a real authenticated reread; dirty draft write failures can only retry
+with their already confirmed CAS revision. Neither path invents a
+"saved" receipt. New tests cover first-read outage recovery, stale
+clean refresh and failed-write recovery without discarding text.
+
 ## Proof entry points
 
 ```bash
