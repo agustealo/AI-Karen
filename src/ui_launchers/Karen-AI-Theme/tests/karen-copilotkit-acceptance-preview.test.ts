@@ -9,6 +9,9 @@ const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf
 const prep = readFileSync(resolve(root, "tools/prepare-copilotkit-styles.mjs"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const ignore = readFileSync(resolve(root, ".gitignore"), "utf8");
+const nextConfig = readFileSync(resolve(root, "next.config.ts"), "utf8");
+const shim = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css"), "utf8");
 
 describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => {
   it("defaults to a 404 unless both server-only flag and exact host are approved", () => {
@@ -38,6 +41,18 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(pkg.scripts.build).toContain("prepare-copilotkit-styles.mjs");
     expect(ignore).toContain("/public/vendor/copilotkit-v2.css");
     expect(page).not.toContain('import "@copilotkit/react-core/v2/styles.css"');
+  });
+
+  it("intercepts only the SDK-internal compiled v4 stylesheet at the webpack boundary", () => {
+    expect(nextConfig).toContain("new webpack.NormalModuleReplacementPlugin");
+    expect(nextConfig).toContain("resource.context");
+    expect(nextConfig).toContain("resource.request");
+    expect(nextConfig).toContain("@copilotkit");
+    expect(nextConfig).toContain("react-core");
+    expect(nextConfig).toContain("dist");
+    expect(nextConfig).toContain("copilotkit-v2-style-import-shim.css");
+    expect(nextConfig).not.toContain("postcss: false");
+    expect(shim.trim()).toBe("/* CopilotKit v2 CSS is loaded from the approved local static asset. */");
   });
 
   it("does not disturb the sole consumer chat mount", () => {

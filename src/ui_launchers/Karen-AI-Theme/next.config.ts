@@ -110,7 +110,24 @@ const nextConfig: NextConfig = {
     return [];
   },
 
-  webpack: (config) => {
+  webpack: (config, { webpack }) => {
+
+    // CopilotKit v2's JS entry imports its Tailwind v4 compiled CSS. Its
+    // @layer rules cannot be sent through Karen's Tailwind v3 PostCSS pipeline.
+    // Redirect ONLY the SDK v2 entry's own ./index.css import to a no-op
+    // stylesheet. The exact installed SDK CSS is served as a static local
+    // asset exclusively by the operator-gated candidate preview route.
+    // Any other stylesheet, SDK version/layout or app CSS remains unchanged.
+    config.plugins ??= [];
+    config.plugins.push(new webpack.NormalModuleReplacementPlugin(
+      /^\.\/index\.css$/,
+      (resource) => {
+        if (/[\\/]@copilotkit[\\/]react-core[\\/]dist[\\/]v2$/.test(resource.context)) {
+          resource.request = path.resolve(__dirname,
+            'src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css');
+        }
+      },
+    ));
 
     // 1. Set up plugin repo alias for dynamic loading
     if (!config.resolve) config.resolve = {};
