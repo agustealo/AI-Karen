@@ -35,6 +35,7 @@ export function KarenCopilotControlledChat({
   const [error, setError] = useState<string | null>(null);
   // Copyable only in this authenticated component, not an additional draft store.
   const [failedSubmission, setFailedSubmission] = useState<string | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const {
     draft, setText: setDraftText, readText: readDraftText,
     status: draftStatus, synced: draftSynced, clearBeforeSubmit,
@@ -100,6 +101,7 @@ export function KarenCopilotControlledChat({
               setDraftText(text);
             } else {
               // Never clobber a newer edit while a durable clear is in flight.
+              setCopyFeedback(null);
               setFailedSubmission(text);
             }
             setError("Karen could not queue the message. Your unsent draft was retained.");
@@ -127,8 +129,31 @@ export function KarenCopilotControlledChat({
     if (!agent.isRunning) return;
     // SDK stop is a transport operation. Final durable cancellation and
     // its receipt must still be proven by the backend owned-run contract.
-    void copilotkit.stopAgent({ agent });
+    try {
+      void Promise.resolve(copilotkit.stopAgent({ agent })).catch(() => {
+        if (mounted.current) {
+          setError("Karen could not confirm the stop request. Check run status before retrying.");
+        }
+      });
+    } catch {
+      if (mounted.current) {
+        setError("Karen could not confirm the stop request. Check run status before retrying.");
+      }
+    }
   }, [agent, copilotkit]);
+
+  const copyFailedMessage = useCallback(async () => {
+    if (failedSubmission === null) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(failedSubmission);
+      if (mounted.current) setCopyFeedback("Failed message copied.");
+    } catch {
+      if (mounted.current) {
+        setCopyFeedback("Clipboard unavailable. Select the unsent message above to copy it.");
+      }
+    }
+  }, [failedSubmission]);
 
   if (!isReady || draftStatus === "loading") {
     return <p role="status" className="text-sm text-muted-foreground">Loading verified conversation and saved draft...</p>;
@@ -167,16 +192,25 @@ export function KarenCopilotControlledChat({
           </p>
           <textarea aria-label="Unsent failed message" readOnly value={failedSubmission}
             className="min-h-16 w-full rounded-lg border border-input p-2 text-sm" />
+          {copyFeedback && <p data-testid="karen-copilot-copy-feedback"
+            role="status" className="text-xs text-muted-foreground">{copyFeedback}</p>}
           <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => void copyFailedMessage()}>
+              Copy failed message
+            </button>
             <button type="button" disabled={Boolean(draft)}
               onClick={() => {
                 if (readDraftText()) return;
                 setDraftText(failedSubmission);
                 setFailedSubmission(null);
+                setCopyFeedback(null);
               }}>
               Restore to empty composer
             </button>
-            <button type="button" onClick={() => setFailedSubmission(null)}>
+            <button type="button" onClick={() => {
+              setFailedSubmission(null);
+              setCopyFeedback(null);
+            }}>
               Dismiss failed message
             </button>
           </div>

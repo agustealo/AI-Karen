@@ -90,6 +90,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(navigator, "clipboard");
   vi.restoreAllMocks();
 });
 
@@ -242,6 +243,66 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
     expect(sdk.runAgent).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).not.toContain("private");
+  });
+
+  it("provides explicit copy and accessible status for a failed native SDK submission", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true, value: { writeText },
+    });
+    sdk.agent.addMessage.mockImplementationOnce(() => { throw new Error("private SDK append"); });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("A valuable unsent message");
+      input().onSubmitMessage("A valuable unsent message");
+    });
+    await waitFor(() => expect(screen.getByRole("button", {
+      name: "Copy failed message",
+    })).toBeTruthy());
+    await act(async () => fireEvent.click(screen.getByRole("button", {
+      name: "Copy failed message",
+    })));
+    expect(writeText).toHaveBeenCalledWith("A valuable unsent message");
+    expect(screen.getByTestId("karen-copilot-copy-feedback").textContent)
+      .toContain("copied");
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps the failed text selectable and reports clipboard permission failure", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("private clipboard denial")) },
+    });
+    sdk.agent.addMessage.mockImplementationOnce(() => { throw new Error("append rejected"); });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Keep this text");
+      input().onSubmitMessage("Keep this text");
+    });
+    await waitFor(() => expect(screen.getByRole("button", {
+      name: "Copy failed message",
+    })).toBeTruthy());
+    await act(async () => fireEvent.click(screen.getByRole("button", {
+      name: "Copy failed message",
+    })));
+    expect(screen.getByTestId("karen-copilot-copy-feedback").textContent)
+      .toContain("Select the unsent message");
+    expect(screen.getByTestId("karen-copilot-copy-feedback").textContent)
+      .not.toContain("private");
+    expect((screen.getByRole("textbox", {
+      name: "Unsent failed message",
+    }) as HTMLTextAreaElement).value).toBe("Keep this text");
+  });
+
+  it("reports a rejected native stop without claiming durable cancellation", async () => {
+    sdk.agent.isRunning = true;
+    sdk.stopAgent.mockRejectedValueOnce(new Error("private cancellation error"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("could not confirm the stop request"));
+    expect(screen.getByRole("alert").textContent).not.toContain("private");
+    expect(sdk.stopAgent).toHaveBeenCalledWith({ agent: sdk.agent });
   });
 
   it("blocks inference until canonical draft clearance is confirmed", async () => {
