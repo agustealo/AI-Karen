@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/verified-search-deployment";
 
 // Authenticated requests read an approved real conversation; never write,
 // start a model, capture browser state, or manufacture a saved AI response.
@@ -31,11 +31,25 @@ type Owned = {
 
 async function signIn(page: import("@playwright/test").Page) {
   if (!email || !password) throw new Error("Live credentials are not configured");
+  const configured = process.env.KAREN_BASE_URL;
+  if (!configured) throw new Error("Approved CopilotKit deployment URL is required");
+  let approved: URL;
+  try {
+    approved = new URL(configured);
+  } catch {
+    throw new Error("Approved CopilotKit deployment origin is malformed");
+  }
+  if (approved.protocol !== "https:" || approved.username || approved.password ||
+      approved.port || approved.pathname !== "/" || approved.search || approved.hash) {
+    throw new Error("Only an approved clean HTTPS origin can accept credentials");
+  }
   await page.goto("/login");
+  expect(new URL(page.url()).origin).toBe(approved.origin);
   await page.getByRole("textbox", { name: "Email" }).fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:[/?#]|$)/, { timeout: 30000 });
+  await expect(page).toHaveURL(/\\/dashboard(?:[/?#]|$)/, { timeout: 30000 });
+  expect(new URL(page.url()).origin).toBe(approved.origin);
 }
 
 function parseSse(input: string): ReplayEvent[] {
