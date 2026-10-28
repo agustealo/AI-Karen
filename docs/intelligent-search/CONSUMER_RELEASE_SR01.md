@@ -337,3 +337,29 @@ host, verified HTTPS ingress, live backend health and model/provider
 execution, authenticated search/replay, tenant isolation, persistence,
 and human UX sign-off. The previous Vercel Python/Next.js mismatch and
 Vercel rate limits cannot be bypassed using signed Docker candidates.
+
+
+### Production Compose must use the signed-image override
+
+Use the **canonical** base and production overlays, followed by the minimal
+`deploy/compose/docker-compose.signed-release.yml` override. The override
+only replaces `api`/`web` image references with approved digest-pinned
+GHCR subjects and removes the local `build` sections using
+`!reset null`; it does not copy or reimplement service settings, auth,
+RBAC, ports, memory, model routing or observability.
+
+```bash
+docker compose --env-file .env.production \
+  -f docker-compose.yml \
+  -f deploy/compose/docker-compose.prod.yml \
+  -f deploy/compose/docker-compose.signed-release.yml \
+  config
+```
+
+Supply `KAREN_SIGNED_API_IMAGE_REF` and `KAREN_SIGNED_WEB_IMAGE_REF`
+from the separately approved signed build receipt and make sure those exact
+digest-pinned images are already pulled and running. Never run a
+`docker compose up --build` promotion for an attested release, or silently
+fall back to images compiled from mutable host source. The verifier checks
+the same three-layer Compose service configuration and the running image
+identity, but does not create or deploy containers.

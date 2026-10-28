@@ -84,6 +84,8 @@ def test_signed_images_match_running_healthy_containers():
     assert len(gh_calls) == 2
     assert {x[3].removeprefix("oci://") for x in gh_calls} == set(REFS.values())
     assert len(docker_calls) == 8
+    assert all("deploy/compose/docker-compose.signed-release.yml" in call
+               for call in docker_calls if "ps" in call)
 
 
 @pytest.mark.parametrize("refs,ids,repo,sha", [
@@ -188,3 +190,23 @@ def test_signed_workflow_never_auto_deploys_or_signs_pr_source():
         assert marker in workflow
     for forbidden in ("docker compose up", "kubectl apply", "vercel deploy"):
         assert forbidden not in workflow
+
+
+
+def test_signed_overlay_replaces_builds_without_duplicating_runtime_owner():
+    root = Path(__file__).resolve().parents[2]
+    overlay = (
+        root / "deploy/compose/docker-compose.signed-release.yml"
+    ).read_text(encoding="utf-8")
+    assert overlay.count("build: !reset null") == 2
+    assert overlay.count("pull_policy: always") == 2
+    assert "KAREN_SIGNED_API_IMAGE_REF:?" in overlay
+    assert "KAREN_SIGNED_WEB_IMAGE_REF:?" in overlay
+    assert "  api:" in overlay and "  web:" in overlay
+    assert "KAREN_BACKEND_URL" not in overlay
+    assert "AUTH_DEV_MODE" not in overlay
+    source = (
+        root / "scripts/ci/verify_docker_release.py"
+    ).read_text(encoding="utf-8")
+    assert "signed_release=True" in source
+    assert 'deploy/compose/docker-compose.signed-release.yml' in source
