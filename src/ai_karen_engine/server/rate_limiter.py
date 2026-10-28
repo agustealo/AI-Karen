@@ -207,6 +207,39 @@ class RedisRateLimitStorage(RateLimitStorage):
         """Create a Redis key with prefix"""
         return f"{self._key_prefix}{key}{suffix}"
     
+    async def admit_sliding_window(self, key: str, limit: int, window_seconds: int, weight: int) -> tuple[bool, int, int]:
+        """Atomically reserve weighted requests across all API workers."""
+        script = """
+        local key = KEYS[1]
+        local now = tonumber(ARGV[1])
+        local window = tonumber(ARGV[2])
+        local limit = tonumber(ARGV[3])
+        local weight = tonumber(ARGV[4])
+        local nonce = ARGV[5]
+        redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
+        local count = tonumber(redis.call('ZCARD', key))
+        if count + weight > limit then
+            local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+            local retry = window
+            if #oldest > 0 then
+                retry = math.max(1, math.ceil(tonumber(oldest[2]) + window - now))
+            end
+            return {0, count, retry}
+        end
+        for i = 1, weight do
+            redis.call('ZADD', key, now, nonce .. ':' .. tostring(i))
+        end
+        redis.call('EXPIRE', key, math.ceil(window * 2))
+        return {1, count, 0}
+        """
+        import uuid
+        now = time.time()
+        result = await self.redis.eval(
+            script, 1, self._make_key(key, ":timestamps"), now,
+            window_seconds, limit, weight, uuid.uuid4().hex,
+        )
+        return bool(int(result[0])), int(result[1]), int(result[2])
+
     async def get_count(self, key: str, window_seconds: int) -> int:
         redis_key = self._make_key(key, ":count")
         count = await self.redis.get(redis_key)
@@ -336,6 +369,22 @@ class EnhancedRateLimiter:
         # Generate rate limit key
         key = self._generate_key(rule, ip_address, endpoint, user_id)
         
+        if rule.algorithm == RateLimitAlgorithm.SLIDING_WINDOW and isinstance(self.storage, RedisRateLimitStorage):
+            allowed, count, retry = await self.storage.admit_sliding_window(
+                key, rule.limit, rule.window_seconds, request_size,
+            )
+            now = datetime.now(timezone.utc)
+            return RateLimitResult(
+                allowed=allowed,
+                rule_name=rule.name,
+                current_count=count,
+                limit=rule.limit,
+                window_seconds=rule.window_seconds,
+                reset_time=now + timedelta(seconds=retry or rule.window_seconds),
+                retry_after_seconds=retry,
+                details={"algorithm": rule.algorithm.value, "reserved": allowed},
+            )
+
         # Check rate limit based on algorithm
         if rule.algorithm == RateLimitAlgorithm.FIXED_WINDOW:
             return await self._check_fixed_window(rule, key, request_size)
