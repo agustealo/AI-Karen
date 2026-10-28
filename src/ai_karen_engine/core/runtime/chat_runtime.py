@@ -1314,6 +1314,11 @@ class ChatRuntime:
                     for key, value in provider_meta.items()
                     if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
+                **({"answer_composition_status": provider_meta["answer_composition_status"]}
+                   if provider_meta.get("answer_composition_status") in {
+                       "grounded_model", "retrieved_evidence",
+                       "source_observation", "capability_unavailable",
+                   } else {}),
                 **({"pending_clarification": provider_meta["pending_clarification"]}
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
@@ -2541,6 +2546,16 @@ class ChatRuntime:
             if decision.intent == "search.weather"
             else None
         )
+        resolved_timezone = (
+            RuntimeEvidenceResolver.authorized_semantic_value(
+                decision.cognitive_context,
+                tenant_id=request.context.tenant_id,
+                user_id=request.context.user_id,
+                attribute="timezone",
+            )
+            if decision.intent == "time.current"
+            else None
+        )
         result = await get_direct_capability_executor().execute(
             request=request,
             decision=decision,
@@ -2548,7 +2563,9 @@ class ChatRuntime:
             meter=meter,
             resolved_context=(
                 {"weather_location": resolved_location, "location_source": "user_profile"}
-                if resolved_location else None
+                if resolved_location else (
+                    {"timezone": resolved_timezone} if resolved_timezone else None
+                )
             ),
         )
         normalized = result.normalized_metadata()
@@ -2587,6 +2604,7 @@ class ChatRuntime:
                 "actual_model": normalized.get("actual_model"),
                 "runtime_engine": normalized.get("runtime_engine"),
                 "response_source": normalized.get("response_source"),
+                "answer_composition_status": normalized.get("answer_composition_status"),
                 "degraded_mode": normalized.get("degraded_mode", False),
             },
         )
@@ -2608,6 +2626,10 @@ class ChatRuntime:
         """One answer and presentation composition path for both transports."""
         accepted = dict(metadata)
         answer = result.text
+        if decision.intent in {"search.general", "search.weather", "time.current"}:
+            # A failed or denied capability must not be classified as grounded
+            # evidence or a model response merely because text was returned.
+            accepted["answer_composition_status"] = "capability_unavailable"
         if result.success and decision.intent in {
             "search.general", "search.weather", "time.current"
         }:
@@ -2617,6 +2639,13 @@ class ChatRuntime:
             if synthesized is not None:
                 answer, attribution = synthesized
                 accepted.update(attribution)
+                accepted["answer_composition_status"] = "grounded_model"
+            else:
+                # The original capability result remains readable evidence,
+                # never a model answer. Preserve the original provider receipt.
+                accepted["answer_composition_status"] = "source_observation" if (
+                    decision.intent in {"search.weather", "time.current"}
+                ) else "retrieved_evidence"
         structured = accepted.get("structured_content")
         presentation = structured.get("presentation") if isinstance(structured, dict) else None
         layout_provenance = {}
@@ -2729,13 +2758,57 @@ class ChatRuntime:
         from urllib.parse import urlsplit
 
         sources = []
+        # Research references are resolved exclusively from the authorized
+        # capability's returned sources, never from client request metadata.
+        authorized_source = (
+            retrieved.success
+            and retrieved.source == "plugin"
+            and retrieved.source_id in set(plan.allowed_plugins)
+        )
+        article_service = None
         for item in retrieved.sources:
             if not isinstance(item, dict) or item.get("evidence_level") != "fetched_page":
                 continue
             url = str(item.get("url") or "")
-            passage = str(item.get("content") or item.get("markdown") or "")[:1000]
             parsed = urlsplit(url)
-            if parsed.scheme in {"http", "https"} and parsed.hostname and passage:
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                continue
+            article_id = item.get("article_id")
+            if article_id is not None:
+                # Stored references must never fall through to caller-supplied
+                # inline text when the principal, plan, or artifact lookup fails.
+                if not (
+                    authorized_source
+                    and isinstance(article_id, str)
+                    and 0 < len(article_id) <= 128
+                ):
+                    continue
+                try:
+                    if article_service is None:
+                        from ai_karen_engine.services.database.repositories.repository_factory import (
+                            get_runtime_search_article_service,
+                        )
+                        article_service = get_runtime_search_article_service()
+                    if article_service is None:
+                        continue
+                    scoped_text = await article_service.read_for_chat(
+                        execution_context=request.context, article_id=article_id,
+                        source_url=url,
+                    )
+                    if not scoped_text:
+                        continue
+                    passage = scoped_text[:1000]
+                except (PermissionError, ValueError):
+                    continue
+                except Exception as exc:
+                    logger.warning("search_article_reference_unavailable", extra={
+                        "correlation_id": request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    })
+                    continue
+            else:
+                passage = str(item.get("content") or item.get("markdown") or "")[:1000]
+            if passage:
                 sources.append({"url": url, "content": passage, "evidence_level": "fetched_page"})
             if len(sources) >= 4:
                 break

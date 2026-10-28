@@ -82,6 +82,7 @@ jobs:
       - name: Build production API image
         run: |
           docker build --target app --build-arg PROFILE=runtime \
+            --build-arg KAREN_DEPLOYED_COMMIT_SHA=${{ github.sha }} \
             -t ai-karen-api:ollama-live .
 
       - name: Prove production Settings discovery, save and unforced inference

@@ -195,3 +195,28 @@ def test_first_run_smoke_is_a_dedicated_ci_gate() -> None:
     assert "pytest tests/architecture/test_first_run_system_contract.py -q" in source
     assert "docker build --target app" in source
     assert "bash scripts/ci/production-first-boot-smoke.sh" in source
+
+
+
+def test_first_boot_builds_stamped_api_and_web_images() -> None:
+    """A synthetic PR merge has its own source SHA; CI must stamp that exact tree."""
+    source = _read(WORKFLOW)
+    api = source.split("      - name: Build production API image", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    web = source.split("      - name: Build production web image", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    for build in (api, web):
+        assert '[[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]' in build
+        assert '--build-arg KAREN_DEPLOYED_COMMIT_SHA="$GITHUB_SHA"' in build
+    assert "test \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\"" in source
+    proof = source.split(
+        "      - name: Prove both built images carry the checked-out CI source identity",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+    assert 'for service in api web; do' in proof
+    assert 'docker image inspect --format' in proof
+    assert 'test "$revision" = "$GITHUB_SHA"' in proof
+    assert '[[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]' in proof
+    assert "GITHUB_STEP_SUMMARY" in proof

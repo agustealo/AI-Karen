@@ -269,7 +269,10 @@ def test_production_stack_uses_web_as_the_only_public_proxy_authority() -> None:
     assert 'AUTH_ENABLE_RATE_LIMITING: "true"' in base_compose
     assert 'HTTP_TRUSTED_PROXY_HOSTS: "web"' in prod_compose
     assert "RATE_LIMIT_TRUSTED_PROXY_HOSTS" not in prod_compose
-    assert "  api:\n    env_file: !reset []\n    ports: !reset []" in prod_compose
+    # Verify the API service security settings irrespective of build metadata ordering.
+    api_service = prod_compose.split("\n  api:\n", 1)[1].split("\n  web:\n", 1)[0]
+    assert "    env_file: !reset []" in api_service
+    assert "    ports: !reset []" in api_service
 
     assert "req.socket.remoteAddress" in ingress
     assert "req.headers['x-forwarded-for'] = clientIp" in ingress

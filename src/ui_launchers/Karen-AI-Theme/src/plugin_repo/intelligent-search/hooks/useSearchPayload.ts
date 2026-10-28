@@ -46,7 +46,7 @@ export function useSearchPayload() {
     });
 
     const payload: Record<string, unknown> = {
-      mode,
+      ...(mode === 'auto' ? {} : { mode }),
       query,
       context,
     };

@@ -81,3 +81,40 @@ class SearchArticleService:
         if hashlib.sha256(data).hexdigest() != artifact.sha256:
             raise RuntimeError("Article integrity verification failed")
         return data.decode("utf-8")
+
+    async def read_for_chat(self, *, execution_context, article_id: str, source_url: str | None = None) -> str | None:
+        """Resolve a browser-supplied research reference for canonical chat.
+
+        The caller's authenticated runtime principal, not request metadata,
+        is the authority for tenant and user scope. A reference does not grant
+        access by itself. The underlying read enforces artifact ownership,
+        deletion status, size and content integrity.
+        """
+        execution_context.require_authenticated_user()
+        tenant_id = str(execution_context.tenant_id or "").strip()
+        user_id = str(execution_context.user_id or "").strip()
+        self._identity(tenant_id, user_id)
+        if not isinstance(article_id, str) or not article_id or len(article_id) > 128:
+            raise ValueError("Valid article identifier is required")
+        # Reject missing citation provenance before touching document bytes.
+        if not isinstance(source_url, str) or not source_url:
+            return None
+        content = await self.read(
+            tenant_id=tenant_id, user_id=user_id, article_id=article_id,
+        )
+        if content is None:
+            return None
+        # The plugin-provided citation must match stored source provenance;
+        # possession of a valid article ID cannot launder a different URL.
+        source = await self._artifacts.get_metadata(article_id, tenant_id)
+        if not source.success or source.data is None:
+            return None
+        artifact = source.data
+        if (
+            artifact.kind != "search_article"
+            or artifact.user_id != user_id
+            or artifact.deleted_at is not None
+            or artifact.metadata.get("source_url") != source_url
+        ):
+            return None
+        return content

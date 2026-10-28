@@ -353,6 +353,23 @@ class InternetCapabilityService:
                             "request_id": execution_context.request_id,
                         },
                     }
+                except ValueError as exc:
+                    # Missing or invalid place is an input requirement, not a
+                    # failed weather observation. Never retry through web search.
+                    return {
+                        "query": request.query, "mode": "weather",
+                        "status": "needs_location", "success": False,
+                        "can_execute": False,
+                        "reason": str(exc),
+                        "missing_requirements": ["location.current"],
+                        "results": [], "sources": [], "citations": [],
+                        "extractedData": None, "provider": "open_meteo",
+                        "metadata": {
+                            "provider": "open_meteo", "degraded": False,
+                            "correlation_id": execution_context.correlation_id,
+                            "request_id": execution_context.request_id,
+                        },
+                    }
                 except Exception as exc:
                     logger.warning(
                         "internet_capability.weather_unavailable",
@@ -863,8 +880,17 @@ class InternetCapabilityService:
 
     def _resolve_mode(self, request: InternetSearchRequest) -> str:
         requested = request.mode or request.requested_mode
-        if requested:
+        if requested and str(requested).strip().lower() != "auto":
             return str(requested).strip().lower()
+
+        # CORTEX owns automatic capability decisions for every entry point.
+        # Calling the InternetCapabilityService directly must not downgrade
+        # a live weather question to the older generic keyword planner.
+        from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+
+        decision = resolve_capability_decision(request.query)
+        if decision.intent == "search.weather":
+            return "weather"
         return str(self.planner.classify_mode(request.query)).strip().lower()
 
     def _resolve_strategy(
@@ -1428,7 +1454,6 @@ class InternetCapabilityService:
                     "publishedDate": metadata.get("published_date")
                     or metadata.get("date")
                     or metadata.get("article:published_time"),
-                    "relevanceScore": round(max(0.0, 1.0 - (len(sources) * 0.08)), 2),
                     "links": [],
                     "media": {},
                 }

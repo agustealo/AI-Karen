@@ -126,6 +126,10 @@ WORKDIR /app
 
 ENV PYTHONPATH=/app:/app/src
 
+# Build provenance: the production Compose overlay requires a reviewed SHA.
+ARG KAREN_DEPLOYED_COMMIT_SHA=""
+LABEL org.opencontainers.image.revision="${KAREN_DEPLOYED_COMMIT_SHA}"
+
 COPY . .
 RUN mkdir -p /app/models /app/logs /app/backups /app/certs /app/config
 RUN mkdir -p /app/plugin_marketplace/ai/model-orchestrator
