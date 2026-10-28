@@ -18,7 +18,7 @@ class PipelinePolicy:
     
     def __init__(self):
         self._policies: Dict[str, StagePolicy] = {
-            "spacy": StagePolicy(timeout_seconds=2.0, max_retries=1, sensitivity_class="normal"),
+            "spacy": StagePolicy(timeout_seconds=2.0, max_retries=0, sensitivity_class="normal"),
             "distilbert": StagePolicy(timeout_seconds=3.0, max_retries=1, sensitivity_class="normal"),
             "leangraph_projection": StagePolicy(timeout_seconds=5.0, max_retries=3, sensitivity_class="high"),
             "profile_synthesis": StagePolicy(timeout_seconds=10.0, max_retries=1, sensitivity_class="high"),
