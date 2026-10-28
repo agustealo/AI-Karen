@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,7 +23,7 @@ def _job(source: str, name: str) -> str:
     marker = f"\n  {name}:\n"
     assert source.count(marker) == 1
     result = source.split(marker, 1)[1]
-    return result.split("\n  ", 1)[0]
+    return re.split(r"\n(?=  [a-z][a-z0-9-]*:\n)", result, maxsplit=1)[0]
 
 
 def test_docker_scenario_reuses_existing_protected_acceptance_workflow() -> None:
