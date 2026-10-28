@@ -13,6 +13,7 @@ on:
           - search
           - docker-search
           - copilotkit-protocol
+          - copilotkit-native
       target_sha:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
@@ -231,13 +232,14 @@ jobs:
 
   # Read-only SDK-protocol proof only. Native CopilotKit UI parity still unverified.
   authenticated-copilotkit-protocol:
-    if: inputs.scenario == 'copilotkit-protocol' && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_COPILOTKIT_ACCEPTANCE_URL }}
-      KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: "true"
+      KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}
+      KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && 'true' || 'false' }}
       KAREN_HISTORY_CONVERSATION_ID: ${{ vars.KAREN_COPILOTKIT_CONVERSATION_ID }}
       KAREN_COPILOTKIT_OBSERVED_RUN_ID: ${{ vars.KAREN_COPILOTKIT_OBSERVED_RUN_ID }}
       KAREN_E2E_CAPTURE_VIDEO: "false"
@@ -296,7 +298,9 @@ jobs:
           test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing acceptance identity"; exit 1; }
           test -n "$KAREN_UX_PASSWORD" || { echo "::error::Missing acceptance credential"; exit 1; }
           test -n "$KAREN_HISTORY_CONVERSATION_ID" || { echo "::error::Missing approved conversation"; exit 1; }
-          test -n "$KAREN_COPILOTKIT_OBSERVED_RUN_ID" || { echo "::error::Missing observed run ID"; exit 1; }
+          if test "${{ inputs.scenario }}" = "copilotkit-protocol"; then
+            test -n "$KAREN_COPILOTKIT_OBSERVED_RUN_ID" || { echo "::error::Missing observed run ID"; exit 1; }
+          fi
           case "$KAREN_BASE_URL" in
             https://*) ;;
             *) echo "::error::Acceptance URL must use HTTPS"; exit 1 ;;
@@ -336,6 +340,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Prove live authenticated CopilotKit protocol and observed replay
+        if: inputs.scenario == 'copilotkit-protocol'
         shell: bash
         env:
           KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
@@ -344,6 +349,19 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright test e2e/karen-copilotkit-protocol-acceptance.spec.ts \
+            --config=e2e/playwright.config.ts --project=chromium \
+            --reporter=list --retries=0
+
+      - name: Prove the isolated native CopilotKit UX draft and no-auto-run contract
+        if: inputs.scenario == 'copilotkit-native'
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts \
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 

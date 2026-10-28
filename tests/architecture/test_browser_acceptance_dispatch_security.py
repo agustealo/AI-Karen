@@ -68,10 +68,11 @@ def test_login_enforces_approved_origin_before_password_submission() -> None:
 def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "          - copilotkit-protocol" in workflow
+    assert "          - copilotkit-native" in workflow
     job = workflow.split("  authenticated-copilotkit-protocol:", 1)[1].split(
         "\n  # Operator-controlled Docker host proof.", 1
     )[0]
-    assert "if: inputs.scenario == 'copilotkit-protocol' && github.ref == 'refs/heads/main'" in job
+    assert "if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native') && github.ref == 'refs/heads/main'" in job
     assert "environment: karen-sanitized-browser-acceptance" in job
     assert "ref: ${{ inputs.target_sha }}" in job
     assert "persist-credentials: false" in job
@@ -80,7 +81,11 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
     assert "e2e/karen-copilotkit-protocol-acceptance.spec.ts" in job
-    assert 'KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: "true"' in job
+    assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in job
+    assert "KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}" in job
+    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && 'true' || 'false' }}" in job
+    assert "if: inputs.scenario == 'copilotkit-native'" in job
+    assert "if: inputs.scenario == 'copilotkit-protocol'" in job
     assert 'KAREN_COPILOTKIT_OBSERVED_RUN_ID: ${{ vars.KAREN_COPILOTKIT_OBSERVED_RUN_ID }}' in job
     assert "KAREN_UX_EMAIL" not in job.split("\n    steps:", 1)[0]
     assert "KAREN_UX_PASSWORD" not in job.split("\n    steps:", 1)[0]
@@ -89,6 +94,14 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
         assert "secrets.KAREN_UX_EMAIL" not in step
         assert "secrets.KAREN_UX_PASSWORD" not in step
         assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in step
+
+    native = job.split(
+        "      - name: Prove the isolated native CopilotKit UX draft and no-auto-run contract", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert "secrets.KAREN_UX_EMAIL" in native
+    assert "secrets.KAREN_UX_PASSWORD" in native
+    assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in native
+    assert "KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED" not in job
 
 
 def test_copilotkit_login_checks_approved_origin_before_password() -> None:
@@ -111,6 +124,7 @@ def test_copilotkit_login_checks_approved_origin_before_password() -> None:
 def test_verified_deployment_access_is_shared_without_general_secret_headers() -> None:
     source = (ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/fixtures/verified-search-deployment.ts").read_text(encoding="utf-8")
     assert "KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED" in source
+    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED" in source
     assert "maxRedirects: 0" in source
     assert "approved.origin !== configured.origin" in source
     assert "'x-vercel-protection-bypass': bypassSecret" in source
