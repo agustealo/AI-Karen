@@ -507,6 +507,33 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.post).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { status: "running", cancel_requested: false, cancellation_confirmed: false },
+    { status: "cancelling", cancel_requested: false, cancellation_confirmed: false },
+  ])("never labels a marker-free $status as an accepted pending stop", async (state) => {
+    sdk.agent.isRunning = true;
+    sdk.get.mockResolvedValueOnce(state);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "run-markerless" },
+    }));
+    act(() => input().onStop());
+    const check = await screen.findByRole("button", {
+      name: "Check cancellation status",
+    });
+    fireEvent.click(check);
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("could not verify the run"));
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("No confirmed stop is available");
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .not.toContain("confirmation is still pending");
+    expect(screen.getByRole("button", { name: "Check cancellation status" }))
+      .toBeTruthy();
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+    expect(sdk.get).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects forged terminal claims and preserves the ability to check again", async () => {
     sdk.agent.isRunning = true;
     sdk.get.mockResolvedValueOnce({
