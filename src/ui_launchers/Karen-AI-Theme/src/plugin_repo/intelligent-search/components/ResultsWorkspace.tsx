@@ -22,6 +22,16 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const sources = response?.sources ?? [];
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
+  const distinctHosts = new Set(sources.map((source) => {
+    try { return new URL(source.url).hostname.replace(/^www\./, '').toLowerCase(); }
+    catch { return ''; }
+  }).filter(Boolean)).size;
+  const actualMode = String(response?.mode || 'unknown');
+  const searchProviders = Array.isArray(response?.metadata?.search_providers)
+    ? response.metadata.search_providers.filter((value): value is string => typeof value === 'string')
+    : [];
+  const correlationId = typeof response?.metadata?.correlation_id === 'string'
+    ? response.metadata.correlation_id : null;
   const providerLabel = String(
     response?.provider || response?.metadata?.provider || 'Unknown',
   );
@@ -33,6 +43,17 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
     'No retrieved preview available.';
   const featuredHref = featuredItem?.url || '';
   const hasEvidence = sourceCount > 0 || resultCount > 0;
+  const weatherData = response?.mode === 'weather' && response.extractedData &&
+    typeof response.extractedData === 'object' ? response.extractedData : null;
+  const measuredTemperature = weatherData?.temperature_f;
+  const hasWeatherObservation = typeof measuredTemperature === 'number' &&
+    Number.isFinite(measuredTemperature) &&
+    typeof weatherData?.observed_at === 'string' &&
+    typeof weatherData?.location === 'string' &&
+    (response?.sources?.length ?? 0) > 0;
+  const failedExecution = response?.metadata?.degraded === true && response?.status === 'error';
+  const searchFailure = response?.status === 'error' || response?.can_execute === false && response?.reason;
+  const failureMessage = typeof response?.reason === 'string' ? response.reason : 'The requested live information is unavailable. Please retry or refine your search.';
 
   useEffect(() => {
     if (activeSourceIndex > sources.length - 1) {
@@ -53,7 +74,19 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   if (state.isLoading) return <LoadingState state={state} />;
   if (state.error) return <ErrorState error={state.error} />;
   if (!response) return <EmptyState />;
-  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-xl font-semibold">No sources found</h2><p className="text-muted-foreground">{response.summary || 'The search did not return usable evidence.'} Try a broader query or a different search mode.</p></div>;
+  if (response.status === 'needs_location') return (
+    <section role="status" aria-label="Weather location required"
+      className="rounded-2xl border border-border/60 bg-card p-8 space-y-3">
+      <h2 className="text-lg font-semibold">Which location should I check?</h2>
+      <p className="text-sm text-muted-foreground">
+        Enter a city and state or country in the search field, such as
+        {' "weather in Detroit, MI"'}, then search again.
+        No weather observation has been retrieved yet.
+      </p>
+    </section>
+  );
+  if (searchFailure || failedExecution) return <div role="alert" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">Search could not be completed</h2><p className="text-muted-foreground">{failureMessage}</p></div>;
+  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">No sources found</h2><p className="text-muted-foreground">The search did not return usable evidence. Try a broader query or a different search mode.</p></div>;
 
   const renderTabContent = () => {
     switch (currentTab) {
@@ -85,16 +118,18 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
-                {modeConfig.label}
+                {response.mode && response.mode !== 'auto' ? String(response.mode).replace(/_/g, ' ') : modeConfig.label}
               </h2>
               <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-                {response.summary || 'Retrieved sources for your query. These excerpts are not a generated answer.'}
+                {response.summary || 'Retrieved evidence is available below.'}
+                <span className="mt-1 block text-xs">Source summaries and excerpts are not verified AI-generated answers.</span>
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <StatBadge label="Sources" value={sourceCount} />
+            <StatBadge label="Distinct websites" value={distinctHosts} />
 
           </div>
         </div>
@@ -102,10 +137,28 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         <details className="mt-5 rounded-xl border border-border/50 bg-card/60 p-3"><summary className="cursor-pointer text-sm font-medium text-muted-foreground">Technical search details</summary><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SignalTile label="Query" value={response.query || 'live request'} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="Provider" value={providerLabel} icon={<Database className="h-4 w-4" />} />
+          <SignalTile label="Actual mode" value={actualMode} icon={<Radar className="h-4 w-4" />} />
+          <SignalTile label="Providers used" value={searchProviders.length ? searchProviders.join(", ") : "Not reported"} icon={<Database className="h-4 w-4" />} />
+          <SignalTile label="Correlation ID" value={correlationId || "Not reported"} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="URLs" value={response.diagnostics?.urlsFound ?? sourceCount} icon={<ArrowUpRight className="h-4 w-4" />} />
           <SignalTile label="Retrieved chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
         </div></details>
       </div>
+
+      {hasWeatherObservation && weatherData && (
+        <section aria-label="Weather observation" className="relative mx-4 mt-4 rounded-2xl border border-border/60 bg-card p-5 lg:mx-6">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Live provider observation</p>
+          <h3 className="mt-2 text-lg font-semibold text-foreground">{String(weatherData.location)}</h3>
+          <p className="mt-2 text-3xl font-semibold text-foreground">{String(measuredTemperature)} °F</p>
+          <p className="mt-2 text-sm text-muted-foreground">Provider timestamp: {String(weatherData.observed_at)} {typeof weatherData.timezone === 'string' ? weatherData.timezone : ''}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Structured weather data, not an AI-generated forecast explanation.</p>
+          {response.sources?.[0]?.url?.startsWith('https://') && (
+            <a href={response.sources[0].url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-sm text-primary underline">
+              View weather data provider
+            </a>
+          )}
+        </section>
+      )}
 
       <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
         style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>

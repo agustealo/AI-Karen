@@ -17,7 +17,8 @@
     "showcase:capture": "playwright test --config=e2e/playwright.showcase.config.ts",
     "playwright:install": "playwright install chromium",
     "ci:forbid-mocks": "bash tools/check-no-prod-mocks.sh",
-    "test:e2e:planner": "playwright test e2e/planner-presentation-replay.spec.ts --config=e2e/playwright.config.ts --project=chromium"
+    "test:e2e:planner": "playwright test e2e/planner-presentation-replay.spec.ts --config=e2e/playwright.config.ts --project=chromium",
+    "test:e2e:search-release": "playwright test e2e/intelligent-search-replay.spec.ts --config=e2e/playwright.config.ts --project=chromium"
   },
   "dependencies": {
     "@hookform/resolvers": "^4.1.3",

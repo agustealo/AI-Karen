@@ -14,10 +14,25 @@ def test_default_branch_only_exposes_reviewed_history_scenario() -> None:
     assert "workflow_dispatch:" in workflow
     assert "  authenticated-history-restoration:" in workflow
     assert "if: inputs.scenario == 'history' && github.ref == 'refs/heads/main'" in workflow
-    assert "  authenticated-search-replay:" not in workflow
-    assert "          - search" not in workflow
-    assert "target_sha:" not in workflow
     assert "persist-credentials: false" in workflow
+    if "  authenticated-search-replay:" not in workflow:
+        # Until the full release harness exists, do not expose an unsafe dispatch.
+        assert "          - search" not in workflow
+        assert "target_sha:" not in workflow
+        return
+
+    # Once SR-01 is integrated, search must be protected and attested.
+    assert "          - search" in workflow
+    job = workflow.split("  authenticated-search-replay:", 1)[1]
+    assert "if: inputs.scenario == 'search' && github.ref == 'refs/heads/main'" in job
+    assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
+    assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
+    assert "ref: ${{ inputs.target_sha }}" in job
+    assert "persist-credentials: false" in job
+    assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
+    assert "gh api repos/${GITHUB_REPOSITORY}/branches/main" in job
+    assert "pulls/550" not in job
+    assert "Require the current reviewed main commit before checkout" in job
 
 
 def test_browser_credentials_never_reach_dependency_setup() -> None:

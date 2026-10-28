@@ -104,3 +104,58 @@ async def test_authorized_conversation_api_exposes_persisted_presentation():
             tenant_id="tenant-b", user_ctx={"user_id": "attacker"},
         )
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_authorized_replay_preserves_search_citations_and_synthesis_receipt():
+    conversation_id = str(uuid4())
+    citation = {"url": "https://example.org/research", "title": "Verified source"}
+    stored = message_with_metadata({
+        "answer_composition_status": "grounded_model",
+        "actual_provider": "local",
+        "actual_model": "selected-model",
+        "response_source": "grounded_search_model",
+        "citations": [citation],
+        "sources": [{"url": citation["url"], "evidence_level": "fetched_page"}],
+    })
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    conversation = SimpleNamespace(
+        id=conversation_id, user_id="owner", tenant_id="tenant-a",
+        session_id="session-1", title="Research", metadata={},
+        summary=None, tags=[], is_active=True,
+        created_at=now, updated_at=now,
+    )
+    gateway = _ScopedGateway(ConversationSnapshot(
+        conversation=conversation, messages=(stored,),
+    ))
+    restored = await get_conversation(
+        conversation_id, conversation_gateway=gateway,
+        tenant_id="tenant-a", user_ctx={"user_id": "owner"},
+    )
+    metadata = restored.messages[0].metadata
+    assert metadata["answer_composition_status"] == "grounded_model"
+    assert metadata["actual_provider"] == "local"
+    assert metadata["actual_model"] == "selected-model"
+    assert metadata["response_source"] == "grounded_search_model"
+    assert metadata["citations"] == [citation]
+    assert metadata["sources"][0]["url"] == citation["url"]
+
+    with pytest.raises(HTTPException) as denied:
+        await get_conversation(
+            conversation_id, conversation_gateway=gateway,
+            tenant_id="tenant-a", user_ctx={"user_id": "other"},
+        )
+    assert denied.value.status_code == 404
+
+
+def test_client_evidence_label_uses_persisted_status_only():
+    from pathlib import Path
+    component = (
+        Path(__file__).resolve().parents[3]
+        / "src/ui_launchers/Karen-AI-Theme/src/components/chat/MessageBubble.tsx"
+    ).read_text(encoding="utf-8")
+    assert "message.metadata?.answer_composition_status" in component
+    assert "chat-evidence-status" in component
+    assert "Verified grounded answer" in component
+    assert "Retrieved evidence only" in component
+    assert "Live capability unavailable" in component

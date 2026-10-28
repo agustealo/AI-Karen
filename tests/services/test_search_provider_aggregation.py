@@ -20,7 +20,7 @@ async def test_general_search_aggregates_hosts_across_providers():
         "searxng": {"enabled": True, "priority": 95},
         "wikipedia": {"enabled": True, "priority": 85},
         "brave_search_free": {"enabled": False},
-        "mojeek": {"enabled": False},
+        "mojeek": {"enabled": True, "priority": 88},
         "startpage": {"enabled": False},
     }})
     client = WebSearchClient(settings={"aggregation": {
@@ -31,6 +31,7 @@ async def test_general_search_aggregates_hosts_across_providers():
             "duckduckgo": [item("https://example.com/one"), item("https://example.com/two")],
             "searxng": [item("https://museum.org/history")],
             "wikipedia": [item("https://en.wikipedia.org/wiki/History_of_Jamaica")],
+            "mojeek": [item("https://archives.gov/history")],
         }
         return SearchResponse(query=query, results=data.get(name, []), provider=name)
     client._search_with_provider = AsyncMock(side_effect=dispatch)
@@ -38,9 +39,9 @@ async def test_general_search_aggregates_hosts_across_providers():
     result = await client.search("Jamaican History", max_results=3)
     assert len(result.results) == 3
     assert {x.url.split("/")[2] for x in result.results} == {
-        "example.com", "museum.org", "en.wikipedia.org"
+        "example.com", "museum.org", "archives.gov"
     }
-    assert "wikipedia" in result.provider
+    assert "wikipedia" not in result.provider
 
 
 @pytest.mark.asyncio
@@ -57,7 +58,7 @@ async def test_explicit_provider_remains_pinned():
 
 
 @pytest.mark.asyncio
-async def test_failed_first_five_providers_do_not_block_last_enabled_fallback():
+async def test_implicit_search_never_uses_wikipedia_when_general_providers_fail():
     registry = WebSearchProviderRegistry(settings={"search": {
         "duckduckgo": {"enabled": True, "priority": 100},
         "searxng": {"enabled": True, "priority": 95},
@@ -80,10 +81,9 @@ async def test_failed_first_five_providers_do_not_block_last_enabled_fallback():
 
     client._search_with_provider = AsyncMock(side_effect=dispatch)
     response = await client.search("Jamaican History")
-    assert [result.url for result in response.results] == [
-        "https://en.wikipedia.org/wiki/History_of_Jamaica"
-    ]
-    assert client._search_with_provider.await_count == 6
+    assert response.results == []
+    assert response.provider == "none"
+    assert client._search_with_provider.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -153,3 +153,21 @@ def test_wikipedia_default_respects_explicit_enable_and_disable_overrides():
     assert build_provider_configs()["wikipedia"]["enabled"] is False
     assert build_provider_configs({"search": {"wikipedia": {"enabled": True}}})["wikipedia"]["enabled"] is True
     assert build_provider_configs({"search": {"wikipedia": {"enabled": False}}})["wikipedia"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_wikipedia_only_configuration_fails_closed_for_implicit_search():
+    registry = WebSearchProviderRegistry(settings={"search": {
+        name: {"enabled": name == "wikipedia"}
+        for name in WebSearchProviderRegistry().descriptors
+    }})
+    client = WebSearchClient(registry=registry)
+    client._search_with_provider = AsyncMock(return_value=SearchResponse(
+        query="weather", provider="wikipedia",
+        results=[item("https://en.wikipedia.org/wiki/Weather")],
+    ))
+    result = await client.search("what's the weather")
+    assert result.provider == "none"
+    assert result.results == []
+    assert "general-web" in (result.error or "")
+    client._search_with_provider.assert_not_awaited()

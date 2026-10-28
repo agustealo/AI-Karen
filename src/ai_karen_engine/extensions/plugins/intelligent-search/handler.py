@@ -5,6 +5,7 @@ from ai_karen_engine.services.tooling.internet_capability_service import (
     InternetCapabilityService,
     InternetExecutionContext,
 )
+from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
 from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
 from ai_karen_engine.services.database.repositories.repository_factory import (
     get_runtime_search_article_service,
@@ -150,7 +151,11 @@ class WebSearchDispatcher(ExtensionBase):
         payload = self._extract_hook_payload(context)
         result = await self.run(self._extract_params(payload))
         return {
-            "success": bool(result.get("can_execute", False) or result.get("sources")),
+            "success": bool(
+                result.get("success") is not False
+                and result.get("status") != "error"
+                and (result.get("can_execute", False) or result.get("sources"))
+            ),
             "hook_point": hook_point.value,
             "result": result,
             "mode": result.get("mode"),
@@ -205,6 +210,13 @@ class WebSearchDispatcher(ExtensionBase):
                         },
                         context=trusted_context,
                     )
+                    if internet_result.get("status") == "error" or internet_result.get("success") is False:
+                        internet_result["can_execute"] = False
+                        internet_result["success"] = False
+                        internet_result.setdefault("sources", [])
+                        internet_result.setdefault("results", [])
+                        return internet_result
+
                     if internet_result.get("sources") or internet_result.get("results"):
                         internet_result.setdefault("mode", mode)
                         internet_result["can_execute"] = True
@@ -270,17 +282,36 @@ class WebSearchDispatcher(ExtensionBase):
     def _resolve_mode(self, params: Dict[str, Any]) -> str:
         mode = params.get("mode")
 
-        if mode:
-            normalized = mode.lower().replace("-", "_")
-            if normalized in MODE_HANDLER_MAP:
-                return normalized
+        if mode == "auto":
+            mode = None
+
+        if mode is not None:
+            # Explicit selection is a request contract, not a hint. Reject
+            # unsupported modes rather than silently executing General search.
+            return (
+                mode.strip().lower().replace("-", "_")
+                if isinstance(mode, str) and mode.strip()
+                else "invalid_explicit_mode"
+            )
 
         if "context" in params and isinstance(params["context"], dict):
             context_mode = params["context"].get("mode")
-            if context_mode:
-                normalized = context_mode.lower().replace("-", "_")
-                if normalized in MODE_HANDLER_MAP:
-                    return normalized
+            if context_mode == "auto":
+                context_mode = None
+            if context_mode is not None:
+                return (
+                    context_mode.strip().lower().replace("-", "_")
+                    if isinstance(context_mode, str) and context_mode.strip()
+                    else "invalid_explicit_mode"
+                )
+
+        # With no explicit user-selected mode, reuse CORTEX's canonical
+        # capability decision rather than a second plugin keyword classifier.
+        # Only modes this plugin can execute are translated here. Other
+        # capabilities remain under their own runtime execution authority.
+        decision = resolve_capability_decision(str(params.get("query") or ""))
+        if decision.intent == "search.weather":
+            return "weather"
 
         manifest_default = self._read_manifest_setting("default_mode")
         if manifest_default:

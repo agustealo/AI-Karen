@@ -106,14 +106,25 @@ class WebSearchClient:
         # web.search capability.
         candidates = [selected]
         if provider is None:
+            # Wikipedia is an encyclopedia, not a general-web search engine.
+            # Allow it only when the caller explicitly requests that provider.
+            # Do not silently turn exhausted live-web transports into an
+            # encyclopedia-only result that looks like current web evidence.
+            candidates = [candidate for candidate in candidates if candidate != "wikipedia"]
             candidates.extend(
                 candidate
                 for candidate in self.registry.sorted_enabled()
-                if candidate != selected
+                if candidate not in candidates
+                and candidate != "wikipedia"
                 and self.registry.get_descriptor(candidate) is not None
                 and self.registry.get_descriptor(candidate).health
                 not in {"unhealthy", "degraded"}
             )
+            if not candidates:
+                return SearchResponse(
+                    query=query, results=[], provider="none",
+                    error="No general-web search provider available; Wikipedia requires explicit selection.",
+                )
         # Search more than one healthy provider; a successful Wikipedia fallback
         # must not monopolize a broad web query. Keep the registry responsible
         # for eligibility and priority, and bound the number of providers tried.
