@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import io
 import json
+from email.message import Message
 from pathlib import Path
 
 import pytest
 
 from scripts.ci.verify_deployment_revision import RevisionVerificationError
-from scripts.ci.verify_docker_release import verify_signed_docker_release
+from scripts.ci.verify_docker_release import (
+    verify_signed_docker_release, verify_signed_consumer_deployment,
+)
 
 ROOT = Path("/trusted/release")
 SHA = "a" * 40
@@ -211,3 +215,87 @@ def test_signed_overlay_replaces_builds_without_duplicating_runtime_owner():
     ).read_text(encoding="utf-8")
     assert "signed_release=True" in source
     assert 'deploy/compose/docker-compose.signed-release.yml' in source
+
+
+
+class _LiveResponse(io.BytesIO):
+    def __init__(self, payload: dict[str, object], *, status: int = 200) -> None:
+        super().__init__(json.dumps(payload).encode())
+        self.status = status
+        self.headers = Message()
+        self.headers["Content-Type"] = "application/json"
+        self.headers["Cache-Control"] = "private, no-store"
+
+
+class _LiveOpener:
+    def __init__(self, *, revision: str = SHA, backend_ready: bool = True) -> None:
+        self.revision = revision
+        self.backend_ready = backend_ready
+        self.urls: list[str] = []
+
+    def open(self, request, *, timeout):
+        self.urls.append(request.full_url)
+        assert timeout == 20
+        assert request.get_header("X-vercel-protection-bypass") is None
+        if request.full_url.endswith("/api/deployment-revision"):
+            return _LiveResponse({"status": "ok", "revision": self.revision})
+        if request.full_url.endswith("/api/health"):
+            return _LiveResponse({
+                "status": "ok" if self.backend_ready else "initializing",
+                "backend_ready": self.backend_ready,
+            })
+        raise AssertionError("Unexpected web ingress endpoint")
+
+
+def test_signed_release_proves_consumer_web_revision_and_backend_health():
+    docker, gh, _, gh_calls = successful_verifiers()
+    client = _LiveOpener()
+    verify_signed_consumer_deployment(
+        ROOT, SHA, REPO, REFS, IDS, "https://karen.example",
+        gh_runner=gh, docker_runner=docker, opener=client,
+    )
+    assert len(gh_calls) == 2
+    assert client.urls == [
+        "https://karen.example/api/deployment-revision",
+        "https://karen.example/api/health",
+    ]
+
+
+@pytest.mark.parametrize("url", [
+    "", "http://karen.example", "https://a:b@karen.example",
+    "https://karen.example:8443", "https://karen.example/redirect",
+    "https://karen.example/?token=secret", "https://karen.example/#fragment",
+])
+def test_invalid_public_origin_rejected_before_any_attestation_or_docker(url):
+    def forbidden(*_args):
+        raise AssertionError("Untrusted URL must not trigger Docker or GitHub access")
+
+    with pytest.raises(RevisionVerificationError):
+        verify_signed_consumer_deployment(
+            ROOT, SHA, REPO, REFS, IDS, url,
+            gh_runner=forbidden, docker_runner=forbidden,
+        )
+
+
+@pytest.mark.parametrize("revision,ready", [
+    ("b" * 40, True), (SHA, False),
+])
+def test_signed_healthy_docker_is_insufficient_without_live_web_and_api(revision, ready):
+    docker, gh, _, gh_calls = successful_verifiers()
+    client = _LiveOpener(revision=revision, backend_ready=ready)
+    with pytest.raises(RevisionVerificationError):
+        verify_signed_consumer_deployment(
+            ROOT, SHA, REPO, REFS, IDS, "https://karen.example",
+            gh_runner=gh, docker_runner=docker, opener=client,
+        )
+    assert len(gh_calls) == 2
+    assert "/api/deployment-revision" in client.urls[0]
+
+
+def test_release_cli_requires_real_public_origin_and_never_uses_vercel_bypass():
+    root = Path(__file__).resolve().parents[2]
+    code = (root / "scripts/ci/verify_docker_release.py").read_text()
+    main_code = code.split("def main() -> int:", 1)[1]
+    assert 'os.environ.get("KAREN_BASE_URL", "")' in main_code
+    assert "verify_signed_consumer_deployment(" in main_code
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in main_code
