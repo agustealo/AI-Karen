@@ -29,7 +29,19 @@ def _job(source: str, name: str) -> str:
 def test_docker_scenario_reuses_existing_protected_acceptance_workflow() -> None:
     workflow = WORKFLOW.read_text()
     assert "          - docker-search\n" in workflow
-    assert workflow.count("environment: karen-sanitized-browser-acceptance") == 5
+    # Every accepted scenario must remain protected; do not freeze the total
+    # number of jobs when an independently reviewed scenario is added.
+    for name in (
+        "authenticated-history-restoration",
+        "authenticated-search-replay",
+        "authenticated-copilotkit-protocol",
+        "docker-provenance-before",
+        "authenticated-docker-search-replay",
+        "docker-provenance-after",
+    ):
+        assert "environment: karen-sanitized-browser-acceptance" in _job(
+            workflow, name
+        )
     before = _job(workflow, "docker-provenance-before")
     browser = _job(workflow, "authenticated-docker-search-replay")
     after = _job(workflow, "docker-provenance-after")
