@@ -60,5 +60,5 @@ done
 
 # Only the trusted current-main verifier executes. Do not execute scripts
 # from the mutable host checkout or modify the deployed containers.
-python3 scripts/ci/verify_docker_release.py
+python3 -m scripts.ci.verify_docker_release
 echo "SIGNED DOCKER HOST AND PUBLIC INGRESS ACCEPTANCE PASSED"

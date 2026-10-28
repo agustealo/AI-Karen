@@ -72,7 +72,7 @@ def test_host_proof_is_read_only_and_does_not_execute_browser_installations() ->
     assert 'git -C "$KAREN_RELEASE_REPO_ROOT" rev-parse HEAD' in checker
     assert "cmp -s" in checker
     assert "docker-compose.signed-release.yml" in checker
-    assert "python3 scripts/ci/verify_docker_release.py" in checker
+    assert "python3 -m scripts.ci.verify_docker_release" in checker
     assert "test -f " in checker and ".env.production" in checker
     for forbidden in ("docker compose up", "docker build", "docker pull", "npm ci"):
         assert forbidden not in checker
