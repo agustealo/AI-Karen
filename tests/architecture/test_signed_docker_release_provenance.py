@@ -12,7 +12,7 @@ from scripts.ci.verify_docker_release import verify_signed_docker_release
 
 ROOT = Path("/trusted/release")
 SHA = "a" * 40
-REPO = "agustealo/ai-karen"
+REPO = "agustealo/AI-Karen"
 IDS = {"api": "sha256:" + "1" * 64, "web": "sha256:" + "2" * 64}
 REFS = {
     "api": "ghcr.io/agustealo/ai-karen-api@sha256:" + "3" * 64,
