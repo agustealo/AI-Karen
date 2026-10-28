@@ -41,6 +41,28 @@ retains pending status through transient errors. This is a committed
 implementation, **not** proof of real cross-worker model cancellation
 until the protected browser and live PostgreSQL test are executed.
 
+### Separate positive live-model Stop acceptance
+
+The protected `copilotkit-native` scenario now contains a separately
+opt-in **real model execution and stop** test. The sanitized environment must
+set `KAREN_COPILOTKIT_LIVE_STOP_REQUIRED=true` and supply a different,
+empty, disposable, authenticated owned conversation through
+`KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID`. The browser types and
+submits one explicit prompt, observes the SDK's true run ID, clicks the
+native Stop control, requires a real 202/200 runtime receipt, uses the
+read-only run status UI to wait for a verified terminal cancelled state,
+and independently rereads canonical run status and conversation history.
+A provider that finishes before the Stop control is available causes a
+failed test, **not** a simulated success. No model output, cookies, traces,
+videos, or screenshots are recorded. The disposable run remains in the
+canonical audit ledger.
+
+The workflow remains main-only and exact-deployment protected. Missing
+operator opt-in is **skipped/unverified**. A passing single-deployment
+stop acceptance is **not** proof of cross-worker scheduling or worker
+restart behavior, which needs separate live multiworker infrastructure
+and PostgreSQL verification.
+
 ## Operator activation (do not enable for consumer traffic yet)
 
 1. Apply and verify migrations 43, 44, 45 and 46 in order through the canonical Supabase PostgreSQL migration pipeline; ensure tenant/user RLS is effective for runtime transactions.

@@ -15,6 +15,7 @@ const text = "CK-07E8 approved unsent draft verification";
 const elsewhere = "CK-07E8 verified other-tab CAS change";
 const competing = "CK-07E8 local stale unsent text";
 test.setTimeout(120000);
+const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
 // Explicitly include all known browser-side inference transports. A new
 // bypass should fail the test, never be invisible to a single SDK path check.
@@ -459,4 +460,125 @@ test("CK-07F rejects runless and nonexistent stop requests without changing save
   expect(await afterDraft.json(), "Rejected stop must not alter any unsent draft")
     .toEqual(draft);
   expect(forbidden, "Invalid stop must never execute inference").toEqual([]);
+});
+
+/**
+ * Positive cancellation proof is MUTATING and requires a separate disposable,
+ * owner-scoped conversation and explicit approval to invoke a real model.
+ * It never uses mock AG-UI frames, a synthetic worker or invented receipts.
+ * This is single-deployment worker proof, not a cross-worker guarantee.
+ */
+test("CK-07F3 operator-approved real native stop confirms the durable worker outcome", async ({ page }) => {
+  const enabled = process.env.KAREN_COPILOTKIT_LIVE_STOP_REQUIRED === "true";
+  test.skip(!enabled, "Real model cancellation requires an approved disposable conversation");
+  requireApprovedNativeFixture();
+  const dedicatedThread = process.env.KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID;
+  if (!dedicatedThread || !UUID.test(dedicatedThread) || dedicatedThread === conversationId) {
+    throw new Error("Live Stop requires a distinct valid, disposable owned conversation UUID");
+  }
+  if (!email || !password) throw new Error("Approved sanitized sign-in required");
+  test.setTimeout(240000);
+  await signInApprovedKaren(page, email, password);
+
+  const capabilities = await page.request.get("/api/chat/ag-ui/capabilities");
+  expect(capabilities.status()).toBe(200);
+  const flags = await capabilities.json() as {
+    enabled: boolean; governed_history: boolean;
+  };
+  expect(flags.enabled, "Real execution must use enabled canonical AG-UI").toBe(true);
+  expect(flags.governed_history, "Positive stop needs durable run admission").toBe(true);
+
+  const prefix = "/api/copilotkit/threads/" + encodeURIComponent(dedicatedThread);
+  const before = await page.request.get(prefix + "/messages");
+  expect(before.status()).toBe(200);
+  const original = await before.json() as {
+    threadId: string; messages: Array<{ id: string; role: string; content: string }>;
+  };
+  expect(original.threadId).toBe(dedicatedThread);
+  expect(original.messages, "Live Stop uses an empty disposable conversation").toEqual([]);
+  const draftUrl = "/api/conversations/" + encodeURIComponent(dedicatedThread) + "/draft";
+  const draft = await page.request.get(draftUrl);
+  expect(draft.status()).toBe(200);
+  expect((await draft.json() as { text: string }).text,
+    "Disposable conversation must not contain another person's unsent draft").toBe("");
+
+  await page.goto("/acceptance/copilotkit/" + encodeURIComponent(dedicatedThread));
+  const native = page.getByTestId("karen-copilot-controlled-chat");
+  await expect(native).toBeVisible({ timeout: 30000 });
+  const composer = native.locator("textarea").first();
+  const prompt = "CK-07F3 approved disposable model cancellation: explain a detailed multi-stage thought experiment about sorting 100000 numbered tiles.";
+  await composer.fill(prompt);
+  await expect.poll(async () => {
+    const value = await page.request.get(draftUrl);
+    expect(value.status()).toBe(200);
+    return (await value.json() as { text: string }).text;
+  }, { timeout: 20000 }).toBe(prompt);
+
+  // Observe the real SDK transport POST. Never log prompt, cookies or streamed
+  // model output, and do not supply a fabricated AG-UI runId.
+  const submitted = page.waitForRequest(request =>
+    request.method() === "POST" &&
+    new URL(request.url()).pathname === "/api/copilotkit/agent/default/run",
+    { timeout: 30000 },
+  );
+  await composer.press("Enter");
+  const runRequest = await submitted;
+  const payload = runRequest.postDataJSON() as { threadId: string; runId: string };
+  expect(payload.threadId).toBe(dedicatedThread);
+  expect(RUN_ID.test(payload.runId), "Observe a real SDK-issued run identity").toBe(true);
+
+  // If the model finishes before Stop is available, this test fails rather
+  // than interpreting a completed run as successful cancellation.
+  const stop = native.getByRole("button", { name: /stop/i }).first();
+  await expect(stop).toBeVisible({ timeout: 20000 });
+  const stopReceipt = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    new URL(response.url()).pathname ===
+      "/api/copilotkit/agent/default/stop/" + dedicatedThread,
+    { timeout: 20000 },
+  );
+  await stop.click();
+  const response = await stopReceipt;
+  expect([200, 202], "Stop must be accepted by the canonical owned-run gateway")
+    .toContain(response.status());
+  const receipt = await response.json() as {
+    status: string; cancel_requested: boolean; cancellation_confirmed: boolean;
+  };
+  expect(receipt.cancel_requested).toBe(true);
+  expect(["cancelling", "cancelled"]).toContain(receipt.status);
+  expect(receipt.cancellation_confirmed).toBe(receipt.status === "cancelled");
+
+  if (!receipt.cancellation_confirmed) {
+    await expect(native.getByTestId("karen-copilot-stop-status"))
+      .toContainText("confirmation is still pending");
+    await expect.poll(async () => {
+      const check = native.getByRole("button", { name: "Check cancellation status" });
+      if (await check.isVisible()) {
+        await expect(check).toBeEnabled();
+        await check.click();
+      }
+      return (await native.getByTestId("karen-copilot-stop-status").textContent()) ?? "";
+    }, { timeout: 100000, intervals: [1500, 2000, 3000] })
+      .toContain("Karen confirmed this run was cancelled.");
+  }
+
+  const terminal = await page.request.get(
+    "/api/copilotkit/agent/default/runs/" + dedicatedThread +
+      "/" + payload.runId + "/status",
+  );
+  expect(terminal.status(), "Read-only canonical run status must be available").toBe(200);
+  expect(await terminal.json()).toEqual({
+    status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+  });
+  const stored = await page.request.get(prefix + "/messages");
+  expect(stored.status()).toBe(200);
+  const persisted = await stored.json() as {
+    threadId: string; messages: Array<{ id: string; role: string; content: string }>;
+  };
+  expect(persisted.threadId).toBe(dedicatedThread);
+  expect(persisted.messages.filter(m => m.role === "assistant"),
+    "Cancelled run must not create a falsely completed assistant transcript")
+    .toEqual([]);
+  // The disposable conversation is intentionally retained as audit evidence.
+  // No user-facing fixture or production message is ever deleted as cleanup.
 });

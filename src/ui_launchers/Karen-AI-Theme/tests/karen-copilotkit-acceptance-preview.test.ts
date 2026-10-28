@@ -81,6 +81,10 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).toContain("runless.status()).toBe(422)");
     expect(nativeBrowser).toContain("unknown.status()");
     expect(nativeBrowser).toContain("toEqual(history)");
+    expect(nativeBrowser).toContain("KAREN_COPILOTKIT_LIVE_STOP_REQUIRED");
+    expect(nativeBrowser).toContain("KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID");
+    expect(nativeBrowser).toContain("Read-only canonical run status must be available");
+    expect(nativeBrowser).toContain("Cancelled run must not create a falsely completed");
   });
 
   it("does not disturb the sole consumer chat mount", () => {
