@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -192,6 +193,70 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             run_id="run-does-not-exist",
         )) is None
         assert not await worker_b.finish(lease, status="cancelled")
+
+        # CK-07F5: a separate OS process (not merely another Python object)
+        # imports the SAME production repository, opens its OWN connection,
+        # and commits a stop for an admitted run. The parent reads that
+        # committed state without shared memory, IPC cancellation shortcuts
+        # or a mock PostgreSQL backend. This is still not model-worker proof.
+        process_lease = await worker_a.admit(
+            **identity(run_id="run-external-process"),
+            request_id="external-process-a",
+            correlation_id="external-process-trace",
+        )
+        assert process_lease is not None
+        assert await worker_b.read_status(**identity(
+            run_id="run-external-process",
+        )) == {
+            "status": "running",
+            "cancel_requested": False,
+            "cancellation_confirmed": False,
+        }
+        worker_environment = {
+            **os.environ,
+            "KAREN_CI_RUN_CHILD_PROBE": "1",
+            "KAREN_CI_RUN_CHILD_TENANT_ID": tenant_a,
+            "KAREN_CI_RUN_CHILD_USER_ID": user_a,
+            "KAREN_CI_RUN_CHILD_CONVERSATION_ID": thread,
+            "KAREN_CI_RUN_CHILD_TRANSPORT_ID": "run-external-process",
+        }
+        probe = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(Path(__file__).with_name("chat_run_external_stop_probe.py")),
+            env=worker_environment,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(probe.wait(), timeout=30)
+        except asyncio.TimeoutError as exc:
+            probe.kill()
+            await probe.wait()
+            raise AssertionError(
+                "Isolated cancellation worker did not finish in its bounded window"
+            ) from exc
+        assert probe.returncode == 0, (
+            "Isolated cancellation worker did not commit an authenticated scoped stop"
+        )
+        assert await worker_a.read_status(**identity(
+            run_id="run-external-process",
+        )) == {
+            "status": "cancelling",
+            "cancel_requested": True,
+            "cancellation_confirmed": False,
+        }
+        assert not await worker_a.renew(process_lease)
+        assert await worker_a.cancel_requested(process_lease)
+        assert await worker_a.finish(
+            process_lease, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
+        )
+        assert await worker_b.read_status(**identity(
+            run_id="run-external-process",
+        )) == {
+            "status": "cancelled",
+            "cancel_requested": True,
+            "cancellation_confirmed": True,
+        }
 
         # Simultaneous stop/completion on two independent connections:
         # serialized SQL transitions must produce exactly one final state.
