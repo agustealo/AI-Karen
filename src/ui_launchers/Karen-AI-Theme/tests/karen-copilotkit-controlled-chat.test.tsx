@@ -409,6 +409,52 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.stopAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the canonical stop receipt when the SDK run finalizes before HTTP acknowledgement", async () => {
+    let finish!: (value: unknown) => void;
+    sdk.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "run-finalizing" },
+    }));
+    act(() => input().onStop());
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+    // Stream completion is not a backend cancellation receipt.
+    act(() => sdk.lifecycle?.onRunFinalized());
+    sdk.agent.isRunning = false;
+    await act(async () => finish({
+      status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+    }));
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmation is still pending");
+    expect(screen.getByRole("button", { name: "Check cancellation status" }))
+      .toBeTruthy();
+    expect(sdk.stopAgent).not.toHaveBeenCalled();
+  });
+
+  it("preserves terminal evidence after SDK failure while rejecting a new run's stale result", async () => {
+    let finish!: (value: unknown) => void;
+    sdk.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "run-failed" },
+    }));
+    act(() => input().onStop());
+    act(() => sdk.lifecycle?.onRunFailed());
+    sdk.agent.isRunning = false;
+    await act(async () => finish({
+      status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
+    }));
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmed this run was cancelled");
+    expect(sdk.stopAgent).not.toHaveBeenCalled();
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "run-next" },
+    }));
+    expect(screen.queryByTestId("karen-copilot-stop-status")).toBeNull();
+  });
+
   it("does not apply a late cancellation receipt to another run", async () => {
     let finish!: (receipt: unknown) => void;
     sdk.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));

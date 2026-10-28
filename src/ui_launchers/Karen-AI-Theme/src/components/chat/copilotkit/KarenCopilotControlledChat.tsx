@@ -70,6 +70,9 @@ export function KarenCopilotControlledChat({
   const lastStopRunId = useRef<string | null>(null);
   const checkingStatusRef = useRef(false);
   const activeRunId = useRef<string | null>(null);
+  // A run may finalize while its exact-stop HTTP request is in flight.
+  // Increment only when identity changes, not when the SDK stream closes.
+  const runGeneration = useRef(0);
   const pendingStopId = useRef<string | null>(null);
   // Copyable only in this authenticated component, not an additional draft store.
   const [failedSubmission, setFailedSubmission] = useState<string | null>(null);
@@ -110,6 +113,7 @@ export function KarenCopilotControlledChat({
         // Run identity is received from authenticated AG-UI lifecycle events,
         // never the composer, local state, or guessed SDK stop arguments.
         if (event.threadId !== conversationId || !RUN_ID.test(event.runId)) return;
+        runGeneration.current += 1;
         activeRunId.current = event.runId;
         lastStopRunId.current = null;
         setStopStatus(null);
@@ -119,6 +123,7 @@ export function KarenCopilotControlledChat({
       onRunFailed: () => { activeRunId.current = null; },
     });
     return () => {
+      runGeneration.current += 1;
       activeRunId.current = null;
       pendingStopId.current = null;
       lastStopRunId.current = null;
@@ -197,6 +202,7 @@ export function KarenCopilotControlledChat({
     }
     if (pendingStopId.current === runId) return;
     pendingStopId.current = runId;
+    const generation = runGeneration.current;
     setError(null);
     void (async () => {
       try {
@@ -207,21 +213,24 @@ export function KarenCopilotControlledChat({
           "/api/copilotkit/agent/default/stop/" + conversationId, { runId },
         );
         if (!validStopReceipt(receipt)) throw new Error("Invalid stop receipt");
-        if (!mounted.current || activeRunId.current !== runId) return;
+        // RUN_FINISHED / RUN_ERROR may close transport before the stop
+        // receipt arrives. Keep the canonical receipt if the run generation
+        // is unchanged, but never apply it to a newer run.
+        if (!mounted.current || runGeneration.current !== generation) return;
         lastStopRunId.current = runId;
         setCheckableRunId(receipt.cancellation_confirmed ? null : runId);
         setStopStatus(receipt.cancellation_confirmed
           ? "Karen confirmed this run was cancelled."
           : "Cancellation requested. Backend confirmation is still pending.");
-        try {
+        if (activeRunId.current === runId && agent.isRunning) try {
           await copilotkit.stopAgent({ agent });
         } catch {
-          if (mounted.current && activeRunId.current === runId) {
+          if (mounted.current && runGeneration.current === generation) {
             setError("Karen accepted the cancellation request, but local streaming could not stop. Check run status.");
           }
         }
       } catch {
-        if (mounted.current && activeRunId.current === runId) {
+        if (mounted.current && runGeneration.current === generation) {
           setError("Karen could not verify the cancellation request. Check run status before retrying.");
         }
       } finally {
