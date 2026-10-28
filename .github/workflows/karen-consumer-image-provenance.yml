@@ -52,8 +52,8 @@ jobs:
           set -euo pipefail
           repo="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           [[ "$repo" =~ ^[a-z0-9_.-]+/[a-z0-9_.-]+$ ]]
-          echo "api=ghcr.io/$repo-api" }} "$GITHUB_OUTPUT"
-          echo "web=ghcr.io/$repo-web" }} "$GITHUB_OUTPUT"
+          echo "api=ghcr.io/$repo-api" >> "$GITHUB_OUTPUT"
+          echo "web=ghcr.io/$repo-web" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -140,4 +140,4 @@ jobs:
             echo "API: $API_NAME@$API_DIGEST"
             echo "Web: $WEB_NAME@$WEB_DIGEST"
             echo "Deployment, protected browser acceptance and human release approval remain separate."
-          } }} "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"
