@@ -1082,6 +1082,65 @@ async def stream_ag_ui_chat(
     )
 
 
+
+@router.get("/chat/ag-ui/runs/{thread_id}/{run_id}/status")
+async def get_ag_ui_chat_run_status(
+    thread_id: str,
+    run_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Read only an owned durable run's persisted state. Never reissue a stop."""
+    features = get_runtime_settings().features
+    if (
+        not features.enable_ag_ui_bridge
+        or not getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Run status unavailable")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+        raise HTTPException(status_code=422, detail="Invalid run identity")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid conversation identity") from exc
+    request_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user, session_id=thread, conversation_id=thread,
+        request_id=request_id, correlation_id=request_id,
+    )
+    try:
+        result = await get_chat_run_coordinator().read_status(context, run_id=run_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+        logger.exception("Chat run status unavailable", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Chat run status unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid run identity") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Chat run unavailable")
+    if (
+        not isinstance(result, dict)
+        or result.get("status") not in {
+            "running", "cancelling", "cancelled", "completed",
+            "failed", "orphaned", "interrupted",
+        }
+        or type(result.get("cancel_requested")) is not bool
+        or type(result.get("cancellation_confirmed")) is not bool
+        or (result["cancellation_confirmed"] and (
+            result["status"] != "cancelled" or not result["cancel_requested"]
+        ))
+    ):
+        raise HTTPException(status_code=503, detail="Chat run status unavailable")
+    return JSONResponse(
+        content=result,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @router.post("/chat/ag-ui/runs/{thread_id}/{run_id}/cancel")
 async def cancel_ag_ui_chat_run(
     thread_id: str,

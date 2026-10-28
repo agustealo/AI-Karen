@@ -758,6 +758,64 @@ class SqlChatRunRepository:
                 raise RuntimeError("chat_run_cancel_concurrent_state_changed")
             return str(next_status)
 
+    async def read_status(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+        transport_run_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Read one tenant/owner-scoped durable outcome, without mutation.
+
+        A transport run ID is correlation only, never a bearer authorization.
+        This works even when the optional AG-UI event journal is disabled.
+        """
+        if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
+            raise ValueError("invalid_transport_run_id")
+        scope = {
+            "tenant": _uuid(tenant_id),
+            "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+            "run_id": transport_run_id,
+        }
+        async with async_transaction_scope(
+            scope["tenant"], user_id=scope["owner"],
+        ) as session:
+            result = await session.execute(
+                text("""
+                    SELECT status,
+                           cancel_requested_at IS NOT NULL AS stop_requested,
+                           terminal_at IS NOT NULL AS terminal_recorded,
+                           lease_expires_at > clock_timestamp() AS lease_live
+                    FROM public.runtime_chat_runs
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                      AND transport_run_id = :run_id
+                    LIMIT 1
+                """),
+                scope,
+            )
+            row = result.mappings().one_or_none()
+        if row is None:
+            return None
+        status = str(row["status"])
+        if status not in {
+            "running", "cancelling", "cancelled", "completed",
+            "failed", "orphaned",
+        }:
+            raise RuntimeError("unrecognized_chat_run_status")
+        requested = row["stop_requested"] is True
+        terminal = row["terminal_recorded"] is True
+        if status in {"completed", "cancelled", "failed", "orphaned"} and not terminal:
+            raise RuntimeError("unverified_chat_run_terminal")
+        if status in {"running", "cancelling"} and row["lease_live"] is not True:
+            status = "interrupted"
+        return {
+            "status": status,
+            "cancel_requested": requested,
+            "cancellation_confirmed": (
+                status == "cancelled" and requested and terminal
+            ),
+        }
+
     async def cancel_requested(self, lease: ChatRunLease) -> bool:
         """Observe an authorized stop without accepting a caller's SDK token."""
         async with async_transaction_scope(lease.tenant_id, user_id=lease.user_id) as session:

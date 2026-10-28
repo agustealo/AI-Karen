@@ -84,6 +84,19 @@ class ChatRunCoordinator:
             transport_run_id=run_id,
         )
 
+    async def read_status(
+        self, context: ChatExecutionContext, *, run_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Authenticate ownership again, then read the canonical run row."""
+        context.require_authenticated_user()
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
+        return await self._repository.read_status(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=context.require_conversation_id(),
+            transport_run_id=run_id,
+        )
+
     async def append_observed_event(
         self, lease: ChatRunLease, event: dict[str, Any],
     ) -> int:
