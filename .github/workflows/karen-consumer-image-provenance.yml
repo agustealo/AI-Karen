@@ -1,0 +1,143 @@
+name: KAREN Consumer Signed Image Provenance
+
+# Manual, post-integration build only. This publishes signed *candidate* images,
+# never deploys, promotes, switches traffic, or marks consumer release green.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: karen-consumer-signed-build-main
+  cancel-in-progress: false
+
+jobs:
+  build-signed-candidates:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: karen-consumer-release-build
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Require reviewed current main checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$current" = "$GITHUB_SHA" || {
+            echo "::error::Main changed before the signed release candidate build"
+            exit 1
+          }
+
+      - name: Resolve canonical GHCR repository names
+        id: names
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          [[ "$repo" =~ ^[a-z0-9_.-]+/[a-z0-9_.-]+$ ]]
+          echo "api=ghcr.io/$repo-api" }} "$GITHUB_OUTPUT"
+          echo "web=ghcr.io/$repo-web" }} "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push canonical API candidate
+        id: api
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: app
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.names.outputs.api }}:sha-${{ github.sha }}
+          build-args: |
+            PROFILE=runtime
+            KAREN_DEPLOYED_COMMIT_SHA=${{ github.sha }}
+
+      - name: Attest immutable API image digest
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.names.outputs.api }}
+          subject-digest: ${{ steps.api.outputs.digest }}
+          push-to-registry: true
+
+      - name: Build and push canonical web candidate
+        id: web
+        uses: docker/build-push-action@v7
+        with:
+          context: ./src/ui_launchers/Karen-AI-Theme
+          file: ./src/ui_launchers/Karen-AI-Theme/Dockerfile.production
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.names.outputs.web }}:sha-${{ github.sha }}
+          build-args: |
+            KAREN_DEPLOYED_COMMIT_SHA=${{ github.sha }}
+
+      - name: Attest immutable web image digest
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.names.outputs.web }}
+          subject-digest: ${{ steps.web.outputs.digest }}
+          push-to-registry: true
+
+      - name: Independently verify both signed registry subjects
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API_NAME: ${{ steps.names.outputs.api }}
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_NAME: ${{ steps.names.outputs.web }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for digest in "$API_DIGEST" "$WEB_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          done
+          for subject in "$API_NAME@$API_DIGEST" "$WEB_NAME@$WEB_DIGEST"; do
+            gh attestation verify "oci://$subject" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/karen-consumer-image-provenance.yml" \
+              --source-digest "$GITHUB_SHA" \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners \
+              --format json >/dev/null
+          done
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$current" = "$GITHUB_SHA" || {
+            echo "::error::Main changed during attested release candidate build"
+            exit 1
+          }
+          {
+            echo "## Signed candidate images (not deployed)"
+            echo "source revision: $GITHUB_SHA"
+            echo "API: $API_NAME@$API_DIGEST"
+            echo "Web: $WEB_NAME@$WEB_DIGEST"
+            echo "Deployment, protected browser acceptance and human release approval remain separate."
+          } }} "$GITHUB_STEP_SUMMARY"
