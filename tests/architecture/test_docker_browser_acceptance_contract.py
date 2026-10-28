@@ -38,7 +38,8 @@ def test_docker_scenario_reuses_existing_protected_acceptance_workflow() -> None
         assert guard in job
         assert "ref: " + chr(36) + "{{ inputs.target_sha }}" in job
         assert "persist-credentials: false" in job
-        assert 'test "$GITHUB_SHA" = "$TARGET_SHA"' in job
+        assert ('test "$GITHUB_SHA" = "$TARGET_SHA"' in job or
+                'test "$TARGET_SHA" = "$GITHUB_SHA"' in job)
         assert "gh api" in job and "branches/main" in job
 
     assert "needs: docker-provenance-before" in browser
@@ -128,7 +129,9 @@ def test_shared_fixture_has_no_vercel_bypass_path_for_docker() -> None:
     assert "context.request.get" not in docker
     assert "context.cookies" not in docker
     assert "approved.origin !== configured.origin" in fixture
-    assert "approved.protocol === 'https:'" in fixture
+    assert "url.protocol === 'https:'" in fixture
+    assert "!validOrigin(approved)" in fixture
+    assert "!validOrigin(configured)" in fixture
     assert "maxRedirects: 0" in fixture
     assert "cookie.name === '_vercel_jwt'" in fixture
     assert "extraHTTPHeaders" not in fixture
