@@ -11,6 +11,7 @@ on:
         options:
           - history
           - search
+          - docker-search
       target_sha:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
@@ -225,3 +226,176 @@ jobs:
           }
 
       # Never upload traces, videos, screenshots, or credential-bearing reports.
+
+
+  # Operator-controlled Docker host proof. NEVER npm install or type browser
+  # credentials on this production-capable runner.
+  docker-provenance-before:
+    if: inputs.scenario == 'docker-search' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, karen-consumer-release]
+    timeout-minutes: 20
+    environment: karen-sanitized-browser-acceptance
+    permissions:
+      contents: read
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      KAREN_RELEASE_REPO_ROOT: ${{ vars.KAREN_DOCKER_RELEASE_REPO_ROOT }}
+      KAREN_RELEASE_REPOSITORY: ${{ github.repository }}
+      KAREN_BASE_URL: ${{ vars.KAREN_DOCKER_SEARCH_ACCEPTANCE_URL }}
+      KAREN_SIGNED_API_IMAGE_REF: ${{ vars.KAREN_SIGNED_API_IMAGE_REF }}
+      KAREN_SIGNED_WEB_IMAGE_REF: ${{ vars.KAREN_SIGNED_WEB_IMAGE_REF }}
+      KAREN_EXPECTED_API_IMAGE_ID: ${{ vars.KAREN_EXPECTED_API_IMAGE_ID }}
+      KAREN_EXPECTED_WEB_IMAGE_ID: ${{ vars.KAREN_EXPECTED_WEB_IMAGE_ID }}
+    steps:
+      - name: Require reviewed current main before Docker checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$current" = "$TARGET_SHA"
+
+      - name: Check out reviewed main for read-only host verifier
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.target_sha }}
+          persist-credentials: false
+
+      - name: Verify signed Docker host and public HTTPS before browser
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/verify_docker_browser_host.sh
+
+  # Credentials and untrusted npm/Playwright setup are isolated on a GitHub-
+  # hosted runner with no operator-host Docker socket or production env file.
+  authenticated-docker-search-replay:
+    if: inputs.scenario == 'docker-search' && github.ref == 'refs/heads/main'
+    needs: docker-provenance-before
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: karen-sanitized-browser-acceptance
+    permissions:
+      contents: read
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      KAREN_BASE_URL: ${{ vars.KAREN_DOCKER_SEARCH_ACCEPTANCE_URL }}
+      KAREN_SEARCH_ACCEPTANCE_REQUIRED: "true"
+      KAREN_SEARCH_ACCEPTANCE_PLATFORM: docker
+      KAREN_E2E_CAPTURE_VIDEO: "false"
+      CI: "true"
+    defaults:
+      run:
+        working-directory: src/ui_launchers/Karen-AI-Theme
+    steps:
+      - name: Require current reviewed main before Docker browser checkout
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$TARGET_SHA" = "$GITHUB_SHA"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$current" = "$TARGET_SHA"
+
+      - name: Check out exact reviewed Docker browser source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.target_sha }}
+          persist-credentials: false
+
+      - name: Verify public Docker revision and canonical backend before browser setup
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          python scripts/ci/verify_deployment_revision.py
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - name: Install pinned Docker acceptance browser dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for Docker acceptance
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove real authenticated Docker search and replay
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KAREN_UX_EMAIL"
+          test -n "$KAREN_UX_PASSWORD"
+          npm run test:e2e:search-release -- --reporter=list --retries=0
+
+      - name: Recheck public Docker revision and main after browser replay
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ci/verify_deployment_revision.py
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$current" = "$TARGET_SHA"
+
+      # No trace/video/screenshot or credential-bearing report upload.
+
+  # Recheck the exact Docker signatures and running images only after the
+  # credentialed browser has demonstrated durable citations and replay.
+  docker-provenance-after:
+    if: inputs.scenario == 'docker-search' && github.ref == 'refs/heads/main'
+    needs: authenticated-docker-search-replay
+    runs-on: [self-hosted, Linux, X64, karen-consumer-release]
+    timeout-minutes: 20
+    environment: karen-sanitized-browser-acceptance
+    permissions:
+      contents: read
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      KAREN_RELEASE_REPO_ROOT: ${{ vars.KAREN_DOCKER_RELEASE_REPO_ROOT }}
+      KAREN_RELEASE_REPOSITORY: ${{ github.repository }}
+      KAREN_BASE_URL: ${{ vars.KAREN_DOCKER_SEARCH_ACCEPTANCE_URL }}
+      KAREN_SIGNED_API_IMAGE_REF: ${{ vars.KAREN_SIGNED_API_IMAGE_REF }}
+      KAREN_SIGNED_WEB_IMAGE_REF: ${{ vars.KAREN_SIGNED_WEB_IMAGE_REF }}
+      KAREN_EXPECTED_API_IMAGE_ID: ${{ vars.KAREN_EXPECTED_API_IMAGE_ID }}
+      KAREN_EXPECTED_WEB_IMAGE_ID: ${{ vars.KAREN_EXPECTED_WEB_IMAGE_ID }}
+    steps:
+      - name: Require same reviewed main before Docker post-checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$current" = "$TARGET_SHA"
+
+      - name: Check out reviewed main for final Docker host verification
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.target_sha }}
+          persist-credentials: false
+
+      - name: Reverify signed Docker containers and public HTTPS after browser
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/verify_docker_browser_host.sh
