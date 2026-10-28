@@ -132,6 +132,8 @@ jobs:
           pytest tests/architecture/test_beta_conversation_reload_contract.py -q
           pytest tests/architecture/test_authenticated_tenant_context_contract.py -q
           pytest tests/architecture/test_chat_transport_authority_closure.py -q
+          python scripts/architecture/verify_capability_baseline.py
+          pytest tests/architecture/test_capability_baseline_contract.py -q
           python scripts/architecture/audit_copilotkit_wiring.py
           pytest tests/architecture/test_copilotkit_migration_wiring.py -q
           pytest tests/architecture/test_browser_acceptance_dispatch_security.py -q

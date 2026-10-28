@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "description": "Evidence-backed capability baseline. Status is conservative: files and PR descriptions do not prove live execution.",
+  "capabilities": [
+    {
+      "id": "chat.transport.ag_ui",
+      "intent": "Authorized canonical ChatRuntime events stream to assistant-ui without a second executor.",
+      "owner": "ChatRuntime",
+      "status": "implemented_unverified",
+      "evidence": [
+        "docs/architecture/governed-generative-ui.md",
+        "src/ui_launchers/Karen-AI-Theme/package.json"
+      ],
+      "proof_required": [
+        "authenticated streamed chat",
+        "nonstream/stream parity",
+        "tenant isolation",
+        "reconnection and replay"
+      ]
+    },
+    {
+      "id": "chat.model_selection",
+      "intent": "User requests eligible model; runtime decides actual model and reports fallback truth.",
+      "owner": "ChatRuntime",
+      "status": "implemented_unverified",
+      "evidence": [
+        "src/ui_launchers/Karen-AI-Theme/package.json"
+      ],
+      "related_prs": [
+        542,
+        543,
+        545,
+        547
+      ],
+      "proof_required": [
+        "catalog authorization",
+        "requested model forwarding",
+        "actual model receipt",
+        "fallback transparency"
+      ]
+    },
+    {
+      "id": "chat.copilot_legacy",
+      "intent": "Copilot-facing UI tasks use one authoritative runtime while preserving useful state/action integration.",
+      "owner": "ChatRuntime",
+      "status": "legacy_under_audit",
+      "evidence": [
+        "src/ai_karen_engine/copilotkit/agent_ui_service.py",
+        "src/ai_karen_engine/copilotkit/thread_manager.py",
+        "src/ai_karen_engine/integrations/providers/copilotkit_provider.py"
+      ],
+      "proof_required": [
+        "live consumer reachability",
+        "reference and import audit",
+        "SDK API compatibility",
+        "tenant isolation",
+        "task durability and truthfulness"
+      ]
+    },
+    {
+      "id": "ui.generative_presentation",
+      "intent": "Authorized tool evidence produces safe, persisted, restorable and accessible interactive presentations.",
+      "owner": "ChatRuntime",
+      "status": "partially_implemented",
+      "evidence": [
+        "docs/architecture/governed-generative-ui.md"
+      ],
+      "related_prs": [
+        502,
+        503,
+        504
+      ],
+      "proof_required": [
+        "actual source-bound synthesis",
+        "stream and replay parity",
+        "action RBAC",
+        "browser acceptance"
+      ]
+    },
+    {
+      "id": "persona.preferences",
+      "intent": "Scoped personas and authorized preferences persist without false success or cross-tenant leakage.",
+      "owner": "PersonaService",
+      "status": "implemented_unverified",
+      "related_prs": [
+        501,
+        522,
+        527,
+        537
+      ],
+      "proof_required": [
+        "migration 41 on deployed database",
+        "optimistic revision race",
+        "unauthorized access",
+        "read/write/read persistence",
+        "cross-persona isolation"
+      ]
+    },
+    {
+      "id": "search.article_persistence",
+      "intent": "Retrieved articles persist via canonical tenant-scoped ArtifactStore and remain accessible to authorized consumers.",
+      "owner": "ArtifactStore",
+      "status": "partially_implemented",
+      "related_prs": [
+        385
+      ],
+      "proof_required": [
+        "runtime write-through",
+        "authorized detail API",
+        "consumer browser read",
+        "retention and integrity"
+      ]
+    },
+    {
+      "id": "model.lifecycle",
+      "intent": "Users control durable model downloads, licensing and availability through canonical lifecycle services.",
+      "owner": "ModelDownloadControlService",
+      "status": "implemented_unverified",
+      "related_prs": [
+        159,
+        544
+      ],
+      "proof_required": [
+        "duplicate downloader reference audit",
+        "durable pause/resume/cancel",
+        "tenant scope",
+        "installed model execution"
+      ]
+    }
+  ]
+}
