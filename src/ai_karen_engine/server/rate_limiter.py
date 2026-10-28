@@ -415,6 +415,9 @@ class EnhancedRateLimiter:
             request_size: Request size/weight (default: 1)
         """
         rule = await self._find_applicable_rule(ip_address, endpoint, user_id, user_type)
+        # Redis sliding-window admission already reserved this request atomically.
+        if rule.algorithm == RateLimitAlgorithm.SLIDING_WINDOW and isinstance(self.storage, RedisRateLimitStorage):
+            return
         key = self._generate_key(rule, ip_address, endpoint, user_id)
         
         current_time = time.time()
