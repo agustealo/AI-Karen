@@ -16,6 +16,16 @@ const elsewhere = "CK-07E8 verified other-tab CAS change";
 const competing = "CK-07E8 local stale unsent text";
 test.setTimeout(120000);
 
+// Explicitly include all known browser-side inference transports. A new
+// bypass should fail the test, never be invisible to a single SDK path check.
+function isInferenceRequest(url: string): boolean {
+  const pathname = new URL(url).pathname;
+  return pathname === "/api/copilotkit/agent/default/run" ||
+    pathname === "/api/chat/ag-ui" ||
+    pathname === "/api/chat/stream" ||
+    pathname === "/api/chat";
+}
+
 function requireApprovedNativeFixture() {
   if (required && (!email || !password || !conversationId || !UUID.test(conversationId))) {
     throw new Error("Native CopilotKit proof requires approved credentials and owned conversation UUID");
@@ -59,9 +69,8 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
 
   try {
     let runs = 0;
-    page.on("request", request => {
-      if (request.method() === "POST" &&
-          new URL(request.url()).pathname === "/api/copilotkit/agent/default/run") {
+    page.context().on("request", request => {
+      if (request.method() === "POST" && isInferenceRequest(request.url())) {
         runs += 1;
       }
     });
@@ -151,8 +160,7 @@ test("CK-07E8 a stale second browser tab cannot overwrite an authenticated draft
 
   let runs = 0;
   page.context().on("request", request => {
-    if (request.method() === "POST" &&
-        new URL(request.url()).pathname === "/api/copilotkit/agent/default/run") {
+    if (request.method() === "POST" && isInferenceRequest(request.url())) {
       runs += 1;
     }
   });
@@ -253,10 +261,7 @@ test("CK-07E8 denied local microphone permission never transcribes or starts an 
   page.context().on("request", request => {
     if (request.method() !== "POST") return;
     const path = new URL(request.url()).pathname;
-    if (path === "/api/copilotkit/agent/default/run" ||
-        path === "/api/chat/ag-ui" ||
-        path === "/api/chat/stream" ||
-        path.startsWith("/api/voice/")) {
+    if (isInferenceRequest(request.url()) || path.startsWith("/api/voice/")) {
       forbidden.push(path);
     }
   });
