@@ -513,6 +513,21 @@ AI results. The test verifies:
 - Input can receive keyboard focus. It does not invoke a model,
   click Send, alter a real user conversation or claim agent completion.
 
+The native scenario also verifies a second real browser tab's stale
+revision cannot overwrite an independently committed same-principal draft.
+One authenticated tab advances the canonical server revision while the other
+remains focused; the stale writer receives a real 409, preserves its text
+in the read-only copyable field, and must explicitly choose the server draft
+before continuing. The saved server value and no-run network evidence are
+checked. Persona selector visibility/selection is compared with the actual
+backend preference without switching personas, and a 375px mobile viewport
+must keep the input and footer accessible without horizontal overflow.
+Both native tests use shared revision-fenced cleanup of only their known
+sanitized text; they never indiscriminately clear an unknown third-party edit.
+These tests remain *written, not executed* in the approved protected browser
+environment as long as the candidate remains draft and main-only dispatch
+cannot be run against the same exact reviewed deployment.
+
 The suite **has not been executed against a deployed preview** merely
 because it is present in the repository. Feature parity remains
 incomplete: no genuine native Send-to-persisted-response, multi-tab
