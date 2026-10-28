@@ -76,10 +76,9 @@ class CapabilityAwareMedusaPlanner:
                 "PLAN_UNSATISFIABLE: agent registry unavailable"
             )
 
-        allowed_agents = set(authorized_plan.allowed_agents)
-        if "*" in allowed_agents:
-            all_agents = await effective_registry.list_agents()
-            allowed_agents = {a.agent_id for a in all_agents}
+        # Wildcards are not scoped grants. RuntimePolicy must supply explicit
+        # independently authorized agent IDs for the requesting principal.
+        allowed_agents = set(authorized_plan.allowed_agents) - {"*"}
 
         registrations = await self._resolve_registrations(
             requirements=requirements,

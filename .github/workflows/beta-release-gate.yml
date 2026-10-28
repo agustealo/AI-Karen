@@ -98,7 +98,7 @@ jobs:
           ! grep -q 'target: /app$' /tmp/ai-karen-production-compose.yml
 
       - name: Build production API image
-        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta .
+        run: docker build --target app --build-arg PROFILE=runtime --build-arg KAREN_DEPLOYED_COMMIT_SHA=${{ github.sha }} -t ai-karen-api:beta .
 
       - name: Reject retired authorities
         shell: bash
@@ -172,7 +172,7 @@ jobs:
 
       - name: Build production web image
         working-directory: .
-        run: docker build -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production src/ui_launchers/Karen-AI-Theme
+        run: docker build --build-arg KAREN_DEPLOYED_COMMIT_SHA=${{ github.sha }} -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production src/ui_launchers/Karen-AI-Theme
 
   auth-postgres-concurrency:
     runs-on: ubuntu-latest
@@ -260,7 +260,7 @@ jobs:
           bash -n scripts/ci/production-first-boot-smoke.sh
 
       - name: Build exact production API image
-        run: docker build --target app --build-arg PROFILE=runtime -t ai-karen-api:beta-live .
+        run: docker build --target app --build-arg PROFILE=runtime --build-arg KAREN_DEPLOYED_COMMIT_SHA=${{ github.sha }} -t ai-karen-api:beta-live .
 
       - name: Prove production-backed two-turn KAREN chat
         shell: bash

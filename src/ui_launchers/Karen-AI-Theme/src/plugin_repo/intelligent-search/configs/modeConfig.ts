@@ -8,6 +8,12 @@ export interface ModeConfigItem {
 }
 
 export const MODE_CONFIG: Record<SearchModeId, ModeConfigItem> = {
+  auto: {
+    label: 'Automatic',
+    description: 'Karen selects the appropriate search capability',
+    visibleControls: [],
+    resultTabs: ['results', 'sources', 'extractedData', 'diagnostics'],
+  },
   general: {
     label: 'General',
     description: 'Broad web search',

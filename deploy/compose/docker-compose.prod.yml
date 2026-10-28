@@ -21,11 +21,16 @@ services:
       - ${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}
 
   api:
+    build:
+      args:
+        KAREN_DEPLOYED_COMMIT_SHA: ${KAREN_DEPLOYED_COMMIT_SHA:?Production source revision is required}
+    image: ai-karen-api:${KAREN_DEPLOYED_COMMIT_SHA:?Production source revision is required}
     env_file: !reset []
     ports: !reset []
     environment:
       ENVIRONMENT: production
       DEBUG: "false"
+      KAREN_DEPLOYED_COMMIT_SHA: ${KAREN_DEPLOYED_COMMIT_SHA:?Production source revision is required}
       AUTH_DEV_MODE: "false"
       AUTH_ALLOW_DEV_LOGIN: "false"
       KARI_AUTH_BYPASS: "false"
@@ -83,10 +88,13 @@ services:
     build:
       context: ./src/ui_launchers/Karen-AI-Theme
       dockerfile: Dockerfile.production
-    image: ai-karen-web:production
+      args:
+        KAREN_DEPLOYED_COMMIT_SHA: ${KAREN_DEPLOYED_COMMIT_SHA:?Production source revision is required}
+    image: ai-karen-web:${KAREN_DEPLOYED_COMMIT_SHA:?Production source revision is required}
     env_file: !reset []
     environment:
       NODE_ENV: production
+      KAREN_DEPLOYED_COMMIT_SHA: ${KAREN_DEPLOYED_COMMIT_SHA:?Production source revision is required}
       NEXT_TELEMETRY_DISABLED: "1"
       WEB_PUBLIC_SCHEME: ${WEB_PUBLIC_SCHEME:?WEB_PUBLIC_SCHEME must be http or https in production}
       KAREN_BACKEND_URL: http://api:8000

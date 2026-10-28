@@ -39,3 +39,18 @@ def test_missing_weather_location_yields_no_invented_city():
 def test_weather_followup_city_is_not_lost():
     context = {"pending_clarification": {"missing_requirement": "weather_location"}}
     assert DirectCapabilityExecutor._weather_query_with_location("Detroit", context) == "What's the weather in Detroit?"
+
+
+def test_streaming_direct_capability_uses_authorized_timezone_evidence():
+    from pathlib import Path
+    runtime_source = (
+        Path(__file__).resolve().parents[3]
+        / "src/ai_karen_engine/core/runtime/chat_runtime.py"
+    ).read_text()
+    start = runtime_source.index("    async def _run_direct_capability_stream(")
+    end = runtime_source.index("        normalized = result.normalized_metadata()", start)
+    streaming = runtime_source[start:end]
+    assert 'attribute="timezone"' in streaming
+    assert 'tenant_id=request.context.tenant_id' in streaming
+    assert 'user_id=request.context.user_id' in streaming
+    assert '{"timezone": resolved_timezone} if resolved_timezone else None' in streaming

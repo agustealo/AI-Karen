@@ -107,7 +107,7 @@ export default function SourceList({ citations }: SourceListProps) {
    * It must not fetch, enrich, deduplicate, or invent sources in the UI layer.
    */
   return (
-    <div className="mt-4 border-t border-gray-200 pt-3 dark:border-gray-700">
+    <div data-testid="chat-source-list" className="mt-4 border-t border-gray-200 pt-3 dark:border-gray-700">
       <button
         type="button"
         onClick={() => setIsExpanded((current) => !current)}
