@@ -43,3 +43,5 @@ next-env.d.ts
 # firebase
 firebase-debug.log
 firestore-debug.log
+# Reproduced from the pinned CopilotKit SDK during dev/build; never check in vendor CSS.
+/public/vendor/copilotkit-v2.css

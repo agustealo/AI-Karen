@@ -40,6 +40,9 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
     }
   });
 
+  const css = await page.request.get("/vendor/copilotkit-v2.css");
+  expect(css.status(), "Pinned native SDK stylesheet must be served locally").toBe(200);
+  expect(css.headers()["content-type"]).toContain("text/css");
   await page.goto("/acceptance/copilotkit/" + encodeURIComponent(conversationId));
   const candidate = page.getByTestId("karen-copilot-controlled-chat");
   await expect(candidate).toBeVisible({ timeout: 30000 });
