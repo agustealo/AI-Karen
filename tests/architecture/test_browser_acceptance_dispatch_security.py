@@ -92,13 +92,20 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
 
 
 def test_copilotkit_login_checks_approved_origin_before_password() -> None:
-    source = (ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/karen-copilotkit-protocol-acceptance.spec.ts").read_text(encoding="utf-8")
+    root = ROOT / "src/ui_launchers/Karen-AI-Theme/e2e"
+    source = (root / "fixtures/approved-karen-login.ts").read_text(encoding="utf-8")
     assertion = "expect(new URL(page.url()).origin).toBe(approved.origin);"
     assert source.count(assertion) == 2
     assert source.index(assertion) < source.index('page.getByLabel("Password").fill(password)')
     assert 'approved.protocol !== "https:"' in source
-    assert 'trace: "off", screenshot: "off", video: "off"' in source
-    assert 'from "./fixtures/verified-search-deployment"' in source
+    for suite in (
+        "karen-copilotkit-protocol-acceptance.spec.ts",
+        "karen-copilotkit-native-acceptance.spec.ts",
+    ):
+        body = (root / suite).read_text(encoding="utf-8")
+        assert 'trace: "off", screenshot: "off", video: "off"' in body
+        assert 'from "./fixtures/approved-karen-login"' in body
+        assert "signInApprovedKaren(page," in body
 
 
 def test_verified_deployment_access_is_shared_without_general_secret_headers() -> None:

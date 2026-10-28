@@ -1,4 +1,5 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
+import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 
 // Authenticated requests read an approved real conversation; never write,
 // start a model, capture browser state, or manufacture a saved AI response.
@@ -29,28 +30,6 @@ type Owned = {
   replayEvents?: ReplayEvent[];
 };
 
-async function signIn(page: import("@playwright/test").Page) {
-  if (!email || !password) throw new Error("Live credentials are not configured");
-  const configured = process.env.KAREN_BASE_URL;
-  if (!configured) throw new Error("Approved CopilotKit deployment URL is required");
-  let approved: URL;
-  try {
-    approved = new URL(configured);
-  } catch {
-    throw new Error("Approved CopilotKit deployment origin is malformed");
-  }
-  if (approved.protocol !== "https:" || approved.username || approved.password ||
-      approved.port || approved.pathname !== "/" || approved.search || approved.hash) {
-    throw new Error("Only an approved clean HTTPS origin can accept credentials");
-  }
-  await page.goto("/login");
-  expect(new URL(page.url()).origin).toBe(approved.origin);
-  await page.getByRole("textbox", { name: "Email" }).fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp("/dashboard(?:[/?#]|$)"), { timeout: 30000 });
-  expect(new URL(page.url()).origin).toBe(approved.origin);
-}
 
 function parseSse(input: string): ReplayEvent[] {
   const events: ReplayEvent[] = [];
@@ -82,7 +61,7 @@ function requireAcceptanceFixture() {
 test("CK-07E2: real CopilotKit connect replays only canonical saved messages and attested CUSTOM events", async ({ page }) => {
   requireAcceptanceFixture();
   if (!conversationId) return;
-  await signIn(page);
+  await signInApprovedKaren(page, email!, password!);
 
   const stored = await page.request.get(
     "/api/copilotkit/threads/" + encodeURIComponent(conversationId) + "/messages",
@@ -149,7 +128,7 @@ test("CK-07E2: run-event cursor cannot turn missing or interrupted runs into suc
   test.skip(!observedRunId || !RUN_ID.test(observedRunId),
     "Requires a real journaled run ID; no manufactured cursor fixture");
   if (!observedRunId) return;
-  await signIn(page);
+  await signInApprovedKaren(page, email!, password!);
 
   const target = "/api/copilotkit/threads/" + encodeURIComponent(conversationId) +
     "/runs/" + encodeURIComponent(observedRunId) + "/events";
@@ -207,7 +186,7 @@ test("CK-07E2: run-event cursor cannot turn missing or interrupted runs into suc
 
 test("CK-07E2: live page retains the existing chat while consumer replacement is unverified", async ({ page }) => {
   requireAcceptanceFixture();
-  await signIn(page);
+  await signInApprovedKaren(page, email!, password!);
   await expect(page.getByTestId("persistent-karen-conversation")).toBeVisible();
   // This does not claim CopilotChat is mounted or interactive. A future
   // replacement requires its own real-browser parity and UX acceptance.
