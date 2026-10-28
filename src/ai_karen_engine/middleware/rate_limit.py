@@ -59,11 +59,11 @@ def configure_rate_limiter(
         )
         logger.info("Rate limiter configured with %s storage", storage_type)
     except Exception as exc:
-        logger.error("Failed to configure rate limiter: %s", exc)
-        # Fallback to memory storage. This keeps the limiter active rather than
-        # silently disabling transport throttling when Redis is unavailable.
-        _rate_limiter = create_rate_limiter(storage_type="memory")
-        logger.info("Rate limiter configured with memory storage (fallback)")
+        # Never silently downgrade distributed throttling to per-worker memory.
+        # Such a downgrade breaks cross-instance security guarantees.
+        _rate_limiter = None
+        logger.error("Rate limiter configuration failed: %s", type(exc).__name__)
+        raise RuntimeError("Rate limiter configuration unavailable") from exc
 
 
 def get_rate_limiter() -> EnhancedRateLimiter:
@@ -283,18 +283,21 @@ async def rate_limit_middleware(request: Request, call_next):
         return response
 
     except Exception as exc:
-        error_message = str(exc).lower()
-        if "authentication required" in error_message or "authentication" in error_message:
-            logger.debug(
-                "Rate limiting middleware encountered authentication dependency: %s",
-                exc,
-            )
-            return await call_next(request)
-
-        logger.error("Rate limiting middleware error: %s", exc, exc_info=True)
-        logger.error("Error type: %s", type(exc).__name__)
-        logger.error("Error args: %s", exc.args)
-        return await call_next(request)
+        # Storage failures must not turn a protected request into an
+        # unthrottled request. Do not expose Redis connection details.
+        logger.error(
+            "Rate limit enforcement unavailable: %s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Rate limit enforcement unavailable",
+                "message": "Service temporarily unavailable. Please retry later.",
+            },
+            headers={"Retry-After": "5"},
+        )
 
 
 async def legacy_rate_limit_middleware(request: Request, call_next):
