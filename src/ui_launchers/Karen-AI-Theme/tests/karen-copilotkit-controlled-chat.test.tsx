@@ -1,5 +1,5 @@
 import React from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({
@@ -188,8 +188,27 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(input().value).toBe("Retain my question");
     expect(screen.getByRole("alert").textContent).not.toContain("private");
     expect(sdk.runAgent).not.toHaveBeenCalled();
+    const retained = screen.getByRole("textbox", { name: "Unsent failed message" }) as HTMLTextAreaElement;
+    expect(retained.readOnly).toBe(true);
+    expect(retained.value).toBe("Retain my question");
+
+    // No automatic retry while the failed submission remains unresolved.
     act(() => input().onSubmitMessage("Retry after recovery"));
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert").textContent).toContain("before sending another");
+
+    // Explicitly resolving the failed copy unlocks deliberate retries.
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Dismiss failed message" })));
+    expect(screen.queryByRole("textbox", { name: "Unsent failed message" })).toBeNull();
+    act(() => {
+      input().onChange("Retry after recovery");
+      input().onSubmitMessage("Retry after recovery");
+    });
     await waitFor(() => expect(sdk.agent.addMessage).toHaveBeenCalledTimes(2));
+    expect(sdk.agent.addMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      role: "user",
+      content: "Retry after recovery",
+    }));
   });
 
   it("preserves newer edits and a copyable failed submission when SDK append fails after clear", async () => {
