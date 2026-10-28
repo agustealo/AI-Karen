@@ -253,7 +253,13 @@ export function KarenCopilotControlledChat({
           "/api/copilotkit/agent/default/runs/" + conversationId +
             "/" + runId + "/status",
         );
-        if (!validRunStatus(result)) throw new Error("Invalid runtime status");
+        if (!validRunStatus(result) ||
+            (["running", "cancelling"].includes(result.status) &&
+              !result.cancel_requested)) {
+          // A prior 202 is not permission to label the run "cancelling"
+          // when the canonical ledger has no matching stop marker.
+          throw new Error("Inconsistent durable stop status");
+        }
         if (!mounted.current || lastStopRunId.current !== runId) return;
         if (result.cancellation_confirmed) {
           setStopStatus("Karen confirmed this run was cancelled.");
@@ -267,6 +273,9 @@ export function KarenCopilotControlledChat({
         }
       } catch {
         if (mounted.current && lastStopRunId.current === runId) {
+          // Do not leave a stale "pending cancellation" assertion on screen
+          // after the supposedly authoritative status read contradicts it.
+          setStopStatus("Cancellation state could not be verified. No confirmed stop is available.");
           setError("Karen could not verify the run's final status. Try checking again.");
         }
       } finally {
