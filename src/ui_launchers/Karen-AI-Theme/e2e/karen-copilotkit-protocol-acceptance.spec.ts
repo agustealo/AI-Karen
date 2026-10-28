@@ -48,7 +48,7 @@ async function signIn(page: import("@playwright/test").Page) {
   await page.getByRole("textbox", { name: "Email" }).fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).toHaveURL(/\\/dashboard(?:[/?#]|$)/, { timeout: 30000 });
+  await expect(page).toHaveURL(new RegExp("/dashboard(?:[/?#]|$)"), { timeout: 30000 });
   expect(new URL(page.url()).origin).toBe(approved.origin);
 }
 
