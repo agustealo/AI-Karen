@@ -271,3 +271,68 @@ The Vercel preview workflow remains provider-specific and may not be
 used to claim a canonical Docker release. Production promotion stays
 RED until the complete deployment, runtime, browser and security
 evidence chain is independently confirmed.
+
+
+## Cryptographically signed Docker release candidates
+
+The canonical `web` and `api` container images can now be published as
+**signed, nonpromoted candidate artifacts** using
+`.github/workflows/karen-consumer-image-provenance.yml`. This workflow has
+no automatic trigger. It must be manually dispatched from the exact current
+`main` revision and executes under the separate
+`karen-consumer-release-build` GitHub environment.
+
+Before operator use, repository administrators must configure that
+environment with **required human reviewers and branch restrictions**.
+The workflow's `environment:` field alone does not establish approval.
+
+Each candidate build:
+
+1. Rechecks the actual current `main` SHA before checkout/build.
+2. Builds the existing canonical API Dockerfile and production Next.js
+   Dockerfile with that SHA, without changing either image implementation.
+3. Publishes to the repository-owned GHCR namespace under a SHA-qualified
+   candidate tag, and records its **immutable OCI manifest digest**.
+4. Signs each digest via `actions/attest@v4`, which uses GitHub OIDC/Sigstore
+   artifact attestation and binds the image to source and signing workflow.
+5. Independently verifies each artifact against the expected source SHA,
+   `refs/heads/main`, exact signer workflow, GitHub repository and attested
+   OCI digest using `gh attestation verify`. Rechecks `main` afterwards.
+
+Publication is not deployment, activation, release approval or evidence that
+the backend is available to consumers. An attestation for the image manifest
+is *not* an OCI config image ID; these are different hashes.
+
+On an authorized deployment host, first authenticate to GHCR, approve both
+signed candidate **digest-pinned** image references and corresponding local
+Docker config image IDs, and pull the images by immutable digest. Then set:
+
+- `TARGET_SHA`: reviewed, full lowercase commit SHA
+- `KAREN_RELEASE_REPOSITORY`: lowercase `owner/repository`
+- `KAREN_SIGNED_API_IMAGE_REF` and `KAREN_SIGNED_WEB_IMAGE_REF`:
+  exact `ghcr.io/owner/repository-{api,web}@sha256:...` registry references
+- `KAREN_EXPECTED_API_IMAGE_ID` and `KAREN_EXPECTED_WEB_IMAGE_ID`:
+  separately approved, complete `sha256:...` *config image IDs*
+- `KAREN_RELEASE_REPO_ROOT`: trusted checkout containing the canonical
+  production Compose configuration and its separately supplied secrets
+
+The existing `scripts/ci/verify_docker_release.py` CLI now verifies both
+GitHub/Sigstore attestations using the trusted GitHub repository, signer,
+source commit and `main` source ref. It also requires the digest-pinned
+registry reference to exist among each local image's RepoDigests and checks
+the approved local image ID. Only then does it execute the existing
+read-only running-container proof, requiring both healthy, correctly
+labeled Compose services.
+
+**Fail closed:** a missing signature, wrong source, untrusted workflow,
+mutable tag, absent image, mismatched digest or config ID, unhealthy
+container or changed runtime source revision blocks acceptance. The
+verifier does not call `docker pull`, restart containers, upload secrets
+or create a deployment. It assumes the host has independently approved
+and pulled the immutable artifacts.
+
+Complete consumer release still requires a configured production-equivalent
+host, verified HTTPS ingress, live backend health and model/provider
+execution, authenticated search/replay, tenant isolation, persistence,
+and human UX sign-off. The previous Vercel Python/Next.js mismatch and
+Vercel rate limits cannot be bypassed using signed Docker candidates.
