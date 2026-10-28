@@ -87,9 +87,15 @@ class SafeStageRunner:
 
         # 3. Execution with Timeout & Retries (retry semantics)
         retries_left = policy.max_retries
+        # The configured timeout is a total stage budget, not a per-retry reset.
+        deadline = asyncio.get_running_loop().time() + policy.timeout_seconds
         attempt = 0
         last_error = None
         while retries_left >= 0:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                last_error = "deadline_exhausted"
+                break
             attempt += 1
             _emit_resilience_event(
                 ProviderEvents.ATTEMPT_STARTED,
@@ -100,13 +106,13 @@ class SafeStageRunner:
             try:
                 # Wrap sync functions in thread or assume async
                 if asyncio.iscoroutinefunction(func):
-                    result = await asyncio.wait_for(func(*args, **kwargs), timeout=policy.timeout_seconds)
+                    result = await asyncio.wait_for(func(*args, **kwargs), timeout=remaining)
                 else:
                     # For sync functions, we use run_in_executor to avoid blocking the event loop
                     loop = asyncio.get_running_loop()
                     result = await asyncio.wait_for(
                         loop.run_in_executor(None, lambda: func(*args, **kwargs)),
-                        timeout=policy.timeout_seconds
+                        timeout=remaining
                     )
 
                 breaker.record_success()
@@ -129,7 +135,7 @@ class SafeStageRunner:
                     error="timeout",
                     retries_remaining=retries_left
                 )
-                if retries_left > 0:
+                if retries_left > 0 and deadline > asyncio.get_running_loop().time():
                     _emit_resilience_event(
                         ProviderEvents.RETRY,
                         stage_name=stage_name,
