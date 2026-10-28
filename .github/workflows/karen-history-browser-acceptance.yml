@@ -355,7 +355,7 @@ jobs:
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
-      - name: Prove the isolated native CopilotKit UX draft and no-auto-run contract
+      - name: Prove isolated native CopilotKit UX and separately opted-in disposable live Stop
         if: inputs.scenario == 'copilotkit-native'
         shell: bash
         env:

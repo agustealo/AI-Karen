@@ -3,7 +3,9 @@ import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 import type { APIRequestContext } from "@playwright/test";
 
 // This visits a REAL isolated candidate on a sanitized reviewed deployment.
-// No mocking, model execution, password recording or browser-state uploads.
+// Default scenarios never execute a model. One separately operator-approved
+// test uses a disposable real model run and retained canonical audit evidence.
+// No mocking, credential recording, traces, or browser-state uploads.
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
 const required = process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED === "true";
