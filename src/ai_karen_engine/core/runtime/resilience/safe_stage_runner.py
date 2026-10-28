@@ -9,11 +9,12 @@ Emits observability events for attempts, retries, and fallbacks.
 """
 
 import asyncio
-import os
 import threading
 from typing import Callable, Any, Dict, Optional
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.logging.events import ProviderEvents, RuntimeEvents
+
+from ai_karen_engine.config.performance_config import PerformanceConfig, get_performance_config
 
 from .feature_flags import get_feature_flags
 from .circuit_breaker import get_breaker_registry
@@ -24,14 +25,11 @@ logger = get_logger(__name__)
 
 
 def _sync_stage_capacity() -> int:
-    """Validated runtime capacity; configurable through the process environment."""
-    raw = os.getenv("KAREN_SYNC_STAGE_MAX_WORKERS", "4")
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ValueError("KAREN_SYNC_STAGE_MAX_WORKERS must be an integer") from exc
-    if not 1 <= value <= 128:
-        raise ValueError("KAREN_SYNC_STAGE_MAX_WORKERS must be between 1 and 128")
+    """Use the canonical performance worker budget, validating before startup."""
+    config = get_performance_config() or PerformanceConfig.from_environment()
+    value = config.max_worker_threads
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 128:
+        raise ValueError("max_worker_threads must be an integer between 1 and 128")
     return value
 
 
