@@ -11,6 +11,11 @@ on:
       - "src/ai_karen_engine/api_routes/monitoring/health.py"
       - "tests/architecture/test_production_deployment_contract.py"
       - "tests/architecture/test_docker_release_attestation.py"
+      - "tests/architecture/test_docker_browser_acceptance_contract.py"
+      - "scripts/ci/verify_docker_browser_host.sh"
+      - ".github/workflows/karen-history-browser-acceptance.yml"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/fixtures/verified-search-deployment.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/intelligent-search-replay.spec.ts"
       - "tests/architecture/test_signed_docker_release_provenance.py"
       - "tests/architecture/test_deployment_revision_acceptance.py"
       - "scripts/ci/verify_deployment_revision.py"
@@ -29,6 +34,11 @@ on:
       - "src/ai_karen_engine/api_routes/monitoring/health.py"
       - "tests/architecture/test_production_deployment_contract.py"
       - "tests/architecture/test_docker_release_attestation.py"
+      - "tests/architecture/test_docker_browser_acceptance_contract.py"
+      - "scripts/ci/verify_docker_browser_host.sh"
+      - ".github/workflows/karen-history-browser-acceptance.yml"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/fixtures/verified-search-deployment.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/intelligent-search-replay.spec.ts"
       - "tests/architecture/test_signed_docker_release_provenance.py"
       - "tests/architecture/test_deployment_revision_acceptance.py"
       - "scripts/ci/verify_deployment_revision.py"
@@ -64,6 +74,8 @@ jobs:
           pytest tests/architecture/test_production_deployment_contract.py -q
           pytest tests/architecture/test_docker_release_attestation.py -q
           pytest tests/architecture/test_signed_docker_release_provenance.py -q
+          pytest tests/architecture/test_docker_browser_acceptance_contract.py -q
+          bash -n scripts/ci/verify_docker_browser_host.sh
           pytest tests/architecture/test_deployment_revision_acceptance.py -q
           pytest tests/architecture/test_operational_health_authority.py -q
 
