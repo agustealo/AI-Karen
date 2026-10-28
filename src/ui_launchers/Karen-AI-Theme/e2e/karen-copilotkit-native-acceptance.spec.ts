@@ -425,6 +425,15 @@ test("CK-07F rejects runless and nonexistent stop requests without changing save
     }
   });
 
+  // Mount the actual native view under the same authenticated principal.
+  // The event listener is intentionally scoped to browser-driven requests;
+  // APIRequestContext calls below are explicit probes, not UI traffic.
+  await page.goto("/acceptance/copilotkit/" + encodeURIComponent(conversationId));
+  await expect(page.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
+    timeout: 30000,
+  });
+  expect(forbidden, "Opening native chat must not start inference").toEqual([]);
+
   // Missing exact run identity is rejected before backend cancellation.
   const runless = await page.request.post(stopUrl, {
     data: { threadId: conversationId },

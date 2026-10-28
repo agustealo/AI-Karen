@@ -551,11 +551,14 @@ implementing another persona persistence API or preference store.
 
 CK-07F native cancellation acceptance now includes an authenticated
 **negative-path gateway probe** in the protected browser suite. It obtains
-canonical history/draft from a dedicated owned conversation, rejects a
-thread-only stop with HTTP 422, and rejects a cryptographically fresh,
-nonexistent run ID with HTTP 404. Rechecking both canonical resources and
-the browser request journal proves no draft or transcript mutation and
-no inference request. It does **not** simulate a RUN_STARTED event,
+canonical history/draft from a dedicated owned conversation, mounts the
+real authenticated native candidate with a browser-side no-auto-inference
+request observer, rejects a thread-only stop with HTTP 422, and rejects
+a cryptographically fresh, nonexistent run ID with HTTP 404. Rechecking
+both canonical resources proves no draft or transcript mutation; the
+browser request observer proves no UI-originated inference. Explicit
+Playwright APIRequestContext stop probes are not represented as captured
+browser requests. It does **not** simulate a RUN_STARTED event,
 manufacture a successful stop receipt, or claim a model worker cancelled.
 Real cross-worker cancellation, final PostgreSQL terminal evidence and
 rendered pending/confirmed UI require a separate operator-approved
