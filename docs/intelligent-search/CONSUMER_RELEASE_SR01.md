@@ -402,3 +402,71 @@ authorization boundaries remain required. The current browser search
 workflow is Vercel-specific and must not be misrepresented as a Docker
 acceptance workflow until a Docker-capable protected harness is implemented
 and independently verified.
+
+
+## Signed-Docker protected browser acceptance (post-integration only)
+
+The existing `KAREN Browser Acceptance` manual workflow supports a third
+`docker-search` scenario in addition to its unchanged `history` and Vercel
+`search` scenarios. The Docker scenario shares the *same authenticated*
+`intelligent-search-replay.spec.ts` search/citation/weather/persistence
+suite and the existing sanitized browser environment. There is no second
+search UI test suite, fake answer, or client-side release authority.
+
+**Required operator setup, not verified by source CI:**
+
+- Protect the `karen-sanitized-browser-acceptance` environment with required
+  reviewers, approved `main` deployment branches, and sanitized-only test
+  credentials `KAREN_UX_EMAIL` / `KAREN_UX_PASSWORD`.
+- Register an operator-controlled, dedicated trusted **Linux x64** GitHub
+  Actions runner with the `karen-consumer-release` label, access to the
+  approved production Docker daemon and read-only GHCR attestation
+  verification. This runner must not be shared with untrusted pull requests.
+- Configure approved environment variables `KAREN_DOCKER_RELEASE_REPO_ROOT`
+  (absolute operator-controlled host checkout directory at the exact
+  approved commit), `KAREN_DOCKER_SEARCH_ACCEPTANCE_URL` (clean HTTPS public
+  origin), `KAREN_SIGNED_API_IMAGE_REF`, `KAREN_SIGNED_WEB_IMAGE_REF`
+  (signed GHCR manifest digest refs), and
+  `KAREN_EXPECTED_API_IMAGE_ID` / `KAREN_EXPECTED_WEB_IMAGE_ID`
+  (independently approved local Docker image IDs).
+- Keep `.env.production` on the authorized host, outside source control.
+  Never upload it to GitHub Actions artifacts or put production credentials
+  into repository variables or Playwright configuration.
+
+**Execution:** dispatch the existing
+`.github/workflows/karen-history-browser-acceptance.yml` from the
+current `main` branch, choose `docker-search`, and provide the exact
+40-character current `main` SHA as `target_sha`.
+
+The mandatory job sequence is:
+
+1. **Docker host before:** on the trusted Linux release runner, check exact
+   `main` SHA and current default branch; attest the on-host checkout and
+   compare its three Compose definitions byte-for-byte with the reviewed
+   checkout. Call the *existing* read-only signed Docker verifier, checking
+   GHCR source/signature, digest-pinned image IDs, running API/web health,
+   canonical public HTTPS revision and backend readiness.
+2. **Browser replay:** only after the host gate succeeds, use a separate
+   GitHub-hosted Ubuntu runner to repeat the public revision/backend
+   checks, install pinned npm/Playwright dependencies **without login
+   credentials in those steps**, then inject sanitized login credentials
+   exclusively into the existing Playwright search/replay execution. The
+   shared fixture enforces the approved origin and forbids any Vercel
+   bypass secret or bypass-cookie request on Docker.
+3. **Docker host after:** only after the browser test and its revision/main
+   recheck succeed, run the exact signed-host verification again, confirming
+   the approved images, services and HTTPS ingress remain live.
+
+No Vercel project/automation bypass token is used on this path.
+No `npm ci`, browser installation, user credentials, uploaded traces,
+screenshots, recordings or page-generated scripts execute on the
+production-capable Docker runner. No Docker build, pull, deploy or
+promotion occurs in any acceptance job.
+
+**Boundary:** these gates prove the approved image identities and observed
+running browser behavior before/after the test, not atomic protection
+against an unobserved deployment switch mid-test. Enforce deployment
+immutability, host/network controls and release change freeze outside the
+test workflow. This workflow also does not authorize a consumer launch:
+signed-image build/host approvals and human UX/security sign-off remain
+independent requirements.
