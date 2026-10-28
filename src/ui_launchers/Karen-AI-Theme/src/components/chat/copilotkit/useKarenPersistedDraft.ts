@@ -71,9 +71,9 @@ export function useKarenPersistedDraft(conversationId: string) {
       const saved = response as DraftRecord;
       const knownRevision = revisionRef.current;
       if (knownRevision !== null && saved.revision < knownRevision) {
-        // This GET was snapshot before a confirmed CAS write or another
-        // worker's latest state. Never replace newer canonical evidence.
-        return;
+        // Canonical storage must never appear to roll its revision backward.
+        // Report unavailability, rather than leave an explicit reload stuck.
+        throw new Error("Canonical draft revision regressed");
       }
       if (knownRevision !== null && saved.revision === knownRevision &&
           !dirtyRef.current && textRef.current !== saved.text) {
