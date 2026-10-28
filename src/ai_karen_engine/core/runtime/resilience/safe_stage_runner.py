@@ -9,9 +9,12 @@ Emits observability events for attempts, retries, and fallbacks.
 """
 
 import asyncio
+import threading
 from typing import Callable, Any, Dict, Optional
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.logging.events import ProviderEvents, RuntimeEvents
+
+from ai_karen_engine.config.performance_config import PerformanceConfig, get_performance_config
 
 from .feature_flags import get_feature_flags
 from .circuit_breaker import get_breaker_registry
@@ -19,6 +22,15 @@ from .fallback_manager import get_fallback_manager
 from .pipeline_policy import get_pipeline_policy
 
 logger = get_logger(__name__)
+
+
+def _sync_stage_capacity() -> int:
+    """Use the canonical performance worker budget, validating before startup."""
+    config = get_performance_config() or PerformanceConfig.from_environment()
+    value = config.max_worker_threads
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 128:
+        raise ValueError("max_worker_threads must be an integer between 1 and 128")
+    return value
 
 
 def _emit_resilience_event(event_name: str, **kwargs):
@@ -41,6 +53,8 @@ class SafeStageRunner:
         self.breakers = get_breaker_registry()
         self.fallbacks = get_fallback_manager()
         self.policies = get_pipeline_policy()
+        # Capacity is held until the underlying thread actually exits.
+        self._sync_slots = threading.BoundedSemaphore(value=_sync_stage_capacity())
 
     async def run_stage(
         self,
@@ -109,11 +123,22 @@ class SafeStageRunner:
                     result = await asyncio.wait_for(func(*args, **kwargs), timeout=remaining)
                 else:
                     # For sync functions, we use run_in_executor to avoid blocking the event loop
+                    if not self._sync_slots.acquire(blocking=False):
+                        raise RuntimeError("synchronous_stage_capacity_exhausted")
                     loop = asyncio.get_running_loop()
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(None, lambda: func(*args, **kwargs)),
-                        timeout=remaining
-                    )
+
+                    def execute_and_release():
+                        try:
+                            return func(*args, **kwargs)
+                        finally:
+                            self._sync_slots.release()
+
+                    try:
+                        future = loop.run_in_executor(None, execute_and_release)
+                    except BaseException:
+                        self._sync_slots.release()
+                        raise
+                    result = await asyncio.wait_for(future, timeout=remaining)
 
                 breaker.record_success()
                 _emit_resilience_event(
