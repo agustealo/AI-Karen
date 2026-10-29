@@ -138,7 +138,7 @@ class SafeStageRunner:
                     except BaseException:
                         self._sync_slots.release()
                         raise
-                    result = await asyncio.wait_for(future, timeout=remaining)
+                    result = await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
 
                 breaker.record_success()
                 _emit_resilience_event(
