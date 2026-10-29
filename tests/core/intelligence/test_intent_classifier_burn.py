@@ -101,6 +101,8 @@ async def test_semantic_path_encodes_request_once_and_uses_real_semantic_provena
     assert prediction.fallback_used is False
     assert prediction.inference_method == "embedding_similarity"
     assert prediction.model_id == "burn-semantic"
+    assert prediction.probability == 0.0  # Uncalibrated similarity is not a probability.
+    assert prediction.metadata["similarity_score"] == 1.0
     assert encoder.calls.count(text) == 1
     assert len(encoder.calls) == 1 + len(IntentPredictor.INTENT_TEMPLATES)
 
