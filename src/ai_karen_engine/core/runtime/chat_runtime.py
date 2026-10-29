@@ -1398,10 +1398,21 @@ class ChatRuntime:
             return result
 
         gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+        snapshot = await self._freeze_persona_snapshot(request)
+        if snapshot.status == "unavailable":
+            return TranscriptPersistenceResult(
+                status="rejected",
+                conversation_id=conversation_id,
+                reason="persona_scope_unavailable",
+            )
+        persona_scope_id = (
+            snapshot.persona_id if snapshot.memory_filter_required else None
+        )
         result = await gateway.persist_completed_turn(
             ctx,
             user_text=self._extract_user_message_for_persistence(request),
             assistant_text=response_text,
+            persona_scope_id=persona_scope_id,
             response_metadata={
                 **{
                     key: value
@@ -2148,42 +2159,81 @@ class ChatRuntime:
     # ------------------------------------------------------------------
 
     async def _prepare_conversation_continuation(self, request: ChatExecutionRequest) -> None:
-        """Hydrate authorized history for any single-turn request before routing.
+        """Restore only canonically owned, persona-compatible history.
 
-        The canonical gateway enforces tenant and user ownership. Conversation
-        evidence never bypasses the later RuntimePolicy evidence authorization;
-        this bounded transcript is conversational input for continuity only.
+        A private persona cannot inherit an older generic or different-persona
+        thread. Client-provided prior turns are not authoritative continuity;
+        they are reloaded from the tenant/user-owned canonical repository.
         """
         if not request.messages:
             return
         current = request.messages[-1]
         if str(current.get("role", "")).lower() != "user":
             return
-        if len(request.messages) == 1:
-            try:
-                gateway = self._conversation_gateway or get_conversation_runtime_gateway()
-                history = await gateway.load_history(request.context, limit=12)
-                if history.success and history.messages:
-                    ordered = sorted(history.messages, key=lambda message: message.created_at)
-                    prior = [
-                        {
-                            "role": message.role,
-                            "content": message.content,
-                            "metadata": dict(getattr(message, "metadata", {}) or {}),
-                        }
-                        for message in ordered
-                        if str(message.role).lower() in {"assistant", "user"}
-                        and str(message.content or "").strip()
-                    ]
-                    if prior:
-                        request.messages = [*prior, current]
-                        request.metadata["conversation_history_source"] = "canonical_repository"
-                        request.metadata["conversation_history_materialized"] = True
-            except Exception as exc:
-                logger.warning(
-                    "Authorized conversation history unavailable: %s",
-                    type(exc).__name__,
+
+        snapshot = await self._freeze_persona_snapshot(request)
+        if snapshot.status == "unavailable":
+            raise PermissionError("persona_scope_unavailable")
+        persona_scope_id = (
+            snapshot.persona_id if snapshot.memory_filter_required else None
+        )
+        if snapshot.memory_filter_required and not persona_scope_id:
+            raise PermissionError("persona_scope_missing")
+
+        # Never let transport supplied history sidestep the same scope
+        # enforcement used by canonical persisted history.
+        if len(request.messages) > 1:
+            request.messages = [current]
+            request.metadata["conversation_history_input_discarded"] = True
+
+        try:
+            gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+            history = await gateway.load_history(
+                request.context,
+                limit=12,
+                persona_scope_id=persona_scope_id,
+            )
+            if history.status == "rejected":
+                raise PermissionError(
+                    history.reason or "conversation_persona_scope_mismatch"
                 )
+            if not history.success and persona_scope_id:
+                raise PermissionError("conversation_history_scope_unavailable")
+            if history.success and history.messages:
+                ordered = sorted(
+                    history.messages, key=lambda message: message.created_at
+                )
+                prior = [
+                    {
+                        "role": message.role,
+                        "content": message.content,
+                        "metadata": dict(getattr(message, "metadata", {}) or {}),
+                    }
+                    for message in ordered
+                    if str(message.role).lower() in {"assistant", "user"}
+                    and str(message.content or "").strip()
+                ]
+                if prior:
+                    request.messages = [*prior, current]
+                    request.metadata["conversation_history_source"] = "canonical_repository"
+                    request.metadata["conversation_history_materialized"] = True
+        except PermissionError:
+            # Never fall through to an unscoped continuity or provider path.
+            raise
+        except Exception as exc:
+            if persona_scope_id:
+                logger.warning(
+                    "persona.conversation_history_unavailable",
+                    extra={
+                        "correlation_id": request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                raise PermissionError("conversation_history_scope_unavailable") from exc
+            logger.warning(
+                "Authorized conversation history unavailable: %s",
+                type(exc).__name__,
+            )
         if not self._resolve_typed_pending_clarification(request):
             self._resolve_pending_weather_followup(request)
 
