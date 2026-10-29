@@ -204,3 +204,18 @@ async def test_prompt_compilation_reuses_selection_without_requery():
         "verbosity": "balanced",
         "language_style": "en-US",
     }
+
+
+@pytest.mark.asyncio
+async def test_frozen_persona_cannot_outlive_authenticated_principal():
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready", persona_id="Troy"
+    )
+
+    def revoked_principal():
+        raise PermissionError("session_revoked")
+
+    request.context.require_authenticated_user = revoked_principal
+    with pytest.raises(PermissionError, match="session_revoked"):
+        await ChatRuntime._freeze_persona_snapshot(request)
