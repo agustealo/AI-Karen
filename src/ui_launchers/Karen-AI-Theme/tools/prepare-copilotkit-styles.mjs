@@ -1,28 +1,59 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { createRequire } from "node:module";
 
 /**
- * CopilotKit v2 ships browser-ready Tailwind v4 CSS. Karen's existing
- * Tailwind v3 PostCSS pipeline cannot reprocess its vendor @layer rules.
+ * Copy the stylesheet actually exported by the pinned CopilotKit package.
+ * Resolving the CSS subpath with import.meta.resolve is not portable across
+ * installed-package/export layouts. Read the installed manifest instead.
  *
- * Copy only the installed locked-package asset to a generated static URL.
- * No CDN, checked-in vendor fork or new CSS compiler. Fail on missing
- * or unexpectedly tiny asset instead of rendering an unstyled preview.
+ * Keep vendor Tailwind v4 CSS out of Karen's Tailwind v3 PostCSS pipeline.
+ * Missing or invalid dependencies remain a hard startup error.
  */
+const require = createRequire(import.meta.url);
 const output = join(import.meta.dirname, "..", "public", "vendor", "copilotkit-v2.css");
-let source;
+
+let manifestPath;
 try {
-  source = fileURLToPath(import.meta.resolve("@copilotkit/react-core/v2/styles.css"));
+  manifestPath = require.resolve("@copilotkit/react-core/package.json");
 } catch {
-  throw new Error("CopilotKit v2 stylesheet is not available in the installed package");
+  throw new Error(
+    "CopilotKit react-core is not installed. Reinstall dependencies from package-lock.json before starting the web server.",
+  );
 }
-if (!source.endsWith(".css") || !source.includes("copilotkit")) {
-  throw new Error("Resolved CopilotKit stylesheet is not an approved local CSS asset");
+
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const version = manifest.version;
+if (version !== "1.79.1") {
+  throw new Error(`CopilotKit react-core version mismatch: expected 1.79.1, found ${version}`);
 }
-const css = await readFile(source, "utf8");
+
+const exportedAsset = manifest.exports?.["./v2/styles.css"];
+const relativeAsset = typeof exportedAsset === "string"
+  ? exportedAsset
+  : exportedAsset?.default ?? exportedAsset?.import;
+
+if (typeof relativeAsset !== "string" || !relativeAsset.startsWith("./")) {
+  throw new Error("Installed CopilotKit package does not export the v2 stylesheet");
+}
+
+const packageRoot = dirname(manifestPath);
+const source = resolve(packageRoot, relativeAsset);
+if (!source.startsWith(packageRoot + sep) || !source.endsWith(".css") || isAbsolute(relativeAsset)) {
+  throw new Error("CopilotKit v2 stylesheet export escapes the installed package");
+}
+
+let css;
+try {
+  css = await readFile(source, "utf8");
+} catch {
+  throw new Error(
+    "CopilotKit v2 stylesheet is missing from the installed package. Reinstall the locked dependencies.",
+  );
+}
 if (css.length < 10000 || !css.includes("@layer")) {
   throw new Error("CopilotKit stylesheet content is unexpectedly missing or invalid");
 }
+
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, css, { encoding: "utf8", mode: 0o644 });
