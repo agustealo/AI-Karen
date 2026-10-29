@@ -2173,7 +2173,12 @@ class ChatRuntime:
 
         snapshot = await self._freeze_persona_snapshot(request)
         if snapshot.status == "unavailable":
-            raise PermissionError("persona_scope_unavailable")
+            # Fail closed on history and persistence, not on harmless current-
+            # turn generation. No old messages or client history may be used.
+            request.messages = [current]
+            request.metadata["conversation_history_status"] = "unavailable"
+            request.metadata["conversation_history_reason"] = "persona_scope_unavailable"
+            return
         persona_scope_id = (
             snapshot.persona_id if snapshot.memory_filter_required else None
         )
