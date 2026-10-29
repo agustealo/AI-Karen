@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.expression.contracts import ExpressionResult
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -17,6 +21,21 @@ from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
     RuntimeExecutionMode,
 )
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_no_persona_selection():
+    """Isolate chat burns from persona persistence without bypassing auth."""
+    service = SimpleNamespace(
+        get_user_preferences=AsyncMock(return_value=SimpleNamespace(
+            active_persona_id=None, revision=0,
+        )),
+    )
+    with patch(
+        "ai_karen_engine.services.persona.persona_service.get_persona_service",
+        return_value=service,
+    ):
+        yield
 
 
 class _NoGateControlPlane:
@@ -93,6 +112,7 @@ def _request(*, stream: bool = False) -> ChatExecutionRequest:
             conversation_id="conversation-1",
             request_id="request-1",
             correlation_id="correlation-1",
+            authenticated_user=UserData(user_id="user-1", tenant_id="tenant-1"),
         ),
         stream=stream,
         metadata={"transport": "stream" if stream else "http"},
