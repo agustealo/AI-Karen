@@ -36,7 +36,12 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {
-    expect(prep).toContain('import.meta.resolve("@copilotkit/react-core/v2/styles.css")');
+    expect(prep).toContain('require.resolve("@copilotkit/react-core/package.json")');
+    expect(prep).toContain('manifest.exports?.["./v2/styles.css"]');
+    expect(prep).toContain('version !== "1.79.1"');
+    expect(prep).toContain('source.startsWith(packageRoot + sep)');
+    expect(prep).toContain('css.length < 10000');
+    expect(prep).not.toContain('import.meta.resolve("@copilotkit/react-core/v2/styles.css")');
     expect(prep).toContain('css.includes("@layer")');
     expect(prep).toContain('"vendor", "copilotkit-v2.css"');
     expect(pkg.scripts.dev).toContain("prepare-copilotkit-styles.mjs");
