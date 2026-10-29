@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from ..contracts import (
     PreferenceRecord,
     PreferenceScope,
+    PreferenceState,
     ResolvedPreferences,
 )
 
@@ -42,9 +43,9 @@ class PreferenceResolver:
         all_prefs.sort(
             key=lambda pref: (
                 priority.get(pref.scope, -1),
-                pref.state.value == "stable",
+                pref.state == PreferenceState.STABLE,
                 pref.version,
-                pref.last_observed_at,
+                pref.preference_id,
             )
         )
         applied = []
