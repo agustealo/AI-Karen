@@ -157,7 +157,24 @@ class ConversationRuntimeGateway:
         if existing.data is not None:
             if str(existing.data.user_id) != str(context.user_id):
                 raise PermissionError("conversation_user_mismatch")
-            self._check_persona_scope(existing.data, persona_scope_id)
+            if (
+                persona_scope_id
+                and (existing.data.metadata or {}).get("persona_scope_id") is None
+            ):
+                # Empty session-bootstrap shells are not yet purpose-bound.
+                # The PostgreSQL completed-turn transaction performs the
+                # authoritative compare-and-bind under the parent row lock.
+                previous = await self._repository.get_messages(
+                    conversation_id, context.tenant_id, limit=1, offset=0,
+                )
+                if not previous.success:
+                    raise RuntimeError(
+                        previous.error or "conversation_history_read_failed"
+                    )
+                if previous.data:
+                    raise PermissionError("conversation_persona_scope_mismatch")
+            else:
+                self._check_persona_scope(existing.data, persona_scope_id)
             return conversation_id
 
         created = await self._repository.create_conversation(
@@ -604,10 +621,14 @@ class ConversationRuntimeGateway:
                     reason="conversation_user_mismatch",
                     error_type="PermissionError",
                 )
-            # This check applies to default personas as well, so a private
-            # thread cannot be resumed merely by switching back to default.
-            self._check_persona_scope(existing.data, persona_scope_id)
-
+            # Inspect actual history before claiming an unbound empty
+            # session shell. A bound private thread is never reusable by a
+            # different persona or by the default persona.
+            stored_scope_id = (existing.data.metadata or {}).get("persona_scope_id")
+            if stored_scope_id is not None and stored_scope_id != persona_scope_id:
+                raise PermissionError("conversation_persona_scope_mismatch")
+            if stored_scope_id is None and persona_scope_id is None:
+                pass  # Existing default, unbound or legacy thread.
             requested_limit = max(0, int(limit))
             if requested_limit == 0:
                 return TranscriptHistoryResult(
@@ -628,10 +649,14 @@ class ConversationRuntimeGateway:
                     reason=result.error or "conversation_history_read_failed",
                 )
 
+            # Don't exclude a prior same-request row until AFTER checking
+            # the scope. A private persona may claim only a truly empty shell.
+            all_messages = tuple(result.data or [])
+            if stored_scope_id is None and persona_scope_id and all_messages:
+                raise PermissionError("conversation_persona_scope_mismatch")
             messages = tuple(
-                message
-                for message in list(result.data or [])
-                if str(message.metadata.get("request_id") or "")
+                message for message in all_messages
+                if str((message.metadata or {}).get("request_id") or "")
                 != str(context.request_id or "")
             )
             # A legacy/unattributed row in a private thread is NOT shared.
