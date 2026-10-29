@@ -375,6 +375,8 @@ class ConversationRuntimeGateway:
         metadata_updates: Optional[Dict[str, Any]] = None,
         tags_to_add: Optional[list[str]] = None,
     ) -> Conversation:
+        if "persona_scope_id" in (metadata_updates or {}):
+            raise PermissionError("conversation_persona_scope_immutable")
         existing = await self.require_owned_conversation(context)
         metadata = dict(existing.metadata or {})
         metadata.update(dict(metadata_updates or {}))
@@ -779,7 +781,8 @@ class ConversationRuntimeGateway:
                 role="assistant",
                 content=assistant_text,
                 metadata={
-                    **dict(response_metadata or {}),
+                    **{k: v for k, v in (response_metadata or {}).items()
+                       if k != "persona_scope_id"},
                     **common_metadata,
                     "transcript_actor": "assistant",
                 },
