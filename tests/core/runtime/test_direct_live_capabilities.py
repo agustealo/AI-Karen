@@ -128,6 +128,62 @@ async def test_cortex_time_uses_time_query_without_inventing_parallel_tool() -> 
 
 
 @pytest.mark.asyncio
+async def test_cortex_current_date_routes_through_governed_time_query() -> None:
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(return_value=_analysis())
+    )
+
+    for question in ("What's the date?", "What is today's date?", "current date"):
+        decision = await decider.decide(_request(question))
+        assert decision.intent == "time.current"
+        assert decision.topology is ExecutionTopology.DIRECT
+        assert decision.graph_required is False
+        assert "time_query" in decision.required_capabilities
+        assert "time-query" in decision.plugin_candidates
+
+
+@pytest.mark.asyncio
+async def test_current_date_executes_authorized_plugin_date_mode() -> None:
+    executor = DirectCapabilityExecutor()
+    request = _request("What's the date?")
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(
+        analyze=AsyncMock(return_value=_analysis())
+    )
+    decision = await decider.decide(request)
+    plan = _plan(plugins=["time-query"], capabilities=["time_query"])
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    plugin_service = SimpleNamespace(
+        execute_plugin=AsyncMock(return_value=SimpleNamespace(
+            status=ExecutionStatus.COMPLETED,
+            result={
+                "status": "success",
+                "mode": "date",
+                "date": "2026-10-29",
+                "value": "2026-10-29",
+                "timezone": "America/Detroit",
+            },
+            error=None,
+        ))
+    )
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=plugin_service,
+    ):
+        result = await executor.execute(
+            request=request, decision=decision, plan=plan, meter=meter
+        )
+    assert result.handled and result.success
+    assert result.text == "The current date in America/Detroit is 2026-10-29."
+    assert result.normalized_metadata()["structured_content"]["date"] == "2026-10-29"
+    params = plugin_service.execute_plugin.await_args.kwargs["parameters"]
+    assert params["mode"] == "date"
+    assert plugin_service.execute_plugin.await_args.kwargs["authorized_plan"] is plan
+
+
+@pytest.mark.asyncio
 async def test_weather_route_survives_intelligence_analyzer_failure() -> None:
     decider = CortexExecutionDecider(force_graph=False)
     decider._intelligence = SimpleNamespace(
