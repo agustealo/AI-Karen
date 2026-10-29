@@ -14,6 +14,7 @@ on:
           - docker-search
           - copilotkit-protocol
           - copilotkit-native
+          - copilotkit-native-stop
       target_sha:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
@@ -232,16 +233,16 @@ jobs:
 
   # Read-only SDK-protocol proof only. Native CopilotKit UI parity still unverified.
   authenticated-copilotkit-protocol:
-    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_COPILOTKIT_ACCEPTANCE_URL }}
       KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}
-      KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && 'true' || 'false' }}
-      KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED: ${{ vars.KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED }}
-      KAREN_COPILOTKIT_LIVE_STOP_REQUIRED: ${{ vars.KAREN_COPILOTKIT_LIVE_STOP_REQUIRED }}
+      KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && 'true' || 'false' }}
+      KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && vars.KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED || 'false' }}
+      KAREN_COPILOTKIT_LIVE_STOP_REQUIRED: ${{ inputs.scenario == 'copilotkit-native-stop' && 'true' || 'false' }}
       KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID: ${{ vars.KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID }}
       KAREN_HISTORY_CONVERSATION_ID: ${{ vars.KAREN_COPILOTKIT_CONVERSATION_ID }}
       KAREN_COPILOTKIT_OBSERVED_RUN_ID: ${{ vars.KAREN_COPILOTKIT_OBSERVED_RUN_ID }}
@@ -304,6 +305,11 @@ jobs:
           if test "${{ inputs.scenario }}" = "copilotkit-protocol"; then
             test -n "$KAREN_COPILOTKIT_OBSERVED_RUN_ID" || { echo "::error::Missing observed run ID"; exit 1; }
           fi
+          if test "${{ inputs.scenario }}" = "copilotkit-native-stop"; then
+            test "$KAREN_COPILOTKIT_LIVE_STOP_REQUIRED" = "true" || { echo "::error::Live Stop acceptance cannot skip"; exit 1; }
+            test -n "$KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID" || { echo "::error::Missing disposable Stop conversation"; exit 1; }
+            test "$KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID" != "$KAREN_HISTORY_CONVERSATION_ID" || { echo "::error::Live Stop must use a distinct disposable conversation"; exit 1; }
+          fi
           case "$KAREN_BASE_URL" in
             https://*) ;;
             *) echo "::error::Acceptance URL must use HTTPS"; exit 1 ;;
@@ -355,7 +361,7 @@ jobs:
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
-      - name: Prove isolated native CopilotKit UX and separately opted-in disposable live Stop
+      - name: Prove isolated native CopilotKit UX without model inference
         if: inputs.scenario == 'copilotkit-native'
         shell: bash
         env:
@@ -365,6 +371,24 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts \
+            --config=e2e/playwright.config.ts --project=chromium \
+            --reporter=list --retries=0
+
+      # Mutating model acceptance has its own explicit operator dispatch.
+      # Grep selects ONLY the positive test; a skipped test cannot make a
+      # wider native suite appear to have proven real cancellation.
+      - name: Prove real native Stop against disposable authenticated model run
+        if: inputs.scenario == 'copilotkit-native-stop'
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test "$KAREN_COPILOTKIT_LIVE_STOP_REQUIRED" = "true"
+          npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts \
+            --grep 'CK-07F3 operator-approved real native stop confirms the durable worker outcome' \
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 

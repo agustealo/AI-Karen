@@ -59,11 +59,21 @@ failed test, **not** a simulated success. No model output, cookies, traces,
 videos, or screenshots are recorded. The disposable run remains in the
 canonical audit ledger.
 
-The workflow remains main-only and exact-deployment protected. Missing
-operator opt-in is **skipped/unverified**. A passing single-deployment
-stop acceptance is **not** proof of cross-worker scheduling or worker
-restart behavior, which needs separate live multiworker infrastructure
-and PostgreSQL verification.
+The workflow remains main-only and exact-deployment protected.
+Dispatch `copilotkit-native` is **read-only/no-model**, with
+`KAREN_COPILOTKIT_LIVE_STOP_REQUIRED=false` regardless of repository
+variables. The separate, explicitly selected
+`copilotkit-native-stop` dispatch forces that flag **true**, requires a
+distinct disposable thread, and selects only the positive live Stop test
+by exact Playwright title. Missing required fixtures **fail** rather than
+silently skipping model cancellation inside a green general UX suite.
+Both scenarios retain identical deployed-revision, independent Vercel
+attestation, approved HTTPS origin, secret isolation and post-run checks.
+No new backend or UI capability was introduced.
+
+A passing single-deployment stop acceptance is **not** proof of
+cross-worker scheduling or worker restart behavior, which needs
+separate live multiworker infrastructure and PostgreSQL verification.
 
 ## Operator activation (do not enable for consumer traffic yet)
 

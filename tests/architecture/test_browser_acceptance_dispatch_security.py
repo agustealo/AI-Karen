@@ -69,10 +69,11 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "          - copilotkit-protocol" in workflow
     assert "          - copilotkit-native" in workflow
+    assert "          - copilotkit-native-stop" in workflow
     job = workflow.split("  authenticated-copilotkit-protocol:", 1)[1].split(
         "\n  # Operator-controlled Docker host proof.", 1
     )[0]
-    assert "if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native') && github.ref == 'refs/heads/main'" in job
+    assert "if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && github.ref == 'refs/heads/main'" in job
     assert "environment: karen-sanitized-browser-acceptance" in job
     assert "ref: ${{ inputs.target_sha }}" in job
     assert "persist-credentials: false" in job
@@ -83,7 +84,7 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "e2e/karen-copilotkit-protocol-acceptance.spec.ts" in job
     assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}" in job
-    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && 'true' || 'false' }}" in job
+    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && 'true' || 'false' }}" in job
     assert "if: inputs.scenario == 'copilotkit-native'" in job
     assert "if: inputs.scenario == 'copilotkit-protocol'" in job
     assert 'KAREN_COPILOTKIT_OBSERVED_RUN_ID: ${{ vars.KAREN_COPILOTKIT_OBSERVED_RUN_ID }}' in job
@@ -110,6 +111,25 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "secrets.KAREN_UX_PASSWORD" in native
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in native
     assert "KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED" not in job
+
+    # A separately dispatched, main-only and deployment-attested live-model
+    # scenario must not be hidden as an optional skip in the read-only suite.
+    assert "KAREN_COPILOTKIT_LIVE_STOP_REQUIRED: ${{ inputs.scenario == 'copilotkit-native-stop' && 'true' || 'false' }}" in job
+    assert 'test "$KAREN_COPILOTKIT_LIVE_STOP_REQUIRED" = "true"' in job
+    assert 'test -n "$KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID"' in job
+    assert 'test "$KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID" != "$KAREN_HISTORY_CONVERSATION_ID"' in job
+    stop_if = "        if: inputs.scenario == 'copilotkit-native-stop'"
+    assert job.count(stop_if) == 1
+    stop_at = job.index(stop_if)
+    start = job.rfind("      - name: ", 0, stop_at)
+    end = job.find("\n      - name:", stop_at)
+    assert start >= 0 and end > stop_at
+    stop_step = job[start:end]
+    assert "--grep 'CK-07F3 operator-approved real native stop confirms the durable worker outcome'" in stop_step
+    assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in stop_step
+    assert "secrets.KAREN_UX_EMAIL" in stop_step
+    assert "secrets.KAREN_UX_PASSWORD" in stop_step
+    assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in stop_step
 
 
 def test_copilotkit_login_checks_approved_origin_before_password() -> None:
