@@ -304,6 +304,40 @@ jobs:
           assert web.get('ports'), 'production web ingress must remain published'
           PY
 
+      - name: Verify development web Compose bootstrap contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Compose's development web uses the root .env and the local
+          # environment file; provide disposable CI copies, never secrets.
+          cp .env.production.example .env
+          touch .env.local
+          docker compose --env-file .env.production \
+            -f docker-compose.yml config --format json \
+            > /tmp/ai-karen-development-compose.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path('/tmp/ai-karen-development-compose.json').read_text())
+          web = config['services']['web']
+          command = web['command']
+          assert isinstance(command, list) or isinstance(command, str)
+          script = ' '.join(command) if isinstance(command, list) else command
+          assert 'sha256sum /app/package-lock.json' in script
+          assert '/app/node_modules/.install_lock_sha256' in script
+          assert "require('@copilotkit/react-core/package.json')" in script
+          assert 'npm ci --cache /root/.npm --prefer-offline --no-audit' in script
+          assert "npm run dev -- --hostname 0.0.0.0 --port 8010" in script
+          assert '.install_complete' not in script
+          assert script.index('npm ci --cache') < script.index('npm run dev')
+          assert web['working_dir'] == '/app'
+          assert any(
+              volume.get('target') == '/app/node_modules'
+              for volume in web.get('volumes', [])
+          )
+          PY
+
   main-quality-gate:
     name: main-quality-gate
     runs-on: ubuntu-latest
