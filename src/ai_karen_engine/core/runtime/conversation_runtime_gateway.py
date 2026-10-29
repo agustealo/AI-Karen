@@ -29,6 +29,10 @@ from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
 logger = get_logger(__name__)
 
+# UI session creation/inspection does not confer permission to reuse the
+# transcript as model context. Only runtime passes an explicit scope (or None).
+_UNSPECIFIED_PERSONA_SCOPE = object()
+
 
 def resolve_runtime_conversation_id(context: ChatExecutionContext) -> str:
     """Return the canonical durable conversation identity for one runtime request.
@@ -141,11 +145,15 @@ class ConversationRuntimeGateway:
         context: ChatExecutionContext,
         *,
         first_user_message: str,
-        persona_scope_id: str | None = None,
+        persona_scope_id: str | None | object = _UNSPECIFIED_PERSONA_SCOPE,
     ) -> str:
         """Ensure the authenticated user owns the tenant-scoped conversation."""
         self._require_scope_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
+        enforce_scope = persona_scope_id is not _UNSPECIFIED_PERSONA_SCOPE
+        requested_scope = (
+            persona_scope_id if isinstance(persona_scope_id, str) else None
+        )
 
         existing = await self._repository.get_conversation(
             conversation_id,
@@ -158,7 +166,8 @@ class ConversationRuntimeGateway:
             if str(existing.data.user_id) != str(context.user_id):
                 raise PermissionError("conversation_user_mismatch")
             if (
-                persona_scope_id
+                enforce_scope
+                and requested_scope
                 and (existing.data.metadata or {}).get("persona_scope_id") is None
             ):
                 # Empty session-bootstrap shells are not yet purpose-bound.
@@ -173,8 +182,8 @@ class ConversationRuntimeGateway:
                     )
                 if previous.data:
                     raise PermissionError("conversation_persona_scope_mismatch")
-            else:
-                self._check_persona_scope(existing.data, persona_scope_id)
+            elif enforce_scope:
+                self._check_persona_scope(existing.data, requested_scope)
             return conversation_id
 
         created = await self._repository.create_conversation(
@@ -188,7 +197,7 @@ class ConversationRuntimeGateway:
                     "source": "chat_runtime",
                     "created_request_id": context.request_id,
                     "created_correlation_id": context.correlation_id,
-                    **({"persona_scope_id": persona_scope_id} if persona_scope_id else {}),
+                    **({"persona_scope_id": requested_scope} if enforce_scope and requested_scope else {}),
                 },
             )
         )
@@ -202,7 +211,8 @@ class ConversationRuntimeGateway:
                 and raced.data is not None
                 and str(raced.data.user_id) == str(context.user_id)
             ):
-                self._check_persona_scope(raced.data, persona_scope_id)
+                if enforce_scope:
+                    self._check_persona_scope(raced.data, requested_scope)
                 return conversation_id
             raise RuntimeError(created.error or "conversation_create_failed")
 
