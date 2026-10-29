@@ -571,6 +571,9 @@ class PostgresConversationRepository(ConversationRepository):
                         FROM {self._conversation_table} c
                         WHERE c.conversation_id = :conversation_id
                           AND c.tenant_id = :tenant_id
+                          AND COALESCE(c.conversation_metadata::jsonb ->> 'persona_scope_id', '')
+                              = COALESCE(CAST(:persona_scope_id AS text), '')
+                        FOR SHARE OF c
                         ON CONFLICT (message_id) DO NOTHING
                         """
                     ),
@@ -581,6 +584,7 @@ class PostgresConversationRepository(ConversationRepository):
                         "role": message.role,
                         "content": message.content,
                         "metadata": json.dumps(message.metadata),
+                        "persona_scope_id": message.metadata.get("persona_scope_id"),
                         "created_at": message.created_at,
                     },
                 )
