@@ -347,7 +347,37 @@ class ChatRuntime:
 
         # Do not read prior conversation or personal context while gated.
         await self._freeze_persona_snapshot(request)
-        await self._prepare_conversation_continuation(request)
+        try:
+            await self._prepare_conversation_continuation(request)
+        except PermissionError:
+            # Persona/history denial is not a model failure. Never hand it to
+            # the fallback router or silently complete an unsaved private turn.
+            logger.warning(
+                "persona.conversation_scope_denied",
+                extra={"correlation_id": ctx.correlation_id},
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type="PersonaHistoryScopeDenied",
+                status="denied",
+                metadata={"error_code": "PERSONA_HISTORY_SCOPE_DENIED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    requested_provider=request.preferred_provider,
+                    requested_model=request.preferred_model,
+                    degraded_mode=True,
+                    degradation_reason="persona_history_scope_denied",
+                    mode="denied",
+                    extra={
+                        "error_code": "PERSONA_HISTORY_SCOPE_DENIED",
+                        "requires_new_conversation": True,
+                    },
+                ),
+            )
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
@@ -732,7 +762,54 @@ class ChatRuntime:
         # Match HTTP ordering: runtime availability gate precedes context access.
         self._apply_selected_model_settings(request)
         await self._freeze_persona_snapshot(request)
-        await self._prepare_conversation_continuation(request)
+        try:
+            await self._prepare_conversation_continuation(request)
+        except PermissionError:
+            denial = {
+                "status": "error",
+                "error_code": "PERSONA_HISTORY_SCOPE_DENIED",
+                "requires_new_conversation": True,
+                "actual_provider": None,
+                "actual_model": None,
+                "response_source": "unavailable",
+                "degraded_mode": True,
+                "degradation_reason": "persona_history_scope_denied",
+            }
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type="PersonaHistoryScopeDenied",
+                status="denied",
+                metadata={"error_code": denial["error_code"]},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content=(
+                        "This conversation cannot continue with the selected persona. "
+                        "Start a new conversation."
+                    ),
+                    correlation_id=ctx.correlation_id,
+                    metadata=denial,
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            sequence += 1
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.COMPLETE,
+                    content="",
+                    correlation_id=ctx.correlation_id,
+                    metadata=denial,
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            return
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
