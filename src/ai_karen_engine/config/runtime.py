@@ -81,7 +81,7 @@ class LLMSettings:
     temperature: float = 0.7
     max_tokens: int = 2048
     # Default completion budget for ordinary direct chat, not prompt context.
-    chat_default_max_output_tokens: int = 512
+    chat_default_max_output_tokens: int = 1536
     timeout: int = 30
     max_retries: int = 3
 

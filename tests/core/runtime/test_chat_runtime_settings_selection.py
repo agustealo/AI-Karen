@@ -126,6 +126,14 @@ def test_disabled_provider_cannot_be_forced_by_saved_configuration(
     assert request.preferred_model is None
 
 
+def test_default_chat_output_budget_supports_long_form_without_unbounded_generation() -> None:
+    from ai_karen_engine.config.runtime import LLMSettings
+
+    config = LLMSettings()
+    assert config.chat_default_max_output_tokens == 1536
+    assert 1024 <= config.chat_default_max_output_tokens <= config.max_tokens
+
+
 def test_stream_error_events_include_canonical_failure_provenance() -> None:
     """Both error branches must expose backend execution truth to stream consumers."""
     import ast
