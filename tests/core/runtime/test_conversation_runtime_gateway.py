@@ -124,6 +124,27 @@ class _Repository(ConversationRepository):
     async def add_completed_turn(
         self, user_message: Message, assistant_message: Message
     ) -> RepositoryResult[int]:
+        # Model the production PostgreSQL parent-row scope check. Database
+        # concurrency/transaction atomicity still needs the live SQL burn.
+        conversation = self.conversations.get(
+            (user_message.tenant_id, user_message.conversation_id)
+        )
+        if conversation is None:
+            return RepositoryResult(success=False, error="conversation_not_found")
+        requested_scope = user_message.metadata.get("persona_scope_id")
+        if requested_scope != assistant_message.metadata.get("persona_scope_id"):
+            return RepositoryResult(success=False, error="invalid_completed_turn")
+        stored_scope = conversation.metadata.get("persona_scope_id")
+        if stored_scope is None and requested_scope:
+            if any(m.conversation_id == conversation.id for m in self.messages):
+                return RepositoryResult(
+                    success=False, error="conversation_persona_scope_mismatch"
+                )
+            conversation.metadata["persona_scope_id"] = requested_scope
+        elif stored_scope != requested_scope:
+            return RepositoryResult(
+                success=False, error="conversation_persona_scope_mismatch"
+            )
         if self.fail_add_role in {"user", "assistant"}:
             return RepositoryResult(
                 success=False, error=f"{self.fail_add_role}_write_failed"
@@ -958,3 +979,52 @@ async def test_new_persona_requires_new_conversation_identity() -> None:
     assert [message.content for message in morgan.messages] == [
         "Morgan", "Separate reply",
     ]
+
+
+@pytest.mark.asyncio
+async def test_empty_session_bootstrap_can_be_claimed_by_first_private_persona():
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    owner = _context(request_id="bootstrap")
+    bootstrapped = await gateway.ensure_session_snapshot(owner, message_limit=0)
+    assert bootstrapped.conversation.metadata.get("persona_scope_id") is None
+
+    history = await gateway.load_history(
+        _context(request_id="first"), limit=12, persona_scope_id="Troy",
+    )
+    assert history.status == "empty"
+    saved = await gateway.persist_completed_turn(
+        _context(request_id="first"),
+        user_text="Troy private request", assistant_text="Scoped response",
+        persona_scope_id="Troy",
+    )
+    assert saved.status == "persisted"
+    assert bootstrapped.conversation.metadata["persona_scope_id"] == "Troy"
+
+    # UI can still display a user-owned conversation, but a default model
+    # cannot reuse its private transcript as prompt continuity.
+    snapshot = await gateway.ensure_session_snapshot(owner, message_limit=12)
+    assert len(snapshot.messages) == 2
+    default_history = await gateway.load_history(
+        _context(request_id="second"), limit=12,
+    )
+    assert default_history.status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_competing_persona_cannot_claim_already_bound_session_shell():
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    context = _context()
+    await gateway.ensure_session_snapshot(context, message_limit=0)
+    first = await gateway.persist_completed_turn(
+        _context(request_id="first"), user_text="First", assistant_text="Troy",
+        persona_scope_id="Troy",
+    )
+    second = await gateway.persist_completed_turn(
+        _context(request_id="second"), user_text="Second", assistant_text="Morgan",
+        persona_scope_id="Morgan",
+    )
+    assert first.status == "persisted"
+    assert second.status == "rejected"
+    assert len(repository.messages) == 2
