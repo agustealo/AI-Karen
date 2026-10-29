@@ -5,15 +5,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
     ChatExecutionStatus,
+    PersonaExecutionSnapshot,
     ChatStreamChunk,
     ChatStreamEventType,
 )
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+    TranscriptHistoryResult,
     TranscriptPersistenceResult,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
@@ -47,6 +50,14 @@ class _TranscriptGateway:
         )
         self.calls: list[dict[str, Any]] = []
 
+    async def load_history(
+        self, context: ChatExecutionContext, *, limit: int,
+        persona_scope_id: str | None = None,
+    ) -> TranscriptHistoryResult:
+        return TranscriptHistoryResult(
+            status="empty", conversation_id=context.conversation_id or "",
+        )
+
     async def persist_completed_turn(
         self,
         context: ChatExecutionContext,
@@ -54,6 +65,7 @@ class _TranscriptGateway:
         user_text: str,
         assistant_text: str,
         response_metadata: Optional[Dict[str, Any]] = None,
+        persona_scope_id: str | None = None,
     ) -> TranscriptPersistenceResult:
         self.calls.append(
             {
@@ -61,6 +73,7 @@ class _TranscriptGateway:
                 "user_text": user_text,
                 "assistant_text": assistant_text,
                 "response_metadata": dict(response_metadata or {}),
+                "persona_scope_id": persona_scope_id,
             }
         )
         return self.result
@@ -84,13 +97,19 @@ def _make_request() -> ChatExecutionRequest:
         conversation_id=CONVERSATION_ID,
         request_id="req-1",
         correlation_id="corr-1",
+        authenticated_user=UserData(user_id=USER_ID, tenant_id=TENANT_ID),
     )
-    return ChatExecutionRequest(
+    request = ChatExecutionRequest(
         messages=[{"role": "user", "content": "hello"}],
         context=ctx,
         preferred_provider="ollama",
         preferred_model="llama3",
     )
+    # Stream contract tests validate provider output, not persona DB reads.
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id=USER_ID, tenant_id=TENANT_ID, status="none",
+    )
+    return request
 
 
 def _make_decision() -> ExecutionDecision:
