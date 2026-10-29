@@ -2515,9 +2515,15 @@ class ChatRuntime:
             candidate = {
                 "schema_version": 1,
                 "presentation_id": f"time-{request.context.request_id}",
-                "component_type": "time.observation",
+                "component_type": (
+                    "date.observation" if payload.get("mode") == "date" else "time.observation"
+                ),
                 "data": {
-                    "formatted": payload.get("formatted") or payload.get("value") or payload.get("time"),
+                    "formatted": (
+                        (payload.get("date") or payload.get("value"))
+                        if payload.get("mode") == "date"
+                        else (payload.get("formatted") or payload.get("value") or payload.get("time"))
+                    ),
                     "timezone": payload.get("timezone") or payload.get("resolved_timezone"),
                 },
                 "evidence_ref": f"{request.context.request_id}:{result.source_id}",
