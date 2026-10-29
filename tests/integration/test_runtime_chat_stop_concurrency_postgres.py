@@ -70,7 +70,8 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             CREATE TABLE public.conversations (
                 conversation_id uuid PRIMARY KEY,
                 tenant_id uuid NOT NULL REFERENCES public.tenants(id),
-                user_id uuid NOT NULL REFERENCES public.auth_users(user_id)
+                user_id uuid NOT NULL REFERENCES public.auth_users(user_id),
+                conversation_metadata jsonb NOT NULL DEFAULT '{}'::jsonb
             );
             CREATE TABLE public.messages (
                 message_id uuid PRIMARY KEY,
