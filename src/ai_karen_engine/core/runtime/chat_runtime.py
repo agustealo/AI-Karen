@@ -13,6 +13,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
     ChatExecutionResult,
     ChatExecutionStatus,
+    PersonaExecutionSnapshot,
     ChatRuntimeMetadata,
     ChatStreamEventType,
 )
@@ -152,6 +153,94 @@ class ChatRuntime:
         return get_workflow_runtime()
 
     @staticmethod
+    async def _freeze_persona_snapshot(
+        request: ChatExecutionRequest,
+    ) -> PersonaExecutionSnapshot:
+        """Resolve one authenticated persona view before CORTEX retrieves evidence.
+
+        Later persona edits or cross-tab selection changes affect subsequent
+        turns only. The snapshot does not grant resource access, which remains
+        subject to canonical memory ACLs and runtime policy.
+        """
+        current = request.persona_snapshot
+        if current is not None:
+            if not current.matches(request.context):
+                raise PermissionError("persona_snapshot_identity_mismatch")
+            return current
+
+        ctx = request.context
+        unavailable = PersonaExecutionSnapshot(
+            user_id=str(ctx.user_id),
+            tenant_id=str(ctx.tenant_id),
+            status="unavailable",
+        )
+        try:
+            principal = ctx.require_authenticated_user()
+        except (AttributeError, PermissionError):
+            request.persona_snapshot = unavailable
+            return unavailable
+
+        try:
+            from ai_karen_engine.services.persona.persona_service import (
+                get_persona_service,
+            )
+
+            service = get_persona_service()
+            preferences = await service.get_user_preferences(
+                user_id=str(principal.user_id),
+                tenant_id=str(principal.tenant_id),
+            )
+            active_id = preferences.active_persona_id
+            revision = int(getattr(preferences, "revision", 0))
+            if not active_id:
+                snapshot = PersonaExecutionSnapshot(
+                    user_id=str(principal.user_id),
+                    tenant_id=str(principal.tenant_id),
+                    status="none",
+                    selection_revision=revision,
+                )
+            else:
+                selected = await service.get_persona(
+                    active_id,
+                    str(principal.user_id),
+                    str(principal.tenant_id),
+                )
+                if selected is None or not selected.is_active:
+                    snapshot = unavailable
+                else:
+                    # Named private personas always use scoped recall until
+                    # a separately governed resource-sharing grant exists.
+                    is_private = not bool(
+                        getattr(selected, "is_system_persona", False)
+                    )
+                    filter_required = is_private or bool(
+                        getattr(preferences, "enable_persona_memory_filtering", False)
+                        and not getattr(preferences, "cross_persona_memory_sharing", False)
+                    )
+                    snapshot = PersonaExecutionSnapshot(
+                        user_id=str(principal.user_id),
+                        tenant_id=str(principal.tenant_id),
+                        status="ready",
+                        persona_id=str(active_id),
+                        selection_revision=revision,
+                        tone=str(selected.default_tone.value),
+                        verbosity=str(selected.default_verbosity.value),
+                        language_style=str(selected.default_language.value),
+                        memory_filter_required=filter_required,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "persona.execution_snapshot_unavailable",
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            snapshot = unavailable
+        request.persona_snapshot = snapshot
+        return snapshot
+
+    @staticmethod
     def _apply_selected_model_settings(request: ChatExecutionRequest) -> None:
         """Apply an explicitly saved application model choice inside runtime.
 
@@ -255,6 +344,7 @@ class ChatRuntime:
 
         # Do not read prior conversation or personal context while gated.
         await self._prepare_conversation_continuation(request)
+        await self._freeze_persona_snapshot(request)
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
@@ -639,6 +729,7 @@ class ChatRuntime:
         # Match HTTP ordering: runtime availability gate precedes context access.
         self._apply_selected_model_settings(request)
         await self._prepare_conversation_continuation(request)
+        await self._freeze_persona_snapshot(request)
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
@@ -1897,23 +1988,12 @@ class ChatRuntime:
             "authorized_session_id": plan.authorized_session_id,
         }
 
-        # Resolve persona provenance from backend-owned, tenant-scoped
-        # preferences only. Never accept a request metadata persona ID.
+        # Frozen at admission: a concurrent selection must not reattribute
+        # a memory candidate to the persona chosen midway through this turn.
+        snapshot = await self._freeze_persona_snapshot(request)
         persona_provenance: Dict[str, str] = {}
-        try:
-            from ai_karen_engine.services.persona.persona_service import get_persona_service
-
-            persona_preferences = await get_persona_service().get_user_preferences(
-                user_id=ctx.user_id, tenant_id=ctx.tenant_id,
-            )
-            selected_persona_id = persona_preferences.active_persona_id
-            if selected_persona_id:
-                persona_provenance["persona_id"] = selected_persona_id
-        except Exception:
-            logger.warning(
-                "memory.persona_provenance_unavailable",
-                extra={"correlation_id": ctx.correlation_id},
-            )
+        if snapshot.status == "ready" and snapshot.persona_id:
+            persona_provenance["persona_id"] = snapshot.persona_id
 
         try:
             from ai_karen_engine.core.memory import get_memory_manager
@@ -3403,39 +3483,16 @@ class ChatRuntime:
                 (request.metadata or {}).get("memory_context", {}).get("recall") or []
             )
 
-        # Presentation preferences are resolved from the authenticated,
-        # tenant-scoped persona service. Client metadata never supplies a
-        # system prompt or an authoritative persona identifier.
+        # Reuse the exact snapshot that governed CORTEX evidence resolution.
+        # Never load a second active persona after a concurrent user switch.
+        snapshot = await ChatRuntime._freeze_persona_snapshot(request)
         persona_presentation: Dict[str, Any] = {}
-        try:
-            principal = request.context.require_authenticated_user()
-        except (AttributeError, PermissionError):
-            principal = None
-        if principal is not None:
-            try:
-                from ai_karen_engine.services.persona.persona_service import get_persona_service
-
-                service = get_persona_service()
-                preferences = await service.get_user_preferences(
-                    user_id=str(principal.user_id),
-                    tenant_id=str(principal.tenant_id),
-                )
-                if preferences.active_persona_id:
-                    selected = await service.get_persona(
-                        preferences.active_persona_id,
-                        str(principal.user_id),
-                        str(principal.tenant_id),
-                    )
-                    if selected is not None and selected.is_active:
-                        persona_presentation = {
-                            "tone": str(selected.default_tone.value),
-                            "verbosity": str(selected.default_verbosity.value),
-                            "language_style": str(selected.default_language.value),
-                        }
-            except Exception:
-                # Persona preferences are optional; unavailable storage must
-                # not turn a failed lookup into an invented selection.
-                logger.warning("Persona presentation unavailable", exc_info=False)
+        if snapshot.status == "ready":
+            persona_presentation = {
+                "tone": snapshot.tone,
+                "verbosity": snapshot.verbosity,
+                "language_style": snapshot.language_style,
+            }
 
         assembly_request = PromptAssemblyRequest(
             persona=persona_presentation,
