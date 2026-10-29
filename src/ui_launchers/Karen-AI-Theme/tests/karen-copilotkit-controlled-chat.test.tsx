@@ -135,6 +135,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
   it("does not start a provider, append a message or overwrite saved history on mount", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     expect(screen.getByTestId("native-copilot-view")).toBeTruthy();
+    expect(screen.getByTestId("karen-copilot-sdk-chat")).toBeTruthy();
     expect(screen.getByTestId("shared-local-dictation")).toBeTruthy();
     expect(screen.getByTestId("shared-browser-dictation")).toBeTruthy();
     expect(sdk.useAgentOptions).toEqual([{

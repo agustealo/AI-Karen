@@ -371,13 +371,16 @@ export function KarenCopilotControlledChat({
       {!draftSynced && <p role="status" className="px-3 text-xs text-muted-foreground">
         Saving draft to your conversation…
       </p>}
-      <CopilotChatView
-        messages={agent.messages}
-        isRunning={agent.isRunning}
-        autoScroll
-        messageView={{ assistantMessage: KarenCopilotAssistantSlot }}
-        input={{ value: draft, onChange: onDraftChange, onSubmitMessage, onStop }}
-      />
+      <div data-testid="karen-copilot-sdk-chat"
+        className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <CopilotChatView
+          messages={agent.messages}
+          isRunning={agent.isRunning}
+          autoScroll
+          messageView={{ assistantMessage: KarenCopilotAssistantSlot }}
+          input={{ value: draft, onChange: onDraftChange, onSubmitMessage, onStop }}
+        />
+      </div>
       <div data-testid="karen-copilot-voice-controls"
         className="flex shrink-0 items-center gap-2 border-t border-border/50 px-3 py-1">
         <KarenLocalDictationCapture port={draftPort} />

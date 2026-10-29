@@ -41,6 +41,17 @@ retains pending status through transient errors. This is a committed
 implementation, **not** proof of real cross-worker model cancellation
 until the protected browser and live PostgreSQL test are executed.
 
+### Native Stop selector isolation
+
+The real-browser positive Stop check scopes the composer and Stop
+button to the actual CopilotKit chat view via
+`data-testid=karen-copilot-sdk-chat`. It must find **exactly one** SDK
+Stop control and an unambiguous composer before submitting or cancelling.
+The adjacent dictation controls are not valid cancellation targets, and
+a false positive from clicking Stop dictation must not count as model
+worker cancellation. This is an acceptance selector boundary, not a new
+runtime or UI cancellation owner.
+
 ### Separate positive live-model Stop acceptance
 
 The protected `copilotkit-native` scenario now contains a separately

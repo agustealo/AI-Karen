@@ -507,7 +507,12 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   await page.goto("/acceptance/copilotkit/" + encodeURIComponent(dedicatedThread));
   const native = page.getByTestId("karen-copilot-controlled-chat");
   await expect(native).toBeVisible({ timeout: 30000 });
-  const composer = native.locator("textarea").first();
+  // Voice buttons and failed-message controls are siblings, not inference
+  // controls. Only interact with the uniquely scoped SDK composer.
+  const sdkChat = native.getByTestId("karen-copilot-sdk-chat");
+  await expect(sdkChat).toBeVisible();
+  const composer = sdkChat.locator("textarea");
+  await expect(composer, "Native SDK must expose exactly one composer").toHaveCount(1);
   const prompt = "CK-07F3 approved disposable model cancellation: explain a detailed multi-stage thought experiment about sorting 100000 numbered tiles.";
   await composer.fill(prompt);
   await expect.poll(async () => {
@@ -548,8 +553,14 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
 
   // If the model finishes before Stop is available, this test fails rather
   // than interpreting a completed run as successful cancellation.
-  const stop = native.getByRole("button", { name: /stop/i }).first();
-  await expect(stop).toBeVisible({ timeout: 20000 });
+  // Never click Stop dictation or any other similarly named sibling.
+  // An ambiguous SDK Stop is a test failure, never an arbitrary first match.
+  const stop = sdkChat.getByRole("button", { name: /stop/i });
+  await expect(stop, "Require one and only one SDK inference Stop").toHaveCount(1, {
+    timeout: 20000,
+  });
+  await expect(stop).toBeVisible();
+  await expect(stop).toBeEnabled();
   const stopUrl = "/api/copilotkit/agent/default/stop/" + dedicatedThread;
   const outboundStops: string[] = [];
   page.on("request", request => {

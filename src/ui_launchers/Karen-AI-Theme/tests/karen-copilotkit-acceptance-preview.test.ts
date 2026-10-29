@@ -88,6 +88,9 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).toContain('"not-admitted"');
     expect(nativeBrowser).toContain("Canonical run status must be readable");
     expect(nativeBrowser).toContain('Native Stop must target exactly one observed run');
+    expect(nativeBrowser).toContain('getByTestId("karen-copilot-sdk-chat")');
+    expect(nativeBrowser).toContain("Require one and only one SDK inference Stop");
+    expect(nativeBrowser).not.toContain('native.getByRole("button", { name: /stop/i }).first()');
     expect(nativeBrowser).toContain('runId: payload.runId');
     expect(nativeBrowser).toContain("Cancelled run must not create a falsely completed");
   });
