@@ -230,10 +230,16 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         async def blocked_upstream():
             try:
                 yield ChatStreamChunk(
-                    type=ChatStreamEventType.CONTENT, content="test partial chunk",
+                    type=ChatStreamEventType.CONTENT,
+                    content="test partial chunk",
+                    correlation_id=process_lease.correlation_id,
                 )
                 await blocked.wait()
-                yield ChatStreamChunk(type=ChatStreamEventType.COMPLETE, content="")
+                yield ChatStreamChunk(
+                    type=ChatStreamEventType.COMPLETE,
+                    content="",
+                    correlation_id=process_lease.correlation_id,
+                )
             finally:
                 upstream_closed.set()
 
