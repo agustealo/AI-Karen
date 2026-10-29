@@ -1967,6 +1967,21 @@ class ChatRuntime:
             memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
             return result
 
+        # Persisting with an unknown persona selection would silently attach a
+        # private correction to global memory. Deny until scope is resolved.
+        snapshot = await self._freeze_persona_snapshot(request)
+        if snapshot.status == "unavailable" or not snapshot.matches(ctx):
+            memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
+            memory_recall_meta["memory_degraded"] = True
+            memory_recall_meta["memory_degradation_reason"] = (
+                "persona_snapshot_unavailable"
+            )
+            return {
+                "status": "rejected",
+                "reason": "persona_snapshot_unavailable",
+                "persisted": 0,
+            }
+
         user_message = self._extract_user_message(request.messages)
         user_message = self._resolve_explicit_memory_reference(request, user_message)
         if not user_message.strip():
