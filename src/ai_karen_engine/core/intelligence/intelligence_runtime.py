@@ -20,7 +20,7 @@ from ai_karen_engine.core.intelligence.contracts import (
 )
 from ai_karen_engine.core.intelligence.profile_attribute import requested_profile_attribute
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
-from ai_karen_engine.core.intelligence.linguistic.contracts import LinguisticAnalysisResult
+from ai_karen_engine.core.intelligence.linguistic.contracts import ParsedMessage
 from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
 from ai_karen_engine.core.intelligence.ml.ml_runtime import MLRuntime
 from ai_karen_engine.core.intelligence.ml.predictors.ambiguity import AmbiguityPredictor
@@ -137,67 +137,76 @@ class IntelligenceRuntime:
 
         if self._linguistic is not None:
             try:
-                ling_result: LinguisticAnalysisResult = await self._linguistic.parse(text)
+                parsed: ParsedMessage = await self._linguistic.parse(text)
+                metadata = await self._linguistic.metadata()
+                fallback_used = bool(parsed.used_fallback or metadata.fallback_used)
                 result.entities = [
                     {"text": entity_text, "label": entity_label}
-                    for entity_text, entity_label in ling_result.parsed.entities
+                    for entity_text, entity_label in parsed.entities
                 ]
-                result.key_phrases = ling_result.parsed.noun_phrases[:10]
-                features.token_count = len(ling_result.parsed.tokens)
-                features.sentence_count = len(ling_result.parsed.sentences)
-                features.entity_count = len(ling_result.parsed.entities)
-                features.entity_labels = [
-                    label for _, label in ling_result.parsed.entities
-                ]
-                features.key_phrases = ling_result.parsed.noun_phrases[:10]
-                features.linguistic_features = {
-                    "pos_tags": ling_result.parsed.pos_tags,
-                }
-                features.syntax_features = {
-                    "dependencies": ling_result.parsed.dependencies,
-                }
-                signals.append(
-                    IntelligenceSignal(
-                        signal_type=SignalType.ENTITY,
-                        value=result.entities,
-                        confidence=0.8,
-                        source_type=SignalSourceType.SPACY,
-                        source_id="LinguisticAnalyzer",
-                        model_id=ling_result.metadata.model_id,
-                        model_version=ling_result.metadata.model_version,
-                        feature_version="v1",
+                result.key_phrases = parsed.noun_phrases[:10]
+                features.token_count = len(parsed.tokens)
+                features.sentence_count = len(parsed.sentences)
+                features.entity_count = len(parsed.entities)
+                features.entity_labels = [label for _, label in parsed.entities]
+                features.key_phrases = parsed.noun_phrases[:10]
+                features.linguistic_features = {"pos_tags": parsed.pos_tags}
+                features.syntax_features = {"dependencies": parsed.dependencies}
+                if parsed.entities:
+                    signals.append(
+                        IntelligenceSignal(
+                            signal_type=SignalType.ENTITY,
+                            value=result.entities,
+                            confidence=0.0,  # NER probabilities are not calibrated.
+                            source_type=(
+                                SignalSourceType.FALLBACK
+                                if fallback_used else SignalSourceType.SPACY
+                            ),
+                            source_id="LinguisticAnalyzer",
+                            model_id=metadata.model_id if not fallback_used else "unavailable",
+                            model_version=metadata.model_version if not fallback_used else "",
+                            feature_version="v1",
+                            fallback_used=fallback_used,
+                            latency_ms=parsed.processing_time * 1000.0,
+                            inference_method=(
+                                "fallback_tokenization" if fallback_used else "spacy_pipeline"
+                            ),
+                        )
                     )
-                )
+                if fallback_used:
+                    result.semantic_features["linguistic_degraded"] = True
             except Exception as exc:
                 logger.debug("IntelligenceRuntime linguistic analysis failed: %s", exc)
 
         semantic_encoding = await self._ml_runtime.encode(text, "default")
+        embedding_available = bool(
+            semantic_encoding is not None
+            and not semantic_encoding.fallback_used
+            and semantic_encoding.vector
+        )
+        result.semantic_features["embedding_available"] = embedding_available
         if semantic_encoding is not None:
-            features.semantic_embedding = semantic_encoding.vector
-            result.semantic_features["embedding_dim"] = semantic_encoding.dimensions
-            signals.append(
-                IntelligenceSignal(
-                    signal_type=SignalType.EMBEDDING,
-                    value=semantic_encoding.vector,
-                    confidence=0.7,
-                    source_type=(
-                        SignalSourceType.FALLBACK
-                        if semantic_encoding.fallback_used
-                        else SignalSourceType.TRANSFORMER
-                    ),
-                    source_id="SemanticEncoder",
-                    model_id=semantic_encoding.model_id,
-                    model_version=semantic_encoding.model_version,
-                    feature_version="v1",
-                    fallback_used=semantic_encoding.fallback_used,
-                    encoder_model=semantic_encoding.model_id,
-                    inference_method=(
-                        "hash_embedding"
-                        if semantic_encoding.fallback_used
-                        else "transformer"
-                    ),
-                )
+            result.semantic_features["embedding_dim"] = (
+                semantic_encoding.dimensions if embedding_available else 0
             )
+            if embedding_available:
+                features.semantic_embedding = semantic_encoding.vector
+                signals.append(
+                    IntelligenceSignal(
+                        signal_type=SignalType.EMBEDDING,
+                        value=semantic_encoding.vector,
+                        confidence=0.0,  # Embeddings have no calibrated confidence.
+                        source_type=SignalSourceType.TRANSFORMER,
+                        source_id="SemanticEncoder",
+                        model_id=semantic_encoding.model_id,
+                        model_version=semantic_encoding.model_version,
+                        feature_version="v1",
+                        fallback_used=False,
+                        encoder_model=semantic_encoding.model_id,
+                        inference_method="transformer",
+                        latency_ms=semantic_encoding.latency_ms,
+                    )
+                )
 
         predictions: dict[PredictionTask, Any] = {}
         for task in PredictionTask:
@@ -350,7 +359,11 @@ class IntelligenceRuntime:
         )
         result.signals = signals
         result.latency_ms = (time.time() - start) * 1000.0
-        result.degraded = not signals and not predictions
+        result.degraded = (
+            bool(result.semantic_features.get("linguistic_degraded"))
+            or not embedding_available
+            or (not signals and not predictions)
+        )
         return result
 
     @staticmethod
