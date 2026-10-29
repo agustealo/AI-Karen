@@ -585,7 +585,10 @@ class ConversationRuntimeGateway:
                 "session_id": context.session_id,
                 "conversation_id": conversation_id,
                 "source": "conversation_api",
-                **dict(metadata or {}),
+                **{key: value for key, value in (metadata or {}).items()
+                   if key != "persona_scope_id"},
+                **({"persona_scope_id": existing.metadata["persona_scope_id"]}
+                   if (existing.metadata or {}).get("persona_scope_id") else {}),
             },
         )
         write_result = await self._repository.add_message(message)
