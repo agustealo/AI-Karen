@@ -334,3 +334,54 @@ async def test_unavailable_persona_state_never_reads_conversation_history():
     assert request.messages == [{"role": "user", "content": "Design this brand"}]
     assert request.metadata["conversation_history_status"] == "unavailable"
     assert request.metadata["conversation_history_reason"] == "persona_scope_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_nonstream_persona_scope_denial_returns_receipt_without_model():
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionStatus
+
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready",
+        persona_id="Morgan", memory_filter_required=True,
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._bind_observability_context = lambda ctx: None
+    runtime._emitter = SimpleNamespace(emit=lambda *args, **kwargs: None)
+    runtime._resolve_gate = AsyncMock(return_value=None)
+    runtime._apply_selected_model_settings = lambda req: None
+    runtime._prepare_conversation_continuation = AsyncMock(
+        side_effect=PermissionError("conversation_persona_scope_mismatch")
+    )
+    runtime._decide = AsyncMock(side_effect=AssertionError("model must not run"))
+    result = await runtime.execute(request)
+    assert result.status == ChatExecutionStatus.ERROR
+    assert result.answer == ""
+    assert result.metadata.extra["error_code"] == "PERSONA_HISTORY_SCOPE_DENIED"
+    assert result.metadata.extra["requires_new_conversation"] is True
+    assert result.metadata.actual_model is None
+    runtime._decide.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stream_persona_scope_denial_emits_error_and_terminal_without_model():
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready",
+        persona_id="Morgan", memory_filter_required=True,
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._bind_observability_context = lambda ctx: None
+    runtime._emitter = SimpleNamespace(emit=lambda *args, **kwargs: None)
+    runtime._resolve_gate = AsyncMock(return_value=None)
+    runtime._apply_selected_model_settings = lambda req: None
+    runtime._prepare_conversation_continuation = AsyncMock(
+        side_effect=PermissionError("conversation_persona_scope_mismatch")
+    )
+    runtime._decide = AsyncMock(side_effect=AssertionError("model must not run"))
+    chunks = [chunk async for chunk in runtime.execute_stream(request)]
+    assert [chunk.type.value for chunk in chunks] == ["error", "complete"]
+    assert chunks[0].metadata["error_code"] == "PERSONA_HISTORY_SCOPE_DENIED"
+    assert chunks[-1].metadata["requires_new_conversation"] is True
+    assert chunks[-1].metadata["actual_model"] is None
+    runtime._decide.assert_not_awaited()
