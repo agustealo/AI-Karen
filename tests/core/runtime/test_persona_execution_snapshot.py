@@ -166,3 +166,41 @@ async def test_unavailable_persona_blocks_durable_memory_write():
     assert outcome["persisted"] == 0
     assert outcome["reason"] == "persona_snapshot_unavailable"
     assert metadata["memory_persistence_status"] == "denied_by_policy"
+
+
+@pytest.mark.asyncio
+async def test_prompt_compilation_reuses_selection_without_requery():
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready",
+        persona_id="Troy", selection_revision=7,
+        tone="professional", verbosity="balanced", language_style="en-US",
+        memory_filter_required=True,
+    )
+    decision = SimpleNamespace(
+        memory_recall_required=False, tool_requirements=[],
+        workflow_id=None, workflow_version=None, requires_human_gate=False,
+        requires_resumability=False, token_budget=2048,
+    )
+    assembler = SimpleNamespace(
+        assemble_prompt=AsyncMock(return_value=SimpleNamespace(
+            messages=[{"role": "system", "content": "compiled"}],
+            metadata={}, included_memory_refs=[],
+        ))
+    )
+    with patch(
+        "ai_karen_engine.services.persona.persona_service.get_persona_service",
+        side_effect=AssertionError("prompt must not reload persona"),
+    ), patch(
+        "ai_karen_engine.core.runtime.prompt.get_prompt_runtime_service",
+        return_value=assembler,
+    ):
+        await ChatRuntime._assemble_prompt_with_telemetry(
+            SimpleNamespace(), request, decision,
+        )
+    offered = assembler.assemble_prompt.await_args.args[0]
+    assert offered.persona == {
+        "tone": "professional",
+        "verbosity": "balanced",
+        "language_style": "en-US",
+    }
