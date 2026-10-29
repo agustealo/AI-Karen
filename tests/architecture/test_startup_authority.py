@@ -55,3 +55,16 @@ def test_model_registry_refresh_is_opt_in() -> None:
     assert 'llm_refresh_interval: int = Field(default=0, validation_alias="KARI_LLM_REFRESH_INTERVAL")' in config
     assert "if settings.llm_refresh_interval > 0:" in startup
     assert "asyncio.create_task(_periodic_refresh())" in startup
+
+
+def test_all_api_docker_targets_install_a_versioned_compatible_spacy_pipeline() -> None:
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    wheel = (
+        "https://github.com/explosion/spacy-models/releases/download/"
+        "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+    )
+    assert dockerfile.count(wheel) == 3
+    assert dockerfile.count("python -m spacy validate") == 3
+    assert dockerfile.count("en_core_web_sm.__version__ == '3.8.0'") == 3
+    assert "python -m spacy download en_core_web_sm || true" not in dockerfile
+    assert "nlp.to_disk('/app/models/spacy/en_core_web_sm')\" || true" not in dockerfile
