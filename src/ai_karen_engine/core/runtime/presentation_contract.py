@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "surface.composition"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -81,6 +81,33 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         safe["data"] = {"layout": data["layout"], "items": safe_items}
         if manifest is not None:
             safe["data"]["evidence_refs"] = manifest
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "date.observation":
+        if not isinstance(data, dict):
+            return None
+        from datetime import date
+
+        value = data.get("formatted")
+        timezone = data.get("timezone")
+        if not isinstance(value, str) or len(value) != 10:
+            return None
+        try:
+            if date.fromisoformat(value).isoformat() != value:
+                return None
+        except ValueError:
+            return None
+        if timezone is not None and (
+            not isinstance(timezone, str) or not 1 <= len(timezone) <= 100
+        ):
+            return None
+        safe = {key: val for key, val in raw.items() if key != "data"}
+        safe["data"] = {"formatted": value}
+        if timezone:
+            safe["data"]["timezone"] = timezone
         try:
             encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
         except (TypeError, ValueError, OverflowError):
