@@ -343,8 +343,8 @@ class ChatRuntime:
         self._apply_selected_model_settings(request)
 
         # Do not read prior conversation or personal context while gated.
-        await self._prepare_conversation_continuation(request)
         await self._freeze_persona_snapshot(request)
+        await self._prepare_conversation_continuation(request)
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
@@ -728,8 +728,8 @@ class ChatRuntime:
 
         # Match HTTP ordering: runtime availability gate precedes context access.
         self._apply_selected_model_settings(request)
-        await self._prepare_conversation_continuation(request)
         await self._freeze_persona_snapshot(request)
+        await self._prepare_conversation_continuation(request)
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
