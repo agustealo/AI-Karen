@@ -589,11 +589,15 @@ services:
     command: >
       sh -c "
         npm config set loglevel error &&
-        if [ -f /app/node_modules/.install_complete ]; then
-          echo 'Skipping npm install (already populated)';
+        lock_sha=$$(sha256sum /app/package-lock.json | cut -d ' ' -f1) &&
+        cached_sha=$$(cat /app/node_modules/.install_lock_sha256 2>/dev/null || true) &&
+        if [ -n \"$$lock_sha\" ] && [ \"$$lock_sha\" = \"$$cached_sha\" ] &&
+           node -e \"const p=require('@copilotkit/react-core/package.json'); if(p.version!=='1.79.1') process.exit(1);\"; then
+          echo 'Using npm dependencies verified against package-lock.json';
         else
+          echo 'Dependency lock changed or required package missing; refreshing npm dependencies';
           npm ci --cache /root/.npm --prefer-offline --no-audit &&
-          touch /app/node_modules/.install_complete;
+          printf '%s\\n' \"$$lock_sha\" > /app/node_modules/.install_lock_sha256;
         fi &&
         npm run dev -- --hostname 0.0.0.0 --port 8010
       "
