@@ -703,6 +703,7 @@ class DirectCapabilityExecutor:
         resolved_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if intent == "time.current":
+            is_date_query = bool(re.search(r"\bdate\b", query, re.IGNORECASE))
             location = self._extract_time_location(query)
             if location:
                 return {
@@ -717,7 +718,7 @@ class DirectCapabilityExecutor:
             )
             timezone_name = selected_timezone.value if selected_timezone else None
             params: Dict[str, Any] = {
-                "mode": "time",
+                "mode": "date" if is_date_query else "time",
                 "context": dict(request.metadata or {}),
             }
             if timezone_name:
@@ -782,6 +783,13 @@ class DirectCapabilityExecutor:
                 return f"Available {requested}: {remaining_gib:.2f} GiB of {total / (1024 ** 3):.2f} GiB."
             return f"Available {requested}: {remaining_gib:.2f} GiB."
         if intent == "time.current":
+            if payload.get("mode") == "date":
+                date_value = payload.get("date") or payload.get("value")
+                if date_value:
+                    timezone_label = payload.get("resolved_timezone") or payload.get("timezone")
+                    if timezone_label:
+                        return f"The current date in {timezone_label} is {date_value}."
+                    return f"The current date is {date_value}."
             value = (
                 payload.get("value")
                 or payload.get("formatted")
