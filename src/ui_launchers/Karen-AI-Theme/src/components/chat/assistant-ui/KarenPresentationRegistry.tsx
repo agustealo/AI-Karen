@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "surface.composition"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -68,6 +68,16 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
           !parseKarenPresentation(child)) return null;
     }
     if (Array.isArray(manifest) && new Set(data.items.map((item: Record<string, unknown>) => item.evidence_ref)).size !== manifest.length) return null;
+  } else if (result.data.component_type === "date.observation") {
+    const value = result.data.data;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const date = (value as Record<string, unknown>).formatted;
+    const timezone = (value as Record<string, unknown>).timezone;
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    const observed = new Date(date + "T00:00:00Z");
+    if (Number.isNaN(observed.valueOf()) || observed.toISOString().slice(0, 10) !== date) return null;
+    if (timezone !== undefined && (typeof timezone !== "string" || !timezone || timezone.length > 100)) return null;
+    if (Object.keys(value).some((key) => !["formatted", "timezone"].includes(key))) return null;
   } else if (result.data.component_type === "time.observation") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -113,6 +123,19 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
         className={composite.layout === "grid" ? "my-3 grid grid-cols-1 gap-3 lg:grid-cols-2" : "my-3 flex flex-col gap-3"}>
         {composite.items.map((item) =>
           <KarenPresentationRegistry key={item.presentation_id} data={item} />)}
+      </section>;
+    }
+    case "date.observation": {
+      const observed = envelope.data as { formatted: string; timezone?: string };
+      const calendarDate = new Date(observed.formatted + "T00:00:00Z");
+      const label = new Intl.DateTimeFormat("en-US", {
+        weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC",
+      }).format(calendarDate);
+      return <section aria-label="Verified date observation" data-testid="karen-date-presentation"
+        className={envelope.display?.density === "compact" ? "my-2 rounded-lg border border-border/70 p-2" : "my-3 rounded-xl border border-border/70 p-4"}>
+        <p className="text-xs font-medium text-muted-foreground">Reported date{observed.timezone ? ` (${observed.timezone})` : ""}</p>
+        <p className="mt-1 text-2xl font-semibold tabular-nums">{label}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{observed.formatted}</p>
       </section>;
     }
     case "time.observation": {

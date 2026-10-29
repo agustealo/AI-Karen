@@ -231,3 +231,30 @@ def test_source_selected_display_density_is_governed():
         {"density": 42},
     ):
         assert validate_presentation({**base, "display": invalid}) is None
+
+
+def test_date_observation_is_calendar_valid_and_evidence_bound():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "date-1",
+        "component_type": "date.observation",
+        "evidence_ref": "request-1:time-query",
+        "data": {
+            "formatted": "2026-10-29",
+            "timezone": "America/Detroit",
+            "secret": "never-project",
+        },
+    }
+    clean = validate_presentation(base)
+    assert clean is not None
+    assert clean["data"] == {
+        "formatted": "2026-10-29",
+        "timezone": "America/Detroit",
+    }
+    for invalid in ("2026-02-30", "2026-10-24T12:00Z", "date unknown"):
+        assert validate_presentation({
+            **base, "data": {"formatted": invalid}
+        }) is None
+    assert validate_presentation({
+        **base, "data": {"formatted": "2026-10-29", "timezone": 3}
+    }) is None

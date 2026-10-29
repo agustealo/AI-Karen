@@ -25,12 +25,16 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "allow_llm_only": False,
     },
     "time.current": {
-        "triggers": ["what time", "current time", "time in", "timezone"],
+        "triggers": ["what time", "current time", "time in", "timezone", "current date", "today's date"],
         "patterns": [
             r"^what\s+time\s+is\s+it(?:\s+right\s+now)?(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^what(?:'s|s|\s+is)\s+the\s+(?:current\s+)?time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^time\s+now(?:\s+(?:in|for)\s+.+)?[?!.]*$",
+            r"^what(?:'s|\s+is)\s+(?:the\s+)?(?:current\s+|today'?s?\s+)?date(?:\s+(?:today|right\s+now))?[?!.]*$",
+            r"^what\s+(?:is\s+)?today'?s?\s+date[?!.]*$",
+            r"^(?:current|today'?s?)\s+date[?!.]*$",
+            r"^(?:please\s+)?(?:tell\s+me|show\s+me)\s+(?:the\s+)?(?:current|today'?s?)\s+date[?!.]*$",
             r"^timezone\s+(?:in|for|of)\s+.+[?!.]*$",
             r"^(?:please\s+)?(?:could|would|can)\s+you\s+(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^(?:please\s+)?tell\s+me\s+(?:what\s+time\s+it\s+is|what\s+time\s+is\s+it|the\s+(?:current\s+)?time)(?:\s+(?:in|for)\s+.+)?[?!.]*$",

@@ -10,6 +10,31 @@ const valid = {
   data: { location: "Detroit, Michigan", temperature_f: 60.3, wind_speed_mph: 0.3 },
 } as const;
 
+describe("verified date observation", () => {
+  const observation = {
+    schema_version: 1,
+    presentation_id: "date-20261029",
+    evidence_ref: "request-1:time-query",
+    component_type: "date.observation",
+    data: { formatted: "2026-10-29", timezone: "America/Detroit" },
+  };
+  it("presents the backed date without converting timezones", () => {
+    expect(parseKarenPresentation(observation)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={observation} />);
+    expect(html).toContain("Thursday, October 29, 2026");
+    expect(html).toContain("America/Detroit");
+    expect(html).toContain("karen-date-presentation");
+  });
+  it("rejects invalid calendar days and unapproved fields", () => {
+    expect(parseKarenPresentation({
+      ...observation, data: { formatted: "2026-02-30" },
+    })).toBeNull();
+    expect(parseKarenPresentation({
+      ...observation, data: { formatted: "2026-10-29", private: "secret" },
+    })).toBeNull();
+  });
+});
+
 describe("versioned presentation registry", () => {
 
   it("restores a bounded composed surface with independently referenced evidence", () => {
