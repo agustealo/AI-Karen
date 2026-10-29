@@ -1,5 +1,22 @@
 # KPERSONA: First-class Persona Studio and Persona Runtime
 
+> **Product acceptance contract (2026-10-29):** A persona knows its
+> user-declared purpose, uses only knowledge authorized for its current task,
+> understands explicit corrections without interpreting quoted text as consent,
+> preserves user-approved and reversible working preferences, and demonstrates
+> improvement against an unchanged task-quality baseline.
+>
+> **Proof over appearance:** A persona name is not a capability. A stored
+> instruction is not evidence it was applied. Semantic resemblance is not
+> permission or a calibrated probability. A missing context selector must
+> exclude scoped preferences, never widen them.
+>
+> **Current delivery gate:** Repair existing NLP contracts and provenance,
+> prevent scope widening, then verify authorized single-persona execution,
+> correction approval, persistence/reload, cross-persona isolation, and
+> measurable task improvement before shipping advanced teams or persona UX.
+
+
 Status: audited design and execution contract, not implementation-complete
 Base: main at 2e3a46b85beb25c648ee46a9687408948a8cabdf (2026-10-21)
 Owner: canonical ChatRuntime / PromptRuntime for execution; PersonaService for scoped definition persistence; UserModelRuntime for evidence-based personalization; UI for presentation only.
