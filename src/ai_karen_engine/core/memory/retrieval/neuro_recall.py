@@ -249,16 +249,17 @@ class NeuroRecall:
                 rejected_count += 1
                 continue
 
-            # Persona filtering is an eligibility restriction applied after
-            # mandatory tenant/user isolation. Unattributed memories remain
-            # visible as shared history; differently attributed memories do not.
+            # A persona filter is a strict eligibility boundary, not a hint:
+            # unattributed legacy memories have no proof of permission to
+            # enter this persona. Explicit sharing requires separately
+            # authorized source grants and must not reuse this filter as ACL.
             if persona_filter is not None:
                 custom_metadata = getattr(metadata, "custom", {}) if metadata else {}
                 tagged_persona = (
                     custom_metadata.get("persona_id")
                     if isinstance(custom_metadata, dict) else None
                 )
-                if tagged_persona is not None and tagged_persona != persona_filter:
+                if tagged_persona != persona_filter:
                     rejected_count += 1
                     continue
 
