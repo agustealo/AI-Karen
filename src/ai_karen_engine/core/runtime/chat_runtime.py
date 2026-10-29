@@ -164,6 +164,9 @@ class ChatRuntime:
         """
         current = request.persona_snapshot
         if current is not None:
+            # Internal snapshots must not be reused after an auth-context
+            # change, even if the string user/tenant IDs happen to match.
+            request.context.require_authenticated_user()
             if not current.matches(request.context):
                 raise PermissionError("persona_snapshot_identity_mismatch")
             return current
