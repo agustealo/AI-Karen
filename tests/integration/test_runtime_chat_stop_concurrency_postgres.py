@@ -22,6 +22,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ai_karen_engine.persistence.repositories import chat_run_repository as module
 from ai_karen_engine.persistence.repositories.chat_run_repository import SqlChatRunRepository
+from ai_karen_engine.core.runtime import chat_run_lifecycle
+from ai_karen_engine.core.runtime.chat_run_lifecycle import (
+    ChatRunCancellationRequested, ChatRunCoordinator,
+)
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatStreamChunk, ChatStreamEventType,
+)
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Message, canonical_message_digest,
 )
@@ -212,6 +219,29 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             "cancel_requested": False,
             "cancellation_confirmed": False,
         }
+        # Run the ACTUAL canonical coordinator around a blocked test stream.
+        # The separate OS process must cause its heartbeat to cancel the
+        # upstream await, close the generator and write terminal PostgreSQL.
+        # No model/provider service or runtime executor is fabricated.
+        monkeypatch.setattr(chat_run_lifecycle, "_heartbeat_seconds", lambda: 0.02)
+        upstream_closed = asyncio.Event()
+        blocked = asyncio.Event()
+
+        async def blocked_upstream():
+            try:
+                yield ChatStreamChunk(
+                    type=ChatStreamEventType.CONTENT, content="test partial chunk",
+                )
+                await blocked.wait()
+                yield ChatStreamChunk(type=ChatStreamEventType.COMPLETE, content="")
+            finally:
+                upstream_closed.set()
+
+        active_stream = ChatRunCoordinator(worker_a).stream(
+            blocked_upstream(), lease=process_lease,
+        )
+        first_chunk = await asyncio.wait_for(anext(active_stream), timeout=10)
+        assert first_chunk.content == "test partial chunk"
         worker_environment = {
             **os.environ,
             "KAREN_CI_RUN_CHILD_PROBE": "1",
@@ -247,8 +277,16 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         }
         assert not await worker_a.renew(process_lease)
         assert await worker_a.cancel_requested(process_lease)
-        assert await worker_a.finish(
-            process_lease, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
+
+        async def consume_remaining():
+            async for chunk in active_stream:
+                # A stale worker must NEVER emit a completed model response.
+                assert chunk.type != ChatStreamEventType.COMPLETE
+
+        with pytest.raises(ChatRunCancellationRequested):
+            await asyncio.wait_for(consume_remaining(), timeout=10)
+        assert upstream_closed.is_set(), (
+            "A remote stop must actually close the blocked upstream generator"
         )
         assert await worker_b.read_status(**identity(
             run_id="run-external-process",
