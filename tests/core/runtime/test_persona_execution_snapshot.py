@@ -145,3 +145,24 @@ async def test_unavailable_snapshot_disables_recall_instead_of_widening_it():
     assert cognitive.metadata["memory_degradation_reason"] == (
         "persona_snapshot_unavailable"
     )
+
+
+@pytest.mark.asyncio
+async def test_unavailable_persona_blocks_durable_memory_write():
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="unavailable"
+    )
+    plan = SimpleNamespace(matches_execution_scope=lambda **kwargs: True)
+    metadata = {}
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    with patch(
+        "ai_karen_engine.core.runtime.chat_runtime.ActionExecutionGate.authorize",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        outcome = await runtime._persist_memory(request, "result", metadata, plan)
+    assert outcome["status"] == "rejected"
+    assert outcome["persisted"] == 0
+    assert outcome["reason"] == "persona_snapshot_unavailable"
+    assert metadata["memory_persistence_status"] == "denied_by_policy"
