@@ -328,6 +328,9 @@ async def test_unavailable_persona_state_never_reads_conversation_history():
     gateway = SimpleNamespace(load_history=AsyncMock())
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = gateway
-    with pytest.raises(PermissionError, match="persona_scope_unavailable"):
-        await runtime._prepare_conversation_continuation(request)
+    request.messages.insert(0, {"role": "assistant", "content": "old private context"})
+    await runtime._prepare_conversation_continuation(request)
     gateway.load_history.assert_not_awaited()
+    assert request.messages == [{"role": "user", "content": "Design this brand"}]
+    assert request.metadata["conversation_history_status"] == "unavailable"
+    assert request.metadata["conversation_history_reason"] == "persona_scope_unavailable"
