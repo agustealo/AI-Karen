@@ -8,9 +8,11 @@ import pytest
 
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
+    PersonaExecutionSnapshot,
 )
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
@@ -51,6 +53,18 @@ def _request(text: str, *, metadata=None) -> ChatExecutionRequest:
         ),
         metadata=dict(metadata or {}),
     )
+
+
+def _authenticated_history_request(text: str) -> ChatExecutionRequest:
+    """Exercise canonical continuation with a verified, nonprivate owner."""
+    request = _request(text)
+    request.context.authenticated_user = UserData(
+        user_id=USER_ID, tenant_id=TENANT_ID,
+    )
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id=USER_ID, tenant_id=TENANT_ID, status="none",
+    )
+    return request
 
 
 def _analysis() -> SimpleNamespace:
@@ -1364,17 +1378,17 @@ async def test_runtime_loads_authorized_transcript_for_single_turn_weather_reply
         ),
     ]
     gateway = SimpleNamespace(
-        load_history=AsyncMock(return_value=SimpleNamespace(success=True, messages=tuple(history)))
+        load_history=AsyncMock(return_value=SimpleNamespace(status="loaded", success=True, messages=tuple(history)))
     )
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = gateway
-    request = _request("nyc")
+    request = _authenticated_history_request("nyc")
 
     await runtime._prepare_conversation_continuation(request)
 
     assert request.messages[-1]["content"] == "What's the weather in nyc?"
     assert request.metadata["weather_followup_resolved"] is True
-    gateway.load_history.assert_awaited_once_with(request.context, limit=12)
+    gateway.load_history.assert_awaited_once_with(request.context, limit=12, persona_scope_id=None)
 
 
 @pytest.mark.asyncio
@@ -1383,9 +1397,9 @@ async def test_runtime_does_not_infer_pending_weather_after_denied_history() -> 
 
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = SimpleNamespace(
-        load_history=AsyncMock(return_value=SimpleNamespace(success=False, messages=()))
+        load_history=AsyncMock(return_value=SimpleNamespace(status="failed", success=False, messages=()))
     )
-    request = _request("nyc")
+    request = _authenticated_history_request("nyc")
     await runtime._prepare_conversation_continuation(request)
     assert request.messages[-1]["content"] == "nyc"
     assert not request.metadata.get("weather_followup_resolved")
@@ -1401,11 +1415,11 @@ async def test_runtime_hydrates_general_conversation_without_weather_keywords() 
         SimpleNamespace(role="assistant", content="I will track the migration blockers.", created_at=datetime.utcnow()),
     ]
     gateway = SimpleNamespace(
-        load_history=AsyncMock(return_value=SimpleNamespace(success=True, messages=tuple(history)))
+        load_history=AsyncMock(return_value=SimpleNamespace(status="loaded", success=True, messages=tuple(history)))
     )
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = gateway
-    request = _request("What is still broken?")
+    request = _authenticated_history_request("What is still broken?")
 
     await runtime._prepare_conversation_continuation(request)
 
@@ -1421,9 +1435,9 @@ async def test_runtime_denied_history_stays_uninjected_for_general_request() -> 
 
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = SimpleNamespace(
-        load_history=AsyncMock(return_value=SimpleNamespace(success=False, messages=()))
+        load_history=AsyncMock(return_value=SimpleNamespace(status="failed", success=False, messages=()))
     )
-    request = _request("What is still broken?")
+    request = _authenticated_history_request("What is still broken?")
     await runtime._prepare_conversation_continuation(request)
     assert len(request.messages) == 1
     assert "conversation_history_source" not in request.metadata
@@ -1569,19 +1583,19 @@ async def test_runtime_hydrates_colloquial_identity_for_later_origin_question() 
     )
     gateway = SimpleNamespace(
         load_history=AsyncMock(
-            return_value=SimpleNamespace(success=True, messages=history)
+            return_value=SimpleNamespace(status="loaded", success=True, messages=history)
         )
     )
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = gateway
-    request = _request("Where am I from?")
+    request = _authenticated_history_request("Where am I from?")
 
     await runtime._prepare_conversation_continuation(request)
 
     assert request.messages[0]["content"] == "I Jamaican."
     assert request.messages[-1]["content"] == "Where am I from?"
     assert request.metadata["conversation_history_materialized"] is True
-    gateway.load_history.assert_awaited_once_with(request.context, limit=12)
+    gateway.load_history.assert_awaited_once_with(request.context, limit=12, persona_scope_id=None)
 
 
 @pytest.mark.asyncio
@@ -1599,19 +1613,19 @@ async def test_runtime_preserves_self_described_identity_for_later_question() ->
     ]
     gateway = SimpleNamespace(
         load_history=AsyncMock(
-            return_value=SimpleNamespace(success=True, messages=tuple(history))
+            return_value=SimpleNamespace(status="loaded", success=True, messages=tuple(history))
         )
     )
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = gateway
-    request = _request("Where am I from?")
+    request = _authenticated_history_request("Where am I from?")
 
     await runtime._prepare_conversation_continuation(request)
 
     assert request.messages[0]["content"] == "I Jamaican."
     assert request.messages[-1]["content"] == "Where am I from?"
     assert request.metadata["conversation_history_source"] == "canonical_repository"
-    gateway.load_history.assert_awaited_once_with(request.context, limit=12)
+    gateway.load_history.assert_awaited_once_with(request.context, limit=12, persona_scope_id=None)
 
 
 @pytest.mark.asyncio
@@ -1621,10 +1635,10 @@ async def test_runtime_does_not_infer_identity_from_denied_history() -> None:
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = SimpleNamespace(
         load_history=AsyncMock(
-            return_value=SimpleNamespace(success=False, messages=())
+            return_value=SimpleNamespace(status="failed", success=False, messages=())
         )
     )
-    request = _request("Where am I from?")
+    request = _authenticated_history_request("Where am I from?")
 
     await runtime._prepare_conversation_continuation(request)
 
