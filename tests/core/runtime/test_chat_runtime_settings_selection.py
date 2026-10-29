@@ -127,9 +127,9 @@ def test_disabled_provider_cannot_be_forced_by_saved_configuration(
 
 
 def test_default_chat_output_budget_supports_long_form_without_unbounded_generation() -> None:
-    from ai_karen_engine.config.runtime import LLMConfig
+    from ai_karen_engine.config.runtime import LLMSettings
 
-    config = LLMConfig()
+    config = LLMSettings()
     assert config.chat_default_max_output_tokens == 1536
     assert 1024 <= config.chat_default_max_output_tokens <= config.max_tokens
 
