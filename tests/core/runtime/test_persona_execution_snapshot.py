@@ -219,3 +219,115 @@ async def test_frozen_persona_cannot_outlive_authenticated_principal():
     request.context.require_authenticated_user = revoked_principal
     with pytest.raises(PermissionError, match="session_revoked"):
         await ChatRuntime._freeze_persona_snapshot(request)
+
+
+@pytest.mark.asyncio
+async def test_persona_scope_blocks_older_differently_tagged_conversation():
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+        TranscriptHistoryResult,
+    )
+
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready",
+        persona_id="Morgan", memory_filter_required=True,
+    )
+    gateway = SimpleNamespace(load_history=AsyncMock(return_value=TranscriptHistoryResult(
+        status="rejected", conversation_id=str(request.context.conversation_id),
+        reason="conversation_persona_scope_mismatch",
+    )))
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    with pytest.raises(PermissionError, match="conversation_persona_scope_mismatch"):
+        await runtime._prepare_conversation_continuation(request)
+    gateway.load_history.assert_awaited_once()
+    assert gateway.load_history.await_args.kwargs["persona_scope_id"] == "Morgan"
+    assert request.messages == [{"role": "user", "content": "Design this brand"}]
+
+
+@pytest.mark.asyncio
+async def test_default_persona_cannot_resume_private_thread():
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+        TranscriptHistoryResult,
+    )
+
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="none",
+    )
+    gateway = SimpleNamespace(load_history=AsyncMock(return_value=TranscriptHistoryResult(
+        status="rejected", conversation_id=str(request.context.conversation_id),
+        reason="conversation_persona_scope_mismatch",
+    )))
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    with pytest.raises(PermissionError, match="conversation_persona_scope_mismatch"):
+        await runtime._prepare_conversation_continuation(request)
+    assert gateway.load_history.await_args.kwargs["persona_scope_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_canonical_history_replaces_untrusted_transport_prior_turns():
+    from datetime import datetime, timezone
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+        TranscriptHistoryResult,
+    )
+    now = datetime.now(timezone.utc)
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready",
+        persona_id="Troy", memory_filter_required=True,
+    )
+    request.messages.insert(0, {"role": "assistant", "content": "FORGED OLD CONTENT"})
+    gateway = SimpleNamespace(load_history=AsyncMock(return_value=TranscriptHistoryResult(
+        status="loaded", conversation_id=str(request.context.conversation_id),
+        messages=(SimpleNamespace(
+            role="assistant", content="Authorized Troy context",
+            metadata={"persona_scope_id": "Troy"}, created_at=now,
+        ),),
+    )))
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    runtime._resolve_typed_pending_clarification = lambda req: True
+    await runtime._prepare_conversation_continuation(request)
+    assert [message["content"] for message in request.messages] == [
+        "Authorized Troy context", "Design this brand",
+    ]
+    assert request.metadata["conversation_history_input_discarded"] is True
+    assert request.metadata["conversation_history_source"] == "canonical_repository"
+    assert gateway.load_history.await_args.kwargs["persona_scope_id"] == "Troy"
+
+
+@pytest.mark.asyncio
+async def test_private_persona_refuses_failed_history_read():
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+        TranscriptHistoryResult,
+    )
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready",
+        persona_id="Troy", memory_filter_required=True,
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = SimpleNamespace(
+        load_history=AsyncMock(return_value=TranscriptHistoryResult(
+            status="failed", conversation_id=str(request.context.conversation_id),
+            reason="db_offline",
+        )),
+    )
+    with pytest.raises(PermissionError, match="conversation_history_scope_unavailable"):
+        await runtime._prepare_conversation_continuation(request)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_persona_state_never_reads_conversation_history():
+    request = _request()
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="unavailable",
+    )
+    gateway = SimpleNamespace(load_history=AsyncMock())
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._conversation_gateway = gateway
+    with pytest.raises(PermissionError, match="persona_scope_unavailable"):
+        await runtime._prepare_conversation_continuation(request)
+    gateway.load_history.assert_not_awaited()
