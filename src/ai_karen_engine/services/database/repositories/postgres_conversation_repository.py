@@ -290,11 +290,14 @@ class PostgresConversationRepository(ConversationRepository):
                             conversation_metadata = :metadata,
                             updated_at = :updated_at
                         WHERE conversation_id = :id AND tenant_id = :tenant_id
+                          AND COALESCE(conversation_metadata::jsonb ->> 'persona_scope_id', '')
+                              = COALESCE(CAST(:expected_persona_scope_id AS text), '')
                         """
                     ),
                     {
                         "id": conversation.id,
                         "tenant_id": conversation.tenant_id,
+                        "expected_persona_scope_id": (conversation.metadata or {}).get("persona_scope_id"),
                         "session_id": conversation.session_id,
                         "title": conversation.title,
                         "is_active": conversation.is_active,
