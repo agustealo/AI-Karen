@@ -114,14 +114,14 @@ class IntentPredictor(BasePredictor):
             return Prediction(
                 task=PredictionTask.INTENT,
                 label=best_intent,
-                probability=best_score,
+                probability=0.0,  # Cosine similarity is not calibrated probability.
                 confidence=min(max(best_score, 0.0), 1.0),
                 model_id=model_id,
                 model_version="current",
                 feature_version=features.feature_version,
                 fallback_used=False,
                 inference_method="embedding_similarity",
-                metadata={"min_semantic_similarity": self._min_semantic_similarity},
+                metadata={"min_semantic_similarity": self._min_semantic_similarity, "similarity_score": best_score},
             )
         except Exception as exc:
             logger.debug("Intent semantic prediction failed: %s", exc)
