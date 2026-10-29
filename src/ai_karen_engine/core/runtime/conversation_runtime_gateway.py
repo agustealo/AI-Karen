@@ -10,7 +10,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
@@ -416,6 +419,77 @@ class ConversationRuntimeGateway:
             raise RuntimeError("conversation_not_found")
         return updated
 
+    @staticmethod
+    def _composer_draft_log_fields(context: ChatExecutionContext) -> Dict[str, Any]:
+        """Trace draft authority without emitting private draft text."""
+        return {
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id,
+            "user_id": context.user_id,
+            "conversation_id": context.conversation_id,
+        }
+
+    async def read_composer_draft(
+        self, context: ChatExecutionContext,
+    ) -> Dict[str, Any]:
+        """Only an owned conversation can expose its unsubmitted draft."""
+        existing = await self.require_owned_conversation(context)
+        result = await self._repository.get_composer_draft(
+            str(existing.id), context.tenant_id, user_id=context.user_id,
+        )
+        if not result.success:
+            if result.error == "conversation_not_found":
+                raise RuntimeError("conversation_not_found")
+            raise RuntimeError(result.error or "composer_draft_read_failed")
+        if not isinstance(result.data, dict):
+            raise RuntimeError("composer_draft_invalid_storage_response")
+        logger.info("conversation_draft_read_completed", extra={
+            **self._composer_draft_log_fields(context),
+            "status": "success",
+            "revision": result.data.get("revision"),
+        })
+        return result.data
+
+    async def write_composer_draft(
+        self, context: ChatExecutionContext, *,
+        text: str, expected_revision: int,
+    ) -> Dict[str, Any]:
+        """Compare-and-swap one draft. A conflicting tab must reread."""
+        if (
+            not isinstance(text, str) or len(text) > 65536
+            or len(text.encode("utf-8")) > 262144
+            or type(expected_revision) is not int or expected_revision < 0
+            or expected_revision > 9223372036854775805
+        ):
+            raise ValueError("composer_draft_invalid")
+        existing = await self.require_owned_conversation(context)
+        result = await self._repository.put_composer_draft(
+            str(existing.id), context.tenant_id, user_id=context.user_id,
+            content=text, expected_revision=expected_revision,
+        )
+        if not result.success:
+            if result.error == "composer_draft_revision_conflict":
+                logger.info("conversation_draft_write_conflict", extra={
+                    **self._composer_draft_log_fields(context),
+                    "status": "conflict",
+                    "expected_revision": expected_revision,
+                })
+                raise ValueError("composer_draft_revision_conflict")
+            if result.error == "conversation_not_found":
+                raise RuntimeError("conversation_not_found")
+            if result.error == "composer_draft_invalid":
+                raise ValueError("composer_draft_invalid")
+            raise RuntimeError(result.error or "composer_draft_write_failed")
+        if not isinstance(result.data, dict):
+            raise RuntimeError("composer_draft_invalid_storage_response")
+        logger.info("conversation_draft_write_completed", extra={
+            **self._composer_draft_log_fields(context),
+            "status": "success",
+            "revision": result.data.get("revision"),
+        })
+        return result.data
+
     async def delete_conversation(self, context: ChatExecutionContext) -> bool:
         """Delete one tenant/user-owned canonical conversation."""
         existing = await self.require_owned_conversation(context)
@@ -424,6 +498,7 @@ class ConversationRuntimeGateway:
         result = await self._repository.delete_conversation(
             conversation_id,
             context.tenant_id,
+            user_id=context.user_id,
         )
         if not result.success:
             raise RuntimeError(result.error or "conversation_delete_failed")
@@ -580,6 +655,7 @@ class ConversationRuntimeGateway:
         user_text: str,
         assistant_text: str,
         response_metadata: Optional[Dict[str, Any]] = None,
+        run_lease: Optional["ChatRunLease"] = None,
     ) -> TranscriptPersistenceResult:
         """Persist one completed user/assistant turn through canonical storage.
 
@@ -643,9 +719,14 @@ class ConversationRuntimeGateway:
                     "transcript_actor": "assistant",
                 },
             )
-            write_result = await self._repository.add_completed_turn(
-                user_message, assistant_message
-            )
+            if run_lease is not None:
+                write_result = await self._repository.add_completed_turn(
+                    user_message, assistant_message, run_lease=run_lease,
+                )
+            else:
+                write_result = await self._repository.add_completed_turn(
+                    user_message, assistant_message,
+                )
             if not write_result.success:
                 return TranscriptPersistenceResult(
                     status="failed",

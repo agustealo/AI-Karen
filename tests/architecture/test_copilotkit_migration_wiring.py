@@ -45,6 +45,12 @@ def fixture(root: Path, *, copilot: bool = False) -> None:
         json.dumps({"dependencies": dependencies, "devDependencies": {}}),
         encoding="utf-8",
     )
+    (web / "package-lock.json").write_text(
+        json.dumps({"packages": {"node_modules/@ag-ui/client": {
+            "version": "1.0.2" if copilot else "0.0.59",
+        }}}),
+        encoding="utf-8",
+    )
     dashboard = web / "src/app/dashboard/page.tsx"
     dashboard.parent.mkdir(parents=True, exist_ok=True)
     selected = AUDITOR.COPILOT_MOUNT if copilot else AUDITOR.LEGACY_MOUNT
@@ -128,3 +134,23 @@ def test_valid_copilotkit_static_fixture_remains_explicitly_unverified(tmp_path:
     assert result["violations"] == []
     assert result["chat_mount"] == "copilotkit"
     assert result["runtime_verification"] == "not_run"
+
+
+def test_duplicate_ag_ui_implementations_block_copilot_cutover(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    lock = tmp_path / AUDITOR.WEB / "package-lock.json"
+    lock.write_text(
+        json.dumps({"packages": {
+            "node_modules/@ag-ui/client": {"version": "0.0.59"},
+            "node_modules/@copilotkit/runtime/node_modules/@ag-ui/client": {
+                "version": "1.0.2"
+            },
+        }}),
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path)
+    assert result["ag_ui_client_versions"] == ["0.0.59", "1.0.2"]
+    assert any(
+        "requires one AG-UI client version" in message
+        for message in result["violations"]
+    )

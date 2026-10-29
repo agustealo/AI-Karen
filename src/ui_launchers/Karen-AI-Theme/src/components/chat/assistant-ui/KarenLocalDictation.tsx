@@ -5,14 +5,25 @@ import { useEffect, useRef, useState } from "react";
 import { useAui } from "@assistant-ui/react";
 import { Mic, Square } from "lucide-react";
 import { apiClient } from "@/lib/api";
-import { mergeDictatedText } from "./KarenBrowserDictation";
+import { mergeDictatedText, type KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { encodeMonoPcmWav } from "./localVoiceWav";
 import { canCommitVoiceResult, isCurrentVoiceSession } from "./voiceSessionGuard";
 
 type Capabilities = { transcription_available: boolean; status: string };
 
+/** Legacy assistant-ui adapter; the recorder has no knowledge of its SDK. */
 export function KarenLocalDictation() {
   const aui = useAui();
+  return <KarenLocalDictationCapture port={{
+    readText: () => aui.composer().getState().text || "",
+    writeText: (text) => aui.composer().setText(text),
+  }} />;
+}
+
+/** Shared local microphone capture, explicit transcription and draft-only commit. */
+export function KarenLocalDictationCapture({ port }: {
+  port: KarenVoiceDraftPort;
+}) {
   const [available, setAvailable] = useState(false);
   const [recording, setRecording] = useState(false);
   const [requesting, setRequesting] = useState(false);
@@ -141,7 +152,7 @@ export function KarenLocalDictation() {
           if (!canCommitVoiceResult(mounted.current, generation.current, currentGeneration, controller.signal.aborted)) return;
           const transcript = await apiClient.transcribeLocalAudio(wav, decoded.duration, controller.signal);
           if (canCommitVoiceResult(mounted.current, generation.current, currentGeneration, controller.signal.aborted)) {
-            aui.composer().setText(mergeDictatedText(aui.composer().getState().text || "", transcript.text));
+            port.writeText(mergeDictatedText(port.readText(), transcript.text));
           }
         } catch {
           if (mounted.current && generation.current === currentGeneration && !controller.signal.aborted) {

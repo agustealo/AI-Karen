@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
-    "build": "next build",
+    "dev": "node tools/prepare-copilotkit-styles.mjs && next dev -p 3000",
+    "build": "node tools/prepare-copilotkit-styles.mjs && next build",
     "start": "next start",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
     "typecheck": "tsc --noEmit",
@@ -70,7 +70,10 @@
     "zustand": "^5.0.12",
     "@ag-ui/client": "0.0.59",
     "@assistant-ui/react": "0.15.29",
-    "@assistant-ui/react-ag-ui": "0.0.70"
+    "@assistant-ui/react-ag-ui": "0.0.70",
+    "@copilotkit/react-core": "1.79.1",
+    "@copilotkit/runtime": "1.79.1",
+    "@ag-ui/client-v1": "npm:@ag-ui/client@1.0.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",

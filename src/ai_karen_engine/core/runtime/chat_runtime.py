@@ -821,8 +821,27 @@ class ChatRuntime:
                 )
             )
     
+        verified_presentations: list[dict[str, Any]] = []
+        presentation_replay_incomplete = False
         try:
             async for chunk in gen:
+                if chunk.type == ChatStreamEventType.PRESENTATION:
+                    from ai_karen_engine.core.runtime.presentation_contract import (
+                        validate_presentation,
+                    )
+                    meta = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+                    validated = (
+                        validate_presentation(meta.get("presentation"))
+                        if meta.get("presentation_verified") is True else None
+                    )
+                    if (
+                        validated is None or len(verified_presentations) >= 6
+                        or any(item["presentation_id"] == validated["presentation_id"]
+                               for item in verified_presentations)
+                    ):
+                        presentation_replay_incomplete = True
+                    else:
+                        verified_presentations.append(validated)
                 if chunk.type == "content":
                     streamed_text += chunk.content
                 if chunk.type == ChatStreamEventType.ERROR:
@@ -1057,12 +1076,17 @@ class ChatRuntime:
         ]
 
         memory_persistence_failed = False
-        if (
+        should_persist_memory = (
             decision.memory_write_allowed
             and streamed_text.strip()
             and generation_error is None
             and not self._is_explicit_save_turn(request)
-        ):
+        )
+
+        async def persist_authorized_memory() -> None:
+            nonlocal memory_persistence_failed
+            if not should_persist_memory:
+                return
             persistence_started = time.perf_counter()
             await self._persist_memory(
                 request,
@@ -1081,6 +1105,18 @@ class ChatRuntime:
                 memory_recall_meta.get("memory_persistence_status") == "failed"
                 or bool(memory_recall_meta.get("memory_degraded"))
             )
+
+        # Non-durable chat retains its established ordering. Durable runs
+        # must not remember an answer until transcript + run completion have
+        # committed together; a cancellation winner must leave no answer
+        # in durable memory without a canonical transcript.
+        if request.runtime_run_lease is None:
+            await persist_authorized_memory()
+
+        if verified_presentations:
+            provider_meta["verified_presentations_v1"] = verified_presentations
+        if presentation_replay_incomplete:
+            provider_meta["presentation_replay_incomplete"] = True
 
         transcript_result = TranscriptPersistenceResult(
             status="skipped",
@@ -1102,6 +1138,9 @@ class ChatRuntime:
                     "source": "runtime_observed",
                 }
             )
+        if request.runtime_run_lease is not None and transcript_result.success:
+            await persist_authorized_memory()
+
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
             "failed",
@@ -1283,7 +1322,17 @@ class ChatRuntime:
                 **({"pending_clarification": provider_meta["pending_clarification"]}
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
+                **({"verified_presentations_v1": provider_meta["verified_presentations_v1"]}
+                   if request.runtime_run_lease is not None
+                   and isinstance(provider_meta.get("verified_presentations_v1"), list)
+                   else {}),
+                **({"presentation_replay_incomplete": True}
+                   if request.runtime_run_lease is not None
+                   and provider_meta.get("presentation_replay_incomplete") is True
+                   else {}),
             },
+            **({"run_lease": request.runtime_run_lease}
+               if request.runtime_run_lease is not None else {}),
         )
 
         event_type = (

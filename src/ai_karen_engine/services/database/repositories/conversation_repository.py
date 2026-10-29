@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 
 from .base import Repository, RepositoryResult
 
@@ -40,6 +45,27 @@ class Message:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     parent_message_id: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+def canonical_message_digest(message: Message) -> str:
+    """Digest exactly the saved canonical assistant message, not its UI projection.
+
+    The payload is stable across JSONB round trips and binds the id, conversation
+    owner scope, role, text and ALL metadata, including evidence provenance.
+    """
+    payload = {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "tenant_id": message.tenant_id,
+        "role": message.role,
+        "content": message.content,
+        "metadata": message.metadata,
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass
@@ -96,15 +122,31 @@ class ConversationRepository(Repository):
         """Update conversation metadata, title, tags, etc."""
 
     @abstractmethod
-    async def delete_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[bool]:
+    async def delete_conversation(
+        self, conversation_id: str, tenant_id: str, *, user_id: str
+    ) -> RepositoryResult[bool]:
         """Delete a conversation and its messages."""
+
+    async def get_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Read one owned unsent draft. Missing implementations fail closed."""
+        return RepositoryResult(success=False, error="composer_draft_not_supported")
+
+    async def put_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        content: str, expected_revision: int,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Atomically CAS one owned draft; never append it to the transcript."""
+        return RepositoryResult(success=False, error="composer_draft_not_supported")
 
     @abstractmethod
     async def add_message(self, message: Message) -> RepositoryResult[str]:
         """Append a message to a conversation."""
 
     async def add_completed_turn(
-        self, user_message: Message, assistant_message: Message
+        self, user_message: Message, assistant_message: Message,
+        *, run_lease: Optional["ChatRunLease"] = None,
     ) -> RepositoryResult[int]:
         """Atomically persist a pair; unsupported repositories fail closed."""
         return RepositoryResult(

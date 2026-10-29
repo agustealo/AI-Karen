@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+
+from fastapi.responses import JSONResponse
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.logging import get_logger
@@ -126,6 +128,16 @@ class UpdateConversationRequest(BaseModel):
 
     title: Optional[str] = Field(None, description="New title")
     is_active: Optional[bool] = Field(None, description="Active status")
+
+
+class UpdateComposerDraftRequest(BaseModel):
+    text: str = Field(..., max_length=65536)
+    expected_revision: int = Field(..., ge=0, le=9223372036854775805)
+
+
+class ComposerDraftResponse(BaseModel):
+    text: str
+    revision: int
 
 
 class UpdateUIContextRequest(BaseModel):
@@ -533,6 +545,10 @@ async def update_session_activity(
 async def get_conversation(
     conversation_id: str,
     include_context: bool = Query(True, description="Compatibility flag; transcript is canonical"),
+    message_limit: int = Query(
+        100, ge=1, le=501,
+        description="Maximum canonical messages; 501 permits overflow detection during replay",
+    ),
     conversation_gateway: ConversationRuntimeGateway = Depends(
         get_conversation_runtime_gateway
     ),
@@ -546,7 +562,8 @@ async def get_conversation(
                 tenant_id=tenant_id,
                 user_id=user_id,
                 conversation_id=conversation_id,
-            )
+            ),
+            message_limit=message_limit,
         )
         return _canonical_snapshot_to_response(snapshot)
     except HTTPException:
@@ -571,6 +588,80 @@ async def get_conversation(
             error=error,
             user_message="Failed to get conversation. Please try again.",
         )
+
+@router.get("/{conversation_id}/draft", response_model=ComposerDraftResponse)
+async def get_composer_draft(
+    conversation_id: str,
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
+    tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Read only this principal's canonical unsent draft, never a model run."""
+    try:
+        conversation_id = str(uuid.UUID(conversation_id))
+        data = await conversation_gateway.read_composer_draft(
+            _conversation_api_context(
+                tenant_id=tenant_id, user_id=_require_user_id(user_ctx),
+                conversation_id=conversation_id,
+            )
+        )
+        result = ComposerDraftResponse(**data)
+        return JSONResponse(
+            content=result.model_dump(mode="json"),
+            headers={"Cache-Control": "private, no-store"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid draft request") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+        logger.error("Draft read unavailable", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="Composer draft unavailable") from exc
+
+
+@router.put("/{conversation_id}/draft", response_model=ComposerDraftResponse)
+async def put_composer_draft(
+    conversation_id: str,
+    request: UpdateComposerDraftRequest,
+    conversation_gateway: ConversationRuntimeGateway = Depends(
+        get_conversation_runtime_gateway
+    ),
+    tenant_id: str = Depends(get_current_tenant_id),
+    user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Fail closed on stale revisions, unknown conversations and storage errors."""
+    try:
+        conversation_id = str(uuid.UUID(conversation_id))
+        data = await conversation_gateway.write_composer_draft(
+            _conversation_api_context(
+                tenant_id=tenant_id, user_id=_require_user_id(user_ctx),
+                conversation_id=conversation_id,
+            ),
+            text=request.text, expected_revision=request.expected_revision,
+        )
+        result = ComposerDraftResponse(**data)
+        return JSONResponse(
+            content=result.model_dump(mode="json"),
+            headers={"Cache-Control": "private, no-store"},
+        )
+    except ValueError as exc:
+        if str(exc) == "composer_draft_revision_conflict":
+            raise HTTPException(
+                status_code=409, detail="Draft changed in another window; reload first",
+            ) from exc
+        raise HTTPException(status_code=422, detail="Invalid draft request") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+        logger.error("Draft write unavailable", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="Composer draft unavailable") from exc
+
 
 @router.post("/{conversation_id}/messages", response_model=AddMessageResponse)
 async def add_message(

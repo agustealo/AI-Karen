@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
@@ -142,6 +143,10 @@ class ChatExecutionRequest:
     max_tokens: Optional[int] = None
     stream: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Minted by runtime admission only; never copied from SDK metadata or prompt.
+    runtime_run_lease: Optional["ChatRunLease"] = field(
+        default=None, repr=False, compare=False,
+    )
 
 
 @dataclass

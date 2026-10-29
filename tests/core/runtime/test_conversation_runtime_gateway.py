@@ -85,12 +85,14 @@ class _Repository(ConversationRepository):
         return RepositoryResult(success=True, data=True)
 
     async def delete_conversation(
-        self, conversation_id: str, tenant_id: str
+        self, conversation_id: str, tenant_id: str, *, user_id: str
     ) -> RepositoryResult[bool]:
-        return RepositoryResult(
-            success=True,
-            data=self.conversations.pop((tenant_id, conversation_id), None) is not None,
-        )
+        key = (tenant_id, conversation_id)
+        existing = self.conversations.get(key)
+        if existing is None or existing.user_id != user_id:
+            return RepositoryResult(success=False, error="conversation_not_found")
+        self.conversations.pop(key)
+        return RepositoryResult(success=True, data=True)
 
     async def add_message(self, message: Message) -> RepositoryResult[str]:
         if self.fail_add_role == message.role:

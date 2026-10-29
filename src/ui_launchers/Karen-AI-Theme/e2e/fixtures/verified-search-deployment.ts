@@ -14,7 +14,9 @@ export { expect };
 export const test = base.extend<{ approvedDeploymentAccess: void }>({
   approvedDeploymentAccess: [
     async ({ context, baseURL }, use) => {
-      if (process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== 'true') {
+      if (process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== 'true' &&
+          process.env.KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED !== 'true' &&
+          process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED !== 'true') {
         await use();
         return;
       }

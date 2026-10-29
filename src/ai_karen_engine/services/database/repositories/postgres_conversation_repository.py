@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
+
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Conversation,
     ConversationQuery,
@@ -317,31 +320,227 @@ class PostgresConversationRepository(ConversationRepository):
         operation="delete_conversation", repository="PostgresConversationRepository"
     )
     async def delete_conversation(
-        self, conversation_id: str, tenant_id: str
+        self, conversation_id: str, tenant_id: str, *, user_id: str
     ) -> RepositoryResult[bool]:
+        """Atomically delete one owned conversation AND its run event evidence.
+
+        Lock ordering is run rows before conversation rows, matching atomic
+        chat completion. The event journal cascades from the run ledger.
+        Never leave an audit/replay payload behind after transcript erasure.
+        """
         start = time.perf_counter()
         try:
+            if not user_id:
+                raise ValueError("conversation_deletion_owner_required")
             async with await self._session() as session:
-                result = await session.execute(
-                    text(
-                        f"""
-                        DELETE FROM {self._conversation_table}
-                        WHERE conversation_id = :id AND tenant_id = :tenant_id
-                        """
-                    ),
-                    {"id": conversation_id, "tenant_id": tenant_id},
-                )
-                await session.commit()
+                async with session.begin():
+                    scope = {
+                        "id": conversation_id, "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    }
+                    # Enforce RLS for the same owning principal in this
+                    # transaction, even if the pooled session was reused.
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :value, true)"),
+                        {"value": tenant_id},
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :value, true)"),
+                        {"value": user_id},
+                    )
+                    # A database not yet migrated to CK-07 has no run ledger.
+                    # Check actual schema capability, never use a broad
+                    # exception fallback that could hide a failed deletion.
+                    ledger = await session.execute(
+                        text("SELECT to_regclass('public.runtime_chat_runs')"),
+                    )
+                    if ledger.scalar_one_or_none() is not None:
+                        await session.execute(
+                            text(f"""
+                                DELETE FROM public.runtime_chat_runs AS r
+                                WHERE r.tenant_id = CAST(:tenant_id AS uuid)
+                                  AND r.user_id = CAST(:user_id AS uuid)
+                                  AND r.conversation_id = CAST(:id AS uuid)
+                                  AND EXISTS (
+                                    SELECT 1 FROM {self._conversation_table} AS c
+                                    WHERE c.conversation_id = r.conversation_id
+                                      AND c.tenant_id = r.tenant_id
+                                      AND c.user_id = r.user_id
+                                  )
+                            """),
+                            scope,
+                        )
+                    result = await session.execute(
+                        text(f"""
+                            DELETE FROM {self._conversation_table}
+                            WHERE conversation_id = :id
+                              AND tenant_id = :tenant_id
+                              AND user_id = :user_id
+                        """),
+                        scope,
+                    )
+                    deleted = result.rowcount > 0
                 latency = time.perf_counter() - start
                 logger.debug(
                     "delete_conversation id=%s latency_ms=%.2f",
-                    conversation_id,
-                    latency * 1000,
+                    conversation_id, latency * 1000,
                 )
-                return RepositoryResult(success=True, data=result.rowcount > 0)
+                return RepositoryResult(success=True, data=deleted)
         except Exception as exc:
-            logger.error("delete_conversation failed: %s", exc)
+            logger.error(
+                "delete_conversation failed", extra={"error_type": type(exc).__name__},
+            )
             return RepositoryResult(success=False, error=str(exc))
+
+    @instrument_repository(
+        operation="get_composer_draft", repository="PostgresConversationRepository"
+    )
+    async def get_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Read only an authorized unsent draft; never expose another user."""
+        try:
+            async with await self._session() as session:
+                async with session.begin():
+                    params = {
+                        "conversation": conversation_id,
+                        "tenant": tenant_id,
+                        "owner": user_id,
+                    }
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        params,
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :owner, true)"),
+                        params,
+                    )
+                    owned = await session.execute(
+                        text("""
+                            SELECT 1 FROM public.conversations
+                            WHERE conversation_id = CAST(:conversation AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                        """),
+                        params,
+                    )
+                    if owned.scalar_one_or_none() is None:
+                        return RepositoryResult(success=False, error="conversation_not_found")
+                    query = await session.execute(
+                        text("""
+                            SELECT draft_text, revision
+                            FROM public.conversation_composer_drafts
+                            WHERE conversation_id = CAST(:conversation AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                        """),
+                        params,
+                    )
+                    row = query.mappings().one_or_none()
+                    return RepositoryResult(
+                        success=True,
+                        data={
+                            "text": row["draft_text"] if row else "",
+                            "revision": int(row["revision"]) if row else 0,
+                        },
+                    )
+        except Exception as exc:
+            logger.error("get_composer_draft failed", extra={
+                "error_type": type(exc).__name__,
+            })
+            return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
+
+    @instrument_repository(
+        operation="put_composer_draft", repository="PostgresConversationRepository"
+    )
+    async def put_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        content: str, expected_revision: int,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """One SQL CAS boundary prevents stale windows overwriting newer drafts.
+
+        A draft never creates a conversation, model execution, message, or
+        memory record. The parent FK owns deletion and prevents orphan writes.
+        """
+        if (
+            not isinstance(content, str)
+            or len(content) > 65536
+            or len(content.encode("utf-8")) > 262144
+            or type(expected_revision) is not int
+            or expected_revision < 0
+            or expected_revision > 9223372036854775805
+        ):
+            return RepositoryResult(success=False, error="composer_draft_invalid")
+        try:
+            async with await self._session() as session:
+                async with session.begin():
+                    params = {
+                        "conversation": conversation_id,
+                        "tenant": tenant_id,
+                        "owner": user_id,
+                        "content": content,
+                        "expected": expected_revision,
+                    }
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        params,
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :owner, true)"),
+                        params,
+                    )
+                    owned = await session.execute(
+                        text("""
+                            SELECT 1 FROM public.conversations
+                            WHERE conversation_id = CAST(:conversation AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                            FOR KEY SHARE
+                        """),
+                        params,
+                    )
+                    if owned.scalar_one_or_none() is None:
+                        return RepositoryResult(success=False, error="conversation_not_found")
+                    statement = await session.execute(
+                        text("""
+                            INSERT INTO public.conversation_composer_drafts AS d
+                              (conversation_id, tenant_id, user_id,
+                               draft_text, revision, updated_at)
+                            SELECT CAST(:conversation AS uuid),
+                                   CAST(:tenant AS uuid), CAST(:owner AS uuid),
+                                   :content, 1, clock_timestamp()
+                            WHERE :expected = 0 OR EXISTS (
+                                SELECT 1 FROM public.conversation_composer_drafts
+                                WHERE conversation_id = CAST(:conversation AS uuid)
+                                  AND tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND revision = :expected
+                            )
+                            ON CONFLICT (conversation_id) DO UPDATE
+                            SET draft_text = EXCLUDED.draft_text,
+                                revision = d.revision + 1,
+                                updated_at = clock_timestamp()
+                            WHERE d.tenant_id = EXCLUDED.tenant_id
+                              AND d.user_id = EXCLUDED.user_id
+                              AND d.revision = :expected
+                            RETURNING revision, draft_text
+                        """),
+                        params,
+                    )
+                    result = statement.mappings().one_or_none()
+                    if result is None:
+                        return RepositoryResult(
+                            success=False, error="composer_draft_revision_conflict",
+                        )
+                    return RepositoryResult(success=True, data={
+                        "text": result["draft_text"],
+                        "revision": int(result["revision"]),
+                    })
+        except Exception as exc:
+            logger.error("put_composer_draft failed", extra={
+                "error_type": type(exc).__name__,
+            })
+            return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
 
     @instrument_repository(
         operation="add_message", repository="PostgresConversationRepository"
@@ -444,7 +643,8 @@ class PostgresConversationRepository(ConversationRepository):
         operation="add_completed_turn", repository="PostgresConversationRepository"
     )
     async def add_completed_turn(
-        self, user_message: Message, assistant_message: Message
+        self, user_message: Message, assistant_message: Message,
+        *, run_lease: Optional[ChatRunLease] = None,
     ) -> RepositoryResult[int]:
         """Commit both messages under one locked, tenant-owned transaction."""
         if (
@@ -459,6 +659,56 @@ class PostgresConversationRepository(ConversationRepository):
         try:
             async with await self._session() as session:
                 async with session.begin():
+                    if run_lease is not None:
+                        # Set the canonical RLS scope ON THIS transaction.
+                        # No independent run-ledger session is opened.
+                        await session.execute(
+                            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+                            {"tid": run_lease.tenant_id},
+                        )
+                        await session.execute(
+                            text("SELECT set_config('app.current_user_id', :uid, true)"),
+                            {"uid": run_lease.user_id},
+                        )
+                        if (
+                            user_message.tenant_id != run_lease.tenant_id
+                            or user_message.conversation_id != run_lease.conversation_id
+                            or user_message.metadata.get("authorized_user_id") != run_lease.user_id
+                            or user_message.metadata.get("request_id") != run_lease.request_id
+                            or assistant_message.metadata.get("request_id") != run_lease.request_id
+                        ):
+                            raise ValueError("chat_run_transcript_scope_mismatch")
+                        # Lock run FIRST, then conversation. The stop endpoint
+                        # locks the same row. The winner defines linearizable
+                        # terminal truth for both transcript messages.
+                        authorized = await session.execute(
+                            text("""
+                                SELECT execution_id
+                                FROM public.runtime_chat_runs
+                                WHERE execution_id = CAST(:execution AS uuid)
+                                  AND tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND conversation_id = CAST(:conversation AS uuid)
+                                  AND request_id = :request_id
+                                  AND correlation_id = :correlation_id
+                                  AND lease_token = CAST(:token AS uuid)
+                                  AND lease_expires_at > NOW()
+                                  AND status = 'running'
+                                  AND cancel_requested_at IS NULL
+                                FOR UPDATE
+                            """),
+                            {
+                                "execution": run_lease.execution_id,
+                                "tenant": run_lease.tenant_id,
+                                "owner": run_lease.user_id,
+                                "conversation": run_lease.conversation_id,
+                                "request_id": run_lease.request_id,
+                                "correlation_id": run_lease.correlation_id,
+                                "token": run_lease.lease_token,
+                            },
+                        )
+                        if authorized.scalar_one_or_none() is None:
+                            raise ValueError("chat_run_commit_not_authorized")
                     # Serialize concurrent replay attempts on the parent row.
                     owner = await session.execute(
                         text("""
@@ -525,6 +775,48 @@ class PostgresConversationRepository(ConversationRepository):
                         # A complete turn is never allowed to repair an orphan
                         # from the obsolete non-atomic write path implicitly.
                         raise ValueError("incomplete_turn_replay")
+                    if run_lease is not None:
+                        # Same PostgreSQL transaction as both message inserts.
+                        # A concurrent stop must win BEFORE this commit or it
+                        # returns 409 after the completed record is durable.
+                        finished = await session.execute(
+                            text("""
+                                UPDATE public.runtime_chat_runs
+                                SET status = 'completed',
+                                    user_message_id = CAST(:user_message_id AS uuid),
+                                    assistant_message_id = CAST(:assistant_message_id AS uuid),
+                                    assistant_message_digest = :assistant_message_digest,
+                                    terminal_at = NOW(),
+                                    updated_at = NOW(),
+                                    lease_token = NULL,
+                                    lease_expires_at = NULL
+                                WHERE execution_id = CAST(:execution AS uuid)
+                                  AND tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND conversation_id = CAST(:conversation AS uuid)
+                                  AND request_id = :request_id
+                                  AND correlation_id = :correlation_id
+                                  AND lease_token = CAST(:token AS uuid)
+                                  AND lease_expires_at > clock_timestamp()
+                                  AND status = 'running'
+                                  AND cancel_requested_at IS NULL
+                                RETURNING execution_id
+                            """),
+                            {
+                                "user_message_id": user_message.id,
+                                "assistant_message_id": assistant_message.id,
+                                "assistant_message_digest": canonical_message_digest(assistant_message),
+                                "execution": run_lease.execution_id,
+                                "tenant": run_lease.tenant_id,
+                                "owner": run_lease.user_id,
+                                "conversation": run_lease.conversation_id,
+                                "request_id": run_lease.request_id,
+                                "correlation_id": run_lease.correlation_id,
+                                "token": run_lease.lease_token,
+                            },
+                        )
+                        if finished.scalar_one_or_none() is None:
+                            raise ValueError("chat_run_commit_not_authorized")
                 return RepositoryResult(
                     success=True, data=persisted,
                     metadata={"idempotent_replay": persisted == 0},

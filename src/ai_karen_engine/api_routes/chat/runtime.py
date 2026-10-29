@@ -12,6 +12,7 @@ import logging
 import re
 import time
 import uuid
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,6 +23,19 @@ from pydantic import BaseModel, Field, field_validator
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+from ai_karen_engine.core.runtime.owned_history_projection import (
+    UnreplayableHistory, project_owned_history,
+)
+from ai_karen_engine.persistence.repositories.chat_run_repository import (
+    SqlChatRunRepository,
+)
+from ai_karen_engine.core.runtime.chat_run_lifecycle import (
+    ChatRunConflict,
+    ChatRunCancellationRequested,
+    ChatRunLease,
+    ChatRunLeaseLost,
+    get_chat_run_coordinator,
+)
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -610,38 +624,286 @@ async def stream_chat_response(
 
 
 async def _ag_ui_sse(
-    runtime_request: ChatExecutionRequest, *, thread_id: str, run_id: str
+    runtime_request: ChatExecutionRequest, *, thread_id: str, run_id: str,
+    run_lease: Optional[ChatRunLease] = None,
 ):
-    """Translate the same authorized runtime stream into AG-UI event framing."""
-    projection = AGUIEventProjection(thread_id=thread_id, run_id=run_id)
-    yield ": stream_connected\n\n"
-    yield f"data: {json.dumps(projection.begin())}\n\n"
+    """Project canonical runtime chunks, with optional fenced observed cursor.
 
-    try:
-        async for chunk in get_chat_runtime().execute_stream(runtime_request):
-            for event in projection.project(chunk):
+    Every journaled AG-UI event is durably appended before the wire sends it.
+    Journal failure never turns an interrupted or unverified run into success.
+    Inference and the canonical transcript stay owned by ChatRuntime.
+    """
+    projection = AGUIEventProjection(thread_id=thread_id, run_id=run_id)
+    settings = get_runtime_settings()
+    journal_enabled = bool(
+        run_lease is not None
+        and getattr(settings.features, "enable_ag_ui_event_journal", False)
+        and settings.features.enable_ag_ui_bridge
+        and getattr(settings.features, "enable_ag_ui_durable_runs", False)
+    )
+    journal = get_chat_run_coordinator() if journal_enabled else None
+    canonical_stream = None
+
+    async def frame(event: dict[str, Any]) -> str:
+        payload = json.dumps(event, ensure_ascii=False, allow_nan=False)
+        if journal is not None and run_lease is not None:
+            seq = await journal.append_observed_event(run_lease, event)
+            return f"id: {seq}\ndata: {payload}\n\n"
+        return f"data: {payload}\n\n"
+
+    async def error_frames(code: str, message: str):
+        # A journal error can occur AFTER projection marked itself terminal.
+        # Never let that terminal bit hide an honest transport failure.
+        chunk = ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content=message,
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={"error_code": code},
+        )
+        projected = projection.project(chunk)
+        if not projected:
+            projected = [{"type": "RUN_ERROR", "message": message, "code": code}]
+        for event in projected:
+            try:
+                yield await frame(event)
+            except Exception as exc:
+                logger.error(
+                    "AG-UI event journal unavailable for error receipt",
+                    extra={
+                        "correlation_id": runtime_request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                # An unjournaled diagnostic is not represented as durable.
                 yield f"data: {json.dumps(event)}\n\n"
+
+    yield ": stream_connected\n\n"
+    try:
+        # A failed first append must not start a provider execution.
+        yield await frame(projection.begin())
+        canonical_stream = get_chat_runtime().execute_stream(runtime_request)
+        if run_lease is not None:
+            canonical_stream = get_chat_run_coordinator().stream(
+                canonical_stream, lease=run_lease,
+            )
+        async for chunk in canonical_stream:
+            for event in projection.project(chunk):
+                yield await frame(event)
             if projection.terminal:
                 break
-    except Exception as exc:
-        logger.exception(
-            "AG-UI runtime projection failed",
+    except ChatRunCancellationRequested:
+        async for packet in error_frames(
+            "CHAT_STREAM_CANCELLED", "This chat run was cancelled.",
+        ):
+            yield packet
+    except ChatRunLeaseLost as exc:
+        logger.error(
+            "Fenced AG-UI run ended without authorized terminal",
             extra={
                 "correlation_id": runtime_request.context.correlation_id,
                 "error_type": type(exc).__name__,
             },
         )
-        error_chunk = ChatStreamChunk(
-            type=ChatStreamEventType.ERROR,
-            content="Chat streaming failed before completion.",
-            correlation_id=runtime_request.context.correlation_id,
-            metadata={"error_code": "CHAT_STREAM_RUNTIME_EXCEPTION"},
+        code = (
+            "CHAT_SSE_MISSING_TERMINAL"
+            if str(exc) == "chat_run_missing_terminal"
+            else "CHAT_RUN_LEASE_LOST"
         )
-        for event in projection.project(error_chunk):
-            yield f"data: {json.dumps(event)}\n\n"
+        async for packet in error_frames(
+            code, "Chat execution ended without verified completion.",
+        ):
+            yield packet
+    except Exception as exc:
+        logger.exception(
+            "AG-UI runtime projection or journal failed",
+            extra={
+                "correlation_id": runtime_request.context.correlation_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        if journal is not None and canonical_stream is None and run_lease is not None:
+            # Before inference, a failed start-event write is a durable
+            # failed run, not a user-visible fake model response.
+            with suppress(Exception):
+                await journal.fail_unstarted_event_journal(run_lease)
+        async for packet in error_frames(
+            "CHAT_EVENT_JOURNAL_UNAVAILABLE" if journal is not None
+            else "CHAT_STREAM_RUNTIME_EXCEPTION",
+            "Chat streaming failed before verified completion.",
+        ):
+            yield packet
+    finally:
+        if canonical_stream is not None:
+            with suppress(Exception):
+                await canonical_stream.aclose()
 
     for event in projection.fail_incomplete():
-        yield f"data: {json.dumps(event)}\n\n"
+        try:
+            yield await frame(event)
+        except Exception:
+            yield f"data: {json.dumps(event)}\n\n"
+
+@router.get("/chat/ag-ui/capabilities")
+async def get_ag_ui_transport_capabilities(
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+) -> Dict[str, Any]:
+    """Truthful, authenticated transport enablement; not a model health claim.
+
+    This read-only projection uses the same flag as the actual AG-UI route.
+    SDK discovery must not advertise an agent while backend ingress is disabled.
+    """
+    _require_execution_identity(user)
+    features = get_runtime_settings().features
+    return {
+        "enabled": bool(features.enable_ag_ui_bridge),
+        "governed_history": bool(
+            features.enable_ag_ui_bridge
+            and getattr(features, "enable_ag_ui_durable_runs", False)
+        ),
+        "observed_event_journal": bool(
+            features.enable_ag_ui_bridge
+            and getattr(features, "enable_ag_ui_durable_runs", False)
+            and getattr(features, "enable_ag_ui_event_journal", False)
+        ),
+    }
+
+
+@router.get("/chat/ag-ui/runs/{thread_id}/{run_id}/events")
+async def get_ag_ui_run_observed_events(
+    thread_id: str,
+    run_id: str,
+    after: int = 0,
+    limit: int = 50,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Read exactly one owner's observed AG-UI cursor, never execute/resume AI.
+
+    A crashed or expired worker is disclosed as interrupted; missing terminal
+    events are never invented from model intent or a UI-selected label.
+    """
+    features = get_runtime_settings().features
+    if not (
+        features.enable_ag_ui_bridge
+        and getattr(features, "enable_ag_ui_durable_runs", False)
+        and getattr(features, "enable_ag_ui_event_journal", False)
+    ):
+        raise HTTPException(status_code=404, detail="Run event history unavailable")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+        raise HTTPException(status_code=422, detail="Invalid run identity")
+    if type(after) is not int or not 0 <= after <= 2048:
+        raise HTTPException(status_code=422, detail="Invalid event cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise HTTPException(status_code=422, detail="Invalid event page limit")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Invalid conversation identity",
+        ) from exc
+    request_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user, session_id=thread, conversation_id=thread,
+        request_id=request_id, correlation_id=request_id,
+    )
+    try:
+        result = await get_chat_run_coordinator().read_observed_events(
+            context, run_id=run_id, after=after, limit=limit,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+        logger.exception("Observed run-event read failed", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Run event history unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid run event query") from exc
+    except Exception as exc:
+        logger.exception("Observed run-event storage failed", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Run event history unavailable") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Chat run unavailable")
+    return JSONResponse(
+        status_code=200, content=result,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get("/chat/ag-ui/threads/{thread_id}/history")
+async def get_ag_ui_owned_history(
+    thread_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Governed, non-executing completed-run replay from canonical storage.
+
+    The text and runtime receipts come from the same owned conversation
+    repository and attested run/message pair. No CopilotKit transcript store,
+    graph execution, or provider is called by this endpoint.
+    """
+    features = get_runtime_settings().features
+    if not (
+        features.enable_ag_ui_bridge
+        and getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Governed history unavailable")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid conversation identity") from exc
+    correlation_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user, session_id=thread, conversation_id=thread,
+        request_id=correlation_id, correlation_id=correlation_id,
+    )
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+        get_conversation_runtime_gateway,
+    )
+    try:
+        snapshot = await get_conversation_runtime_gateway().get_owned_snapshot(
+            context, message_limit=501,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
+        logger.exception("Governed history read failed", extra={
+            "correlation_id": correlation_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="History temporarily unavailable") from exc
+    try:
+        attestations = await SqlChatRunRepository().completed_replay_attestations(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=thread,
+        )
+        history = project_owned_history(snapshot, attestations=attestations)
+    except UnreplayableHistory as exc:
+        # A truncated/oversized history is an incomplete backend projection,
+        # while unknown rich content is intentionally not yet replayable.
+        # Neither is ever framed as a successful SSE snapshot.
+        status = (
+            502 if str(exc) in {"history_message_limit", "history_byte_limit"}
+            else 409
+        )
+        raise HTTPException(
+            status_code=status, detail="Complete governed replay is unavailable",
+        ) from exc
+    except Exception as exc:
+        logger.exception("History attestation unavailable", extra={
+            "correlation_id": correlation_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(
+            status_code=503, detail="History verification unavailable",
+        ) from exc
+    return JSONResponse(
+        status_code=200, content=history,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/chat/ag-ui")
@@ -764,6 +1026,32 @@ async def stream_ag_ui_chat(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # CK-07A: admission is durable, scoped, and must precede any model work.
+    # The legacy bridge remains unchanged until operators enable the opt-in
+    # feature following migration 43. SDK stop remains explicitly denied.
+    run_lease: Optional[ChatRunLease] = None
+    if getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False):
+        try:
+            run_lease = await get_chat_run_coordinator().admit(
+                canonical_request.context, request.runId,
+            )
+            canonical_request.runtime_run_lease = run_lease
+        except ChatRunConflict as exc:
+            raise HTTPException(
+                status_code=409, detail="Chat execution has already been admitted",
+            ) from exc
+        except Exception as exc:
+            logger.exception(
+                "Durable chat run admission failed",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(
+                status_code=503, detail="Chat run admission unavailable",
+            ) from exc
+
     get_structured_logger().log_event(
         event="chat_stream_started",
         user_id=user_id,
@@ -782,6 +1070,7 @@ async def stream_ag_ui_chat(
             canonical_request,
             thread_id=request.threadId,
             run_id=request.runId,
+            run_lease=run_lease,
         ),
         media_type="text/event-stream",
         headers={
@@ -790,6 +1079,152 @@ async def stream_ag_ui_chat(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
+    )
+
+
+
+@router.get("/chat/ag-ui/runs/{thread_id}/{run_id}/status")
+async def get_ag_ui_chat_run_status(
+    thread_id: str,
+    run_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Read only an owned durable run's persisted state. Never reissue a stop."""
+    features = get_runtime_settings().features
+    if (
+        not features.enable_ag_ui_bridge
+        or not getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Run status unavailable")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+        raise HTTPException(status_code=422, detail="Invalid run identity")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid conversation identity") from exc
+    request_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user, session_id=thread, conversation_id=thread,
+        request_id=request_id, correlation_id=request_id,
+    )
+    try:
+        result = await get_chat_run_coordinator().read_status(context, run_id=run_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+        logger.exception("Chat run status unavailable", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Chat run status unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid run identity") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Chat run unavailable")
+    if (
+        not isinstance(result, dict)
+        or result.get("status") not in {
+            "running", "cancelling", "cancelled", "completed",
+            "failed", "orphaned", "interrupted",
+        }
+        or type(result.get("cancel_requested")) is not bool
+        or type(result.get("cancellation_confirmed")) is not bool
+        or (result["cancellation_confirmed"] and (
+            result["status"] != "cancelled" or not result["cancel_requested"]
+        ))
+    ):
+        raise HTTPException(status_code=503, detail="Chat run status unavailable")
+    return JSONResponse(
+        content=result,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/chat/ag-ui/runs/{thread_id}/{run_id}/cancel")
+async def cancel_ag_ui_chat_run(
+    thread_id: str,
+    run_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Request exactly one owner-scoped run stop; the worker confirms outcome.
+
+    The SDK thread ID is NOT a bearer capability. The Runtime coordinator
+    revalidates the authenticated principal, conversation ownership, and
+    canonical PostgreSQL principal-scoped row before signaling anything.
+    """
+    features = get_runtime_settings().features
+    if (
+        not features.enable_ag_ui_bridge
+        or not getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Run cancellation unavailable")
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+        raise HTTPException(status_code=422, detail="Invalid run identity")
+    try:
+        thread = str(uuid.UUID(thread_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid conversation identity") from exc
+    request_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user,
+        session_id=thread,
+        conversation_id=thread,
+        request_id=request_id,
+        correlation_id=request_id,
+    )
+    try:
+        status = await get_chat_run_coordinator().request_cancel(
+            context, run_id=run_id,
+        )
+    except PermissionError as exc:
+        # Foreign and absent run IDs must be indistinguishable.
+        raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
+        logger.exception("Chat run cancellation unavailable", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Chat cancellation unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid run identity") from exc
+
+    if status is None:
+        raise HTTPException(status_code=404, detail="Chat run unavailable")
+
+    get_structured_logger().log_event(
+        event="chat_run_cancel_decision",
+        user_id=context.user_id,
+        details={
+            "tenant_id": context.tenant_id,
+            "conversation_id": thread,
+            "transport_run_id": run_id,
+            "request_id": request_id,
+            "status": status,
+        },
+    )
+    if status == "cancelling":
+        # This is an accepted intent, NOT proof the model has stopped.
+        return JSONResponse(
+            status_code=202,
+            content={"status": "cancelling", "cancel_requested": True,
+                     "cancellation_confirmed": False},
+            headers={"Cache-Control": "private, no-store"},
+        )
+    if status == "cancelled":
+        return JSONResponse(
+            status_code=200,
+            content={"status": "cancelled", "cancel_requested": True,
+                     "cancellation_confirmed": True},
+            headers={"Cache-Control": "private, no-store"},
+        )
+    # Completed/failed/orphaned cannot be retrospectively reported as stopped.
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "This chat run is no longer cancellable"},
+        headers={"Cache-Control": "private, no-store"},
     )
 
 

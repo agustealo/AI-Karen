@@ -8,6 +8,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useAui } from "@assistant-ui/react";
 import { Mic, MicOff } from "lucide-react";
+import { mergeDictatedText, type KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
+export { mergeDictatedText } from "../KarenVoiceDraftPort";
 
 type SpeechResult = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
 type BrowserRecognition = {
@@ -27,16 +29,19 @@ type SpeechWindow = {
 
 const enabled = process.env.NEXT_PUBLIC_KAREN_BROWSER_DICTATION_ENABLED === "true";
 
-/** Keep dictation additive to the pre-recording draft; never submit. */
-export function mergeDictatedText(existingDraft: string, transcript: string): string {
-  const words = transcript.trim();
-  if (!words) return existingDraft;
-  const prefix = existingDraft.trim();
-  return prefix ? `${prefix} ${words}` : words;
-}
-
+/** The assistant-ui adapter delegates all capture behavior to the shared port. */
 export function KarenBrowserDictation() {
   const aui = useAui();
+  return <KarenBrowserDictationCapture port={{
+    readText: () => aui.composer().getState().text || "",
+    writeText: (text) => aui.composer().setText(text),
+  }} />;
+}
+
+/** Capture-only, browser-vendor processing requires explicit opt-in. */
+export function KarenBrowserDictationCapture({ port }: {
+  port: KarenVoiceDraftPort;
+}) {
   const recognition = useRef<BrowserRecognition | null>(null);
   const draft = useRef("");
   const mounted = useRef(true);
@@ -75,14 +80,14 @@ export function KarenBrowserDictation() {
     }
     const instance = new Recognition();
     recognition.current = instance;
-    draft.current = aui.composer().getState().text || "";
+    draft.current = port.readText();
     instance.lang = navigator.language || "en-US";
     instance.interimResults = false;
     instance.continuous = false;
     instance.onresult = (event) => {
       const words = Array.from(event.results).map((result) => result[0]?.transcript || "").join(" ").trim();
       if (!words || !mounted.current) return;
-      aui.composer().setText(mergeDictatedText(draft.current, words));
+      port.writeText(mergeDictatedText(draft.current, words));
     };
     instance.onerror = () => {
       if (mounted.current) setError("Speech recognition failed. Your draft was not sent.");

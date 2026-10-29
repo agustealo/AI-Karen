@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from email.message import Message
 from urllib.error import HTTPError
 from unittest.mock import patch
@@ -143,7 +144,9 @@ def test_search_acceptance_checks_platform_before_and_after_browser():
         Path(__file__).resolve().parents[2]
         / ".github/workflows/karen-history-browser-acceptance.yml"
     ).read_text(encoding="utf-8")
-    job = workflow.split("  authenticated-search-replay:", 1)[1]
+    job = re.split(r"\n(?=  [a-z][a-z0-9-]*:\n)",
+                   workflow.split("  authenticated-search-replay:", 1)[1],
+                   maxsplit=1)[0]
     pre = job.index("- name: Verify independent Vercel deployment provenance before browser acceptance")
     browser = job.index("- name: Prove live authenticated grounded search and replay")
     post = job.index("- name: Revalidate platform, running deployment and reviewed main head")
@@ -199,7 +202,9 @@ def test_automation_bypass_is_step_scoped_and_browser_cookie_only():
     workflow = (
         root / ".github/workflows/karen-history-browser-acceptance.yml"
     ).read_text(encoding="utf-8")
-    job = workflow.split("  authenticated-search-replay:", 1)[1]
+    job = re.split(r"\n(?=  [a-z][a-z0-9-]*:\n)",
+                   workflow.split("  authenticated-search-replay:", 1)[1],
+                   maxsplit=1)[0]
     job_scope = job.split("\n    steps:", 1)[0]
     secret = "VERCEL_AUTOMATION_BYPASS_SECRET: " + chr(36) + "{{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}"
     assert secret not in job_scope

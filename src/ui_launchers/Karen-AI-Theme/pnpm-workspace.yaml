@@ -4,3 +4,4 @@
 allowBuilds:
   sharp: true
   unrs-resolver: true
+  '@scarf/scarf': false # Transitive telemetry postinstall denied; not required for runtime execution.

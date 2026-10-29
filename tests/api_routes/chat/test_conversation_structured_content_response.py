@@ -50,9 +50,10 @@ class _ScopedGateway:
     def __init__(self, snapshot):
         self.snapshot = snapshot
 
-    async def get_owned_snapshot(self, context):
+    async def get_owned_snapshot(self, context, *, message_limit=100):
         if str(context.user_id) != "owner" or str(context.tenant_id) != "tenant-a":
             raise PermissionError("conversation_user_mismatch")
+        assert isinstance(message_limit, int) and 0 < message_limit <= 501
         return self.snapshot
 
 
@@ -86,7 +87,7 @@ async def test_authorized_conversation_api_exposes_persisted_presentation():
         conversation=conversation, messages=(stored,),
     ))
     result = await get_conversation(
-        conversation_id, conversation_gateway=gateway,
+        conversation_id, message_limit=100, conversation_gateway=gateway,
         tenant_id="tenant-a", user_ctx={"user_id": "owner"},
     )
     assert result.messages[0].structured_content == {"presentation": envelope}
@@ -100,7 +101,7 @@ async def test_authorized_conversation_api_exposes_persisted_presentation():
 
     with pytest.raises(HTTPException) as exc:
         await get_conversation(
-            conversation_id, conversation_gateway=gateway,
+            conversation_id, message_limit=100, conversation_gateway=gateway,
             tenant_id="tenant-b", user_ctx={"user_id": "attacker"},
         )
     assert exc.value.status_code == 404
@@ -129,7 +130,7 @@ async def test_authorized_replay_preserves_search_citations_and_synthesis_receip
         conversation=conversation, messages=(stored,),
     ))
     restored = await get_conversation(
-        conversation_id, conversation_gateway=gateway,
+        conversation_id, message_limit=100, conversation_gateway=gateway,
         tenant_id="tenant-a", user_ctx={"user_id": "owner"},
     )
     metadata = restored.messages[0].metadata
@@ -142,7 +143,7 @@ async def test_authorized_replay_preserves_search_citations_and_synthesis_receip
 
     with pytest.raises(HTTPException) as denied:
         await get_conversation(
-            conversation_id, conversation_gateway=gateway,
+            conversation_id, message_limit=100, conversation_gateway=gateway,
             tenant_id="tenant-a", user_ctx={"user_id": "other"},
         )
     assert denied.value.status_code == 404
