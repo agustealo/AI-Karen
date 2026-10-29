@@ -71,7 +71,7 @@ async function readKarenGovernedHistory(
     return failure("Governed conversation history unavailable", 503);
   }
   const size = response.headers.get("content-length");
-  if (size !== null && (!/^\\d+$/.test(size) || Number(size) > MAX_HISTORY_BYTES)) {
+  if (size !== null && (!/^\d+$/.test(size) || Number(size) > MAX_HISTORY_BYTES)) {
     return failure("Governed history exceeds limit", 502);
   }
   let body: unknown;
