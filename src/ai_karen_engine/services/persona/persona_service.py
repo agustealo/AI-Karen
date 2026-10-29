@@ -5,6 +5,8 @@ Business logic for managing personas, style controls, and NLP-driven adaptation.
 
 import json
 import logging
+from dataclasses import asdict, is_dataclass
+from inspect import isawaitable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -46,8 +48,8 @@ class PersonaService:
 
             return NLPStyleAnalyzer()
         except ImportError:
-            logger.warning("NLP style analyzer not available, using mock analyzer")
-            return MockNLPAnalyzer()
+            logger.warning("Persona style analyzer unavailable; adaptation disabled")
+            return None
 
     @asynccontextmanager
     async def _tenant_session(self, tenant_id: str):
@@ -754,25 +756,50 @@ class PersonaService:
         return await self.get_user_preferences(user_id, tenant_id)
 
     async def analyze_user_style(self, message: str) -> Dict[str, Any]:
-        """Analyze user's writing style using NLP."""
+        """Consume registered style analysis without inventing model results.
+
+        The existing lightweight analyzer is synchronous and returns a
+        dataclass; injected analyzers may be async and return dictionaries.
+        The supported tone taxonomy is enforced at this boundary.
+        """
+        unavailable = {
+            "detected_tone": None,
+            "formality_score": 0.5,
+            "sentiment_score": 0.0,
+            "complexity_score": 0.5,
+            "emotion_indicators": [],
+            "analysis_available": False,
+        }
+        if self.nlp_analyzer is None:
+            return unavailable
         try:
-            analysis = await self.nlp_analyzer.analyze_style(message)
+            analysis = self.nlp_analyzer.analyze_style(message)
+            if isawaitable(analysis):
+                analysis = await analysis
+            if is_dataclass(analysis) and not isinstance(analysis, type):
+                values = asdict(analysis)
+            elif isinstance(analysis, dict):
+                values = analysis
+            else:
+                raise TypeError("Unsupported style analyzer result")
+            try:
+                tone = ToneEnum(values.get("tone"))
+            except (TypeError, ValueError):
+                tone = None
             return {
-                "detected_tone": analysis.get("tone"),
-                "formality_score": analysis.get("formality", 0.5),
-                "sentiment_score": analysis.get("sentiment", 0.0),
-                "complexity_score": analysis.get("complexity", 0.5),
-                "emotion_indicators": analysis.get("emotions", []),
+                "detected_tone": tone,
+                "formality_score": float(values.get("formality", 0.5)),
+                "sentiment_score": float(values.get("sentiment", 0.0)),
+                "complexity_score": float(values.get("complexity", 0.5)),
+                "emotion_indicators": list(values.get("emotions") or []),
+                "analysis_available": True,
             }
-        except Exception as exc:
-            logger.warning("Style analysis failed: %s", exc)
-            return {
-                "detected_tone": None,
-                "formality_score": 0.5,
-                "sentiment_score": 0.0,
-                "complexity_score": 0.5,
-                "emotion_indicators": [],
-            }
+        except (TypeError, ValueError, RuntimeError) as exc:
+            logger.warning(
+                "Persona style analysis unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+            return unavailable
 
     async def build_chat_context(
         self,
