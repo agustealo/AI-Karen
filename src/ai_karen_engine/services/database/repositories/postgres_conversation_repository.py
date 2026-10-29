@@ -654,6 +654,7 @@ class PostgresConversationRepository(ConversationRepository):
             or user_message.id == assistant_message.id
             or not user_message.metadata.get("authorized_user_id")
             or user_message.metadata.get("authorized_user_id") != assistant_message.metadata.get("authorized_user_id")
+            or user_message.metadata.get("persona_scope_id") != assistant_message.metadata.get("persona_scope_id")
         ):
             return RepositoryResult(success=False, error="invalid_completed_turn")
         try:
@@ -712,7 +713,7 @@ class PostgresConversationRepository(ConversationRepository):
                     # Serialize concurrent replay attempts on the parent row.
                     owner = await session.execute(
                         text("""
-                            SELECT conversation_id FROM conversations
+                            SELECT conversation_id, conversation_metadata FROM conversations
                             WHERE conversation_id = :conversation_id
                               AND tenant_id = :tenant_id
                               AND user_id = :user_id
@@ -722,11 +723,21 @@ class PostgresConversationRepository(ConversationRepository):
                          "tenant_id": user_message.tenant_id,
                          "user_id": user_message.metadata["authorized_user_id"]},
                     )
-                    if owner.fetchone() is None:
+                    owner_row = owner.fetchone()
+                    if owner_row is None:
                         return RepositoryResult(
                             success=False,
                             error="conversation_not_found_or_tenant_mismatch",
                         )
+                    stored_metadata = owner_row.conversation_metadata
+                    if isinstance(stored_metadata, str):
+                        stored_metadata = json.loads(stored_metadata)
+                    if not isinstance(stored_metadata, dict):
+                        raise ValueError("conversation_persona_scope_invalid")
+                    # The parent row is locked before both transcript writes.
+                    # No second concurrent persona may claim this conversation.
+                    if stored_metadata.get("persona_scope_id") != user_message.metadata.get("persona_scope_id"):
+                        raise ValueError("conversation_persona_scope_mismatch")
                     persisted = 0
                     for message in (user_message, assistant_message):
                         inserted = await session.execute(
