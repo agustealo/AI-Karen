@@ -166,6 +166,7 @@ jobs:
           pytest tests/core/runtime/test_context_evidence_contracts.py -q
           pytest tests/core/runtime/test_runtime_evidence_resolution.py -q
           pytest tests/core/runtime/test_persona_execution_snapshot.py -q
+          pytest src/ai_karen_engine/api_routes/chat/tests/test_execution_identity_principal.py -q
           pytest tests/core/runtime/test_authorized_semantic_context_handoff.py -q
           pytest tests/core/runtime/test_direct_live_capabilities.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
