@@ -119,6 +119,35 @@ describe("CK-07D governed CopilotKit history and reconnect", () => {
     expect(called).toEqual([AUTH, FLAGS, HISTORY]);
   });
 
+  it("accepts numeric content-length for governed history and reconnect", async () => {
+    const snapshot = JSON.stringify(ownedHistory());
+    setup(() => new Response(snapshot, {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(new TextEncoder().encode(snapshot).byteLength),
+      },
+    }));
+    const history = await GET(req("history"));
+    expect(history.status).toBe(200);
+    expect((await history.json()).messages).toHaveLength(2);
+
+    const reconnect = await POST(req("connect"));
+    expect(reconnect.status).toBe(200);
+    expect(decoded(await reconnect.text()).map((event) => event.type)).toEqual([
+      "RUN_STARTED", "MESSAGES_SNAPSHOT", "CUSTOM", "CUSTOM", "RUN_FINISHED",
+    ]);
+  });
+
+  it("rejects malformed governed content-length without exposing history", async () => {
+    setup(() => new Response(JSON.stringify(ownedHistory()), {
+      headers: { "content-type": "application/json", "content-length": "not-a-number" },
+    }));
+    const response = await GET(req("history"));
+    expect(response.status).toBe(502);
+    expect(JSON.stringify(await response.json())).not.toContain("10:42");
+  });
+
   it("reconnects with snapshot, attested presentation, receipt, and synthetic replay-only finish", async () => {
     const called = setup();
     const response = await POST(req("connect"));
