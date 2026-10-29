@@ -28,15 +28,37 @@ class PreferenceResolver:
         resolved: Dict[str, Any] = {}
         scopes_used: List[PreferenceScope] = []
 
-        all_prefs = list(snapshot.stable_preferences) + list(snapshot.tentative_preferences)
-
+        # Narrower, applicable preferences override broad defaults.
+        # Stable values take precedence over tentative values at equal scope.
+        priority = {
+            PreferenceScope.GLOBAL: 0,
+            PreferenceScope.DOMAIN: 1,
+            PreferenceScope.TASK_TYPE: 2,
+            PreferenceScope.PROJECT: 3,
+            PreferenceScope.SESSION: 4,
+            PreferenceScope.CONVERSATION: 5,
+        }
+        all_prefs = list(snapshot.tentative_preferences) + list(snapshot.stable_preferences)
+        all_prefs.sort(
+            key=lambda pref: (
+                priority.get(pref.scope, -1),
+                pref.state.value == "stable",
+                pref.version,
+                pref.last_observed_at,
+            )
+        )
+        applied = []
         for pref in all_prefs:
             if self._applies(pref, task_context, requested_scope):
                 resolved[pref.key] = pref.value
+                applied.append(pref)
                 if pref.scope not in scopes_used:
                     scopes_used.append(pref.scope)
 
-        confidence = self._compute_confidence(snapshot)
+        confidence = (
+            sum(pref.confidence for pref in applied) / len(applied)
+            if applied else 0.0
+        )
         applied_scope = self._most_specific_scope(scopes_used)
 
         return ResolvedPreferences(
@@ -54,19 +76,40 @@ class PreferenceResolver:
         task_context: Dict[str, Any],
         requested_scope: Optional[PreferenceScope],
     ) -> bool:
-        if requested_scope and pref.scope != requested_scope:
-            if pref.scope != PreferenceScope.GLOBAL:
-                return False
-        domain = task_context.get("domain") or task_context.get("domains", [None])[0]
-        if pref.scope == PreferenceScope.DOMAIN and domain:
-            return domain in pref.key or pref.metadata.get("domain") == domain
-        if pref.scope == PreferenceScope.TASK_TYPE:
-            task_type = task_context.get("task_type") or task_context.get("intent")
-            return task_type and (task_type in pref.key or pref.metadata.get("task_type") == task_type)
-        if pref.scope == PreferenceScope.PROJECT:
-            project = task_context.get("project")
-            return project and pref.metadata.get("project") == project
-        return True
+        if requested_scope and pref.scope not in (requested_scope, PreferenceScope.GLOBAL):
+            return False
+
+        # The runtime must supply an authenticated persona context; neither
+        # client metadata nor quoted user messages are authorization.
+        persona_id = pref.metadata.get("persona_id")
+        if persona_id and task_context.get("persona_id") != persona_id:
+            return False
+
+        if pref.scope == PreferenceScope.GLOBAL:
+            return True
+
+        selectors = {
+            PreferenceScope.DOMAIN: "domain",
+            PreferenceScope.TASK_TYPE: "task_type",
+            PreferenceScope.PROJECT: "project",
+            PreferenceScope.SESSION: "session_id",
+            PreferenceScope.CONVERSATION: "conversation_id",
+        }
+        field = selectors.get(pref.scope)
+        if field is None:
+            return False
+
+        current = task_context.get(field)
+        if pref.scope == PreferenceScope.DOMAIN and current is None:
+            current = task_context.get("domains")
+        if pref.scope == PreferenceScope.TASK_TYPE and current is None:
+            current = task_context.get("intent")
+        expected = pref.metadata.get(field)
+        if current is None or expected is None or expected == "":
+            return False
+        if isinstance(current, (list, tuple)):
+            return bool(current) and any(item == expected for item in current)
+        return current == expected
 
     def _compute_confidence(self, snapshot: Any) -> float:
         if not snapshot.stable_preferences and not snapshot.tentative_preferences:
@@ -83,7 +126,7 @@ class PreferenceResolver:
             PreferenceScope.SESSION,
             PreferenceScope.CONVERSATION,
         ]
-        for s in order:
+        for s in reversed(order):
             if s in scopes:
                 return s
         return PreferenceScope.GLOBAL
