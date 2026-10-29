@@ -48,10 +48,12 @@ opt-in **real model execution and stop** test. The sanitized environment must
 set `KAREN_COPILOTKIT_LIVE_STOP_REQUIRED=true` and supply a different,
 empty, disposable, authenticated owned conversation through
 `KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID`. The browser types and
-submits one explicit prompt, observes the SDK's true run ID, clicks the
-native Stop control, requires a real 202/200 runtime receipt, uses the
-read-only run status UI to wait for a verified terminal cancelled state,
-and independently rereads canonical run status and conversation history.
+submits one explicit prompt, observes the SDK's true run ID, **requires
+owner-scoped canonical PostgreSQL run admission before pressing Stop**,
+clicks the native Stop control, verifies exactly one stop POST with that
+same run ID, requires a real 202/200 runtime receipt, uses the read-only
+run status UI to wait for a verified terminal cancelled state, and
+independently rereads canonical run status and conversation history.
 A provider that finishes before the Stop control is available causes a
 failed test, **not** a simulated success. No model output, cookies, traces,
 videos, or screenshots are recorded. The disposable run remains in the

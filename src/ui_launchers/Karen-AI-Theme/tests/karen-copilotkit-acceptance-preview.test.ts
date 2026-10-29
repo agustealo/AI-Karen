@@ -84,6 +84,10 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).toContain("KAREN_COPILOTKIT_LIVE_STOP_REQUIRED");
     expect(nativeBrowser).toContain("KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID");
     expect(nativeBrowser).toContain("Read-only canonical run status must be available");
+    expect(nativeBrowser).toContain('"not-admitted"');
+    expect(nativeBrowser).toContain("Canonical run status must be readable");
+    expect(nativeBrowser).toContain('Native Stop must target exactly one observed run');
+    expect(nativeBrowser).toContain('runId: payload.runId');
     expect(nativeBrowser).toContain("Cancelled run must not create a falsely completed");
   });
 

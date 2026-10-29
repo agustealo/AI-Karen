@@ -529,18 +529,44 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   expect(payload.threadId).toBe(dedicatedThread);
   expect(RUN_ID.test(payload.runId), "Observe a real SDK-issued run identity").toBe(true);
 
+  // A client transport packet alone does not establish that Karen admitted
+  // this run. Require a separate owner-scoped PostgreSQL-backed status GET
+  // to see the exact SDK run ID in the canonical running state before Stop.
+  const runStatusUrl = "/api/copilotkit/agent/default/runs/" +
+    dedicatedThread + "/" + payload.runId + "/status";
+  await expect.poll(async () => {
+    const status = await page.request.get(runStatusUrl);
+    if (status.status() === 404) return "not-admitted";
+    expect(status.status(), "Canonical run status must be readable").toBe(200);
+    const body = await status.json() as {
+      status: string; cancel_requested: boolean; cancellation_confirmed: boolean;
+    };
+    expect(body.cancel_requested).toBe(false);
+    expect(body.cancellation_confirmed).toBe(false);
+    return body.status;
+  }, { timeout: 15000, intervals: [100, 200, 300, 500] }).toBe("running");
+
   // If the model finishes before Stop is available, this test fails rather
   // than interpreting a completed run as successful cancellation.
   const stop = native.getByRole("button", { name: /stop/i }).first();
   await expect(stop).toBeVisible({ timeout: 20000 });
+  const stopUrl = "/api/copilotkit/agent/default/stop/" + dedicatedThread;
+  const outboundStops: string[] = [];
+  page.on("request", request => {
+    if (request.method() === "POST" &&
+        new URL(request.url()).pathname === stopUrl) {
+      outboundStops.push(request.postData() ?? "");
+    }
+  });
   const stopReceipt = page.waitForResponse(response =>
     response.request().method() === "POST" &&
-    new URL(response.url()).pathname ===
-      "/api/copilotkit/agent/default/stop/" + dedicatedThread,
+    new URL(response.url()).pathname === stopUrl,
     { timeout: 20000 },
   );
   await stop.click();
   const response = await stopReceipt;
+  expect(outboundStops, "Native Stop must target exactly one observed run")
+    .toEqual([JSON.stringify({ runId: payload.runId })]);
   expect([200, 202], "Stop must be accepted by the canonical owned-run gateway")
     .toContain(response.status());
   const receipt = await response.json() as {
@@ -564,10 +590,11 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
       .toContain("Karen confirmed this run was cancelled.");
   }
 
-  const terminal = await page.request.get(
-    "/api/copilotkit/agent/default/runs/" + dedicatedThread +
-      "/" + payload.runId + "/status",
-  );
+  // Even an immediate 200 stop must be reflected in the actual native
+  // UI, not only in a server JSON payload.
+  await expect(native.getByTestId("karen-copilot-stop-status"))
+    .toContainText("Karen confirmed this run was cancelled.");
+  const terminal = await page.request.get(runStatusUrl);
   expect(terminal.status(), "Read-only canonical run status must be available").toBe(200);
   expect(await terminal.json()).toEqual({
     status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
