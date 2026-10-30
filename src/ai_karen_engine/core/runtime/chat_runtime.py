@@ -544,7 +544,9 @@ class ChatRuntime:
                 if origin is not None else "unavailable"
             )
             logger.error(
-                "ChatRuntime.execute failed; attempting canonical fallback",
+                "ChatRuntime.execute failed; attempting canonical fallback; error_type=%s error_origin=%s",
+                error_type,
+                safe_origin,
                 extra={
                     "correlation_id": ctx.correlation_id,
                     "error_type": error_type,
