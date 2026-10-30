@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   loadSession: vi.fn(),
   mounts: [] as string[],
   modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null}>,
+  onModelChange: null as null | ((value: {provider: string; model: string} | null) => void),
+  onBusyChange: null as null | ((busy: boolean) => void),
 }));
 
 vi.mock("@/components/chat/SessionProvider", () => ({
@@ -26,14 +28,15 @@ vi.mock("@/components/chat/SessionProvider", () => ({
 
 vi.mock("@/components/chat/assistant-ui/KarenComposerRuntimeCatalog", () => ({
   KarenComposerRuntimeCatalog: ({ onSelectionChange }: { onSelectionChange: (selection: { provider: string; model: string } | null) => void }) => (
-    <button type="button" onClick={() => onSelectionChange({ provider: "local", model: "selected-model" })}>Choose available model</button>
+    <button type="button" onClick={() => { state.onModelChange = onSelectionChange; onSelectionChange({ provider: "local", model: "selected-model" }); }}>Choose available model</button>
   ),
 }));
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotChat", () => ({
-  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null }) => {
+  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, onBusyChange }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; onBusyChange: (busy: boolean) => void }) => {
     state.mounts.push(conversationId);
     state.modelProps.push({ preferredProvider, preferredModel });
+    state.onBusyChange = onBusyChange;
     return <div data-testid="owned-copilot-chat">{conversationId}</div>;
   },
 }));
@@ -50,6 +53,8 @@ beforeEach(() => {
   state.error = null;
   state.mounts.length = 0;
   state.modelProps.length = 0;
+  state.onModelChange = null;
+  state.onBusyChange = null;
   state.createNewSession.mockReset().mockResolvedValue(undefined);
   state.loadSession.mockReset().mockResolvedValue(undefined);
 });
@@ -103,6 +108,28 @@ describe("CopilotKit consumer session adapter", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
     expect(state.modelProps.at(-1)).toEqual({
       preferredProvider: "local", preferredModel: "selected-model",
+    });
+  });
+
+  it("freezes model preferences during an in-flight turn", () => {
+    state.currentSession = { id: FIRST, title: "Project Alpha" };
+    state.sessions = [{ id: FIRST, title: "Project Alpha" }];
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByText("Model and provider"));
+    fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
+    const busy = state.onBusyChange;
+    const change = state.onModelChange;
+    if (!busy || !change) throw new Error("Missing canonical callbacks");
+    act(() => busy(true));
+    expect(screen.getByRole("status").textContent).toContain("Model changes are unavailable");
+    act(() => change(null));
+    expect(state.modelProps.at(-1)).toEqual({
+      preferredProvider: "local", preferredModel: "selected-model",
+    });
+    act(() => busy(false));
+    act(() => change(null));
+    expect(state.modelProps.at(-1)).toEqual({
+      preferredProvider: null, preferredModel: null,
     });
   });
 
