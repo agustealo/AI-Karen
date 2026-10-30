@@ -396,3 +396,33 @@ async def test_legacy_user_scoped_memories_remain_available_without_derived_line
         RecallRequest(query="known fact", tenant_id="tenant-1", user_id="user-1")
     )
     assert [item.id for item in result.memories] == ["legacy"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lineage_key", "lineage_value"),
+    [
+        ("source_lineage", None),
+        ("source_lineage", {}),
+        ("derived_source_ids", None),
+        ("derived_source_ids", []),
+    ],
+)
+async def test_unverified_lineage_cannot_bypass_filter_with_empty_values(
+    lineage_key: str, lineage_value: object,
+) -> None:
+    derived = _memory("derived-empty-tag", "tenant-1", "user-1")
+    derived.metadata.custom["persona_id"] = "Troy"
+    derived.metadata.custom[lineage_key] = lineage_value
+
+    result = await NeuroRecall(_FakeRetriever([derived])).recall(
+        RecallRequest(
+            query="sensitive derived fact",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            metadata={"persona_filter": "Troy"},
+        )
+    )
+
+    assert result.memories == ()
+    assert result.provenance == ()
