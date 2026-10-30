@@ -176,6 +176,10 @@ class TestProviderRegistryServiceEndpoints:
         assert {"ollama-local", "lmstudio-desktop", "llamacpp-server"}.issubset(ids)
 
         for provider_id in ("ollama-local", "lmstudio-desktop", "llamacpp-server"):
+            status = registry.get_provider_status(provider_id)
+            assert status is not None
+            assert provider_registry_service_module.ProviderCapability.CHAT_COMPLETION in status.capabilities
+            assert provider_registry_service_module.ProviderCapability.TEXT_GENERATION in status.capabilities
             selected = registry.select_best_target(
                 required_capabilities=needed,
                 preferred_target_id=provider_id,
