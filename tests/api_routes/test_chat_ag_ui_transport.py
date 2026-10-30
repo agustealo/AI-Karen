@@ -108,6 +108,46 @@ async def test_ag_ui_calls_only_canonical_stream_and_preserves_tenant_scope(monk
 
 
 @pytest.mark.asyncio
+async def test_ag_ui_model_hints_reach_only_canonical_runtime(monkeypatch):
+    """Requested routing hints survive ingress, without becoming execution authority."""
+    fake = FakeRuntime()
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: fake)
+    response = await chat_ingress.stream_ag_ui_chat(
+        request=agui_run(forwardedProps={
+            "preferred_llm_provider": "local",
+            "preferred_model": "selected-model",
+        }),
+        http_request=SimpleNamespace(headers={}),
+        user={"user_id": USER, "tenant_id": TENANT_A},
+    )
+    frames = "".join([part async for part in response.body_iterator])
+    assert '"RUN_FINISHED"' in frames
+    assert len(fake.requests) == 1
+    assert fake.requests[0].preferred_provider == "local"
+    assert fake.requests[0].preferred_model == "selected-model"
+    assert fake.requests[0].context.tenant_id == TENANT_A
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_rejects_unpaired_or_unapproved_model_hints():
+    identity = {"user_id": USER, "tenant_id": TENANT_A}
+    for hints in (
+        {"preferred_llm_provider": "local"},
+        {"preferred_model": "selected-model"},
+        {"preferred_llm_provider": "local", "preferred_model": ""},
+        {"preferred_llm_provider": "local", "preferred_model": "selected-model",
+         "execution_authority": True},
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await chat_ingress.stream_ag_ui_chat(
+                request=agui_run(forwardedProps=hints),
+                http_request=SimpleNamespace(headers={}),
+                user=identity,
+            )
+        assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_ag_ui_rejects_unguarded_tools_state_and_context():
     http = SimpleNamespace(headers={})
     identity = {"user_id": USER, "tenant_id": TENANT_A}
