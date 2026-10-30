@@ -108,6 +108,32 @@ describe("CopilotKit pinned SDK discovery", () => {
         preferred_model: "selected-model",
       },
     });
+    // A subsequent automatic-routing run must not inherit the old model hint.
+    const automatic = await POST(new NextRequest(
+      "http://localhost:3000/api/copilotkit/agent/default/run", {
+        method: "POST",
+        headers: {
+          cookie: "kari_session=authenticated",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          threadId: conversation,
+          runId: "run-model-2",
+          messages: [{ id: "message-2", role: "user", content: "Route automatically" }],
+          tools: [],
+          context: [],
+          state: {},
+        }),
+      },
+    ));
+    expect(automatic.status).toBe(200);
+    await automatic.text();
+    expect(observed).toHaveLength(2);
+    const second = observed[1] as Record<string, unknown>;
+    const forwarded = second.forwardedProps as Record<string, unknown> | undefined;
+    expect(forwarded?.preferred_llm_provider).toBeUndefined();
+    expect(forwarded?.preferred_model).toBeUndefined();
+
   });
 
   it("rejects unauthenticated SDK discovery before any runtime work", async () => {
