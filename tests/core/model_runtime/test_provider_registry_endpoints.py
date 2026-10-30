@@ -112,7 +112,9 @@ class TestProviderRegistryServiceEndpoints:
         endpoint = registry.get_provider_endpoint("ollama-local")
         assert endpoint is not None
         assert endpoint.base_url == "http://localhost:11434/v1"
-        assert "chat" in endpoint.capabilities
+        assert {"chat_completion", "text_generation"}.issubset(
+            registry.effective_endpoint_capabilities(endpoint)
+        )
 
     def test_resolve_capable_targets(self, provider_registry_service_module):
         ProviderRegistryService = provider_registry_service_module.ProviderRegistryService
@@ -126,11 +128,11 @@ class TestProviderRegistryServiceEndpoints:
         assert "lmstudio-desktop" in target_ids
 
         targets = registry.resolve_capable_targets(
-            required_capabilities={"chat_completion", "streaming_text"},
+            required_capabilities={"chat_completion", "text_generation"},
             healthy_only=False,
         )
         target_ids = [t.provider_id for t in targets]
-        assert "builtin_vllm" in target_ids
+        assert "ollama-local" in target_ids
 
     def test_select_best_target_preferred(self, provider_registry_service_module):
         ProviderRegistryService = provider_registry_service_module.ProviderRegistryService
