@@ -201,6 +201,7 @@ jobs:
           pytest tests/core/model_runtime/test_ollama_model_inventory_contract.py -q
           pytest tests/core/runtime/test_chat_runtime_settings_selection.py -q
           pytest tests/core/runtime/test_chat_runtime_graph_provenance.py -q
+          pytest tests/core/reasoning/test_chat_runtime_reasoning_activation.py -q
 
       - name: Personalization authority proofs
         run: |
