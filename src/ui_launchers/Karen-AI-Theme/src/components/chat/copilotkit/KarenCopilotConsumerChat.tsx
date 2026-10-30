@@ -115,16 +115,16 @@ export function KarenCopilotConsumerChat() {
           <p className="text-xs text-muted-foreground">Karen runtime controls model execution and saved history</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button type="button" ref={historyButtonRef} disabled={navigationBusy}
+          <button type="button" ref={historyButtonRef} disabled={navigationBusy || runBusy}
             aria-label="Find conversations" aria-expanded={historyOpen}
             aria-controls={historyOpen ? "karen-copilot-history" : undefined}
-            onClick={() => setHistoryOpen(open => !open)}
+            onClick={() => { if (!busyRef.current && !pendingRef.current) setHistoryOpen(open => !open); }}
             className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-input px-3 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
             <Search aria-hidden="true" className="h-4 w-4" />
             <span className="hidden sm:inline">Conversations</span>
           </button>
           <button type="button" aria-label="New conversation" title="New conversation"
-            disabled={navigationBusy} onClick={() => void performNavigation(createNewSession)}
+            disabled={navigationBusy || runBusy} onClick={() => void performNavigation(createNewSession)}
             className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
             <Plus aria-hidden="true" className="h-4 w-4" />
           </button>
@@ -152,7 +152,7 @@ export function KarenCopilotConsumerChat() {
             {matchingSessions.length === 0 ? (
               <p className="py-3 text-sm text-muted-foreground">No matching conversations.</p>
             ) : matchingSessions.map(session => (
-              <button type="button" key={session.id} disabled={navigationBusy}
+              <button type="button" key={session.id} disabled={navigationBusy || runBusy}
                 data-conversation-id={session.id}
                 aria-current={session.id === currentSession.id ? "page" : undefined}
                 onClick={() => void performNavigation(() => loadSession(session.id))}
