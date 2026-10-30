@@ -62,6 +62,10 @@ def test_live_repository_has_single_owner_mount() -> None:
     assert result["violations"] == []
     assert result["runtime_verification"] == "not_run"
     assert result["static_evidence_only"] is True
+    assert result["schema_version"] == 2
+    assert result["consumer_cutover"]["release_ready"] is False
+    assert result["consumer_cutover"]["live_browser_acceptance"] == "not_run"
+    assert result["consumer_cutover"]["active_renderer"] in {"assistant-ui", "copilotkit"}
 
 
 def test_missing_runtime_authority_is_rejected(tmp_path: Path) -> None:
@@ -134,6 +138,18 @@ def test_valid_copilotkit_static_fixture_remains_explicitly_unverified(tmp_path:
     assert result["violations"] == []
     assert result["chat_mount"] == "copilotkit"
     assert result["runtime_verification"] == "not_run"
+    assert result["consumer_cutover"]["copilotkit_consumer_mounted"] is True
+    assert result["consumer_cutover"]["release_ready"] is False
+    assert result["consumer_cutover"]["human_ux_signoff"] == "not_run"
+
+
+def test_legacy_mount_never_claims_copilotkit_consumer_cutover(tmp_path: Path) -> None:
+    fixture(tmp_path)
+    result = AUDITOR.audit(tmp_path)
+    assert result["violations"] == []
+    assert result["consumer_cutover"]["active_renderer"] == "assistant-ui"
+    assert result["consumer_cutover"]["copilotkit_consumer_mounted"] is False
+    assert result["consumer_cutover"]["release_ready"] is False
 
 
 def test_duplicate_ag_ui_implementations_block_copilot_cutover(tmp_path: Path) -> None:

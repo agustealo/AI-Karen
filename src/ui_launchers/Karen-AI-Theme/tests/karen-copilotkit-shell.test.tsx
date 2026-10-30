@@ -98,6 +98,33 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
   });
 
+  it("updates idle provider preferences without remounting the owned SDK thread", () => {
+    const view = render(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(sdk.providerMounts).toBe(1);
+    expect(sdk.providerUnmounts).toBe(0);
+    expect(sdk.provider.at(-1)?.properties).toBeUndefined();
+
+    view.rerender(
+      <KarenCopilotChat
+        conversationId={CONVERSATION}
+        preferredProvider="local"
+        preferredModel="selected-model"
+      />,
+    );
+    expect(sdk.provider.at(-1)?.properties).toEqual({
+      preferred_llm_provider: "local",
+      preferred_model: "selected-model",
+    });
+    expect(sdk.providerMounts).toBe(1);
+    expect(sdk.providerUnmounts).toBe(0);
+    expect(sdk.controlled.at(-1)?.conversationId).toBe(CONVERSATION);
+
+    view.rerender(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(sdk.provider.at(-1)?.properties).toBeUndefined();
+    expect(sdk.providerMounts).toBe(1);
+    expect(sdk.providerUnmounts).toBe(0);
+  });
+
   it("never mounts a provider when authentication is unresolved or invalidated", () => {
     sdk.auth.isLoading = true;
     const view = render(<KarenCopilotChat conversationId={CONVERSATION} />);

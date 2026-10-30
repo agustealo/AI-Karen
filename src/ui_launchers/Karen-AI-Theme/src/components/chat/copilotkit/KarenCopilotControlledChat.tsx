@@ -54,8 +54,10 @@ function validStopReceipt(value: unknown): value is StopReceipt {
 
 export function KarenCopilotControlledChat({
   conversationId,
+  onBusyChange,
 }: {
   conversationId: string;
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const { agent, isReady } = useAgent({
     agentId: karenScopedAgentId(conversationId),
@@ -99,6 +101,12 @@ export function KarenCopilotControlledChat({
   // concurrent run or produce duplicate user-message writes.
   const submitPending = useRef(false);
   const mounted = useRef(true);
+  const reportBusy = useCallback((busy: boolean) => {
+    onBusyChange?.(busy);
+  }, [onBusyChange]);
+  useEffect(() => {
+    reportBusy(Boolean(agent.isRunning || submitPending.current));
+  }, [agent.isRunning, reportBusy]);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
@@ -145,6 +153,7 @@ export function KarenCopilotControlledChat({
       return;
     }
     submitPending.current = true;
+    reportBusy(true);
     setError(null);
     // This is an explicit user gesture. Durable draft clearance is a
     // separate canonical CAS write and must succeed before inference starts.
@@ -186,11 +195,13 @@ export function KarenCopilotControlledChat({
         }
       } finally {
         submitPending.current = false;
+        if (mounted.current) reportBusy(Boolean(agent.isRunning));
       }
     })();
   }, [
     agent, conversationId, copilotkit, isReady, clearBeforeSubmit,
     draftStatus, draftSynced, readDraftText, setDraftText, failedSubmission,
+    reportBusy,
   ]);
 
   const onStop = useCallback(() => {
