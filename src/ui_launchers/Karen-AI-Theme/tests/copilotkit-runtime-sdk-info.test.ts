@@ -64,10 +64,11 @@ describe("CopilotKit pinned SDK discovery", () => {
         return Response.json({ enabled: true });
       }
       if (url === "http://api:8000/api/chat/ag-ui") {
-        observed.push(JSON.parse(String(init?.body)) as unknown);
+        const run = JSON.parse(String(init?.body)) as { runId: string };
+        observed.push(run);
         const stream = [
-          { type: "RUN_STARTED", threadId: conversation, runId: "run-model-1" },
-          { type: "RUN_FINISHED", threadId: conversation, runId: "run-model-1" },
+          { type: "RUN_STARTED", threadId: conversation, runId: run.runId },
+          { type: "RUN_FINISHED", threadId: conversation, runId: run.runId },
         ].map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join("");
         return new Response(stream, {
           status: 200,
