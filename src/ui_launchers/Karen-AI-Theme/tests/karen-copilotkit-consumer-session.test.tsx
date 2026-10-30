@@ -133,6 +133,30 @@ describe("CopilotKit consumer session adapter", () => {
     });
   });
 
+  it("blocks conversation changes while an owned CopilotKit run is active", () => {
+    state.currentSession = { id: FIRST, title: "Original" };
+    state.sessions = [
+      { id: FIRST, title: "Original" },
+      { id: SECOND, title: "Other" },
+    ];
+    render(<KarenCopilotConsumerChat />);
+    const busy = state.onBusyChange;
+    if (!busy) throw new Error("Missing run-state callback");
+    act(() => busy(true));
+    const history = screen.getByRole("button", { name: "Find conversations" });
+    const create = screen.getByRole("button", { name: "New conversation" });
+    expect(history.hasAttribute("disabled")).toBe(true);
+    expect(create.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(history);
+    fireEvent.click(create);
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.loadSession).not.toHaveBeenCalled();
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+    act(() => busy(false));
+    expect(history.hasAttribute("disabled")).toBe(false);
+    expect(create.hasAttribute("disabled")).toBe(false);
+  });
+
   it("reports a failed session switch without mounting an unverified thread", async () => {
     state.currentSession = { id: FIRST, title: "Original" };
     state.sessions = [
