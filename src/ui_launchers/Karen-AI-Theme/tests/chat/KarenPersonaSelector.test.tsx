@@ -70,4 +70,63 @@ describe("authenticated persona selector", () => {
       .toContain("Previous selection retained");
     expect((select as HTMLSelectElement).value).toBe("");
   });
+  it("offers an explicit new conversation only after persisted persona selection", async () => {
+    const createNewSession = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/personas/" ? personas : preferences);
+    vi.mocked(apiClient.put).mockResolvedValue({
+      ...preferences, revision: 6, active_persona_id: "persona-1",
+    });
+
+    render(<KarenPersonaSelector onStartNewConversation={createNewSession} />);
+    expect(screen.queryByRole("button", { name: "Start new conversation for selected persona" })).toBeNull();
+    const select = await screen.findByRole("combobox", { name: "Active Karen persona" });
+    fireEvent.change(select, { target: { value: "persona-1" } });
+    const start = await screen.findByRole("button", { name: "Start new conversation for selected persona" });
+    expect(screen.getByRole("status").textContent).toContain("Persona selection saved");
+    expect(createNewSession).not.toHaveBeenCalled();
+    fireEvent.click(start);
+    await waitFor(() => expect(createNewSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole(
+      "button", { name: "Start new conversation for selected persona",
+    )).toBeNull());
+  });
+
+  it("retains handoff notice and surfaces canonical creation failures", async () => {
+    const createNewSession = vi.fn().mockRejectedValue(new Error("write failed"));
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/personas/" ? personas : preferences);
+    vi.mocked(apiClient.put).mockResolvedValue({
+      ...preferences, revision: 6, active_persona_id: "persona-1",
+    });
+    render(<KarenPersonaSelector onStartNewConversation={createNewSession} />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Active Karen persona" }), {
+      target: { value: "persona-1" },
+    });
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Start new conversation for selected persona",
+    }));
+    expect((await screen.findByRole("alert")).textContent)
+      .toContain("Unable to create a new conversation");
+    expect(screen.getByRole("button", {
+      name: "Start new conversation for selected persona",
+    })).toBeTruthy();
+  });
+
+  it("does not display a verified handoff after an unconfirmed switch", async () => {
+    const createNewSession = vi.fn();
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/personas/" ? personas : preferences);
+    vi.mocked(apiClient.put).mockRejectedValue(new Error("no confirmation"));
+    render(<KarenPersonaSelector onStartNewConversation={createNewSession} />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Active Karen persona" }), {
+      target: { value: "persona-1" },
+    });
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("button", {
+      name: "Start new conversation for selected persona",
+    })).toBeNull();
+    expect(createNewSession).not.toHaveBeenCalled();
+  });
+
 });
