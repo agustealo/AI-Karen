@@ -264,3 +264,34 @@ async def test_gated_stream_emits_no_execution_provenance(
 
 async def _gate() -> SimpleNamespace:
     return SimpleNamespace(mode="unavailable", message="Runtime unavailable")
+
+
+def test_reasoning_with_selected_model_uses_canonical_generation_on_both_transports() -> None:
+    """Reasoning topology must not swallow an explicit or saved model selection."""
+    import ast
+    import inspect
+    import textwrap
+
+    execute_tree = ast.parse(textwrap.dedent(inspect.getsource(ChatRuntime.execute)))
+    stream_tree = ast.parse(textwrap.dedent(inspect.getsource(ChatRuntime.execute_stream)))
+    for tree in (execute_tree, stream_tree):
+        guards = [
+            node.test for node in ast.walk(tree)
+            if isinstance(node, ast.If)
+            and any(
+                isinstance(descendant, ast.Compare)
+                and any(isinstance(value, ast.Constant) and value.value == "reasoning"
+                        for value in descendant.comparators)
+                for descendant in ast.walk(node.test)
+            )
+        ]
+        assert any(
+            isinstance(descendant, ast.Attribute)
+            and descendant.attr == "preferred_provider"
+            for guard in guards for descendant in ast.walk(guard)
+        ), "Reasoning dispatch must respect the selected generation provider"
+        assert any(
+            isinstance(descendant, ast.Attribute)
+            and descendant.attr == "preferred_model"
+            for guard in guards for descendant in ast.walk(guard)
+        ), "Reasoning dispatch must respect the selected generation model"
