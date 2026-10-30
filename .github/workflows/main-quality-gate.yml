@@ -190,6 +190,8 @@ jobs:
 
       - name: Ollama live inventory and provider settings contracts
         run: |
+          pytest tests/core/model_runtime/test_provider_registry_endpoints.py -q
+          pytest tests/core/expression/test_gateway_selected_provider_precedence.py -q
           pytest tests/core/model_runtime/test_ollama_native_inventory.py -q
           pytest tests/core/model_runtime/test_ollama_inference_endpoint.py -q
           pytest tests/core/model_runtime/test_ollama_execution_mapping.py -q
