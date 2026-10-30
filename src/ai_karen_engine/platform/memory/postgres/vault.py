@@ -348,6 +348,16 @@ class PostgresNeuroVault(VaultPort):
         """
         self._require_capability(context, self.WRITE_CAPABILITY)
         self._validate_entry_scope(entry, context)
+        # The public VaultContext has execution identity, not an attested
+        # source-to-memory grant. Never persist caller-controlled assertions
+        # which a future recall authorizer could mistake for verified lineage.
+        custom = getattr(entry.metadata, "custom", None)
+        if isinstance(custom, dict) and (
+            "source_lineage" in custom or "derived_source_ids" in custom
+        ):
+            raise NeuroVaultAuthorizationError(
+                "derived source lineage requires trusted persistence attestation"
+            )
 
     @staticmethod
     def _is_historical_write(entry: MemoryEntry) -> bool:
