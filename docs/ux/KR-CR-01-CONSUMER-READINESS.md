@@ -88,6 +88,12 @@ Using the connected Vercel project `prj_uAqBwgpUsdA0OEoomX4klWUYEWyg` (`ai-karen
 
 The previous Python entrypoint error belongs to deployments built **before** this setting update. It must not be reused as the outcome of a later Next.js build. This documentation commit is intended to produce fresh PR preview deployment evidence at an exact SHA. If deployment builds, confirm its actual revision and authenticated browser/AG-UI backend connectivity before any consumer cutover.
 
+## Exact-head failures discovered and corrective action (2026-10-30)
+
+- Commit `514ea2a1317cb15b72488b9b68f74aa2aac95218`: Main Quality Gate failed in `frontend-quality`, specifically `Run frontend unit tests` after dependency install and TypeScript passed. The Vitest log reported 504 passed and one failure at `tests/karen-copilotkit-consumer-session.test.tsx:148` because the history button remained enabled during a run. The consumer adapter had guarded navigation callbacks but left three visible buttons at `disabled={navigationBusy}` instead of `disabled={navigationBusy || runBusy}`. The fix updates all history/create actions, including rows in an already-open picker, and guards opening history by the shared busy ref. Do not claim this new head passed until its own gates complete.
+- The Vercel preview `dpl_F8SoG4GJp9YiyEnHMwLr9f3graKq`, also at `514ea2a1`, correctly reports `framework: nextjs`, but failed with `MODULE_NOT_FOUND: Cannot find module 'next/dist/compiled/next-server/server.runtime.prod.js'`, require stack `/vercel/path0/ui_launchers/Karen-AI-Theme/noop.js`. The original Python entrypoint error is resolved; the new build failure is **not yet attributed** to a specific install command, dependency layout or root-directory error. Do not invent a cause or modify unrelated build settings without dependency/install logs.
+- Detailed Vercel build-event access returned a team-scoped 403. Permission must be restored through Vercel's single-use team authorization flow before querying logs. Existing GitHub workflow logs remain accessible. No production promotion or dashboard cutover was attempted.
+
 ## Mandatory security and observability
 - Cross-user/tenant/persona denial at final backend boundary, including history and derived summaries.
 - Reauthorization on sensitive actions, revocation, replay, cancellation and idempotency testing.
