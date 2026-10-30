@@ -121,6 +121,15 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
         diagnostic = {name: metadata.get(name) for name in fields}
         # Typed, low-cardinality envelope evidence only. Never print content,
         # messages, arbitrary metadata, identifiers or exception arguments.
+        # A zero-token gate is not provider failure. Classify its envelope
+        # without revealing any gate text, user identity, or private payload.
+        diagnostic["has_gate_response"] = payload.get("gate_response") is not None
+        diagnostic["has_approval"] = payload.get("approval") is not None
+        diagnostic["has_error"] = payload.get("error") is not None
+        diagnostic["response_keys"] = sorted(set(payload).intersection({
+            "content", "status", "metadata", "gate_response", "approval",
+            "error", "detail", "message", "model", "provider",
+        }))
         diagnostic["http_response_shape"] = (
             "messages" if isinstance(payload.get("messages"), list)
             else "content" if "content" in payload else "other"
