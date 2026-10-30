@@ -58,7 +58,7 @@ class ConversationSourceAuthorizer:
         # A deleted/revoked source cannot be released based on a cached label.
         if stored.get("revoked") is True or stored.get("deleted") is True:
             return False
-        # No evidence of a complete ACL/versioning contract exists here.
-        # Remain fail-closed until a trusted persisted derivation binding and
-        # authoritative revision check are provided by the memory ledger.
+        # Current ownership is necessary but not sufficient. The caller must
+        # supply an independently attested source-to-memory binding, which the
+        # existing memory persistence API does not yet expose. Deny for now.
         return False
