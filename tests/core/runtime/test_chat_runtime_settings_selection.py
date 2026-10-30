@@ -337,3 +337,19 @@ def test_workflow_graph_empty_response_fails_closed() -> None:
         and node.func.attr == "_extract_payload"
         for node in ast.walk(tree)
     )
+
+
+def test_reasoning_topology_selected_model_bypasses_graph_on_both_transports() -> None:
+    """REASONING is not an instruction to route a selected chat model to LangGraph."""
+    import inspect
+    import textwrap
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    for method, graph_call in (
+        (ChatRuntime.execute, "_run_graph"),
+        (ChatRuntime.execute_stream, "_run_graph_stream"),
+    ):
+        source = textwrap.dedent(inspect.getsource(method))
+        assert 'decision.is_graph_required and decision.topology.value != "reasoning"' in source
+        assert graph_call in source
+        assert "_run_simple" in source
