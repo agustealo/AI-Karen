@@ -13,6 +13,8 @@ import { Loader2, Plus, Search } from "lucide-react";
 
 import { useSession } from "@/components/chat/SessionProvider";
 import { KarenCopilotChat } from "./KarenCopilotChat";
+import { KarenComposerRuntimeCatalog } from "../assistant-ui/KarenComposerRuntimeCatalog";
+import type { ComposerModelRequest } from "../assistant-ui/KarenComposerRuntimeCatalog";
 
 export function KarenCopilotConsumerChat() {
   const {
@@ -24,6 +26,7 @@ export function KarenCopilotConsumerChat() {
     error: sessionError,
   } = useSession();
   const [query, setQuery] = useState("");
+  const [modelRequest, setModelRequest] = useState<ComposerModelRequest>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [navigationBusy, setNavigationBusy] = useState(false);
@@ -148,7 +151,20 @@ export function KarenCopilotConsumerChat() {
           </div>
         </section>
       )}
-      <KarenCopilotChat key={currentSession.id} conversationId={currentSession.id} />
+      <details data-testid="karen-copilot-model-discovery" className="shrink-0 border-b border-border/60 px-4 py-2">
+        <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
+          Model and provider
+        </summary>
+        <div className="max-w-2xl py-2">
+          <KarenComposerRuntimeCatalog selection={modelRequest} onSelectionChange={setModelRequest} />
+        </div>
+      </details>
+      <KarenCopilotChat
+        key={currentSession.id}
+        conversationId={currentSession.id}
+        preferredProvider={modelRequest?.provider ?? null}
+        preferredModel={modelRequest?.model ?? null}
+      />
     </section>
   );
 }
