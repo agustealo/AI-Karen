@@ -314,3 +314,26 @@ async def test_workflow_orchestrator_factory_is_synchronous_and_not_awaited(
     )
     runtime = WorkflowRuntime()
     assert await runtime._get_orchestrator() is sentinel
+
+
+def test_workflow_graph_empty_response_fails_closed() -> None:
+    """Graph result extraction cannot turn a missing answer into success."""
+    import ast
+    import inspect
+    import textwrap
+    from ai_karen_engine.core.runtime.workflow_runtime import WorkflowRuntime
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(WorkflowRuntime.run)))
+    assert any(
+        isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "RuntimeError"
+        for node in ast.walk(tree)
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_extract_payload"
+        for node in ast.walk(tree)
+    )
