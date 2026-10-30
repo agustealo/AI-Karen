@@ -3501,13 +3501,13 @@ class ChatRuntime:
         provider_meta = {
             "requested_provider": request.preferred_provider,
             "requested_model": request.preferred_model,
-            "actual_provider": activation_meta.get(
-                "soft_reasoning_provider",
-                "reasoning_executor",
-            ),
-            "actual_model": activation_meta.get(
-                "soft_reasoning_model",
-                "canonical",
+            # Strategy selection and configured soft-reasoning targets are not
+            # execution receipts. Never identify the reasoning executor or a
+            # proposed model as the provider/model that generated the answer.
+            "actual_provider": None,
+            "actual_model": None,
+            "reasoning_model_attribution_status": (
+                "unverified" if consumed_model_calls > 0 else "not_executed"
             ),
             "runtime_engine": activation_meta.get(
                 "soft_reasoning_runtime_engine",
