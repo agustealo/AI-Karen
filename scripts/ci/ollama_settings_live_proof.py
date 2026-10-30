@@ -126,8 +126,35 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
     provider = str(metadata.get("actual_provider") or "").strip()
     actual_model = str(metadata.get("actual_model") or payload.get("model") or "").strip()
     if provider not in {"ollama", "ollama-local"} or actual_model != model:
+        # Only emit typed, low-cardinality routing classifications to CI.
+        # Never log model names, raw metadata, prompt text or credentials.
+        permitted_providers = {
+            "ollama", "ollama-local", "local", "vllm", "transformers",
+            "lmstudio-desktop", "fallback",
+        }
+        permitted_sources = {
+            "model", "model_stream", "runtime", "unavailable",
+            "emergency", "static", "mock",
+        }
+        source = metadata.get("response_source")
+        diagnostics = {
+            "observed_provider_class": (
+                provider if provider in permitted_providers else "other"
+            ),
+            "selected_model_matched": actual_model == model,
+            "source_class": (
+                source if isinstance(source, str) and source in permitted_sources
+                else "other"
+            ),
+            "fallback_active": metadata.get("fallback_level") not in (None, 0, "0"),
+            "degraded": metadata.get("degraded_mode") is True,
+            "persona_history_scope_denied": (
+                metadata.get("error_code") == "PERSONA_HISTORY_SCOPE_DENIED"
+            ),
+        }
         raise LiveProofError(
-            "Default ChatRuntime ignored the saved Ollama selection or fell back"
+            "Default ChatRuntime ignored the saved Ollama selection or fell back; "
+            + json.dumps(diagnostics, sort_keys=True)
         )
     if metadata.get("response_source") in {"emergency", "unavailable", "mock", "static"}:
         raise LiveProofError("ChatRuntime reported a non-model response source")
