@@ -27,6 +27,15 @@ export function KarenCopilotConsumerChat() {
   } = useSession();
   const [query, setQuery] = useState("");
   const [modelRequest, setModelRequest] = useState<ComposerModelRequest>(null);
+  const [runBusy, setRunBusy] = useState(false);
+  const busyRef = useRef(false);
+  const handleBusyChange = useCallback((busy: boolean) => {
+    busyRef.current = busy;
+    setRunBusy(busy);
+  }, []);
+  const handleModelRequest = useCallback((request: ComposerModelRequest) => {
+    if (!busyRef.current) setModelRequest(request);
+  }, []);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [navigationBusy, setNavigationBusy] = useState(false);
@@ -155,15 +164,19 @@ export function KarenCopilotConsumerChat() {
         <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
           Model and provider
         </summary>
-        <div className="max-w-2xl py-2">
-          <KarenComposerRuntimeCatalog selection={modelRequest} onSelectionChange={setModelRequest} />
-        </div>
+        <fieldset disabled={runBusy} className="max-w-2xl py-2 disabled:opacity-60">
+          <KarenComposerRuntimeCatalog selection={modelRequest} onSelectionChange={handleModelRequest} />
+        </fieldset>
+        {runBusy && <p role="status" className="text-xs text-muted-foreground">
+          Model changes are unavailable while Karen is processing this message.
+        </p>}
       </details>
       <KarenCopilotChat
         key={currentSession.id}
         conversationId={currentSession.id}
         preferredProvider={modelRequest?.provider ?? null}
         preferredModel={modelRequest?.model ?? null}
+        onBusyChange={handleBusyChange}
       />
     </section>
   );
