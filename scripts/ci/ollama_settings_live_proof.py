@@ -148,6 +148,19 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
             ),
             "fallback_active": metadata.get("fallback_level") not in (None, 0, "0"),
             "degraded": metadata.get("degraded_mode") is True,
+            "requested_model_matched": metadata.get("requested_model") == model,
+            "requested_provider_is_ollama": metadata.get("requested_provider") in {
+                "ollama", "ollama-local",
+            },
+            "actual_provider_present": bool(provider),
+            "actual_model_present": bool(actual_model),
+            "model_selection_source": (
+                metadata.get("model_selection_source")
+                if metadata.get("model_selection_source") in {
+                    "application_settings", "explicit_runtime_or_user",
+                    "runtime_default", "provider_router",
+                } else "other"
+            ),
             "persona_history_scope_denied": (
                 metadata.get("error_code") == "PERSONA_HISTORY_SCOPE_DENIED"
             ),
@@ -286,7 +299,7 @@ def run(
         f"{api}/api/chat", timeout=timeout, cookies=cookie_file,
         method="POST",
         body={
-            "messages": [{"content": "Reply with a short greeting.", "message_type": "user"}],
+            "messages": [{"content": "Write one original sentence describing a blue lantern beside a wooden bridge.", "message_type": "user"}],
             "session_id": f"ollama_settings_{uuid.uuid4().hex}",
             "max_tokens": 512,
             "temperature": 0.0,
