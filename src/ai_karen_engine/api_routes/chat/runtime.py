@@ -506,6 +506,20 @@ async def create_chat_response(
                 headers["Retry-After"] = str(retry_after)
             return JSONResponse(status_code=status_code, content=payload, headers=headers)
 
+        if result.status == ChatExecutionStatus.ERROR:
+            # An unsuccessful runtime execution must not become an HTTP 200
+            # success envelope with empty assistant content.
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error_code": result.metadata.extra.get("error_code") or "CHAT_EXECUTION_FAILED",
+                    "message": "The chat runtime could not complete the response.",
+                    "correlation_id": correlation_id,
+                    "requires_retry": True,
+                },
+                headers={"X-Correlation-Id": correlation_id},
+            )
+
         response_metadata = result.metadata.to_dict()
         actual_model = response_metadata.get("actual_model") or "unknown"
         processing_time = time.time() - start_time
