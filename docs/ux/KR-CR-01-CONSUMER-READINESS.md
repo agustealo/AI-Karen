@@ -56,6 +56,15 @@ Never map existence to release. Record evidence SHA, source path, test command, 
 - Prove create/edit/save/version/restore/export against real owned state before marketing durable workspace or living artifacts.
 - Extend existing approval and task lifecycle contracts for real verified outcomes; never infer completion from a frontend event.
 
+
+## CK-CUTOVER-02 source progress (2026-10-30)
+
+- Added `KarenCopilotConsumerChat.tsx` using canonical `SessionProvider` for durable create/load and title search, with negative unauthorized-session handling and duplicate navigation suppression.
+- Reused existing `KarenComposerRuntimeCatalog` to display backend-reported provider/models in the candidate consumer shell; any choice is a *request*, not verified execution. A targeted component test asserts forwarding; no claim of browser acceptance.
+- Rich history already has `KarenCopilotVerifiedHistory.tsx` and `KarenCopilotHistoryGate.tsx`, which validate authoritative saved CUSTOM presentation/receipt events before hydration. This is partial existing implementation, **not absent functionality**. Confirm live streaming equivalence, actual owned history, and fresh account/tenant permissions in a real integration test.
+- Existing `ConversationContextRail` is not yet wired to the candidate, and there is no established safe mapping from the candidate's live SDK event data to its observed event props. Do not pass synthetic empty events merely to make the rail look implemented.
+- Do not activate candidate dashboard mount while mid-run model preference behavior, rich replay, accessibility/visual/rail parity and authenticated browser journeys remain unverified.
+
 ## Mandatory security and observability
 - Cross-user/tenant/persona denial at final backend boundary, including history and derived summaries.
 - Reauthorization on sensitive actions, revocation, replay, cancellation and idempotency testing.
