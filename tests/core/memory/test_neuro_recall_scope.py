@@ -426,3 +426,54 @@ async def test_unverified_lineage_cannot_bypass_filter_with_empty_values(
 
     assert result.memories == ()
     assert result.provenance == ()
+
+
+@pytest.mark.asyncio
+async def test_live_source_authorizer_can_admit_verified_derived_memory():
+    """Only an injected current source authority may release derived knowledge."""
+    derived = _memory("verified-derived", "tenant-1", "user-1")
+    derived.metadata.custom.update({
+        "persona_id": "Troy",
+        "source_lineage": {"source_id": "conversation-1", "authorization_status": "revoked"},
+    })
+
+    class _Authorizer:
+        async def authorize(self, memory, request):
+            assert memory.id == "verified-derived"
+            assert request.tenant_id == "tenant-1"
+            assert request.user_id == "user-1"
+            assert request.metadata["persona_filter"] == "Troy"
+            return True
+
+    result = await NeuroRecall(
+        _FakeRetriever([derived]), source_authorizer=_Authorizer()
+    ).recall(RecallRequest(
+        query="context", tenant_id="tenant-1", user_id="user-1",
+        metadata={"persona_filter": "Troy"},
+    ))
+    assert [entry.id for entry in result.memories] == ["verified-derived"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verifier_behavior", ["deny", "error"])
+async def test_source_authorizer_denial_and_failure_never_release_content(verifier_behavior):
+    derived = _memory("sensitive-derived", "tenant-1", "user-1")
+    derived.metadata.custom.update({
+        "persona_id": "Troy",
+        "derived_source_ids": ["conversation-1", "conversation-2"],
+    })
+
+    class _Authorizer:
+        async def authorize(self, memory, request):
+            if verifier_behavior == "error":
+                raise RuntimeError("secret source credential")
+            return False
+
+    result = await NeuroRecall(
+        _FakeRetriever([derived]), source_authorizer=_Authorizer()
+    ).recall(RecallRequest(
+        query="context", tenant_id="tenant-1", user_id="user-1",
+        metadata={"persona_filter": "Troy"},
+    ))
+    assert not result.memories
+    assert not result.provenance

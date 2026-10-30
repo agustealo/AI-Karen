@@ -96,6 +96,13 @@ class RecallRetriever(Protocol):
     async def recall(self, query: MemoryQuery) -> list[MemoryEntry]: ...
 
 
+@runtime_checkable
+class SourceLineageAuthorizer(Protocol):
+    """Live source ACL authority, never metadata-provided permission claims."""
+
+    async def authorize(self, memory: MemoryEntry, request: RecallRequest) -> bool: ...
+
+
 class NeuroRecall:
     """Single production recall strategy and selection authority."""
 
@@ -104,6 +111,7 @@ class NeuroRecall:
         retriever: RecallRetriever | None = None,
         *,
         retrievers: Sequence[RecallRetriever] | None = None,
+        source_authorizer: SourceLineageAuthorizer | None = None,
     ) -> None:
         if retriever is not None and retrievers is not None:
             raise TypeError("provide retriever or retrievers, not both")
@@ -125,6 +133,7 @@ class NeuroRecall:
                     "every NeuroRecall retriever must provide async recall(query)"
                 )
         self._retrievers = selected
+        self._source_authorizer = source_authorizer
 
     async def recall(self, request: RecallRequest) -> RecallResult:
         request.validate()
@@ -273,8 +282,25 @@ class NeuroRecall:
                 "source_lineage" in custom_metadata
                 or "derived_source_ids" in custom_metadata
             ):
-                rejected_count += 1
-                continue
+                # A source authority must independently recheck the complete
+                # source set against current ACL/revocation state. Missing or
+                # failing authorization denies recall without leaking details.
+                if self._source_authorizer is None:
+                    rejected_count += 1
+                    continue
+                try:
+                    authorized = await self._source_authorizer.authorize(memory, request)
+                except Exception as exc:
+                    logger.warning(
+                        "memory.neuro_recall.source_authorization_failed",
+                        extra={"error_type": type(exc).__name__,
+                               "correlation_id": request.correlation_id},
+                    )
+                    rejected_count += 1
+                    continue
+                if authorized is not True:
+                    rejected_count += 1
+                    continue
 
             candidate = self._to_candidate(memory, request)
             guard = evaluate_guardrails(candidate)
