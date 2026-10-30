@@ -288,6 +288,22 @@ class NeuroRecall:
                 if self._source_authorizer is None:
                     rejected_count += 1
                     continue
+                lineage = custom_metadata.get("source_lineage")
+                source_ids = custom_metadata.get("derived_source_ids")
+                if "source_lineage" in custom_metadata and (
+                    not isinstance(lineage, dict) or not lineage
+                ):
+                    rejected_count += 1
+                    continue
+                if "derived_source_ids" in custom_metadata and (
+                    not isinstance(source_ids, list)
+                    or not source_ids
+                    or any(not isinstance(source_id, str) or not source_id.strip()
+                           for source_id in source_ids)
+                    or len(set(source_ids)) != len(source_ids)
+                ):
+                    rejected_count += 1
+                    continue
                 try:
                     authorized = await self._source_authorizer.authorize(memory, request)
                 except Exception as exc:
