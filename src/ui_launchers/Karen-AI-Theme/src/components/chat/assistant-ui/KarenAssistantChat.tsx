@@ -370,6 +370,7 @@ function AssistantMessage() {
 
 function KarenThread({ selection, onSelectionChange }: { selection: ComposerModelRequest; onSelectionChange: (next: ComposerModelRequest) => void }) {
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
+  const { createNewSession } = useSession();
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
       <ThreadPrimitive.Viewport
@@ -409,7 +410,7 @@ function KarenThread({ selection, onSelectionChange }: { selection: ComposerMode
                 <p className="mt-2 text-muted-foreground">Persona selection, voice input and attachments will appear here only when supported by the connected runtime and composer transport.</p>
               </section>
             )}
-            <div className="mb-2"><KarenPersonaSelector /></div>
+            <div className="mb-2"><KarenPersonaSelector onStartNewConversation={createNewSession} /></div>
             <ComposerPrimitive.Root className="flex items-end gap-2 rounded-2xl border border-input bg-card p-2 shadow-sm">
               <button type="button" aria-label="Composer settings" aria-expanded={composerSettingsOpen}
                 onClick={() => setComposerSettingsOpen((open) => !open)}
