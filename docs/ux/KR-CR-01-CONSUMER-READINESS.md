@@ -66,6 +66,17 @@ Never map existence to release. Record evidence SHA, source path, test command, 
 - The candidate now reports synchronous submit-pending state and SDK running state to the canonical consumer shell; provider/model selection and conversation navigation are disabled during busy periods and request callbacks reject navigation while the runtime is active. Unit regression coverage added. This does **not** establish that CopilotKit dynamically updates provider properties correctly on an idle model change; real SDK/owned execution receipts are still required.
 - Do not activate candidate dashboard mount while model override execution proof, rich replay, accessibility/visual/rail parity and authenticated browser journeys remain unverified.
 
+## Preview deployment diagnostic (2026-10-30)
+
+The Vercel deployment for commit `157c7637cfa97d3772d366a63c56b333707cb268` was inspected through the connected Vercel project (deployment `dpl_7DGZhQga126mgixSwaAiZ39SCN8N`). Vercel reported:
+- `readyState: ERROR`
+- `errorCode: PYTHON_ENTRYPOINT_NOT_FOUND`
+- Project framework: `python`
+- Git source branch: `audit/kr-cr-01-consumer-readiness`
+- The actual frontend application is Next.js under `src/ui_launchers/Karen-AI-Theme/`.
+
+This is a **Vercel framework/root deployment configuration mismatch**, not a demonstrated CopilotKit compile/test regression. Do not follow the generic Vercel suggestion to point Python at a test file's `app`; that would deploy the wrong application and conceal the discrepancy. Before browser acceptance, confirm whether this project is intended to deploy the Next.js consumer UI or a Python API. If it is the consumer UI, configure the existing project for the verified frontend root and Next.js framework and prove exact-commit build. If it is an API project, use the proper API entrypoint and a separately identified approved consumer deployment. No production deployment settings were modified in this audit.
+
 ## Mandatory security and observability
 - Cross-user/tenant/persona denial at final backend boundary, including history and derived summaries.
 - Reauthorization on sensitive actions, revocation, replay, cancellation and idempotency testing.
