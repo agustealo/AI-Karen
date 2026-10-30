@@ -263,6 +263,19 @@ class NeuroRecall:
                     rejected_count += 1
                     continue
 
+            # Derived source lineage is a security claim, not an ordinary
+            # relevance hint. A stored assertion of authorization cannot prove
+            # that its source grant remains valid at recall time. Until the
+            # governed source-ACL verifier is connected, exclude explicitly
+            # source-derived entries rather than reuse revoked/stale content.
+            custom_metadata = getattr(metadata, "custom", {}) if metadata else {}
+            if isinstance(custom_metadata, dict) and (
+                "source_lineage" in custom_metadata
+                or "derived_source_ids" in custom_metadata
+            ):
+                rejected_count += 1
+                continue
+
             candidate = self._to_candidate(memory, request)
             guard = evaluate_guardrails(candidate)
             if guard.outcome.value in {"reject", "quarantine"}:

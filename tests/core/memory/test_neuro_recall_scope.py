@@ -361,3 +361,68 @@ async def test_unfiltered_recall_remains_explicitly_user_scoped():
         RecallRequest(query="general", tenant_id="tenant-1", user_id="user-1")
     )
     assert [memory.id for memory in result.memories] == ["general"]
+
+
+@pytest.mark.asyncio
+async def test_source_derived_memories_fail_closed_without_current_acl_verification():
+    """Stored lineage or an asserted grant cannot replace a live source ACL check."""
+    derived = _memory("derived", "tenant-1", "user-1", relevance=1.0)
+    derived.metadata.custom["persona_id"] = "Troy"
+    derived.metadata.custom["source_lineage"] = {
+        "source_id": "private-conversation",
+        "authorization_status": "authorized",
+        "acl_revision": 1,
+    }
+    mixed = _memory("mixed", "tenant-1", "user-1", relevance=0.95)
+    mixed.metadata.custom["persona_id"] = "Troy"
+    mixed.metadata.custom["derived_source_ids"] = ["source-1", "source-2"]
+    direct = _memory("direct", "tenant-1", "user-1", relevance=0.9)
+    direct.metadata.custom["persona_id"] = "Troy"
+
+    result = await NeuroRecall(_FakeRetriever([derived, mixed, direct])).recall(
+        RecallRequest(
+            query="private knowledge", tenant_id="tenant-1", user_id="user-1",
+            metadata={"persona_filter": "Troy"},
+        )
+    )
+    assert [memory.id for memory in result.memories] == ["direct"]
+    assert "private-conversation" not in str(result.provenance)
+
+
+@pytest.mark.asyncio
+async def test_legacy_user_scoped_memories_remain_available_without_derived_lineage():
+    memory = _memory("legacy", "tenant-1", "user-1")
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="known fact", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert [item.id for item in result.memories] == ["legacy"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lineage_key", "lineage_value"),
+    [
+        ("source_lineage", None),
+        ("source_lineage", {}),
+        ("derived_source_ids", None),
+        ("derived_source_ids", []),
+    ],
+)
+async def test_unverified_lineage_cannot_bypass_filter_with_empty_values(
+    lineage_key: str, lineage_value: object,
+) -> None:
+    derived = _memory("derived-empty-tag", "tenant-1", "user-1")
+    derived.metadata.custom["persona_id"] = "Troy"
+    derived.metadata.custom[lineage_key] = lineage_value
+
+    result = await NeuroRecall(_FakeRetriever([derived])).recall(
+        RecallRequest(
+            query="sensitive derived fact",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            metadata={"persona_filter": "Troy"},
+        )
+    )
+
+    assert result.memories == ()
+    assert result.provenance == ()
