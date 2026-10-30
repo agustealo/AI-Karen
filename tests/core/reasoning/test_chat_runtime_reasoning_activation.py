@@ -70,6 +70,21 @@ def test_reasoning_strategy_cannot_override_observed_model_receipt() -> None:
         and isinstance(value, ast.Call)
         for key, value in zip(receipt.keys, receipt.values)
     )
-    assert "if key not in {" in ast.unparse(receipt)
-    assert '"actual_provider"' in ast.unparse(receipt)
-    assert '"actual_model"' in ast.unparse(receipt)
+    exclusions = [
+        comparison.comparators[0]
+        for comparison in ast.walk(receipt)
+        if isinstance(comparison, ast.Compare)
+        and any(isinstance(op, ast.NotIn) for op in comparison.ops)
+        and isinstance(comparison.left, ast.Name)
+        and comparison.left.id == "key"
+        and len(comparison.comparators) == 1
+        and isinstance(comparison.comparators[0], ast.Set)
+    ]
+    assert exclusions, "Strategy metadata must exclude observed execution fields"
+    excluded = {
+        value.value
+        for exclusion in exclusions
+        for value in exclusion.elts
+        if isinstance(value, ast.Constant)
+    }
+    assert {"actual_provider", "actual_model", "response_source"}.issubset(excluded)
