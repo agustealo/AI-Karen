@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import ai_karen_engine.core.runtime.reasoning_bridge as reasoning_bridge
 
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -70,9 +69,11 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reporte
         consume_reasoning_step=AsyncMock(return_value=True),
         check_duration=AsyncMock(return_value=True),
     )
-    with patch(
-        "ai_karen_engine.core.runtime.reasoning_bridge.get_runtime_reasoning_bridge",
-        return_value=fake_bridge,
+    bridge_module = ModuleType("ai_karen_engine.core.runtime.reasoning_bridge")
+    bridge_module.get_runtime_reasoning_bridge = lambda: fake_bridge
+    with patch.dict(
+        "sys.modules",
+        {"ai_karen_engine.core.runtime.reasoning_bridge": bridge_module},
     ):
         answer, metadata = await runtime._run_reasoning(
             request, decision, plan, meter,
