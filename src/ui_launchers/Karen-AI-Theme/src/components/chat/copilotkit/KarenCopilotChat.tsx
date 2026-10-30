@@ -27,12 +27,14 @@ export interface KarenCopilotChatProps {
   /** Optional user preference from Karen's backend-owned model catalog. */
   preferredProvider?: string | null;
   preferredModel?: string | null;
+  onBusyChange?: (busy: boolean) => void;
 }
 
 export function KarenCopilotChat({
   conversationId,
   preferredProvider = null,
   preferredModel = null,
+  onBusyChange,
 }: KarenCopilotChatProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
   if (isLoading || !isAuthenticated || !user ||
@@ -78,7 +80,7 @@ export function KarenCopilotChat({
     >
       <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
-          <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} />
+          <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
           <div data-testid="karen-copilot-persona-footer"
             className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
             <KarenPersonaSelector />
