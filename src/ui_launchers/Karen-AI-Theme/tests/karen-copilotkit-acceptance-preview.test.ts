@@ -6,6 +6,10 @@ const root = process.cwd();
 const page = readFileSync(resolve(root,
   "src/app/acceptance/copilotkit/[conversationId]/page.tsx"), "utf8");
 const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf8");
+const previewGate = readFileSync(resolve(root,
+  "src/app/acceptance/copilotkit/_lib/preview-gate.ts"), "utf8");
+const consumerPreview = readFileSync(resolve(root,
+  "src/app/acceptance/copilotkit-consumer/[conversationId]/page.tsx"), "utf8");
 const prep = readFileSync(resolve(root, "tools/prepare-copilotkit-styles.mjs"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const ignore = readFileSync(resolve(root, ".gitignore"), "utf8");
@@ -17,11 +21,12 @@ const shim = readFileSync(resolve(root,
 
 describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => {
   it("defaults to a 404 unless both server-only flag and exact host are approved", () => {
-    expect(page).toContain('KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED === "true"');
-    expect(page).toContain('process.env.KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_HOST');
-    expect(page).toContain('incomingHost !== allowedHost');
-    expect(page).toContain('if (!enabled || !APPROVED_HOST.test(allowedHost)) notFound()');
-    expect(page).toContain('if (!UUID.test(conversationId)) notFound()');
+    expect(page).toContain("requireApprovedCopilotKitPreview(conversationId)");
+    expect(previewGate).toContain('KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED === "true"');
+    expect(previewGate).toContain('process.env.KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_HOST');
+    expect(previewGate).toContain('incomingHost !== allowedHost');
+    expect(previewGate).toContain('!APPROVED_HOST.test(allowedHost)');
+    expect(previewGate).toContain('!UUID.test(conversationId)');
     expect(page).not.toMatch(/process\\.env\\.NEXT_PUBLIC_[A-Z_]+/);
     expect(page).not.toContain("x-forwarded-host");
   });
@@ -33,6 +38,18 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(page).toContain("force-dynamic");
     expect(page).toContain("index: false, follow: false");
     expect(page).not.toContain("new InMemoryAgentRunner");
+  });
+
+  it("mounts the canonical consumer candidate on a separately gated preview only", () => {
+    expect(consumerPreview).toContain("requireApprovedCopilotKitPreview(conversationId)");
+    expect(consumerPreview).toContain("<AuthWrapper>");
+    expect(consumerPreview).toContain("<SessionProvider initialSessionId={conversationId}>");
+    expect(consumerPreview).toContain("<KarenCopilotConsumerChat />");
+    expect(consumerPreview).toContain('href="/vendor/copilotkit-v2.css"');
+    expect(consumerPreview).toContain('index: false, follow: false');
+    expect(consumerPreview).not.toContain("process.env.NEXT_PUBLIC_");
+    expect(consumerPreview).not.toContain("x-forwarded-host");
+    expect(dashboard).not.toContain("<KarenCopilotConsumerChat");
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {
