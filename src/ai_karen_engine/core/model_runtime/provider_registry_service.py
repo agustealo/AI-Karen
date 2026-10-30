@@ -357,7 +357,7 @@ class ProviderRegistryService:
         self, endpoint: ProviderEndpoint
     ) -> Set[ProviderCapability]:
         capabilities: Set[ProviderCapability] = set()
-        for capability_name in endpoint.capabilities:
+        for capability_name in self.effective_endpoint_capabilities(endpoint):
             try:
                 capabilities.add(ProviderCapability(capability_name))
             except ValueError:
