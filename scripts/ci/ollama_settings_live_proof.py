@@ -119,6 +119,22 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
         fields = ("actual_provider", "actual_model", "response_source",
                   "failure_category", "degradation_reason", "fallback_level")
         diagnostic = {name: metadata.get(name) for name in fields}
+        # Typed, low-cardinality envelope evidence only. Never print content,
+        # messages, arbitrary metadata, identifiers or exception arguments.
+        diagnostic["http_response_shape"] = (
+            "messages" if isinstance(payload.get("messages"), list)
+            else "content" if "content" in payload else "other"
+        )
+        diagnostic["status_class"] = (
+            str(payload.get("status")) if payload.get("status") in
+            {"success", "error", "failed", "gate", "completed", "unavailable", "partial"}
+            else "other"
+        )
+        diagnostic["error_code_class"] = (
+            str(metadata.get("error_code")) if metadata.get("error_code") in
+            {"PERSONA_HISTORY_SCOPE_DENIED", "CHAT_RUNTIME_GATED", "CHAT_EXECUTION_FAILED", "APPROVAL_REQUIRED"}
+            else "other"
+        )
         raise LiveProofError(
             "Default ChatRuntime did not produce an assistant response; "
             + json.dumps(diagnostic, sort_keys=True, default=str)
