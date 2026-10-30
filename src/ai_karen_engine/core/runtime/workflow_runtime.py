@@ -582,7 +582,7 @@ class WorkflowRuntime:
     async def _get_orchestrator(self):
         from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator
 
-        return await get_default_orchestrator()
+        return get_default_orchestrator()
 
     def _build_config(
         self,
