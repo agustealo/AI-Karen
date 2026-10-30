@@ -372,7 +372,11 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
     --backend-ollama-url "${container_model_url}" \
     --cookie-file "${COOKIE_JAR}" \
     --model "${LIVE_MODEL_NAME}" \
-    --timeout "${LIVE_MODEL_TIMEOUT_SECONDS}"
+    --timeout "${LIVE_MODEL_TIMEOUT_SECONDS}" || {
+      # Report only pre-redacted runtime callsite diagnostics, never full API logs.
+      docker logs "${API_CONTAINER}" 2>&1 | grep -F "ChatRuntime.execute failed; attempting canonical fallback; error_type=" | tail -n 3 >&2 || true
+      exit 1
+    }
   if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" ]]; then
     echo "PRODUCTION OLLAMA SETTINGS-TO-RUNTIME LIVE PROOF PASSED"
     exit 0
