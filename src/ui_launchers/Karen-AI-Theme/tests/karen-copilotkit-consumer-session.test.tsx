@@ -1,0 +1,116 @@
+import React from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const state = vi.hoisted(() => ({
+  currentSession: null as null | { id: string; title: string },
+  sessions: [] as Array<{ id: string; title: string }>,
+  isLoadingSessions: false,
+  error: null as string | null,
+  createNewSession: vi.fn(),
+  loadSession: vi.fn(),
+  mounts: [] as string[],
+}));
+
+vi.mock("@/components/chat/SessionProvider", () => ({
+  useSession: () => ({
+    currentSession: state.currentSession,
+    sessions: state.sessions,
+    isLoadingSessions: state.isLoadingSessions,
+    error: state.error,
+    createNewSession: state.createNewSession,
+    loadSession: state.loadSession,
+  }),
+}));
+
+vi.mock("@/components/chat/copilotkit/KarenCopilotChat", () => ({
+  KarenCopilotChat: ({ conversationId }: { conversationId: string }) => {
+    state.mounts.push(conversationId);
+    return <div data-testid="owned-copilot-chat">{conversationId}</div>;
+  },
+}));
+
+import { KarenCopilotConsumerChat } from "@/components/chat/copilotkit/KarenCopilotConsumerChat";
+
+const FIRST = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
+const SECOND = "7aaebd2c-1b53-4f55-9e34-2c4593b477c5";
+
+beforeEach(() => {
+  state.currentSession = null;
+  state.sessions = [];
+  state.isLoadingSessions = false;
+  state.error = null;
+  state.mounts.length = 0;
+  state.createNewSession.mockReset().mockResolvedValue(undefined);
+  state.loadSession.mockReset().mockResolvedValue(undefined);
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("CopilotKit consumer session adapter", () => {
+  it("does not mount an SDK chat while canonical sessions load", () => {
+    state.isLoadingSessions = true;
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.getByRole("status").textContent).toContain("Loading conversations");
+    expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
+    expect(state.mounts).toHaveLength(0);
+  });
+
+  it("requires a durable new session instead of inventing a local thread", async () => {
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    await waitFor(() => expect(state.createNewSession).toHaveBeenCalledTimes(1));
+    expect(state.mounts).toHaveLength(0);
+  });
+
+  it("binds the authorized selected session and searches owned titles only", async () => {
+    state.currentSession = { id: FIRST, title: "Project Alpha" };
+    state.sessions = [
+      { id: FIRST, title: "Project Alpha" },
+      { id: SECOND, title: "Research Beta" },
+    ];
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+    fireEvent.click(screen.getByRole("button", { name: "Find conversations" }));
+    const search = screen.getByRole("searchbox", { name: "Find a conversation" });
+    fireEvent.change(search, { target: { value: "beta" } });
+    expect(screen.queryByRole("button", { name: "Project Alpha" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Research Beta" }));
+    await waitFor(() => expect(state.loadSession).toHaveBeenCalledWith(SECOND));
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    // No optimistic local session switch: SessionProvider decides the identity.
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("reports a failed session switch without mounting an unverified thread", async () => {
+    state.currentSession = { id: FIRST, title: "Original" };
+    state.sessions = [
+      { id: FIRST, title: "Original" },
+      { id: SECOND, title: "Restricted" },
+    ];
+    state.loadSession.mockRejectedValue(new Error("unauthorized"));
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Find conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("could not be saved")
+    );
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("does not issue duplicate creates while the canonical store is pending", async () => {
+    let resolve!: () => void;
+    state.createNewSession.mockImplementation(() => new Promise<void>(r => { resolve = r; }));
+    render(<KarenCopilotConsumerChat />);
+    const button = screen.getByRole("button", { name: "New conversation" });
+    fireEvent.click(button);
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(state.createNewSession).toHaveBeenCalledTimes(1);
+    resolve();
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  });
+});
