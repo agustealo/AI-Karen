@@ -353,3 +353,30 @@ def test_reasoning_topology_selected_model_bypasses_graph_on_both_transports() -
         assert 'decision.is_graph_required and decision.topology.value != "reasoning"' in source
         assert graph_call in source
         assert "_run_simple" in source
+
+
+def test_empty_nonstream_answer_fails_before_persistence_and_success_recording() -> None:
+    """A model-required empty result cannot be persisted or reported as success."""
+    import inspect
+
+    source = inspect.getsource(ChatRuntime.execute)
+    guard = source.index('if not isinstance(text, str) or not text.strip():')
+    persistence = source.index('transcript_result = await self._persist_transcript(', guard)
+    success = source.index('success=True,', guard)
+    assert guard < persistence < success
+    rejection = source[guard:persistence]
+    assert 'status=ChatExecutionStatus.ERROR' in rejection
+    assert '"CHAT_EMPTY_RESPONSE"' in rejection
+    assert 'success=False' in rejection
+
+
+def test_http_chat_converts_runtime_errors_to_failure_status() -> None:
+    """The HTTP ingress must not wrap runtime errors in a 200 ChatResponse."""
+    import inspect
+    from ai_karen_engine.api_routes.chat.runtime import create_chat_response
+
+    source = inspect.getsource(create_chat_response)
+    rejection = source.index('if result.status == ChatExecutionStatus.ERROR:')
+    success = source.index('return ChatResponse(', rejection)
+    assert rejection < success
+    assert 'status_code=503' in source[rejection:success]
