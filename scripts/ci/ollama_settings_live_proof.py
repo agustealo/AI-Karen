@@ -130,6 +130,20 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
             {"success", "error", "failed", "gate", "completed", "unavailable", "partial"}
             else "other"
         )
+        diagnostic["runtime_metadata_fields"] = sorted(
+            key for key in (
+                "execution_topology", "execution_mode", "topology",
+                "reasoning_status", "agent_status", "runtime_engine",
+                "provider_attempts", "gate_response", "provider_selection",
+                "status", "response_source", "requested_provider",
+                "requested_model", "actual_provider", "actual_model",
+            ) if key in metadata
+        )
+        diagnostic["content_type"] = (
+            "string" if isinstance(payload.get("content"), str)
+            else "null" if payload.get("content") is None else "other"
+        )
+        diagnostic["content_nonempty"] = bool(str(payload.get("content") or "").strip())
         diagnostic["error_code_class"] = (
             str(metadata.get("error_code")) if metadata.get("error_code") in
             {"PERSONA_HISTORY_SCOPE_DENIED", "CHAT_RUNTIME_GATED", "CHAT_EXECUTION_FAILED", "APPROVAL_REQUIRED"}
