@@ -63,7 +63,8 @@ Never map existence to release. Record evidence SHA, source path, test command, 
 - Reused existing `KarenComposerRuntimeCatalog` to display backend-reported provider/models in the candidate consumer shell; any choice is a *request*, not verified execution. A targeted component test asserts forwarding; no claim of browser acceptance.
 - Rich history already has `KarenCopilotVerifiedHistory.tsx` and `KarenCopilotHistoryGate.tsx`, which validate authoritative saved CUSTOM presentation/receipt events before hydration. This is partial existing implementation, **not absent functionality**. Confirm live streaming equivalence, actual owned history, and fresh account/tenant permissions in a real integration test.
 - Existing `ConversationContextRail` is not yet wired to the candidate, and there is no established safe mapping from the candidate's live SDK event data to its observed event props. Do not pass synthetic empty events merely to make the rail look implemented.
-- Do not activate candidate dashboard mount while mid-run model preference behavior, rich replay, accessibility/visual/rail parity and authenticated browser journeys remain unverified.
+- The candidate now reports synchronous submit-pending state and SDK running state to the canonical consumer shell; provider/model selection is disabled during busy periods and callback attempts are ignored. Unit regression coverage added. This does **not** establish that CopilotKit dynamically updates provider properties correctly on an idle model change; real SDK/owned execution receipts are still required.
+- Do not activate candidate dashboard mount while model override execution proof, rich replay, accessibility/visual/rail parity and authenticated browser journeys remain unverified.
 
 ## Mandatory security and observability
 - Cross-user/tenant/persona denial at final backend boundary, including history and derived summaries.
