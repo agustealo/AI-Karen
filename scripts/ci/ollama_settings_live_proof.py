@@ -130,10 +130,13 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
         # Never log model names, raw metadata, prompt text or credentials.
         permitted_providers = {
             "ollama", "ollama-local", "local", "vllm", "transformers",
-            "lmstudio-desktop", "fallback",
+            "lmstudio-desktop", "llamacpp-server",
+            "builtin_vllm", "builtin_transformers", "openai",
+            "fallback",
         }
         permitted_sources = {
-            "model", "model_stream", "runtime", "unavailable",
+            "model", "model_stream", "runtime", "provider_runtime",
+            "fallback_provider_runtime", "unavailable",
             "emergency", "static", "mock",
         }
         source = metadata.get("response_source")
