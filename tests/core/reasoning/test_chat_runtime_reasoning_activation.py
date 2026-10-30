@@ -47,7 +47,7 @@ def test_reasoning_strategy_cannot_override_observed_model_receipt() -> None:
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run_reasoning"
     )
     receipt = next(
-        node.value for node in ast.walk(run_reason)
+        node.value for node in ast.walk(run_reasoning)
         if isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "provider_meta" for target in node.targets)
     )
