@@ -622,3 +622,57 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   // The disposable conversation is intentionally retained as audit evidence.
   // No user-facing fixture or production message is ever deleted as cleanup.
 });
+
+/**
+ * Read-only consumer-adapter proof using the same approved owned conversation.
+ * The SessionProvider is real; never replace it with a browser-owned thread.
+ * No provider selection, session creation, or model execution is performed.
+ */
+test("CK-CONSUMER-01 gated consumer preview restores an owned session without inference", async ({ page }) => {
+  requireApprovedNativeFixture();
+  if (!email || !password || !conversationId) return;
+  await signInApprovedKaren(page, email, password);
+
+  const owned = await page.request.get(
+    "/api/conversations/" + encodeURIComponent(conversationId),
+  );
+  expect(owned.status(), "Consumer preview requires an owned canonical conversation").toBe(200);
+
+  const inferred: string[] = [];
+  page.context().on("request", request => {
+    if (request.method() === "POST" && isInferenceRequest(request.url())) {
+      inferred.push(new URL(request.url()).pathname);
+    }
+  });
+
+  const previewPath = "/acceptance/copilotkit-consumer/" + encodeURIComponent(conversationId);
+  await page.goto(previewPath);
+  await expect(page.getByTestId("karen-copilot-consumer-acceptance")).toBeVisible();
+  await expect(page.getByTestId("karen-copilot-consumer-chat")).toBeVisible({
+    timeout: 30000,
+  });
+  await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible({
+    timeout: 30000,
+  });
+  await expect(page.getByTestId("karen-copilot-model-discovery")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Find conversations" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "New conversation" })).toBeEnabled();
+  expect(inferred, "Opening a saved consumer thread must not start inference").toEqual([]);
+
+  await page.getByRole("button", { name: "Find conversations" }).click();
+  await expect(page.getByRole("searchbox", { name: "Find a conversation" })).toBeVisible();
+  await page.getByRole("button", { name: "Find conversations" }).click();
+  await expect(page.getByRole("searchbox", { name: "Find a conversation" })).toHaveCount(0);
+  expect(inferred, "History navigation must be read-only").toEqual([]);
+
+  await page.reload();
+  await expect(page.getByTestId("karen-copilot-consumer-chat")).toBeVisible({
+    timeout: 30000,
+  });
+  await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible();
+  expect(inferred, "Consumer reload must not create a model run").toEqual([]);
+
+  await page.goto("/dashboard");
+  await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
+  expect(inferred, "Ordinary dashboard remains on the existing consumer mount").toEqual([]);
+});
