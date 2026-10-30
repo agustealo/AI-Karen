@@ -637,6 +637,44 @@ class ChatRuntime:
             *list(provider_meta.get("execution_spans") or []),
         ]
 
+        # A completed model path with no answer is not a successful turn.
+        # Reject it before memory, transcript, learning success, or completion events.
+        if not isinstance(text, str) or not text.strip():
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type="EmptyGeneration",
+                status="error",
+                metadata={"error_code": "CHAT_EMPTY_RESPONSE"},
+            )
+            await self._record_trajectory_completion(
+                trajectory, decision, "", start, meter, provider_meta,
+                memory_recall_meta, error="empty_execution_output",
+            )
+            await self._record_execution_outcome(
+                trajectory.trajectory_id, decision, decision_observation_id,
+                "", start, meter, memory_recall_meta, success=False,
+                provider_meta=provider_meta,
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    mode="emergency",
+                    degraded_mode=True,
+                    degradation_reason="empty_execution_output",
+                    extra={
+                        "error_code": "CHAT_EMPTY_RESPONSE",
+                        "requested_provider": request.preferred_provider,
+                        "requested_model": request.preferred_model,
+                        "actual_provider": provider_meta.get("actual_provider"),
+                        "actual_model": provider_meta.get("actual_model"),
+                        "response_source": provider_meta.get("response_source"),
+                    },
+                ),
+            )
+
         if decision.memory_write_allowed and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
             await self._persist_memory(request, text, memory_recall_meta, plan)
