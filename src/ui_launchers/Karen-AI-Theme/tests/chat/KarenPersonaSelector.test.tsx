@@ -88,7 +88,7 @@ describe("authenticated persona selector", () => {
     fireEvent.click(start);
     await waitFor(() => expect(createNewSession).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByRole(
-      "button", { name: "Start new conversation for selected persona",
+      "button", { name: "Start new conversation for selected persona" },
     )).toBeNull());
   });
 
