@@ -277,7 +277,7 @@ def test_reasoning_with_selected_model_uses_canonical_generation_on_both_transpo
     for tree in (execute_tree, stream_tree):
         guards = [
             node.test for node in ast.walk(tree)
-            if isinstance(node, ast.If)
+            if isinstance(node, (ast.If, ast.IfExp))
             and any(
                 isinstance(descendant, ast.Compare)
                 and any(isinstance(value, ast.Constant) and value.value == "reasoning"
