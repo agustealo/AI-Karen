@@ -521,7 +521,7 @@ class ChatRuntime:
                     provider_meta["pending_clarification"] = pending
             elif grounded is None and not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning" and not (request.preferred_provider and request.preferred_model):
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
-            elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required:
+            elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required and decision.topology.value != "reasoning":
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
             elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
@@ -1001,7 +1001,7 @@ class ChatRuntime:
                             meter,
                             _meta=provider_meta,
                         )
-                        if decision.is_graph_required
+                        if decision.is_graph_required and decision.topology.value != "reasoning"
                         else self._run_simple_stream(
                             request,
                             decision,
