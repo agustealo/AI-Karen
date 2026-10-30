@@ -3534,7 +3534,15 @@ class ChatRuntime:
                     "source": "reasoning_executor",
                 }
             ],
-            **activation_meta,
+            **{
+                key: value for key, value in activation_meta.items()
+                if key not in {
+                    "requested_provider", "requested_model", "actual_provider",
+                    "actual_model", "runtime_engine", "response_source",
+                    "fallback_level", "degraded_mode", "degradation_reason",
+                    "reasoning_model_attribution_status",
+                }
+            },
         }
         if "counterfactual" in activation.reasoning_modes and result.hypotheses:
             provider_meta["counterfactuals"] = {
