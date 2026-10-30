@@ -65,7 +65,13 @@ const allowedDevOrigins = Array.from(
 
 const nextConfig: NextConfig = {
   /* config options here */
-  outputFileTracingRoot: path.resolve(__dirname, '../..'),
+  // Vercel builds this Next.js package from its own configured project root.
+  // Tracing from ../../ changes the packaged server's module layout and may
+  // exclude the local Next.js runtime. Preserve the existing wider tracing
+  // root for local/Docker workflows that need the parent src directory.
+  outputFileTracingRoot: process.env.VERCEL === '1'
+    ? __dirname
+    : path.resolve(__dirname, '../..'),
   allowedDevOrigins,
   transpilePackages: [
     'rehype-raw', 
