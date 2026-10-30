@@ -41,8 +41,13 @@ RUN pip install --no-cache-dir "torch==2.8.0+cpu" --extra-index-url https://down
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN playwright install chromium && playwright install-deps chromium
-RUN python -m spacy download en_core_web_sm || true
-RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')" || true
+# Install the spaCy 3.8-compatible pipeline from a versioned artifact.
+# Do not mark the image ready when download, deserialization, or compatibility fails.
+RUN python -m pip install --no-cache-dir \
+    "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" \
+    && python -m spacy validate \
+    && mkdir -p /app/models/spacy \
+    && python -c "import spacy, en_core_web_sm; assert en_core_web_sm.__version__ == '3.8.0'; nlp = spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')"
 
 # -----------------------------
 # Runtime-perf stage (OpenBLAS enabled)
@@ -60,8 +65,13 @@ RUN pip install --no-cache-dir "torch==2.8.0+cpu" --extra-index-url https://down
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN playwright install chromium && playwright install-deps chromium
-RUN python -m spacy download en_core_web_sm || true
-RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')" || true
+# Install the spaCy 3.8-compatible pipeline from a versioned artifact.
+# Do not mark the image ready when download, deserialization, or compatibility fails.
+RUN python -m pip install --no-cache-dir \
+    "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" \
+    && python -m spacy validate \
+    && mkdir -p /app/models/spacy \
+    && python -c "import spacy, en_core_web_sm; assert en_core_web_sm.__version__ == '3.8.0'; nlp = spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')"
 
 # -----------------------------
 # Runtime-cuda stage (CUDA-enabled local GGUF build)
@@ -105,8 +115,13 @@ COPY requirements/spacy.txt ./requirements/spacy.txt
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu120
 RUN playwright install chromium && playwright install-deps chromium
-RUN python -m spacy download en_core_web_sm || true
-RUN mkdir -p /app/models/spacy && python -c "import spacy; nlp=spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')" || true
+# Install the spaCy 3.8-compatible pipeline from a versioned artifact.
+# Do not mark the image ready when download, deserialization, or compatibility fails.
+RUN python -m pip install --no-cache-dir \
+    "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" \
+    && python -m spacy validate \
+    && mkdir -p /app/models/spacy \
+    && python -c "import spacy, en_core_web_sm; assert en_core_web_sm.__version__ == '3.8.0'; nlp = spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')"
 
 # -----------------------------
 # Opt-in governed LoRA training image. No PEFT dependency in the API runtime.
