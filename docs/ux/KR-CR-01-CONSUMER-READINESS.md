@@ -77,6 +77,17 @@ The Vercel deployment for commit `157c7637cfa97d3772d366a63c56b333707cb268` was 
 
 This is a **Vercel framework/root deployment configuration mismatch**, not a demonstrated CopilotKit compile/test regression. Do not follow the generic Vercel suggestion to point Python at a test file's `app`; that would deploy the wrong application and conceal the discrepancy. Before browser acceptance, confirm whether this project is intended to deploy the Next.js consumer UI or a Python API. If it is the consumer UI, configure the existing project for the verified frontend root and Next.js framework and prove exact-commit build. If it is an API project, use the proper API entrypoint and a separately identified approved consumer deployment. No production deployment settings were modified in this audit.
 
+
+## Vercel project configuration correction (2026-10-30)
+
+Using the connected Vercel project `prj_uAqBwgpUsdA0OEoomX4klWUYEWyg` (`ai-karen`), updated project-level build settings:
+- Framework: `python` → `nextjs`.
+- Root directory requested: `src/ui_launchers/Karen-AI-Theme`.
+- Explicitly left production promotion, domains, secrets, authentication/deployment protection and API backend routing untouched.
+- Subsequent project read reports `framework: nextjs`. That read's reduced response does not independently echo `rootDirectory`; require a real deployment to prove root resolution.
+
+The previous Python entrypoint error belongs to deployments built **before** this setting update. It must not be reused as the outcome of a later Next.js build. This documentation commit is intended to produce fresh PR preview deployment evidence at an exact SHA. If deployment builds, confirm its actual revision and authenticated browser/AG-UI backend connectivity before any consumer cutover.
+
 ## Mandatory security and observability
 - Cross-user/tenant/persona denial at final backend boundary, including history and derived summaries.
 - Reauthorization on sensitive actions, revocation, replay, cancellation and idempotency testing.
