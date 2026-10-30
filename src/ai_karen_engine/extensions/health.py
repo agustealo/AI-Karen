@@ -206,12 +206,13 @@ class ExtensionHealthMonitor:
                             continue
                         state = str(status.get("status") or "unknown")
                         is_active = state in {"enabled", "active", "running"}
+                        is_disabled = state in {"disabled"}
                         extensions[name] = SimpleNamespace(
                             status=SimpleNamespace(
                                 value="active" if is_active else state
                             ),
                             instance=None,
-                            error_count=0 if is_active else 1,
+                            error_count=0 if (is_active or is_disabled) else 1,
                             success_count=0,
                             loaded_at=None,
                             state=(
@@ -296,6 +297,18 @@ class ExtensionHealthMonitor:
         try:
             # Basic status check
             is_active = hasattr(record, 'status') and record.status.value == 'active'
+            is_disabled = hasattr(record, 'status') and record.status.value == 'disabled'
+
+            # If explicitly disabled, it's a valid state (degraded, not unhealthy)
+            if is_disabled:
+                return ExtensionHealthRecord(
+                    plugin_id=name,
+                    state=ExtensionLifecycleState.DISABLED,
+                    health=ExtensionHealth.DEGRADED,
+                    response_time_ms=0,
+                    last_check=datetime.now(timezone.utc),
+                    error=None
+                )
 
             # Check if extension has health check method
             health_result = True
@@ -437,14 +450,25 @@ class ExtensionHealthMonitor:
         if not extension_metrics:
             return ExtensionHealthStatus.DEGRADED if bg_tasks_healthy else ExtensionHealthStatus.UNHEALTHY
 
-        # Calculate extension health ratios
-        total = len(extension_metrics)
-        healthy = sum(1 for m in extension_metrics.values()
+        # Calculate extension health ratios - only consider enabled extensions
+        # Disabled extensions are a valid configuration choice, not a health problem
+        enabled_metrics = {
+            name: m for name, m in extension_metrics.items()
+            if m.state == ExtensionLifecycleState.ENABLED
+        }
+        
+        # If all extensions are disabled, system is degraded (no active extensions)
+        if not enabled_metrics:
+            return ExtensionHealthStatus.DEGRADED
+
+        # Calculate health ratios among enabled extensions only
+        total = len(enabled_metrics)
+        healthy = sum(1 for m in enabled_metrics.values()
                      if convert_health(m.health) == ExtensionHealthStatus.HEALTHY)
-        unhealthy = sum(1 for m in extension_metrics.values()
+        unhealthy = sum(1 for m in enabled_metrics.values()
                         if convert_health(m.health) == ExtensionHealthStatus.UNHEALTHY)
 
-        # Determine overall status based on ratios
+        # Determine overall status based on ratios of enabled extensions
         if unhealthy > total * 0.5:  # More than 50% unhealthy
             return ExtensionHealthStatus.UNHEALTHY
         elif healthy < total * 0.7:  # Less than 70% healthy

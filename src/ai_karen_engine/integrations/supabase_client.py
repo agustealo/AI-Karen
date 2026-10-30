@@ -24,6 +24,7 @@ class SupabasePlatformClient:
         self._publisher: Optional[Any] = None
         self._url: Optional[str] = None
         self._key: Optional[str] = None
+        self._credential_source: Optional[str] = None
         self._initialized = False
 
     @property
@@ -59,13 +60,31 @@ class SupabasePlatformClient:
         # New API-key contract has precedence. Legacy keys remain a compatibility
         # path for existing installations until their deployment env is migrated.
         self._url = url or os.getenv("SUPABASE_PROJECT_URL") or os.getenv("SUPABASE_URL")
-        self._key = (
-            key
-            or os.getenv("SUPABASE_SECRET_KEY")
-            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            or os.getenv("SUPABASE_PUBLISHABLE_KEY")
-            or os.getenv("SUPABASE_ANON_KEY")
-        )
+        self._key = None
+        self._credential_source = None
+        if key:
+            self._key = key
+            self._credential_source = "explicit"
+        else:
+            # Privileged credentials must never be silently overridden by a
+            # public key. Compatibility follows the documented migration order.
+            for source in (
+                "SUPABASE_SECRET_KEY",
+                "SUPABASE_SERVICE_ROLE_KEY",
+                "SUPABASE_PUBLISHABLE_KEY",
+                "SUPABASE_ANON_KEY",
+            ):
+                candidate = os.getenv(source)
+                if candidate:
+                    self._key = candidate
+                    self._credential_source = source
+                    break
+        if self._credential_source in {"SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"}:
+            logger.warning(
+                "Supabase platform is using a legacy key source: %s; migrate to a "
+                "scoped modern key before retiring the legacy configuration",
+                self._credential_source,
+            )
 
         if not self._url or not self._key:
             logger.info(
@@ -112,6 +131,7 @@ class SupabasePlatformClient:
             "publisher": self._publisher is not None,
             "queue": False,
             "url": self._url,
+            "credential_source": self._credential_source,
         }
 
     def reset(self) -> None:
@@ -120,6 +140,7 @@ class SupabasePlatformClient:
         self._publisher = None
         self._url = None
         self._key = None
+        self._credential_source = None
         self._initialized = False
 
 
