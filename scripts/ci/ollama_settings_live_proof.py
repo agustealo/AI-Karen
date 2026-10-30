@@ -132,11 +132,11 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
             "ollama", "ollama-local", "local", "vllm", "transformers",
             "lmstudio-desktop", "llamacpp-server",
             "builtin_vllm", "builtin_transformers", "openai",
-            "fallback",
+            "reasoning_executor", "fallback",
         }
         permitted_sources = {
             "model", "model_stream", "runtime", "provider_runtime",
-            "fallback_provider_runtime", "unavailable",
+            "fallback_provider_runtime", "reasoning", "workflow", "unavailable",
             "emergency", "static", "mock",
         }
         source = metadata.get("response_source")
@@ -302,7 +302,7 @@ def run(
         f"{api}/api/chat", timeout=timeout, cookies=cookie_file,
         method="POST",
         body={
-            "messages": [{"content": "Write one original sentence describing a blue lantern beside a wooden bridge.", "message_type": "user"}],
+            "messages": [{"content": "In one sentence, explain what a lighthouse does for ships at night.", "message_type": "user"}],
             "session_id": f"ollama_settings_{uuid.uuid4().hex}",
             "max_tokens": 512,
             "temperature": 0.0,
