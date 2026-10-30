@@ -80,8 +80,10 @@ class FakeTransaction:
             return SimpleNamespace(
                 scalar_one_or_none=lambda: "owned" if self.allow_admission else None,
             )
-        if "SELECT conversation_id FROM conversations" in statement:
-            return SimpleNamespace(fetchone=lambda: ("found",))
+        if "SELECT conversation_id, conversation_metadata FROM conversations" in statement:
+            return SimpleNamespace(fetchone=lambda: SimpleNamespace(
+                conversation_metadata={},
+            ))
         if "INSERT INTO messages" in statement:
             return SimpleNamespace(rowcount=1)
         if "UPDATE public.runtime_chat_runs" in statement:
@@ -121,7 +123,7 @@ async def test_both_messages_and_run_complete_inside_one_transaction() -> None:
     joined = "\n".join(sql for sql, _ in tx.calls)
     assert "FOR UPDATE" in joined
     assert joined.index("FROM public.runtime_chat_runs") < joined.index(
-        "SELECT conversation_id FROM conversations"
+        "SELECT conversation_id, conversation_metadata FROM conversations"
     ) < joined.index("INSERT INTO messages")
     assert joined.rindex("UPDATE public.runtime_chat_runs") > joined.index(
         "INSERT INTO messages"

@@ -290,11 +290,14 @@ class PostgresConversationRepository(ConversationRepository):
                             conversation_metadata = :metadata,
                             updated_at = :updated_at
                         WHERE conversation_id = :id AND tenant_id = :tenant_id
+                          AND COALESCE(conversation_metadata::jsonb ->> 'persona_scope_id', '')
+                              = COALESCE(CAST(:expected_persona_scope_id AS text), '')
                         """
                     ),
                     {
                         "id": conversation.id,
                         "tenant_id": conversation.tenant_id,
+                        "expected_persona_scope_id": (conversation.metadata or {}).get("persona_scope_id"),
                         "session_id": conversation.session_id,
                         "title": conversation.title,
                         "is_active": conversation.is_active,
@@ -568,6 +571,9 @@ class PostgresConversationRepository(ConversationRepository):
                         FROM {self._conversation_table} c
                         WHERE c.conversation_id = :conversation_id
                           AND c.tenant_id = :tenant_id
+                          AND COALESCE(c.conversation_metadata::jsonb ->> 'persona_scope_id', '')
+                              = COALESCE(CAST(:persona_scope_id AS text), '')
+                        FOR SHARE OF c
                         ON CONFLICT (message_id) DO NOTHING
                         """
                     ),
@@ -578,6 +584,7 @@ class PostgresConversationRepository(ConversationRepository):
                         "role": message.role,
                         "content": message.content,
                         "metadata": json.dumps(message.metadata),
+                        "persona_scope_id": message.metadata.get("persona_scope_id"),
                         "created_at": message.created_at,
                     },
                 )
@@ -654,6 +661,7 @@ class PostgresConversationRepository(ConversationRepository):
             or user_message.id == assistant_message.id
             or not user_message.metadata.get("authorized_user_id")
             or user_message.metadata.get("authorized_user_id") != assistant_message.metadata.get("authorized_user_id")
+            or user_message.metadata.get("persona_scope_id") != assistant_message.metadata.get("persona_scope_id")
         ):
             return RepositoryResult(success=False, error="invalid_completed_turn")
         try:
@@ -712,7 +720,7 @@ class PostgresConversationRepository(ConversationRepository):
                     # Serialize concurrent replay attempts on the parent row.
                     owner = await session.execute(
                         text("""
-                            SELECT conversation_id FROM conversations
+                            SELECT conversation_id, conversation_metadata FROM conversations
                             WHERE conversation_id = :conversation_id
                               AND tenant_id = :tenant_id
                               AND user_id = :user_id
@@ -722,11 +730,53 @@ class PostgresConversationRepository(ConversationRepository):
                          "tenant_id": user_message.tenant_id,
                          "user_id": user_message.metadata["authorized_user_id"]},
                     )
-                    if owner.fetchone() is None:
+                    owner_row = owner.fetchone()
+                    if owner_row is None:
                         return RepositoryResult(
                             success=False,
                             error="conversation_not_found_or_tenant_mismatch",
                         )
+                    stored_metadata = owner_row.conversation_metadata
+                    if isinstance(stored_metadata, str):
+                        stored_metadata = json.loads(stored_metadata)
+                    if not isinstance(stored_metadata, dict):
+                        raise ValueError("conversation_persona_scope_invalid")
+                    # The parent row is locked before both transcript writes.
+                    # An empty session-bootstrap shell may be claimed once.
+                    # Never infer sharing from an older untagged message.
+                    stored_scope_id = stored_metadata.get("persona_scope_id")
+                    requested_scope_id = user_message.metadata.get("persona_scope_id")
+                    if stored_scope_id is None and requested_scope_id:
+                        previous = await session.execute(
+                            text("""
+                                SELECT message_id FROM messages
+                                WHERE conversation_id = :conversation_id
+                                LIMIT 1
+                            """),
+                            {"conversation_id": user_message.conversation_id},
+                        )
+                        if previous.fetchone() is not None:
+                            raise ValueError("conversation_persona_scope_mismatch")
+                        await session.execute(
+                            text("""
+                                UPDATE conversations
+                                SET conversation_metadata = jsonb_set(
+                                    COALESCE(conversation_metadata::jsonb, '{}'::jsonb),
+                                    '{persona_scope_id}', to_jsonb(CAST(:scope AS text)), true
+                                )
+                                WHERE conversation_id = :conversation_id
+                                  AND tenant_id = :tenant_id
+                                  AND user_id = :user_id
+                            """),
+                            {
+                                "scope": requested_scope_id,
+                                "conversation_id": user_message.conversation_id,
+                                "tenant_id": user_message.tenant_id,
+                                "user_id": user_message.metadata["authorized_user_id"],
+                            },
+                        )
+                    elif stored_scope_id != requested_scope_id:
+                        raise ValueError("conversation_persona_scope_mismatch")
                     persisted = 0
                     for message in (user_message, assistant_message):
                         inserted = await session.execute(

@@ -13,6 +13,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
     ChatExecutionResult,
     ChatExecutionStatus,
+    PersonaExecutionSnapshot,
     ChatRuntimeMetadata,
     ChatStreamEventType,
 )
@@ -152,6 +153,97 @@ class ChatRuntime:
         return get_workflow_runtime()
 
     @staticmethod
+    async def _freeze_persona_snapshot(
+        request: ChatExecutionRequest,
+    ) -> PersonaExecutionSnapshot:
+        """Resolve one authenticated persona view before CORTEX retrieves evidence.
+
+        Later persona edits or cross-tab selection changes affect subsequent
+        turns only. The snapshot does not grant resource access, which remains
+        subject to canonical memory ACLs and runtime policy.
+        """
+        current = request.persona_snapshot
+        if current is not None:
+            # Internal snapshots must not be reused after an auth-context
+            # change, even if the string user/tenant IDs happen to match.
+            request.context.require_authenticated_user()
+            if not current.matches(request.context):
+                raise PermissionError("persona_snapshot_identity_mismatch")
+            return current
+
+        ctx = request.context
+        unavailable = PersonaExecutionSnapshot(
+            user_id=str(ctx.user_id),
+            tenant_id=str(ctx.tenant_id),
+            status="unavailable",
+        )
+        try:
+            principal = ctx.require_authenticated_user()
+        except (AttributeError, PermissionError):
+            request.persona_snapshot = unavailable
+            return unavailable
+
+        try:
+            from ai_karen_engine.services.persona.persona_service import (
+                get_persona_service,
+            )
+
+            service = get_persona_service()
+            preferences = await service.get_user_preferences(
+                user_id=str(principal.user_id),
+                tenant_id=str(principal.tenant_id),
+            )
+            active_id = preferences.active_persona_id
+            revision = int(getattr(preferences, "revision", 0))
+            if not active_id:
+                snapshot = PersonaExecutionSnapshot(
+                    user_id=str(principal.user_id),
+                    tenant_id=str(principal.tenant_id),
+                    status="none",
+                    selection_revision=revision,
+                )
+            else:
+                selected = await service.get_persona(
+                    active_id,
+                    str(principal.user_id),
+                    str(principal.tenant_id),
+                )
+                if selected is None or not selected.is_active:
+                    snapshot = unavailable
+                else:
+                    # Named private personas always use scoped recall until
+                    # a separately governed resource-sharing grant exists.
+                    is_private = not bool(
+                        getattr(selected, "is_system_persona", False)
+                    )
+                    filter_required = is_private or bool(
+                        getattr(preferences, "enable_persona_memory_filtering", False)
+                        and not getattr(preferences, "cross_persona_memory_sharing", False)
+                    )
+                    snapshot = PersonaExecutionSnapshot(
+                        user_id=str(principal.user_id),
+                        tenant_id=str(principal.tenant_id),
+                        status="ready",
+                        persona_id=str(active_id),
+                        selection_revision=revision,
+                        tone=str(selected.default_tone.value),
+                        verbosity=str(selected.default_verbosity.value),
+                        language_style=str(selected.default_language.value),
+                        memory_filter_required=filter_required,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "persona.execution_snapshot_unavailable",
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            snapshot = unavailable
+        request.persona_snapshot = snapshot
+        return snapshot
+
+    @staticmethod
     def _apply_selected_model_settings(request: ChatExecutionRequest) -> None:
         """Apply an explicitly saved application model choice inside runtime.
 
@@ -254,7 +346,38 @@ class ChatRuntime:
         self._apply_selected_model_settings(request)
 
         # Do not read prior conversation or personal context while gated.
-        await self._prepare_conversation_continuation(request)
+        await self._freeze_persona_snapshot(request)
+        try:
+            await self._prepare_conversation_continuation(request)
+        except PermissionError:
+            # Persona/history denial is not a model failure. Never hand it to
+            # the fallback router or silently complete an unsaved private turn.
+            logger.warning(
+                "persona.conversation_scope_denied",
+                extra={"correlation_id": ctx.correlation_id},
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type="PersonaHistoryScopeDenied",
+                status="denied",
+                metadata={"error_code": "PERSONA_HISTORY_SCOPE_DENIED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    requested_provider=request.preferred_provider,
+                    requested_model=request.preferred_model,
+                    degraded_mode=True,
+                    degradation_reason="persona_history_scope_denied",
+                    mode="denied",
+                    extra={
+                        "error_code": "PERSONA_HISTORY_SCOPE_DENIED",
+                        "requires_new_conversation": True,
+                    },
+                ),
+            )
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
@@ -396,17 +519,39 @@ class ChatRuntime:
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
-            elif grounded is None and not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning":
+            elif grounded is None and not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning" and not (request.preferred_provider and request.preferred_model):
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
-            elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required:
+            elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required and decision.topology.value != "reasoning":
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
             elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except Exception as exc:
             error_type = type(exc).__name__
+            # Log code location only. Never log exception arguments, prompts, or secrets.
+            import traceback
+            from pathlib import Path
+
+            frames = traceback.extract_tb(exc.__traceback__)
+            origin = next(
+                (
+                    frame for frame in reversed(frames)
+                    if "/ai_karen_engine/" in frame.filename.replace("\\\\", "/")
+                ),
+                None,
+            )
+            safe_origin = (
+                f"{Path(origin.filename).name}:{origin.lineno}"
+                if origin is not None else "unavailable"
+            )
             logger.error(
-                "ChatRuntime.execute failed; attempting canonical fallback",
-                extra={"correlation_id": ctx.correlation_id, "error_type": error_type},
+                "ChatRuntime.execute failed; attempting canonical fallback; error_type=%s error_origin=%s",
+                error_type,
+                safe_origin,
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": error_type,
+                    "error_origin": safe_origin,
+                },
             )
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
@@ -638,7 +783,55 @@ class ChatRuntime:
 
         # Match HTTP ordering: runtime availability gate precedes context access.
         self._apply_selected_model_settings(request)
-        await self._prepare_conversation_continuation(request)
+        await self._freeze_persona_snapshot(request)
+        try:
+            await self._prepare_conversation_continuation(request)
+        except PermissionError:
+            denial = {
+                "status": "error",
+                "error_code": "PERSONA_HISTORY_SCOPE_DENIED",
+                "requires_new_conversation": True,
+                "actual_provider": None,
+                "actual_model": None,
+                "response_source": "unavailable",
+                "degraded_mode": True,
+                "degradation_reason": "persona_history_scope_denied",
+            }
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                error_type="PersonaHistoryScopeDenied",
+                status="denied",
+                metadata={"error_code": denial["error_code"]},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content=(
+                        "This conversation cannot continue with the selected persona. "
+                        "Start a new conversation."
+                    ),
+                    correlation_id=ctx.correlation_id,
+                    metadata=denial,
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            sequence += 1
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.COMPLETE,
+                    content="",
+                    correlation_id=ctx.correlation_id,
+                    metadata=denial,
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+            return
 
         decision_started = time.perf_counter()
         decision = await self._decide(request)
@@ -799,7 +992,7 @@ class ChatRuntime:
                         meter,
                         _meta=provider_meta,
                     )
-                    if decision.topology.value == "reasoning"
+                    if decision.topology.value == "reasoning" and not (request.preferred_provider and request.preferred_model)
                     else (
                         self._run_graph_stream(
                             request,
@@ -808,7 +1001,7 @@ class ChatRuntime:
                             meter,
                             _meta=provider_meta,
                         )
-                        if decision.is_graph_required
+                        if decision.is_graph_required and decision.topology.value != "reasoning"
                         else self._run_simple_stream(
                             request,
                             decision,
@@ -1304,10 +1497,21 @@ class ChatRuntime:
             return result
 
         gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+        snapshot = await self._freeze_persona_snapshot(request)
+        if snapshot.status == "unavailable":
+            return TranscriptPersistenceResult(
+                status="rejected",
+                conversation_id=conversation_id,
+                reason="persona_scope_unavailable",
+            )
+        persona_scope_id = (
+            snapshot.persona_id if snapshot.memory_filter_required else None
+        )
         result = await gateway.persist_completed_turn(
             ctx,
             user_text=self._extract_user_message_for_persistence(request),
             assistant_text=response_text,
+            persona_scope_id=persona_scope_id,
             response_metadata={
                 **{
                     key: value
@@ -1876,6 +2080,21 @@ class ChatRuntime:
             memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
             return result
 
+        # Persisting with an unknown persona selection would silently attach a
+        # private correction to global memory. Deny until scope is resolved.
+        snapshot = await self._freeze_persona_snapshot(request)
+        if snapshot.status == "unavailable" or not snapshot.matches(ctx):
+            memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
+            memory_recall_meta["memory_degraded"] = True
+            memory_recall_meta["memory_degradation_reason"] = (
+                "persona_snapshot_unavailable"
+            )
+            return {
+                "status": "rejected",
+                "reason": "persona_snapshot_unavailable",
+                "persisted": 0,
+            }
+
         user_message = self._extract_user_message(request.messages)
         user_message = self._resolve_explicit_memory_reference(request, user_message)
         if not user_message.strip():
@@ -1897,23 +2116,12 @@ class ChatRuntime:
             "authorized_session_id": plan.authorized_session_id,
         }
 
-        # Resolve persona provenance from backend-owned, tenant-scoped
-        # preferences only. Never accept a request metadata persona ID.
+        # Frozen at admission: a concurrent selection must not reattribute
+        # a memory candidate to the persona chosen midway through this turn.
+        snapshot = await self._freeze_persona_snapshot(request)
         persona_provenance: Dict[str, str] = {}
-        try:
-            from ai_karen_engine.services.persona.persona_service import get_persona_service
-
-            persona_preferences = await get_persona_service().get_user_preferences(
-                user_id=ctx.user_id, tenant_id=ctx.tenant_id,
-            )
-            selected_persona_id = persona_preferences.active_persona_id
-            if selected_persona_id:
-                persona_provenance["persona_id"] = selected_persona_id
-        except Exception:
-            logger.warning(
-                "memory.persona_provenance_unavailable",
-                extra={"correlation_id": ctx.correlation_id},
-            )
+        if snapshot.status == "ready" and snapshot.persona_id:
+            persona_provenance["persona_id"] = snapshot.persona_id
 
         try:
             from ai_karen_engine.core.memory import get_memory_manager
@@ -2050,42 +2258,86 @@ class ChatRuntime:
     # ------------------------------------------------------------------
 
     async def _prepare_conversation_continuation(self, request: ChatExecutionRequest) -> None:
-        """Hydrate authorized history for any single-turn request before routing.
+        """Restore only canonically owned, persona-compatible history.
 
-        The canonical gateway enforces tenant and user ownership. Conversation
-        evidence never bypasses the later RuntimePolicy evidence authorization;
-        this bounded transcript is conversational input for continuity only.
+        A private persona cannot inherit an older generic or different-persona
+        thread. Client-provided prior turns are not authoritative continuity;
+        they are reloaded from the tenant/user-owned canonical repository.
         """
         if not request.messages:
             return
         current = request.messages[-1]
         if str(current.get("role", "")).lower() != "user":
             return
-        if len(request.messages) == 1:
-            try:
-                gateway = self._conversation_gateway or get_conversation_runtime_gateway()
-                history = await gateway.load_history(request.context, limit=12)
-                if history.success and history.messages:
-                    ordered = sorted(history.messages, key=lambda message: message.created_at)
-                    prior = [
-                        {
-                            "role": message.role,
-                            "content": message.content,
-                            "metadata": dict(getattr(message, "metadata", {}) or {}),
-                        }
-                        for message in ordered
-                        if str(message.role).lower() in {"assistant", "user"}
-                        and str(message.content or "").strip()
-                    ]
-                    if prior:
-                        request.messages = [*prior, current]
-                        request.metadata["conversation_history_source"] = "canonical_repository"
-                        request.metadata["conversation_history_materialized"] = True
-            except Exception as exc:
-                logger.warning(
-                    "Authorized conversation history unavailable: %s",
-                    type(exc).__name__,
+
+        snapshot = await self._freeze_persona_snapshot(request)
+        if snapshot.status == "unavailable":
+            # Fail closed on history and persistence, not on harmless current-
+            # turn generation. No old messages or client history may be used.
+            request.messages = [current]
+            request.metadata["conversation_history_status"] = "unavailable"
+            request.metadata["conversation_history_reason"] = "persona_scope_unavailable"
+            return
+        persona_scope_id = (
+            snapshot.persona_id if snapshot.memory_filter_required else None
+        )
+        if snapshot.memory_filter_required and not persona_scope_id:
+            raise PermissionError("persona_scope_missing")
+
+        # Never let transport supplied history sidestep the same scope
+        # enforcement used by canonical persisted history.
+        if len(request.messages) > 1:
+            request.messages = [current]
+            request.metadata["conversation_history_input_discarded"] = True
+
+        try:
+            gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+            history = await gateway.load_history(
+                request.context,
+                limit=12,
+                persona_scope_id=persona_scope_id,
+            )
+            if history.status == "rejected":
+                raise PermissionError(
+                    history.reason or "conversation_persona_scope_mismatch"
                 )
+            if not history.success and persona_scope_id:
+                raise PermissionError("conversation_history_scope_unavailable")
+            if history.success and history.messages:
+                ordered = sorted(
+                    history.messages, key=lambda message: message.created_at
+                )
+                prior = [
+                    {
+                        "role": message.role,
+                        "content": message.content,
+                        "metadata": dict(getattr(message, "metadata", {}) or {}),
+                    }
+                    for message in ordered
+                    if str(message.role).lower() in {"assistant", "user"}
+                    and str(message.content or "").strip()
+                ]
+                if prior:
+                    request.messages = [*prior, current]
+                    request.metadata["conversation_history_source"] = "canonical_repository"
+                    request.metadata["conversation_history_materialized"] = True
+        except PermissionError:
+            # Never fall through to an unscoped continuity or provider path.
+            raise
+        except Exception as exc:
+            if persona_scope_id:
+                logger.warning(
+                    "persona.conversation_history_unavailable",
+                    extra={
+                        "correlation_id": request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                raise PermissionError("conversation_history_scope_unavailable") from exc
+            logger.warning(
+                "Authorized conversation history unavailable: %s",
+                type(exc).__name__,
+            )
         if not self._resolve_typed_pending_clarification(request):
             self._resolve_pending_weather_followup(request)
 
@@ -3271,13 +3523,13 @@ class ChatRuntime:
         provider_meta = {
             "requested_provider": request.preferred_provider,
             "requested_model": request.preferred_model,
-            "actual_provider": activation_meta.get(
-                "soft_reasoning_provider",
-                "reasoning_executor",
-            ),
-            "actual_model": activation_meta.get(
-                "soft_reasoning_model",
-                "canonical",
+            # Strategy selection and configured soft-reasoning targets are not
+            # execution receipts. Never identify the reasoning executor or a
+            # proposed model as the provider/model that generated the answer.
+            "actual_provider": None,
+            "actual_model": None,
+            "reasoning_model_attribution_status": (
+                "unverified" if consumed_model_calls > 0 else "not_executed"
             ),
             "runtime_engine": activation_meta.get(
                 "soft_reasoning_runtime_engine",
@@ -3304,7 +3556,15 @@ class ChatRuntime:
                     "source": "reasoning_executor",
                 }
             ],
-            **activation_meta,
+            **{
+                key: value for key, value in activation_meta.items()
+                if key not in {
+                    "requested_provider", "requested_model", "actual_provider",
+                    "actual_model", "runtime_engine", "response_source",
+                    "fallback_level", "degraded_mode", "degradation_reason",
+                    "reasoning_model_attribution_status",
+                }
+            },
         }
         if "counterfactual" in activation.reasoning_modes and result.hypotheses:
             provider_meta["counterfactuals"] = {
@@ -3403,39 +3663,16 @@ class ChatRuntime:
                 (request.metadata or {}).get("memory_context", {}).get("recall") or []
             )
 
-        # Presentation preferences are resolved from the authenticated,
-        # tenant-scoped persona service. Client metadata never supplies a
-        # system prompt or an authoritative persona identifier.
+        # Reuse the exact snapshot that governed CORTEX evidence resolution.
+        # Never load a second active persona after a concurrent user switch.
+        snapshot = await ChatRuntime._freeze_persona_snapshot(request)
         persona_presentation: Dict[str, Any] = {}
-        try:
-            principal = request.context.require_authenticated_user()
-        except (AttributeError, PermissionError):
-            principal = None
-        if principal is not None:
-            try:
-                from ai_karen_engine.services.persona.persona_service import get_persona_service
-
-                service = get_persona_service()
-                preferences = await service.get_user_preferences(
-                    user_id=str(principal.user_id),
-                    tenant_id=str(principal.tenant_id),
-                )
-                if preferences.active_persona_id:
-                    selected = await service.get_persona(
-                        preferences.active_persona_id,
-                        str(principal.user_id),
-                        str(principal.tenant_id),
-                    )
-                    if selected is not None and selected.is_active:
-                        persona_presentation = {
-                            "tone": str(selected.default_tone.value),
-                            "verbosity": str(selected.default_verbosity.value),
-                            "language_style": str(selected.default_language.value),
-                        }
-            except Exception:
-                # Persona preferences are optional; unavailable storage must
-                # not turn a failed lookup into an invented selection.
-                logger.warning("Persona presentation unavailable", exc_info=False)
+        if snapshot.status == "ready":
+            persona_presentation = {
+                "tone": snapshot.tone,
+                "verbosity": snapshot.verbosity,
+                "language_style": snapshot.language_style,
+            }
 
         assembly_request = PromptAssemblyRequest(
             persona=persona_presentation,

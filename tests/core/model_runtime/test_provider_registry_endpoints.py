@@ -112,7 +112,9 @@ class TestProviderRegistryServiceEndpoints:
         endpoint = registry.get_provider_endpoint("ollama-local")
         assert endpoint is not None
         assert endpoint.base_url == "http://localhost:11434/v1"
-        assert "chat" in endpoint.capabilities
+        assert {"chat_completion", "text_generation"}.issubset(
+            registry.effective_endpoint_capabilities(endpoint)
+        )
 
     def test_resolve_capable_targets(self, provider_registry_service_module):
         ProviderRegistryService = provider_registry_service_module.ProviderRegistryService
@@ -126,11 +128,11 @@ class TestProviderRegistryServiceEndpoints:
         assert "lmstudio-desktop" in target_ids
 
         targets = registry.resolve_capable_targets(
-            required_capabilities={"chat_completion", "streaming_text"},
+            required_capabilities={"chat_completion", "text_generation"},
             healthy_only=False,
         )
         target_ids = [t.provider_id for t in targets]
-        assert "builtin_vllm" in target_ids
+        assert "ollama-local" in target_ids
 
     def test_select_best_target_preferred(self, provider_registry_service_module):
         ProviderRegistryService = provider_registry_service_module.ProviderRegistryService
@@ -163,3 +165,51 @@ class TestProviderRegistryServiceEndpoints:
         assert ProviderRegistryService.CANONICAL_PROVIDER_ALIASES["lm_studio"] == "lmstudio-desktop"
         assert ProviderRegistryService.CANONICAL_PROVIDER_ALIASES["ollama"] == "ollama-local"
         assert ProviderRegistryService.CANONICAL_PROVIDER_ALIASES["llama_cpp"] == "llamacpp-server"
+
+    def test_expression_chat_capability_normalization(self, provider_registry_service_module):
+        """Built-in chat and configured OpenAI-compatible declarations agree."""
+        Registry = provider_registry_service_module.ProviderRegistryService
+        registry = Registry()
+        needed = {"chat_completion", "text_generation"}
+        targets = registry.resolve_capable_targets(
+            required_capabilities=needed, healthy_only=False,
+        )
+        ids = {endpoint.provider_id for endpoint in targets}
+        assert {"ollama-local", "lmstudio-desktop", "llamacpp-server"}.issubset(ids)
+
+        for provider_id in ("ollama-local", "lmstudio-desktop", "llamacpp-server"):
+            status = registry.get_provider_status(provider_id)
+            assert status is not None
+            assert provider_registry_service_module.ProviderCapability.CHAT_COMPLETION in status.capabilities
+            assert provider_registry_service_module.ProviderCapability.TEXT_GENERATION in status.capabilities
+            selected = registry.select_best_target(
+                required_capabilities=needed,
+                preferred_target_id=provider_id,
+                healthy_only=False,
+            )
+            assert selected is not None
+            assert selected.provider_id == provider_id
+
+        configured = registry.register_openai_compatible_endpoint(
+            "compatible-chat-test", "Compatible Chat Test",
+            base_url="http://localhost:5000/v1",
+        )
+        assert "chat" in registry.effective_endpoint_capabilities(configured)
+        assert needed.issubset(registry.effective_endpoint_capabilities(configured))
+
+    def test_text_only_endpoint_cannot_claim_chat_authority(self, provider_registry_service_module):
+        Registry = provider_registry_service_module.ProviderRegistryService
+        registry = Registry()
+        text_only = registry.register_openai_compatible_endpoint(
+            "text-only-test", "Text Only Test",
+            base_url="http://localhost:5001/v1",
+            capabilities=["text_generation"],
+        )
+        assert "chat" not in registry.effective_endpoint_capabilities(text_only)
+        assert "chat_completion" not in registry.effective_endpoint_capabilities(text_only)
+        selected = registry.select_best_target(
+            required_capabilities={"chat_completion", "text_generation"},
+            preferred_target_id="text-only-test",
+            healthy_only=False,
+        )
+        assert selected is None or selected.provider_id != "text-only-test"

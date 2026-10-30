@@ -119,6 +119,45 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
         fields = ("actual_provider", "actual_model", "response_source",
                   "failure_category", "degradation_reason", "fallback_level")
         diagnostic = {name: metadata.get(name) for name in fields}
+        # Typed, low-cardinality envelope evidence only. Never print content,
+        # messages, arbitrary metadata, identifiers or exception arguments.
+        # A zero-token gate is not provider failure. Classify its envelope
+        # without revealing any gate text, user identity, or private payload.
+        diagnostic["has_gate_response"] = payload.get("gate_response") is not None
+        diagnostic["has_approval"] = payload.get("approval") is not None
+        diagnostic["has_error"] = payload.get("error") is not None
+        diagnostic["response_keys"] = sorted(set(payload).intersection({
+            "content", "status", "metadata", "gate_response", "approval",
+            "error", "detail", "message", "model", "provider",
+        }))
+        diagnostic["http_response_shape"] = (
+            "messages" if isinstance(payload.get("messages"), list)
+            else "content" if "content" in payload else "other"
+        )
+        diagnostic["status_class"] = (
+            str(payload.get("status")) if payload.get("status") in
+            {"success", "error", "failed", "gate", "completed", "unavailable", "partial"}
+            else "other"
+        )
+        diagnostic["runtime_metadata_fields"] = sorted(
+            key for key in (
+                "execution_topology", "execution_mode", "topology",
+                "reasoning_status", "agent_status", "runtime_engine",
+                "provider_attempts", "gate_response", "provider_selection",
+                "status", "response_source", "requested_provider",
+                "requested_model", "actual_provider", "actual_model",
+            ) if key in metadata
+        )
+        diagnostic["content_type"] = (
+            "string" if isinstance(payload.get("content"), str)
+            else "null" if payload.get("content") is None else "other"
+        )
+        diagnostic["content_nonempty"] = bool(str(payload.get("content") or "").strip())
+        diagnostic["error_code_class"] = (
+            str(metadata.get("error_code")) if metadata.get("error_code") in
+            {"PERSONA_HISTORY_SCOPE_DENIED", "CHAT_RUNTIME_GATED", "CHAT_EXECUTION_FAILED", "APPROVAL_REQUIRED"}
+            else "other"
+        )
         raise LiveProofError(
             "Default ChatRuntime did not produce an assistant response; "
             + json.dumps(diagnostic, sort_keys=True, default=str)
@@ -126,8 +165,51 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
     provider = str(metadata.get("actual_provider") or "").strip()
     actual_model = str(metadata.get("actual_model") or payload.get("model") or "").strip()
     if provider not in {"ollama", "ollama-local"} or actual_model != model:
+        # Only emit typed, low-cardinality routing classifications to CI.
+        # Never log model names, raw metadata, prompt text or credentials.
+        permitted_providers = {
+            "ollama", "ollama-local", "local", "vllm", "transformers",
+            "lmstudio-desktop", "llamacpp-server",
+            "builtin_vllm", "builtin_transformers", "openai",
+            "reasoning_executor", "fallback",
+        }
+        permitted_sources = {
+            "model", "model_stream", "runtime", "provider_runtime",
+            "fallback_provider_runtime", "reasoning", "workflow", "unavailable",
+            "emergency", "static", "mock",
+        }
+        source = metadata.get("response_source")
+        diagnostics = {
+            "observed_provider_class": (
+                provider if provider in permitted_providers else "other"
+            ),
+            "selected_model_matched": actual_model == model,
+            "source_class": (
+                source if isinstance(source, str) and source in permitted_sources
+                else "other"
+            ),
+            "fallback_active": metadata.get("fallback_level") not in (None, 0, "0"),
+            "degraded": metadata.get("degraded_mode") is True,
+            "requested_model_matched": metadata.get("requested_model") == model,
+            "requested_provider_is_ollama": metadata.get("requested_provider") in {
+                "ollama", "ollama-local",
+            },
+            "actual_provider_present": bool(provider),
+            "actual_model_present": bool(actual_model),
+            "model_selection_source": (
+                metadata.get("model_selection_source")
+                if metadata.get("model_selection_source") in {
+                    "application_settings", "explicit_runtime_or_user",
+                    "runtime_default", "provider_router",
+                } else "other"
+            ),
+            "persona_history_scope_denied": (
+                metadata.get("error_code") == "PERSONA_HISTORY_SCOPE_DENIED"
+            ),
+        }
         raise LiveProofError(
-            "Default ChatRuntime ignored the saved Ollama selection or fell back"
+            "Default ChatRuntime ignored the saved Ollama selection or fell back; "
+            + json.dumps(diagnostics, sort_keys=True)
         )
     if metadata.get("response_source") in {"emergency", "unavailable", "mock", "static"}:
         raise LiveProofError("ChatRuntime reported a non-model response source")
@@ -259,7 +341,7 @@ def run(
         f"{api}/api/chat", timeout=timeout, cookies=cookie_file,
         method="POST",
         body={
-            "messages": [{"content": "Reply with a short greeting.", "message_type": "user"}],
+            "messages": [{"content": "In one sentence, explain what a lighthouse does for ships at night.", "message_type": "user"}],
             "session_id": f"ollama_settings_{uuid.uuid4().hex}",
             "max_tokens": 512,
             "temperature": 0.0,

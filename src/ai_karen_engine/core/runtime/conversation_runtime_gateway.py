@@ -29,6 +29,10 @@ from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
 logger = get_logger(__name__)
 
+# UI session creation/inspection does not confer permission to reuse the
+# transcript as model context. Only runtime passes an explicit scope (or None).
+_UNSPECIFIED_PERSONA_SCOPE = object()
+
 
 def resolve_runtime_conversation_id(context: ChatExecutionContext) -> str:
     """Return the canonical durable conversation identity for one runtime request.
@@ -128,15 +132,28 @@ class ConversationRuntimeGateway:
             ).create_conversation_repository()
         self._repository = repository
 
+    @staticmethod
+    def _check_persona_scope(conversation: Conversation, expected: str | None) -> None:
+        """Conversation purpose is an immutable eligibility boundary."""
+        metadata = conversation.metadata or {}
+        actual = metadata.get("persona_scope_id") if isinstance(metadata, dict) else None
+        if actual != expected:
+            raise PermissionError("conversation_persona_scope_mismatch")
+
     async def ensure_conversation(
         self,
         context: ChatExecutionContext,
         *,
         first_user_message: str,
+        persona_scope_id: str | None | object = _UNSPECIFIED_PERSONA_SCOPE,
     ) -> str:
         """Ensure the authenticated user owns the tenant-scoped conversation."""
         self._require_scope_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
+        enforce_scope = persona_scope_id is not _UNSPECIFIED_PERSONA_SCOPE
+        requested_scope = (
+            persona_scope_id if isinstance(persona_scope_id, str) else None
+        )
 
         existing = await self._repository.get_conversation(
             conversation_id,
@@ -148,6 +165,25 @@ class ConversationRuntimeGateway:
         if existing.data is not None:
             if str(existing.data.user_id) != str(context.user_id):
                 raise PermissionError("conversation_user_mismatch")
+            if (
+                enforce_scope
+                and requested_scope
+                and (existing.data.metadata or {}).get("persona_scope_id") is None
+            ):
+                # Empty session-bootstrap shells are not yet purpose-bound.
+                # The PostgreSQL completed-turn transaction performs the
+                # authoritative compare-and-bind under the parent row lock.
+                previous = await self._repository.get_messages(
+                    conversation_id, context.tenant_id, limit=1, offset=0,
+                )
+                if not previous.success:
+                    raise RuntimeError(
+                        previous.error or "conversation_history_read_failed"
+                    )
+                if previous.data:
+                    raise PermissionError("conversation_persona_scope_mismatch")
+            elif enforce_scope:
+                self._check_persona_scope(existing.data, requested_scope)
             return conversation_id
 
         created = await self._repository.create_conversation(
@@ -161,6 +197,7 @@ class ConversationRuntimeGateway:
                     "source": "chat_runtime",
                     "created_request_id": context.request_id,
                     "created_correlation_id": context.correlation_id,
+                    **({"persona_scope_id": requested_scope} if enforce_scope and requested_scope else {}),
                 },
             )
         )
@@ -174,6 +211,8 @@ class ConversationRuntimeGateway:
                 and raced.data is not None
                 and str(raced.data.user_id) == str(context.user_id)
             ):
+                if enforce_scope:
+                    self._check_persona_scope(raced.data, requested_scope)
                 return conversation_id
             raise RuntimeError(created.error or "conversation_create_failed")
 
@@ -336,6 +375,8 @@ class ConversationRuntimeGateway:
         metadata_updates: Optional[Dict[str, Any]] = None,
         tags_to_add: Optional[list[str]] = None,
     ) -> Conversation:
+        if "persona_scope_id" in (metadata_updates or {}):
+            raise PermissionError("conversation_persona_scope_immutable")
         existing = await self.require_owned_conversation(context)
         metadata = dict(existing.metadata or {})
         metadata.update(dict(metadata_updates or {}))
@@ -544,7 +585,10 @@ class ConversationRuntimeGateway:
                 "session_id": context.session_id,
                 "conversation_id": conversation_id,
                 "source": "conversation_api",
-                **dict(metadata or {}),
+                **{key: value for key, value in (metadata or {}).items()
+                   if key != "persona_scope_id"},
+                **({"persona_scope_id": existing.metadata["persona_scope_id"]}
+                   if (existing.metadata or {}).get("persona_scope_id") else {}),
             },
         )
         write_result = await self._repository.add_message(message)
@@ -559,6 +603,7 @@ class ConversationRuntimeGateway:
         context: ChatExecutionContext,
         *,
         limit: int,
+        persona_scope_id: str | None = None,
     ) -> TranscriptHistoryResult:
         """Load authorized durable transcript rows for prompt continuity.
 
@@ -591,7 +636,14 @@ class ConversationRuntimeGateway:
                     reason="conversation_user_mismatch",
                     error_type="PermissionError",
                 )
-
+            # Inspect actual history before claiming an unbound empty
+            # session shell. A bound private thread is never reusable by a
+            # different persona or by the default persona.
+            stored_scope_id = (existing.data.metadata or {}).get("persona_scope_id")
+            if stored_scope_id is not None and stored_scope_id != persona_scope_id:
+                raise PermissionError("conversation_persona_scope_mismatch")
+            if stored_scope_id is None and persona_scope_id is None:
+                pass  # Existing default, unbound or legacy thread.
             requested_limit = max(0, int(limit))
             if requested_limit == 0:
                 return TranscriptHistoryResult(
@@ -612,12 +664,27 @@ class ConversationRuntimeGateway:
                     reason=result.error or "conversation_history_read_failed",
                 )
 
+            # Don't exclude a prior same-request row until AFTER checking
+            # the scope. A private persona may claim only a truly empty shell.
+            all_messages = tuple(result.data or [])
+            if stored_scope_id is None and persona_scope_id and all_messages:
+                raise PermissionError("conversation_persona_scope_mismatch")
             messages = tuple(
-                message
-                for message in list(result.data or [])
-                if str(message.metadata.get("request_id") or "")
+                message for message in all_messages
+                if str((message.metadata or {}).get("request_id") or "")
                 != str(context.request_id or "")
             )
+            # A legacy/unattributed row in a private thread is NOT shared.
+            if any(
+                (message.metadata or {}).get("persona_scope_id") != persona_scope_id
+                for message in messages
+            ):
+                return TranscriptHistoryResult(
+                    status="rejected",
+                    conversation_id=conversation_id,
+                    reason="conversation_history_persona_scope_mismatch",
+                    error_type="PermissionError",
+                )
             return TranscriptHistoryResult(
                 status="loaded" if messages else "empty",
                 conversation_id=conversation_id,
@@ -656,6 +723,7 @@ class ConversationRuntimeGateway:
         assistant_text: str,
         response_metadata: Optional[Dict[str, Any]] = None,
         run_lease: Optional["ChatRunLease"] = None,
+        persona_scope_id: str | None = None,
     ) -> TranscriptPersistenceResult:
         """Persist one completed user/assistant turn through canonical storage.
 
@@ -678,6 +746,7 @@ class ConversationRuntimeGateway:
             conversation_id = await self.ensure_conversation(
                 context,
                 first_user_message=user_text,
+                persona_scope_id=persona_scope_id,
             )
             user_message_id = self._message_id(
                 context=context,
@@ -697,6 +766,7 @@ class ConversationRuntimeGateway:
                 "conversation_id": conversation_id,
                 "source": "chat_runtime",
                 "authorized_user_id": context.user_id,
+                **({"persona_scope_id": persona_scope_id} if persona_scope_id else {}),
             }
 
             user_message = Message(
@@ -714,7 +784,8 @@ class ConversationRuntimeGateway:
                 role="assistant",
                 content=assistant_text,
                 metadata={
-                    **dict(response_metadata or {}),
+                    **{k: v for k, v in (response_metadata or {}).items()
+                       if k != "persona_scope_id"},
                     **common_metadata,
                     "transcript_actor": "assistant",
                 },

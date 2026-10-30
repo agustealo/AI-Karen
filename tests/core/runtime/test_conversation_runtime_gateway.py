@@ -124,6 +124,27 @@ class _Repository(ConversationRepository):
     async def add_completed_turn(
         self, user_message: Message, assistant_message: Message
     ) -> RepositoryResult[int]:
+        # Model the production PostgreSQL parent-row scope check. Database
+        # concurrency/transaction atomicity still needs the live SQL burn.
+        conversation = self.conversations.get(
+            (user_message.tenant_id, user_message.conversation_id)
+        )
+        if conversation is None:
+            return RepositoryResult(success=False, error="conversation_not_found")
+        requested_scope = user_message.metadata.get("persona_scope_id")
+        if requested_scope != assistant_message.metadata.get("persona_scope_id"):
+            return RepositoryResult(success=False, error="invalid_completed_turn")
+        stored_scope = conversation.metadata.get("persona_scope_id")
+        if stored_scope is None and requested_scope:
+            if any(m.conversation_id == conversation.id for m in self.messages):
+                return RepositoryResult(
+                    success=False, error="conversation_persona_scope_mismatch"
+                )
+            conversation.metadata["persona_scope_id"] = requested_scope
+        elif stored_scope != requested_scope:
+            return RepositoryResult(
+                success=False, error="conversation_persona_scope_mismatch"
+            )
         if self.fail_add_role in {"user", "assistant"}:
             return RepositoryResult(
                 success=False, error=f"{self.fail_add_role}_write_failed"
@@ -845,3 +866,218 @@ async def test_restored_turn_retains_grounded_search_execution_receipt() -> None
         "answer_composition_status" not in message.metadata
         for message in restored.messages if message.role == "user"
     )
+
+
+@pytest.mark.asyncio
+async def test_persona_scope_rejects_switch_to_different_persona_in_same_thread() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    first = await gateway.persist_completed_turn(
+        _context(request_id="first"),
+        user_text="Private Troy design instructions",
+        assistant_text="Troy response",
+        persona_scope_id="Troy",
+    )
+    assert first.status == "persisted"
+    conversation = repository.conversations[("tenant-a", _context().conversation_id)]
+    assert conversation.metadata["persona_scope_id"] == "Troy"
+    assert all(message.metadata["persona_scope_id"] == "Troy" for message in repository.messages)
+
+    same = await gateway.load_history(
+        _context(request_id="next"), limit=12, persona_scope_id="Troy",
+    )
+    assert same.success
+    assert len(same.messages) == 2
+
+    for new_scope in ("Morgan", None):
+        different = await gateway.load_history(
+            _context(request_id="next"), limit=12, persona_scope_id=new_scope,
+        )
+        assert different.status == "rejected"
+        assert different.reason == "conversation_persona_scope_mismatch"
+
+        forbidden = await gateway.persist_completed_turn(
+            _context(request_id=f"switch-{new_scope}"),
+            user_text="Do not transfer Troy knowledge",
+            assistant_text="Not persisted",
+            persona_scope_id=new_scope,
+        )
+        assert forbidden.status == "rejected"
+        assert forbidden.reason == "conversation_persona_scope_mismatch"
+        assert len(repository.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_unattributed_conversation_cannot_be_claimed_by_private_persona() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    legacy = await gateway.persist_completed_turn(
+        _context(request_id="legacy"),
+        user_text="Legacy user information",
+        assistant_text="Legacy assistant information",
+    )
+    assert legacy.status == "persisted"
+    legacy_history = await gateway.load_history(
+        _context(request_id="new"), limit=12, persona_scope_id="Troy",
+    )
+    assert legacy_history.status == "rejected"
+    assert legacy_history.messages == ()
+
+    attempted = await gateway.persist_completed_turn(
+        _context(request_id="new"),
+        user_text="Troy must not inherit legacy context",
+        assistant_text="not stored",
+        persona_scope_id="Troy",
+    )
+    assert attempted.status == "rejected"
+    assert len(repository.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_scoped_history_rejects_untagged_legacy_message_even_when_parent_matches() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    persisted = await gateway.persist_completed_turn(
+        _context(request_id="first"),
+        user_text="Private source",
+        assistant_text="Private reply",
+        persona_scope_id="Troy",
+    )
+    assert persisted.status == "persisted"
+    # Simulate a legacy conversation API adding an unattributed message.
+    repository.messages[0].metadata.pop("persona_scope_id")
+    history = await gateway.load_history(
+        _context(request_id="second"), limit=12, persona_scope_id="Troy",
+    )
+    assert history.status == "rejected"
+    assert history.reason == "conversation_history_persona_scope_mismatch"
+    assert not history.messages
+
+
+@pytest.mark.asyncio
+async def test_new_persona_requires_new_conversation_identity() -> None:
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    original = _context(request_id="first")
+    original_result = await gateway.persist_completed_turn(
+        original, user_text="Troy", assistant_text="Original reply",
+        persona_scope_id="Troy",
+    )
+    assert original_result.status == "persisted"
+    new_context = _context(
+        request_id="new", conversation_id="33333333-3333-3333-3333-333333333333",
+    )
+    new_result = await gateway.persist_completed_turn(
+        new_context, user_text="Morgan", assistant_text="Separate reply",
+        persona_scope_id="Morgan",
+    )
+    assert new_result.status == "persisted"
+    morgan = await gateway.load_history(
+        _context(request_id="next", conversation_id=new_context.conversation_id),
+        limit=12, persona_scope_id="Morgan",
+    )
+    assert [message.content for message in morgan.messages] == [
+        "Morgan", "Separate reply",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_empty_session_bootstrap_can_be_claimed_by_first_private_persona():
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    owner = _context(request_id="bootstrap")
+    bootstrapped = await gateway.ensure_session_snapshot(owner, message_limit=0)
+    assert bootstrapped.conversation.metadata.get("persona_scope_id") is None
+
+    history = await gateway.load_history(
+        _context(request_id="first"), limit=12, persona_scope_id="Troy",
+    )
+    assert history.status == "empty"
+    saved = await gateway.persist_completed_turn(
+        _context(request_id="first"),
+        user_text="Troy private request", assistant_text="Scoped response",
+        persona_scope_id="Troy",
+    )
+    assert saved.status == "persisted"
+    assert bootstrapped.conversation.metadata["persona_scope_id"] == "Troy"
+
+    # UI can still display a user-owned conversation, but a default model
+    # cannot reuse its private transcript as prompt continuity.
+    snapshot = await gateway.ensure_session_snapshot(owner, message_limit=12)
+    assert len(snapshot.messages) == 2
+    default_history = await gateway.load_history(
+        _context(request_id="second"), limit=12,
+    )
+    assert default_history.status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_competing_persona_cannot_claim_already_bound_session_shell():
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    context = _context()
+    await gateway.ensure_session_snapshot(context, message_limit=0)
+    first = await gateway.persist_completed_turn(
+        _context(request_id="first"), user_text="First", assistant_text="Troy",
+        persona_scope_id="Troy",
+    )
+    second = await gateway.persist_completed_turn(
+        _context(request_id="second"), user_text="Second", assistant_text="Morgan",
+        persona_scope_id="Morgan",
+    )
+    assert first.status == "persisted"
+    assert second.status == "rejected"
+    assert len(repository.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_persona_binding_cannot_be_changed_by_conversation_metadata_update():
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    await gateway.persist_completed_turn(
+        _context(request_id="first"),
+        user_text="Troy context", assistant_text="Scoped answer",
+        persona_scope_id="Troy",
+    )
+    with pytest.raises(PermissionError, match="conversation_persona_scope_immutable"):
+        await gateway.update_conversation_metadata(
+            _context(request_id="modify"),
+            metadata_updates={"persona_scope_id": "Morgan"},
+        )
+    assert repository.conversations[
+        ("tenant-a", _context().conversation_id)
+    ].metadata["persona_scope_id"] == "Troy"
+
+
+@pytest.mark.asyncio
+async def test_single_conversation_api_message_inherits_server_scope_not_client_scope():
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    await gateway.persist_completed_turn(
+        _context(request_id="first"),
+        user_text="Troy context", assistant_text="Scoped answer",
+        persona_scope_id="Troy",
+    )
+    message = await gateway.append_message(
+        _context(request_id="second"),
+        role="user", content="Additional design note",
+        metadata={"persona_scope_id": "Morgan", "ui_source": "chat"},
+    )
+    assert message.metadata["persona_scope_id"] == "Troy"
+    history = await gateway.load_history(
+        _context(request_id="third"), limit=12, persona_scope_id="Troy",
+    )
+    assert history.status == "loaded"
+    assert len(history.messages) == 3
+
+
+@pytest.mark.asyncio
+async def test_provider_response_metadata_cannot_inject_persona_binding():
+    repository = _Repository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    persisted = await gateway.persist_completed_turn(
+        _context(request_id="first"), user_text="Hello", assistant_text="Hi",
+        response_metadata={"persona_scope_id": "forged"},
+    )
+    assert persisted.status == "persisted"
+    assert all("persona_scope_id" not in m.metadata for m in repository.messages)

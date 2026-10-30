@@ -25,7 +25,12 @@ function validPreferences(value: unknown): value is PersonaPreferences {
  * canonical revision-fenced preferences endpoint. Reuse it here rather
  * than sending an unconditional switch that can overwrite a newer tab.
  */
-export function KarenPersonaSelector() {
+export function KarenPersonaSelector({
+  onStartNewConversation,
+}: {
+  /** Canonical SessionProvider action; never fabricate a client-only thread. */
+  onStartNewConversation?: () => Promise<void>;
+} = {}) {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -37,6 +42,8 @@ export function KarenPersonaSelector() {
   const [saving, setSaving] = useState(false);
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [switchConfirmed, setSwitchConfirmed] = useState(false);
+  const [startingConversation, setStartingConversation] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +80,7 @@ export function KarenPersonaSelector() {
       if (mounted.current) {
         setPreferences(current);
         setStale(false);
+        setSwitchConfirmed(false);
       }
     } catch {
       if (mounted.current) setError("Persona selection could not be reloaded.");
@@ -107,7 +115,10 @@ export function KarenPersonaSelector() {
               updated.active_persona_id !== requested) {
             throw new Error("Persona switch receipt not confirmed");
           }
-          if (mounted.current) setPreferences(updated);
+          if (mounted.current) {
+            setPreferences(updated);
+            setSwitchConfirmed(true);
+          }
         } catch (cause: unknown) {
           if (mounted.current) {
             if (cause instanceof ApiError && cause.status === 409) {
@@ -126,6 +137,30 @@ export function KarenPersonaSelector() {
       {personas.map((persona) => <option value={persona.id} key={persona.id}>{persona.name}</option>)}
     </select>
     {saving && <span role="status" className="text-xs text-muted-foreground">Saving…</span>}
+    {switchConfirmed && <span role="status" className="text-xs text-muted-foreground">
+      Persona selection saved. To keep conversations separate, start a new thread before sending.
+    </span>}
+    {switchConfirmed && onStartNewConversation && <button type="button"
+      disabled={startingConversation || saving}
+      aria-label="Start new conversation for selected persona"
+      onClick={async () => {
+        if (startingConversation || saving) return;
+        setStartingConversation(true);
+        setError(null);
+        try {
+          await onStartNewConversation();
+          if (mounted.current) setSwitchConfirmed(false);
+        } catch {
+          if (mounted.current) {
+            setError("Unable to create a new conversation. The current thread was not changed.");
+          }
+        } finally {
+          if (mounted.current) setStartingConversation(false);
+        }
+      }}
+      className="rounded-md border border-input px-2 py-1.5 text-xs hover:bg-muted disabled:opacity-50">
+      {startingConversation ? "Creating conversation…" : "New conversation"}
+    </button>}
     {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
     {stale && <button type="button" disabled={saving} onClick={() => void reloadCurrent()}
       className="rounded-md border border-input px-2 py-1.5 text-xs">

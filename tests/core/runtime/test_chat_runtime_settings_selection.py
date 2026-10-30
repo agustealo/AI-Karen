@@ -264,3 +264,92 @@ async def test_gated_stream_emits_no_execution_provenance(
 
 async def _gate() -> SimpleNamespace:
     return SimpleNamespace(mode="unavailable", message="Runtime unavailable")
+
+
+def test_reasoning_with_selected_model_uses_canonical_generation_on_both_transports() -> None:
+    """Reasoning topology must not swallow an explicit or saved model selection."""
+    import ast
+    import inspect
+    import textwrap
+
+    execute_tree = ast.parse(textwrap.dedent(inspect.getsource(ChatRuntime.execute)))
+    stream_tree = ast.parse(textwrap.dedent(inspect.getsource(ChatRuntime.execute_stream)))
+    for tree in (execute_tree, stream_tree):
+        guards = [
+            node.test for node in ast.walk(tree)
+            if isinstance(node, (ast.If, ast.IfExp))
+            and any(
+                isinstance(descendant, ast.Compare)
+                and any(isinstance(value, ast.Constant) and value.value == "reasoning"
+                        for value in descendant.comparators)
+                for descendant in ast.walk(node.test)
+            )
+        ]
+        assert any(
+            isinstance(descendant, ast.Attribute)
+            and descendant.attr == "preferred_provider"
+            for guard in guards for descendant in ast.walk(guard)
+        ), "Reasoning dispatch must respect the selected generation provider"
+        assert any(
+            isinstance(descendant, ast.Attribute)
+            and descendant.attr == "preferred_model"
+            for guard in guards for descendant in ast.walk(guard)
+        ), "Reasoning dispatch must respect the selected generation model"
+
+
+@pytest.mark.asyncio
+async def test_workflow_orchestrator_factory_is_synchronous_and_not_awaited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WorkflowRuntime obtains the canonical orchestrator without awaiting its instance."""
+    from ai_karen_engine.core.runtime.workflow_runtime import WorkflowRuntime
+    import ai_karen_engine.core.langgraph_orchestrator as orchestrator_package
+
+    sentinel = object()
+    monkeypatch.setattr(
+        orchestrator_package,
+        "get_default_orchestrator",
+        lambda: sentinel,
+        raising=False,
+    )
+    runtime = WorkflowRuntime()
+    assert await runtime._get_orchestrator() is sentinel
+
+
+def test_workflow_graph_empty_response_fails_closed() -> None:
+    """Graph result extraction cannot turn a missing answer into success."""
+    import ast
+    import inspect
+    import textwrap
+    from ai_karen_engine.core.runtime.workflow_runtime import WorkflowRuntime
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(WorkflowRuntime.run)))
+    assert any(
+        isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "RuntimeError"
+        for node in ast.walk(tree)
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_extract_payload"
+        for node in ast.walk(tree)
+    )
+
+
+def test_reasoning_topology_selected_model_bypasses_graph_on_both_transports() -> None:
+    """REASONING is not an instruction to route a selected chat model to LangGraph."""
+    import inspect
+    import textwrap
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    for method, graph_call in (
+        (ChatRuntime.execute, "_run_graph"),
+        (ChatRuntime.execute_stream, "_run_graph_stream"),
+    ):
+        source = textwrap.dedent(inspect.getsource(method))
+        assert 'decision.is_graph_required and decision.topology.value != "reasoning"' in source
+        assert graph_call in source
+        assert "_run_simple" in source

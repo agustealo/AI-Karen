@@ -126,6 +126,32 @@ class ChatExecutionContext:
         return conversation_id
 
 
+@dataclass(frozen=True, slots=True)
+class PersonaExecutionSnapshot:
+    """Runtime-authenticated persona selection frozen for one execution.
+
+    Persona IDs here are provenance and presentation references, never
+    authorization to read resources or perform actions. Memory retrieval must
+    still enforce its own tenant/user/purpose and source ACL checks.
+    """
+
+    user_id: str
+    tenant_id: str
+    status: str  # "ready", "none", "unavailable"
+    persona_id: Optional[str] = None
+    selection_revision: int = 0
+    tone: str = ""
+    verbosity: str = ""
+    language_style: str = ""
+    memory_filter_required: bool = False
+
+    def matches(self, context: ChatExecutionContext) -> bool:
+        return (
+            self.user_id == str(context.user_id)
+            and self.tenant_id == str(context.tenant_id)
+        )
+
+
 @dataclass
 class ChatExecutionRequest:
     """Canonical input contract for the chat runtime.
@@ -146,6 +172,11 @@ class ChatExecutionRequest:
     # Minted by runtime admission only; never copied from SDK metadata or prompt.
     runtime_run_lease: Optional["ChatRunLease"] = field(
         default=None, repr=False, compare=False,
+    )
+    # Assigned only by ChatRuntime after authenticating ingress identity.
+    # init=False prevents SDK request construction from supplying this field.
+    persona_snapshot: Optional[PersonaExecutionSnapshot] = field(
+        default=None, init=False, repr=False, compare=False,
     )
 
 

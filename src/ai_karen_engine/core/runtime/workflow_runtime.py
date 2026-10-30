@@ -57,7 +57,16 @@ class WorkflowRuntime:
             session_id=conversation_id,
             config=config,
         )
-        return self._extract_payload(final_state)
+        answer, metadata = self._extract_payload(final_state)
+        if not isinstance(answer, str) or not answer.strip():
+            # A completed graph without answer text is not successful model
+            # execution. Do not persist or display an empty success receipt.
+            logger.warning(
+                "workflow_empty_execution_result",
+                extra={"correlation_id": ctx.correlation_id, "error_type": "EmptyWorkflowResult"},
+            )
+            raise RuntimeError("Authorized workflow completed without an assistant response")
+        return answer, metadata
 
     async def stream(
         self,
@@ -582,7 +591,7 @@ class WorkflowRuntime:
     async def _get_orchestrator(self):
         from ai_karen_engine.core.langgraph_orchestrator import get_default_orchestrator
 
-        return await get_default_orchestrator()
+        return get_default_orchestrator()
 
     def _build_config(
         self,

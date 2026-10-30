@@ -89,12 +89,12 @@ async def test_vault_to_recall_persona_filter_and_revocation():
         assistant = await recall.recall(RecallRequest(
             **base, metadata={"persona_filter": "assistant"},
         ))
-        assert {str(item.id) for item in assistant.memories} == {str(ids[0]), str(ids[2])}
+        assert {str(item.id) for item in assistant.memories} == {str(ids[0])}
 
         expert = await recall.recall(RecallRequest(
             **base, metadata={"persona_filter": "expert"},
         ))
-        assert {str(item.id) for item in expert.memories} == {str(ids[1]), str(ids[2])}
+        assert {str(item.id) for item in expert.memories} == {str(ids[1])}
 
         other_tenant = await recall.recall(RecallRequest(
             query=base["query"], tenant_id=str(uuid.uuid4()),

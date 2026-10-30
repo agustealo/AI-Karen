@@ -6,22 +6,30 @@ from types import SimpleNamespace
 
 import pytest
 
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
-    ChatExecutionContext, ChatExecutionRequest,
+    ChatExecutionContext, ChatExecutionRequest, PersonaExecutionSnapshot,
 )
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 
 
 def request():
-    return ChatExecutionRequest(
+    execution = ChatExecutionRequest(
         context=ChatExecutionContext(
             tenant_id="tenant", user_id="user", session_id="session",
             conversation_id="conversation", request_id="request",
             correlation_id="correlation",
+            authenticated_user=UserData(user_id="user", tenant_id="tenant"),
         ),
         messages=[{"role": "user", "content": "I prefer concise responses."}],
     )
+    # This burn exercises memory write receipts, not persona selection I/O.
+    # Keep an authenticated, explicit no-persona runtime snapshot.
+    execution.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="user", tenant_id="tenant", status="none",
+    )
+    return execution
 
 
 def plan(*, user="user", tenant="tenant", session="session", allowed=True):

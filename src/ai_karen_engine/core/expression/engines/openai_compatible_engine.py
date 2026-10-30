@@ -175,6 +175,9 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         self, task: ExpressionTask, is_cloud: bool, registry: Any
     ) -> str | None:
         """Find the best healthy provider matching the engine category."""
+        # The supplied canonical registry owns capability normalization.
+        # Keep the endpoint adapter compatible with independent registry
+        # substitutes that expose only declared capabilities.
         required_caps = {"chat_completion", "text_generation"}
         preferred = str(task.preferred_provider or "").strip()
 
@@ -196,7 +199,14 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     continue
                 if not self._matches_engine_locality(endpoint, is_cloud):
                     continue
-                cap_lower = {capability.lower() for capability in endpoint.capabilities}
+                resolve_capabilities = getattr(
+                    registry, "effective_endpoint_capabilities", None,
+                )
+                cap_lower = (
+                    resolve_capabilities(endpoint)
+                    if callable(resolve_capabilities)
+                    else {str(value).strip().lower() for value in endpoint.capabilities}
+                )
                 if not required_caps.issubset(cap_lower):
                     continue
                 status = registry.get_provider_status(candidate_id)

@@ -145,3 +145,35 @@ def test_chat_catalog_rejects_saved_model_masquerading_as_installed() -> None:
     }
     with pytest.raises(LiveProofError, match="differs"):
         assert_chat_catalog_matches(native, catalog, native[0])
+
+
+def test_ollama_live_proof_mismatch_diagnostics_never_log_private_model_or_metadata() -> None:
+    """CI should distinguish routing from fallback without leaking sensitive fields."""
+    saved_model = "private-saved-model-sensitive"
+    actual_model = "unexpected-private-model-sensitive"
+    credentials = "never-print-this-token"
+    response = {
+        "content": "Test response (must not appear in mismatch diagnostics)",
+        "model": actual_model,
+        "metadata": {
+            "actual_provider": "unexpected-" + credentials,
+            "actual_model": actual_model,
+            "response_source": credentials,
+            "fallback_level": 1,
+            "degraded_mode": True,
+            "degradation_reason": credentials,
+            "private_payload": credentials,
+        },
+    }
+    with pytest.raises(LiveProofError, match="ignored the saved Ollama") as caught:
+        assert_default_runtime_response(response, saved_model)
+    message = str(caught.value)
+    assert '"observed_provider_class": "other"' in message
+    assert '"selected_model_matched": false' in message
+    assert '"source_class": "other"' in message
+    assert '"fallback_active": true' in message
+    assert '"degraded": true' in message
+    for forbidden in (
+        credentials, saved_model, actual_model, "Test response",
+    ):
+        assert forbidden not in message

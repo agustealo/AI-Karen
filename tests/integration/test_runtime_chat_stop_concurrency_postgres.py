@@ -70,7 +70,8 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             CREATE TABLE public.conversations (
                 conversation_id uuid PRIMARY KEY,
                 tenant_id uuid NOT NULL REFERENCES public.tenants(id),
-                user_id uuid NOT NULL REFERENCES public.auth_users(user_id)
+                user_id uuid NOT NULL REFERENCES public.auth_users(user_id),
+                conversation_metadata jsonb NOT NULL DEFAULT '{}'::jsonb
             );
             CREATE TABLE public.messages (
                 message_id uuid PRIMARY KEY,
@@ -621,6 +622,65 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         )) is None
         assert await worker_b.finish(distinct, status="failed",
                                     error_code="CHAT_TEST_TERMINAL")
+
+        # KP-RED-03: two concurrent persona runs may claim an empty session
+        # shell only once. Real PostgreSQL must serialize both on the parent.
+        scoped_thread = str(uuid.uuid4())
+        await raw.execute(
+            "INSERT INTO public.conversations(conversation_id,tenant_id,user_id) "
+            "VALUES($1,$2,$3)",
+            uuid.UUID(scoped_thread), uuid.UUID(tenant_a), uuid.UUID(user_a),
+        )
+
+        async def claim_persona(persona_name: str):
+            provenance = {
+                "authorized_user_id": user_a,
+                "persona_scope_id": persona_name,
+                "request_id": "claim-" + persona_name,
+            }
+            pair = (
+                Message(
+                    id=str(uuid.uuid4()), conversation_id=scoped_thread,
+                    tenant_id=tenant_a, role="user", content=persona_name,
+                    metadata={**provenance, "transcript_actor": "user"},
+                ),
+                Message(
+                    id=str(uuid.uuid4()), conversation_id=scoped_thread,
+                    tenant_id=tenant_a, role="assistant", content="scoped",
+                    metadata={**provenance, "transcript_actor": "assistant"},
+                ),
+            )
+            return await conversations.add_completed_turn(*pair)
+
+        troy, morgan = await asyncio.gather(
+            claim_persona("Troy"), claim_persona("Morgan"),
+        )
+        assert sorted([troy.success, morgan.success]) == [False, True]
+        winner = "Troy" if troy.success else "Morgan"
+        assert await raw.fetchval(
+            "SELECT conversation_metadata->>'persona_scope_id' "
+            "FROM public.conversations WHERE conversation_id=$1",
+            uuid.UUID(scoped_thread),
+        ) == winner
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.messages WHERE conversation_id=$1",
+            uuid.UUID(scoped_thread),
+        ) == 2
+
+        # A direct single-message write with no matching purpose cannot
+        # bypass the parent-row scope, including during concurrent commits.
+        disallowed = await conversations.add_message(Message(
+            id=str(uuid.uuid4()), conversation_id=scoped_thread,
+            tenant_id=tenant_a, role="user", content="unattributed",
+            metadata={"authorized_user_id": user_a},
+        ))
+        assert not disallowed.success
+        allowed = await conversations.add_message(Message(
+            id=str(uuid.uuid4()), conversation_id=scoped_thread,
+            tenant_id=tenant_a, role="user", content="authorized note",
+            metadata={"authorized_user_id": user_a, "persona_scope_id": winner},
+        ))
+        assert allowed.success
 
     finally:
         if engine is not None:

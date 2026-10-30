@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 from fastapi import HTTPException
 
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
 
@@ -66,6 +67,9 @@ def build_chat_execution_context(
         correlation_id=correlation_id,
         roles=list(user.get("roles") or []),
         permissions=list(user.get("permissions") or user.get("scopes") or []),
+        # Persona snapshots and runtime policy require the verified ingress
+        # principal, not merely copied user/tenant string identifiers.
+        authenticated_user=UserData.from_dict(dict(user)),
     )
 
 

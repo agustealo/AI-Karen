@@ -165,6 +165,9 @@ jobs:
         run: |
           pytest tests/core/runtime/test_context_evidence_contracts.py -q
           pytest tests/core/runtime/test_runtime_evidence_resolution.py -q
+          pytest tests/core/runtime/test_persona_execution_snapshot.py -q
+          pytest tests/core/runtime/test_conversation_runtime_gateway.py -q
+          pytest src/ai_karen_engine/api_routes/chat/tests/test_execution_identity_principal.py -q
           pytest tests/core/runtime/test_authorized_semantic_context_handoff.py -q
           pytest tests/core/runtime/test_direct_live_capabilities.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
@@ -187,6 +190,8 @@ jobs:
 
       - name: Ollama live inventory and provider settings contracts
         run: |
+          pytest tests/core/model_runtime/test_provider_registry_endpoints.py -q
+          pytest tests/core/expression/test_gateway_selected_provider_precedence.py -q
           pytest tests/core/model_runtime/test_ollama_native_inventory.py -q
           pytest tests/core/model_runtime/test_ollama_inference_endpoint.py -q
           pytest tests/core/model_runtime/test_ollama_execution_mapping.py -q
@@ -196,6 +201,8 @@ jobs:
           pytest tests/core/model_runtime/test_ollama_model_inventory_contract.py -q
           pytest tests/core/runtime/test_chat_runtime_settings_selection.py -q
           pytest tests/core/runtime/test_chat_runtime_graph_provenance.py -q
+          pytest tests/core/reasoning/test_chat_runtime_reasoning_activation.py -q
+          pytest tests/core/runtime/test_reasoning_model_attribution_truth.py -q
 
       - name: Personalization authority proofs
         run: |

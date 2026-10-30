@@ -290,6 +290,22 @@ class ProviderRegistryService:
         )
         self.register_provider_endpoint(endpoint)
 
+    @staticmethod
+    def effective_endpoint_capabilities(endpoint: ProviderEndpoint) -> Set[str]:
+        """Normalize only proven chat aliases at the canonical registry boundary.
+
+        Built-in local endpoints advertise "chat"; configured OpenAI-compatible
+        endpoints have historically advertised "chat_completion" plus
+        "text_generation". They are equivalent for conversational generation,
+        but a text-generation-only endpoint must not inherit chat authority.
+        """
+        capabilities = {str(capability).strip().lower() for capability in endpoint.capabilities}
+        if "chat" in capabilities:
+            capabilities.update({"chat_completion", "text_generation"})
+        elif {"chat_completion", "text_generation"}.issubset(capabilities):
+            capabilities.add("chat")
+        return capabilities
+
     def resolve_capable_targets(
         self,
         required_capabilities: Set[str],
@@ -307,7 +323,7 @@ class ProviderRegistryService:
                 status = self.get_provider_status(endpoint.provider_id)
                 if status and not status.is_available:
                     continue
-            cap_lower = {c.lower() for c in endpoint.capabilities}
+            cap_lower = self.effective_endpoint_capabilities(endpoint)
             if required_capabilities and not required_capabilities.issubset(cap_lower):
                 continue
             targets.append(endpoint)
@@ -325,7 +341,7 @@ class ProviderRegistryService:
         if preferred_target_id:
             endpoint = self._provider_endpoints.get(preferred_target_id)
             if endpoint and endpoint.enabled:
-                cap_lower = {c.lower() for c in endpoint.capabilities}
+                cap_lower = self.effective_endpoint_capabilities(endpoint)
                 if required_capabilities.issubset(cap_lower):
                     status = self.get_provider_status(preferred_target_id)
                     if not healthy_only or (status and status.is_available):
@@ -341,7 +357,7 @@ class ProviderRegistryService:
         self, endpoint: ProviderEndpoint
     ) -> Set[ProviderCapability]:
         capabilities: Set[ProviderCapability] = set()
-        for capability_name in endpoint.capabilities:
+        for capability_name in self.effective_endpoint_capabilities(endpoint):
             try:
                 capabilities.add(ProviderCapability(capability_name))
             except ValueError:

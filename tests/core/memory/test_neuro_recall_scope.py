@@ -330,3 +330,34 @@ async def test_runtime_memory_health_preserves_partial_results_and_safe_diagnost
     assert [item["status"] for item in health["source_health"]] == ["success", "failed"]
     assert "private backend credential" not in str(health["source_health"])
     assert "Zeus" not in str(health["source_health"])
+
+
+@pytest.mark.asyncio
+async def test_private_persona_recall_rejects_unattributed_legacy_memories():
+    matching = _memory("troy-only", "tenant-1", "user-1", relevance=0.9)
+    matching.metadata.custom["persona_id"] = "Troy"
+    other = _memory("morgan-only", "tenant-1", "user-1", relevance=1.0)
+    other.metadata.custom["persona_id"] = "Morgan"
+    untagged = _memory("legacy-untagged", "tenant-1", "user-1", relevance=1.0)
+    retriever = _FakeRetriever([untagged, other, matching])
+
+    result = await NeuroRecall(retriever).recall(
+        RecallRequest(
+            query="brand project",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            metadata={"persona_filter": "Troy"},
+        )
+    )
+
+    assert [memory.id for memory in result.memories] == ["troy-only"]
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_recall_remains_explicitly_user_scoped():
+    untagged = _memory("general", "tenant-1", "user-1", relevance=0.9)
+    other = _memory("cross-tenant", "tenant-2", "user-1", relevance=1.0)
+    result = await NeuroRecall(_FakeRetriever([untagged, other])).recall(
+        RecallRequest(query="general", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert [memory.id for memory in result.memories] == ["general"]
