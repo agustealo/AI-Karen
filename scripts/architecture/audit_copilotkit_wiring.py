@@ -196,8 +196,25 @@ def audit(root: Path = ROOT) -> dict[str, Any]:
     if not (root / WEB_GATEWAY).exists():
         warnings.append("CopilotKit production runtime gateway not installed")
 
+    # Static SDK or acceptance-preview presence is not consumer cutover proof.
+    consumer_cutover = {
+        "consumer_entry": str(WEB / "src/app/dashboard/page.tsx"),
+        "active_renderer": (
+            "copilotkit" if copilot_mount else
+            "assistant-ui" if legacy_mount else "unknown"
+        ),
+        "copilotkit_consumer_mounted": bool(copilot_mount and not legacy_mount),
+        "copilotkit_sdk_declared": copilot_installed,
+        "live_browser_acceptance": "not_run",
+        "model_and_persona_acceptance": "not_run",
+        "rich_history_replay_acceptance": "not_run",
+        "human_ux_signoff": "not_run",
+        "release_ready": False,
+    }
+
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "consumer_cutover": consumer_cutover,
         "static_evidence_only": True,
         "runtime_verification": "not_run",
         "owners": evidence,
@@ -223,8 +240,13 @@ def main() -> int:
             print(f"UNVERIFIED: {warning}")
         for violation in result["violations"]:
             print(f"VIOLATION: {violation}")
+        cutover = result["consumer_cutover"]
+        print(
+            f"CONSUMER MOUNT: {cutover['active_renderer']}; "
+            "CopilotKit browser/human acceptance NOT VERIFIED."
+        )
         if not result["violations"]:
-            print("Static ownership contracts passed; live CopilotKit integration NOT verified.")
+            print("Static ownership contracts passed; consumer release NOT VERIFIED.")
     return 1 if result["violations"] else 0
 
 
