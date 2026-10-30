@@ -295,3 +295,22 @@ def test_reasoning_with_selected_model_uses_canonical_generation_on_both_transpo
             and descendant.attr == "preferred_model"
             for guard in guards for descendant in ast.walk(guard)
         ), "Reasoning dispatch must respect the selected generation model"
+
+
+@pytest.mark.asyncio
+async def test_workflow_orchestrator_factory_is_synchronous_and_not_awaited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WorkflowRuntime obtains the canonical orchestrator without awaiting its instance."""
+    from ai_karen_engine.core.runtime.workflow_runtime import WorkflowRuntime
+    import ai_karen_engine.core.langgraph_orchestrator as orchestrator_package
+
+    sentinel = object()
+    monkeypatch.setattr(
+        orchestrator_package,
+        "get_default_orchestrator",
+        lambda: sentinel,
+        raising=False,
+    )
+    runtime = WorkflowRuntime()
+    assert await runtime._get_orchestrator() is sentinel
