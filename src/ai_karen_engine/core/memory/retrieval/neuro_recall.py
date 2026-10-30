@@ -270,8 +270,8 @@ class NeuroRecall:
             # source-derived entries rather than reuse revoked/stale content.
             custom_metadata = getattr(metadata, "custom", {}) if metadata else {}
             if isinstance(custom_metadata, dict) and (
-                custom_metadata.get("source_lineage") is not None
-                or custom_metadata.get("derived_source_ids") is not None
+                "source_lineage" in custom_metadata
+                or "derived_source_ids" in custom_metadata
             ):
                 rejected_count += 1
                 continue
