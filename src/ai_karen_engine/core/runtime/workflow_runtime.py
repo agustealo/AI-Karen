@@ -57,7 +57,16 @@ class WorkflowRuntime:
             session_id=conversation_id,
             config=config,
         )
-        return self._extract_payload(final_state)
+        answer, metadata = self._extract_payload(final_state)
+        if not isinstance(answer, str) or not answer.strip():
+            # A completed graph without answer text is not successful model
+            # execution. Do not persist or display an empty success receipt.
+            logger.warning(
+                "workflow_empty_execution_result",
+                extra={"correlation_id": ctx.correlation_id, "error_type": "EmptyWorkflowResult"},
+            )
+            raise RuntimeError("Authorized workflow completed without an assistant response")
+        return answer, metadata
 
     async def stream(
         self,
