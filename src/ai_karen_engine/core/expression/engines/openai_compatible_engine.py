@@ -175,6 +175,12 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         self, task: ExpressionTask, is_cloud: bool, registry: Any
     ) -> str | None:
         """Find the best healthy provider matching the engine category."""
+        # The canonical registry normalizes built-in "chat" to the same
+        # execution contract used by config-defined compatible endpoints.
+        from ai_karen_engine.core.model_runtime.provider_registry_service import (
+            ProviderRegistryService,
+        )
+
         required_caps = {"chat_completion", "text_generation"}
         preferred = str(task.preferred_provider or "").strip()
 
@@ -196,7 +202,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     continue
                 if not self._matches_engine_locality(endpoint, is_cloud):
                     continue
-                cap_lower = {capability.lower() for capability in endpoint.capabilities}
+                cap_lower = ProviderRegistryService.effective_endpoint_capabilities(endpoint)
                 if not required_caps.issubset(cap_lower):
                     continue
                 status = registry.get_provider_status(candidate_id)
