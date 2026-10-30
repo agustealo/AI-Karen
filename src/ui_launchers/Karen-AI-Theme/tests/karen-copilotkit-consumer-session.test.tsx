@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   createNewSession: vi.fn(),
   loadSession: vi.fn(),
   mounts: [] as string[],
+  modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null}>,
 }));
 
 vi.mock("@/components/chat/SessionProvider", () => ({
@@ -23,9 +24,16 @@ vi.mock("@/components/chat/SessionProvider", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/assistant-ui/KarenComposerRuntimeCatalog", () => ({
+  KarenComposerRuntimeCatalog: ({ onSelectionChange }: { onSelectionChange: (selection: { provider: string; model: string } | null) => void }) => (
+    <button type="button" onClick={() => onSelectionChange({ provider: "local", model: "selected-model" })}>Choose available model</button>
+  ),
+}));
+
 vi.mock("@/components/chat/copilotkit/KarenCopilotChat", () => ({
-  KarenCopilotChat: ({ conversationId }: { conversationId: string }) => {
+  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null }) => {
     state.mounts.push(conversationId);
+    state.modelProps.push({ preferredProvider, preferredModel });
     return <div data-testid="owned-copilot-chat">{conversationId}</div>;
   },
 }));
@@ -41,6 +49,7 @@ beforeEach(() => {
   state.isLoadingSessions = false;
   state.error = null;
   state.mounts.length = 0;
+  state.modelProps.length = 0;
   state.createNewSession.mockReset().mockResolvedValue(undefined);
   state.loadSession.mockReset().mockResolvedValue(undefined);
 });
@@ -83,6 +92,18 @@ describe("CopilotKit consumer session adapter", () => {
     expect(screen.queryByRole("searchbox")).toBeNull();
     // No optimistic local session switch: SessionProvider decides the identity.
     expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("uses the existing backend catalog to request a model without choosing runtime execution", () => {
+    state.currentSession = { id: FIRST, title: "Project Alpha" };
+    state.sessions = [{ id: FIRST, title: "Project Alpha" }];
+    render(<KarenCopilotConsumerChat />);
+    expect(state.modelProps.at(-1)).toEqual({ preferredProvider: null, preferredModel: null });
+    fireEvent.click(screen.getByText("Model and provider"));
+    fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
+    expect(state.modelProps.at(-1)).toEqual({
+      preferredProvider: "local", preferredModel: "selected-model",
+    });
   });
 
   it("reports a failed session switch without mounting an unverified thread", async () => {
