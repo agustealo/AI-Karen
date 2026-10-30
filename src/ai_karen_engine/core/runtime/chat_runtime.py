@@ -527,9 +527,29 @@ class ChatRuntime:
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except Exception as exc:
             error_type = type(exc).__name__
+            # Log code location only. Never log exception arguments, prompts, or secrets.
+            import traceback
+            from pathlib import Path
+
+            frames = traceback.extract_tb(exc.__traceback__)
+            origin = next(
+                (
+                    frame for frame in reversed(frames)
+                    if "/ai_karen_engine/" in frame.filename.replace("\\\\", "/")
+                ),
+                None,
+            )
+            safe_origin = (
+                f"{Path(origin.filename).name}:{origin.lineno}"
+                if origin is not None else "unavailable"
+            )
             logger.error(
                 "ChatRuntime.execute failed; attempting canonical fallback",
-                extra={"correlation_id": ctx.correlation_id, "error_type": error_type},
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": error_type,
+                    "error_origin": safe_origin,
+                },
             )
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
