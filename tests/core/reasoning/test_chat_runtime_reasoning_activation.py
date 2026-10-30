@@ -69,7 +69,7 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reporte
         reasoning_id="reason-1",
     )
     activation = SimpleNamespace(
-        reasoning_modes=("deductive",),
+        reasoning_modes=("evidence_synthesis",),
         request_metadata={},
         runtime_metadata={
             "reasoning_activation": "runtime_composed",
