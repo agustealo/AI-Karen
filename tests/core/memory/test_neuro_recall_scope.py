@@ -477,3 +477,31 @@ async def test_source_authorizer_denial_and_failure_never_release_content(verifi
     ))
     assert not result.memories
     assert not result.provenance
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key,value", [
+    ("source_lineage", None),
+    ("source_lineage", {}),
+    ("source_lineage", "forged"),
+    ("derived_source_ids", None),
+    ("derived_source_ids", []),
+    ("derived_source_ids", [""]),
+    ("derived_source_ids", ["conversation-a", "conversation-a"]),
+])
+async def test_malformed_lineage_never_reaches_trusted_authorizer(key, value):
+    """An injected verifier must never receive empty or ambiguous lineage."""
+    derived = _memory("malformed-derived", "tenant-1", "user-1")
+    derived.metadata.custom[key] = value
+
+    class _UnexpectedAuthorizer:
+        async def authorize(self, memory, request):
+            pytest.fail("malformed lineage must be rejected before authorization")
+
+    result = await NeuroRecall(
+        _FakeRetriever([derived]), source_authorizer=_UnexpectedAuthorizer()
+    ).recall(RecallRequest(
+        query="derived knowledge", tenant_id="tenant-1", user_id="user-1",
+    ))
+    assert result.memories == ()
+    assert result.provenance == ()
