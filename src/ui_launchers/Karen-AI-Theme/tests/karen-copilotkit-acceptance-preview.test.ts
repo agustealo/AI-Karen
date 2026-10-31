@@ -134,6 +134,8 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(canonicalSessions).toContain("setCurrentSession(null)");
     expect(canonicalSessions).toContain("No replacement conversation was created.");
     expect(consumerPreview).toContain("strictInitialSession>");
+    expect(canonicalSessions).toContain("if (!strictInitialSession) setError(null)");
+    expect(canonicalSessions).toContain("if (!strictInitialSession) setError('Failed to load sessions list.");
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {
@@ -208,7 +210,8 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(browserWorkflow).toContain("Verify deployed revision before browser acceptance");
     expect(browserWorkflow).toContain("Verify independent Vercel deployment provenance before browser acceptance");
     expect(browserWorkflow).toContain("KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED:");
-    expect(browserWorkflow).toContain("--grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference'");
+    expect(browserWorkflow).toContain("--grep 'CK-CONSUMER-0[12]'");
+    expect(nativeBrowser).toContain('test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread"');
     expect(browserWorkflow).toContain("Revalidate platform, running deployment and reviewed main head after browser acceptance");
     expect(nativeBrowser).toContain('test("CK-CONSUMER-01 gated consumer preview restores an owned session without inference"');
   });
