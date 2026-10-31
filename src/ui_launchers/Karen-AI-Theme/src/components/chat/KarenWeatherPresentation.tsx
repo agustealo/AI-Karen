@@ -58,10 +58,10 @@ function numeric(value: unknown, unit: "fahrenheit" | "percentage" | "mph" | "pl
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
   const pattern = {
-    fahrenheit: /^(-?\d+(?:\\.\d+)?)\s*(?:°\s*F)?$/i,
-    percentage: /^(-?\d+(?:\\.\d+)?)\s*%?$/,
-    mph: /^(-?\d+(?:\\.\d+)?)\s*(?:mph)?$/i,
-    plain: /^(-?\d+(?:\\.\d+)?)$/,
+    fahrenheit: /^(-?\d+(?:[.]\d+)?)\s*(?:°\s*F)?$/i,
+    percentage: /^(-?\d+(?:[.]\d+)?)\s*%?$/,
+    mph: /^(-?\d+(?:[.]\d+)?)\s*(?:mph)?$/i,
+    plain: /^(-?\d+(?:[.]\d+)?)$/,
   }[unit];
   const match = value.trim().match(pattern);
   if (!match) return null;
