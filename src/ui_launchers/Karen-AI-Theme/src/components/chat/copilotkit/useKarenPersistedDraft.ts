@@ -29,6 +29,7 @@ export function useKarenPersistedDraft(conversationId: string) {
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<DraftStatus>("loading");
   const [synced, setSynced] = useState(false);
+  const [failureStatus, setFailureStatus] = useState<number | null>(null);
   const [version, setVersion] = useState(0);
   const textRef = useRef("");
   const revisionRef = useRef<number | null>(null);
@@ -85,11 +86,13 @@ export function useKarenPersistedDraft(conversationId: string) {
       setDraft(saved.text);
       setSynced(true);
       setStatus("ready");
-    } catch {
+      setFailureStatus(null);
+    } catch (error) {
       if (!activeRef.current || generationRef.current !== generation ||
           readSequenceRef.current !== readSequence) return;
       // Never pass off a local draft as saved after an API failure.
       setStatus("unavailable");
+      setFailureStatus(error instanceof ApiError ? error.status : null);
       setSynced(false);
     }
   }, [endpoint]);
@@ -105,6 +108,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     setDraft("");
     setSynced(false);
     setStatus("loading");
+    setFailureStatus(null);
     void refresh(true);
     const onFocus = () => {
       if (!document.hidden && !dirtyRef.current) void refresh(false);
@@ -156,12 +160,14 @@ export function useKarenPersistedDraft(conversationId: string) {
         setVersion(v => v + 1);
       }
       setStatus("ready");
+      setFailureStatus(null);
     } catch (error) {
       if (!activeRef.current || generationRef.current !== generation ||
           controller.signal.aborted) return;
       setSynced(false);
       setStatus(error instanceof ApiError && error.status === 409 ?
         "conflict" : "unavailable");
+      setFailureStatus(error instanceof ApiError ? error.status : null);
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       busyRef.current = false;
@@ -210,6 +216,7 @@ export function useKarenPersistedDraft(conversationId: string) {
         setVersion(v => v + 1);
       }
       setStatus("ready");
+      setFailureStatus(null);
       return true;
     } catch (error) {
       if (activeRef.current && generationRef.current === generation &&
@@ -217,6 +224,7 @@ export function useKarenPersistedDraft(conversationId: string) {
         setSynced(false);
         setStatus(error instanceof ApiError && error.status === 409 ?
           "conflict" : "unavailable");
+        setFailureStatus(error instanceof ApiError ? error.status : null);
       }
       return false;
     } finally {
@@ -253,7 +261,7 @@ export function useKarenPersistedDraft(conversationId: string) {
   }, [refresh, status]);
 
   return {
-    draft, setText, readText, status, synced,
+    draft, setText, readText, status, synced, failureStatus,
     clearBeforeSubmit, retry, discardAndReload,
   };
 }
