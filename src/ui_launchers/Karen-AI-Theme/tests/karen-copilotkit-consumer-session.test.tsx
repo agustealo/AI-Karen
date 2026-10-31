@@ -96,6 +96,19 @@ describe("CopilotKit consumer session adapter", () => {
     expect(state.mounts).toHaveLength(0);
   });
 
+  it("fails closed on an unavailable strict acceptance conversation without offering a replacement", () => {
+    state.strictInitialSession = true;
+    state.error = "The requested conversation could not be verified. No replacement conversation was created.";
+    render(<KarenCopilotConsumerChat />);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("No replacement conversation was created.");
+    expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
+    expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.loadSession).not.toHaveBeenCalled();
+    expect(state.mounts).toHaveLength(0);
+  });
+
   it("locks navigation to an already verified strictly pinned conversation", () => {
     state.strictInitialSession = true;
     state.currentSession = { id: FIRST, title: "Pinned conversation" };
