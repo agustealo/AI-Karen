@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { KarenLocalDictation } from "@/components/chat/assistant-ui/KarenLocalDictation";
+import { KarenLocalDictationCapture } from "@/components/chat/voice/KarenLocalDictationCapture";
 import { apiClient } from "@/lib/api";
 
 const { composer } = vi.hoisted(() => ({
   composer: { text: "Existing", getState: vi.fn(), setText: vi.fn() },
 }));
-vi.mock("@assistant-ui/react", () => ({ useAui: () => ({ composer: () => composer }) }));
+const port = {
+  readText: () => String(composer.getState().text || ""),
+  writeText: (text: string) => composer.setText(text),
+};
 vi.mock("@/lib/api", () => ({
   apiClient: { get: vi.fn(), transcribeLocalAudio: vi.fn() },
 }));
@@ -68,7 +71,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     vi.mocked(apiClient.transcribeLocalAudio).mockResolvedValue({
       text: "spoken words", engine: "faster-whisper-local", language: "en",
     });
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     await screen.findByRole("button", { name: "Stop local dictation" });
     fireEvent.click(screen.getByRole("button", { name: "Stop local dictation" }));
@@ -86,7 +89,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     vi.mocked(apiClient.get)
       .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
       .mockResolvedValueOnce({ status: "ready", transcription_available: true });
-    render(<StrictMode><KarenLocalDictation /></StrictMode>);
+    render(<StrictMode><KarenLocalDictationCapture port={port} /></StrictMode>);
     await screen.findByRole("button", { name: "Start local dictation" });
     resolveFirst({ status: "unavailable", transcription_available: false });
     await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(2));
@@ -95,7 +98,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
 
   it("never requests microphone when backend does not advertise local STT", async () => {
     vi.mocked(apiClient.get).mockResolvedValue({ status: "unavailable", transcription_available: false });
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith("/api/voice/capabilities"));
     expect(screen.queryByRole("button", { name: "Start local dictation" })).toBeNull();
   });
@@ -105,7 +108,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(
       () => new Promise<MediaStream>((resolve) => { grant = resolve; }),
     );
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel microphone permission request" }));
     grant({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
@@ -124,7 +127,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
       .mockResolvedValueOnce({
         getTracks: () => [{ stop: newStop }],
       } as unknown as MediaStream);
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel microphone permission request" }));
     fireEvent.click(screen.getByRole("button", { name: "Start local dictation" }));
@@ -143,7 +146,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
   });
 
   it("discards a recording without an upload or a draft mutation", async () => {
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     await screen.findByRole("button", { name: "Discard local recording" });
     fireEvent.click(screen.getByRole("button", { name: "Discard local recording" }));
@@ -156,7 +159,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     const schedule = vi.spyOn(globalThis, "setTimeout");
     const clear = vi.spyOn(globalThis, "clearTimeout");
     try {
-      render(<KarenLocalDictation />);
+      render(<KarenLocalDictationCapture port={port} />);
       fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
       await screen.findByRole("button", { name: "Stop local dictation" });
       const recordingTimeout = schedule.mock.results[
@@ -180,7 +183,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     vi.mocked(apiClient.transcribeLocalAudio).mockResolvedValue({
       text: "once", engine: "local", language: "en",
     });
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     await screen.findByRole("button", { name: "Stop local dictation" });
     const active = Recorder.instances[0];
@@ -198,7 +201,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
       throw new Error("device start failed");
     });
     try {
-      render(<KarenLocalDictation />);
+      render(<KarenLocalDictationCapture port={port} />);
       fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
       expect((await screen.findByRole("alert")).textContent).toContain("Microphone access");
       expect(stopTrack).toHaveBeenCalled();
@@ -215,7 +218,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
   });
 
   it("invalidates recorder ownership when stopping the device throws", async () => {
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     await screen.findByRole("button", { name: "Stop local dictation" });
     const failed = Recorder.instances[0];
@@ -231,7 +234,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
   });
 
   it("releases microphone tracks if the recorder fails after becoming inactive", async () => {
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     await screen.findByRole("button", { name: "Stop local dictation" });
     const active = Recorder.instances[0];
@@ -244,7 +247,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
   });
 
   it("ignores late errors from a discarded recorder after a new session starts", async () => {
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     await screen.findByRole("button", { name: "Discard local recording" });
     const oldRecorder = Recorder.instances[0];
@@ -260,7 +263,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
 
   it("reports permission denial without uploading or changing the draft", async () => {
     vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(new Error("denied"));
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Microphone access");
     expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
@@ -271,7 +274,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     vi.mocked(apiClient.transcribeLocalAudio).mockImplementation(
       () => new Promise((resolve) => { resolveUpload = resolve; }),
     );
-    render(<KarenLocalDictation />);
+    render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop local dictation" }));
     await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
@@ -287,7 +290,7 @@ describe("local dictation composer acceptance with controlled browser devices", 
     vi.mocked(apiClient.transcribeLocalAudio).mockImplementation(
       () => new Promise(() => { /* Leave the mocked request pending. */ }),
     );
-    const { unmount } = render(<KarenLocalDictation />);
+    const { unmount } = render(<KarenLocalDictationCapture port={port} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop local dictation" }));
     await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
