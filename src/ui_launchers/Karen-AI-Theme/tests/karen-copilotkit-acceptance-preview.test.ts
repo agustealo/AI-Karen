@@ -23,6 +23,18 @@ const browserWorkflow = readFileSync(resolve(root,
 const shim = readFileSync(resolve(root,
   "src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css"), "utf8");
 
+const copilotShell = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotChat.tsx"), "utf8");
+const consumerChat = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx"), "utf8");
+const verifiedHistory = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotVerifiedHistory.tsx"), "utf8");
+const personaOwner = readFileSync(resolve(root,
+  "src/components/chat/persona/KarenPersonaSelector.tsx"), "utf8");
+const catalogOwner = readFileSync(resolve(root,
+  "src/components/chat/runtime/KarenComposerRuntimeCatalog.tsx"), "utf8");
+const presentationOwner = readFileSync(resolve(root,
+  "src/components/chat/presentation/KarenPresentationRegistry.tsx"), "utf8");
 const controlledChat = readFileSync(resolve(root,
   "src/components/chat/copilotkit/KarenCopilotControlledChat.tsx"), "utf8");
 const localCapture = readFileSync(resolve(root,
@@ -31,6 +43,19 @@ const browserCapture = readFileSync(resolve(root,
   "src/components/chat/voice/KarenBrowserDictationCapture.tsx"), "utf8");
 
 describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => {
+  it("keeps persona, catalog and verified presentation independent of the legacy renderer", () => {
+    expect(copilotShell).toContain('from "../persona/KarenPersonaSelector"');
+    expect(consumerChat).toContain('from "../runtime/KarenComposerRuntimeCatalog"');
+    expect(verifiedHistory).toContain('from "@/components/chat/presentation/KarenPresentationRegistry"');
+    for (const module of [copilotShell, consumerChat, verifiedHistory,
+      personaOwner, catalogOwner, presentationOwner]) {
+      expect(module).not.toContain("@assistant-ui/react");
+      expect(module).not.toContain("@assistant-ui/react-ag-ui");
+    }
+    expect(catalogOwner).toContain('"/api/agent-runtime/catalog"');
+    expect(presentationOwner).toContain("parseKarenPresentation");
+  });
+
   it("uses only canonical draft-port voice capture, not the retired assistant-ui runtime", () => {
     expect(controlledChat).toContain('from "../voice/KarenLocalDictationCapture"');
     expect(controlledChat).toContain('from "../voice/KarenBrowserDictationCapture"');
