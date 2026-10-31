@@ -68,12 +68,11 @@
     "tailwindcss-animate": "^1.0.7",
     "zod": "^3.24.2",
     "zustand": "^5.0.12",
-    "@ag-ui/client": "0.0.59",
+    "@ag-ui/client": "1.0.2",
     "@assistant-ui/react": "0.15.29",
     "@assistant-ui/react-ag-ui": "0.0.70",
     "@copilotkit/react-core": "1.79.1",
-    "@copilotkit/runtime": "1.79.1",
-    "@ag-ui/client-v1": "npm:@ag-ui/client@1.0.2"
+    "@copilotkit/runtime": "1.79.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",
