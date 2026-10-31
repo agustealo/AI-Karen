@@ -220,3 +220,16 @@ def test_first_boot_builds_stamped_api_and_web_images() -> None:
     assert 'test "$revision" = "$GITHUB_SHA"' in proof
     assert '[[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]' in proof
     assert "GITHUB_STEP_SUMMARY" in proof
+
+
+def test_production_boot_requires_canonical_composer_draft_schema() -> None:
+    source = _read(SMOKE)
+    assert 'proving composer-draft schema, ownership constraints and forced RLS' in source
+    assert "to_regclass('public.conversation_composer_drafts')" in source
+    assert "relrowsecurity AND relforcerowsecurity" in source
+    assert "conversation_composer_draft_owner" in source
+    assert "column_name = 'revision'" in source
+    assert "missing or its ownership safeguards are incomplete" in source
+    assert source.index("proving composer-draft schema") < source.index(
+        "booting production API image"
+    )

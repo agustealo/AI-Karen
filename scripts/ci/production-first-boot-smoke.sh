@@ -225,6 +225,41 @@ while IFS= read -r migration; do
     psql -v ON_ERROR_STOP=1 -U "${DB_USER}" -d "${DB_NAME}" <"${migration}"
 done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
 
+echo "[smoke] proving composer-draft schema, ownership constraints and forced RLS"
+draft_schema_status="$(docker exec "${POSTGRES_CONTAINER}" \
+  psql -At -v ON_ERROR_STOP=1 -U "${DB_USER}" -d "${DB_NAME}" \
+  -c "SELECT CASE WHEN
+    to_regclass('public.conversation_composer_drafts') IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM pg_class
+      WHERE oid = to_regclass('public.conversation_composer_drafts')
+        AND relrowsecurity AND relforcerowsecurity
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = to_regclass('public.conversation_composer_drafts')
+        AND contype = 'p'
+    )
+    AND EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname = 'public'
+        AND tablename = 'conversation_composer_drafts'
+        AND policyname = 'conversation_composer_draft_owner'
+        AND cmd = 'ALL'
+    )
+    AND EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'conversation_composer_drafts'
+        AND column_name = 'revision'
+        AND data_type = 'bigint'
+    )
+    THEN 'ready' ELSE 'missing_or_unsafe' END;")"
+if [[ "${draft_schema_status}" != "ready" ]]; then
+  echo "Canonical composer-draft schema is missing or its ownership safeguards are incomplete" >&2
+  exit 1
+fi
+
 echo "[smoke] booting production API image"
 start_api
 
