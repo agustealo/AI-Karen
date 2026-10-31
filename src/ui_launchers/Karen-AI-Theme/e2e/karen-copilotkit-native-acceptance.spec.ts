@@ -135,6 +135,22 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
     // Responsive geometry is read-only and must not submit, reflow offscreen or
     // hide access to the shared native composer at a mobile viewport width.
     await page.setViewportSize({ width: 375, height: 812 });
+    const mobileIntelligence = page.getByTestId("karen-copilot-mobile-intelligence");
+    await expect(mobileIntelligence).toBeVisible();
+    const intelligenceToggle = mobileIntelligence.locator("summary");
+    await expect(intelligenceToggle).toContainText("Conversation intelligence");
+    await intelligenceToggle.click();
+    await expect(mobileIntelligence).toHaveAttribute("open", "");
+    const verifiedMobileDeck = mobileIntelligence.getByTestId("canonical-conversation-rail");
+    const unverifiedMobileDeck = mobileIntelligence.getByTestId("karen-copilot-rail-unverified");
+    const verifiedCount = await verifiedMobileDeck.count();
+    const unverifiedCount = await unverifiedMobileDeck.count();
+    expect(verifiedCount + unverifiedCount,
+      "Mobile deck must show canonical verified insight or an explicit unverified state").toBe(1);
+    if (verifiedCount) await expect(verifiedMobileDeck).toBeVisible();
+    else await expect(unverifiedMobileDeck).toBeVisible();
+    await intelligenceToggle.click();
+    await expect(mobileIntelligence).not.toHaveAttribute("open", "");
     await expect(restored).toBeVisible();
     await expect(page.getByTestId("karen-copilot-persona-footer")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth))
