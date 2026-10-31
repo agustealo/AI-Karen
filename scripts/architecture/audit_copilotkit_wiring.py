@@ -176,6 +176,41 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
                     + str(path.relative_to(root))
                 )
 
+    # Inspect *all* production frontend sources before deleting the retired
+    # renderer. A missing import from a different route must block cutover too.
+    # Existing legacy compatibility files are accounted for by the dependency
+    # gate and are deliberately excluded from the caller search.
+    legacy_import_callers: list[str] = []
+    frontend_source = root / WEB / "src"
+    retired_dir = root / WEB / "src/components/chat/assistant-ui"
+    if frontend_source.is_dir():
+        for source_path in sorted(frontend_source.rglob("*")):
+            if not source_path.is_file() or source_path.suffix not in {
+                ".ts", ".tsx", ".js", ".jsx",
+            }:
+                continue
+            if source_path.is_relative_to(retired_dir):
+                continue
+            source = _read(source_path)
+            if any(token in source for token in (
+                'from "@/components/chat/assistant-ui/',
+                "from '@/components/chat/assistant-ui/",
+                'from "../assistant-ui/',
+                "from '../assistant-ui/",
+                'from "@assistant-ui/',
+                "from '@assistant-ui/",
+                'import("@assistant-ui/',
+                "import('@assistant-ui/",
+                'KarenAssistantChat',
+            )):
+                legacy_import_callers.append(str(source_path.relative_to(root)))
+    if require_cutover and copilot_mount and legacy_import_callers:
+        violations.extend(
+            "Retired assistant-ui is still imported by production source: "
+            + caller
+            for caller in legacy_import_callers
+        )
+
     lock_path = root / WEB / "package-lock.json"
     ag_ui_client_versions: dict[str, str] = {}
     if lock_path.is_file():
@@ -265,6 +300,7 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         "chat_mount": "copilotkit" if copilot_mount else "assistant-ui" if legacy_mount else "unknown",
         "sdk_dependency_declared": copilot_installed,
         "new_sdk_files_checked": len(gateway_files),
+        "legacy_import_callers": legacy_import_callers,
         "ag_ui_client_versions": unique_client_versions,
         "violations": sorted(set(violations)),
         "warnings": sorted(set(warnings)),
