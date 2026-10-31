@@ -8,6 +8,16 @@
 import ConversationContextRail from "@/components/chat/ConversationContextRail";
 import { useKarenLatestVerifiedExecution } from "./KarenCopilotVerifiedHistory";
 
+/** The authenticated replay contract does not yet attest historical agent steps. */
+function ActivityReplayNotice() {
+  return (
+    <p role="status" data-testid="karen-copilot-activity-replay-unavailable"
+      className="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
+      Historical agent steps are not available in verified replay. No activity is inferred from SDK state.
+    </p>
+  );
+}
+
 function RailUnavailable({ embedded = false }: { embedded?: boolean }) {
   return (
     <aside aria-label="Conversation intelligence deck"
@@ -35,12 +45,12 @@ export function KarenCopilotVerifiedRail() {
         </summary>
         <div className="max-h-[min(55dvh,28rem)] min-h-0 overflow-y-auto overscroll-contain border-t border-border/60">
           {receipt
-            ? <ConversationContextRail metadata={receipt} agentSteps={[]} embedded />
+            ? <><ConversationContextRail metadata={receipt} agentSteps={[]} embedded /><ActivityReplayNotice /></>
             : <RailUnavailable embedded />}
         </div>
       </details>
       {receipt
-        ? <ConversationContextRail metadata={receipt} agentSteps={[]} />
+        ? <><ConversationContextRail metadata={receipt} agentSteps={[]} /><ActivityReplayNotice /></>
         : <RailUnavailable />}
     </>
   );
