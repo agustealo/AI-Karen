@@ -170,3 +170,34 @@ def test_duplicate_ag_ui_implementations_block_copilot_cutover(tmp_path: Path) -
         "requires one AG-UI client version" in message
         for message in result["violations"]
     )
+
+
+
+def test_cutover_enforcement_rejects_legacy_consumer(tmp_path: Path) -> None:
+    fixture(tmp_path)
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert result["cutover_required"] is True
+    assert result["consumer_cutover"]["active_renderer"] == "assistant-ui"
+    assert any("dashboard still mounts assistant-ui" in item for item in result["violations"])
+    assert result["consumer_cutover"]["release_ready"] is False
+
+
+def test_cutover_enforcement_accepts_only_static_copilot_mount(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    route = tmp_path / AUDITOR.WEB_GATEWAY / "[[...slug]]" / "route.ts"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text('import { CopilotRuntime } from "@copilotkit/runtime/v2";\n', encoding="utf-8")
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert result["cutover_required"] is True
+    assert result["violations"] == []
+    assert result["consumer_cutover"]["active_renderer"] == "copilotkit"
+    assert result["consumer_cutover"]["release_ready"] is False
+    assert result["runtime_verification"] == "not_run"
+
+
+def test_cutover_enforcement_rejects_missing_chat_mount(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    dashboard = tmp_path / AUDITOR.WEB / "src/app/dashboard/page.tsx"
+    dashboard.write_text("export default function Dashboard() { return null; }\n", encoding="utf-8")
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert any("CopilotKit is not the active renderer" in item for item in result["violations"])
