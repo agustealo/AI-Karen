@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 
-describe("existing rail menu placement", () => {
+describe("canonical CopilotKit rail menu placement", () => {
   it("places the existing customization portal before the Conversations trigger", () => {
-    const chat = source("src/components/chat/assistant-ui/KarenAssistantChat.tsx");
+    const chat = source("src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx");
     expect(chat.indexOf('id="karen-rail-customize-menu"')).toBeLessThan(
       chat.indexOf('aria-label="Find conversations"'),
     );
