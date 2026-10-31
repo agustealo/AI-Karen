@@ -186,8 +186,11 @@ export function parseKarenVerifiedHistory(
   // Event arrival order is not conversation order. The intelligence rail must
   // identify the latest saved execution by canonical assistant message order,
   // even when the backend sends valid CUSTOM events in another sequence.
-  return new Map(messages.filter(message => message.role === "assistant" && parts.has(message.id))
-    .map(message => [message.id, parts.get(message.id)!] as const));
+  // Include every canonical assistant message, including those without rich
+  // events. Otherwise the rail can mistake an older turn with saved activity
+  // for the latest assistant turn when the newest reply has no agent steps.
+  return new Map(messages.filter(message => message.role === "assistant")
+    .map(message => [message.id, parts.get(message.id) ?? []] as const));
 }
 
 const VerifiedHistoryContext = createContext<VerifiedHistoryParts>(new Map());
