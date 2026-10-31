@@ -70,6 +70,45 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.queryByTestId("karen-copilot-rail-unverified")).toBeNull();
   });
 
+  it("restores a successful non-degraded execution receipt without inventing fallback", () => {
+    const parts = parseKarenVerifiedHistory([{
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId: "assistant-1",
+      value: {
+        actual_provider: "local",
+        actual_model: "verified-runtime-model",
+        response_source: "local_inference",
+        degraded_mode: false,
+        fallback_level: 0,
+      },
+    }], messages);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getByTestId("canonical-conversation-rail")).toBeTruthy();
+    expect(screen.getByText("verified-runtime-model")).toBeTruthy();
+  });
+
+  it.each(["false", 0, null, {}, []])(
+    "rejects untrusted non-boolean degraded_mode %j",
+    (degraded_mode) => {
+      expect(() => parseKarenVerifiedHistory([{
+        type: "CUSTOM",
+        name: "karen.execution_receipt.v1",
+        messageId: "assistant-1",
+        value: {
+          actual_provider: "local",
+          actual_model: "verified-runtime-model",
+          response_source: "local_inference",
+          degraded_mode,
+        },
+      }], messages)).toThrow("Unsupported verified execution receipt");
+    },
+  );
+
   it("rejects a forged receipt instead of rendering made-up execution", () => {
     expect(() => parseKarenVerifiedHistory([{
       type: "CUSTOM",
