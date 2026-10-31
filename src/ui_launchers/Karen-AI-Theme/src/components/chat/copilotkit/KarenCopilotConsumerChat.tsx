@@ -5,8 +5,8 @@
  *
  * SessionProvider remains the sole owner of persisted conversation identities.
  * This adapter performs no history writes, provider routing, or SDK inference.
- * It is kept out of the active dashboard until the migration's browser and
- * presentation-parity gates are verified.
+ * It is mounted by the dashboard on the draft cutover branch; browser and
+ * release parity remain unverified until acceptance runs against that revision.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, Search } from "lucide-react";
