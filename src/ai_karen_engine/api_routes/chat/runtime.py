@@ -890,12 +890,25 @@ async def get_ag_ui_owned_history(
         })
         raise HTTPException(status_code=503, detail="History temporarily unavailable") from exc
     try:
-        attestations = await SqlChatRunRepository().completed_replay_attestations(
+        repository = SqlChatRunRepository()
+        attestations = await repository.completed_replay_attestations(
             tenant_id=context.tenant_id,
             user_id=context.user_id,
             conversation_id=thread,
         )
-        history = project_owned_history(snapshot, attestations=attestations)
+        observed_activity = (
+            await repository.completed_agent_activity(
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                conversation_id=thread,
+            )
+            if getattr(features, "enable_ag_ui_event_journal", False)
+            else {}
+        )
+        history = project_owned_history(
+            snapshot, attestations=attestations,
+            observed_activity=observed_activity,
+        )
     except UnreplayableHistory as exc:
         # A truncated/oversized history is an incomplete backend projection,
         # while unknown rich content is intentionally not yet replayable.
