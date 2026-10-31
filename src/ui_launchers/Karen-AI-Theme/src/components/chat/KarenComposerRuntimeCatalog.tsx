@@ -13,6 +13,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
   const [error, setError] = useState(false);
   const [agents, setAgents] = useState<Array<{ agent_id: string; name: string; lifecycle_state: string; healthy: boolean }>>([]);
   const [agentCatalogError, setAgentCatalogError] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   useEffect(() => {
     let cancelled = false;
     apiClient.getRuntimeProviderCatalog().then((data) => {
@@ -23,6 +24,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
     return () => { cancelled = true; };
   }, []);
   useEffect(() => {
+    if (!showAdvanced) return;
     let cancelled = false;
     apiClient.get<{ agents: Array<{ agent_id: string; name: string; lifecycle_state: string; healthy: boolean }> }>("/api/agent-runtime/catalog")
       .then((data) => {
@@ -32,13 +34,13 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
       })
       .catch(() => { if (!cancelled) setAgentCatalogError(true); });
     return () => { cancelled = true; };
-  }, []);
+  }, [showAdvanced]);
   if (error) return <p role="status" className="text-sm text-muted-foreground">Runtime catalog unavailable. No provider selection was changed.</p>;
   if (!catalog) return <p role="status" className="text-sm text-muted-foreground">Loading runtime providers…</p>;
   const providers = catalog.providers.filter((provider) => provider.enabled === true && provider.allowed_for_current_user !== false);
   return <section aria-label="Runtime provider discovery" className="space-y-2">
-    <h4 className="text-sm font-medium">Providers and models</h4>
-    <label htmlFor="karen-model-request" className="block text-xs text-muted-foreground">Next message routing request</label>
+    <h4 className="text-sm font-medium">Choose how Karen responds</h4>
+    <label htmlFor="karen-model-request" className="block text-xs text-muted-foreground">Model preference for your next message</label>
     <select id="karen-model-request" aria-label="Requested provider and model"
       value={selection ? JSON.stringify([selection.provider, selection.model]) : ""}
       onChange={(event) => {
@@ -62,8 +64,11 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
         )
       )}
     </select>
-    {selection && <p className="text-xs text-muted-foreground">Requested only. ChatRuntime may reject or route differently under policy.</p>}
-    <p className="text-xs text-muted-foreground">Options come from the backend catalog. ChatRuntime validates each execution request.</p>
+    <p className="text-xs text-muted-foreground">Automatic lets Karen choose an available model. Your preference may change if a model is unavailable.</p>
+    <details onToggle={(event) => setShowAdvanced(event.currentTarget.open)} className="rounded-lg border border-border/60 px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium focus-visible:outline-2 focus-visible:outline-ring">Advanced provider and agent details</summary>
+      {showAdvanced && <div className="mt-3 space-y-3">
+      <p className="text-xs text-muted-foreground">Provider availability and agent registration are reported by the backend. They do not grant execution access.</p>
     {providers.length === 0 ? <p className="text-sm text-muted-foreground">No enabled providers reported.</p> :
       <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
         {providers.map((provider) => <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
@@ -92,5 +97,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
             <span className="text-muted-foreground">{agent.lifecycle_state === "active" && agent.healthy === true ? "Registered and healthy; eligibility unverified" : "Not ready"}</span>
           </li>)}</ul>}
     </section>
+      </div>}
+    </details>
   </section>;
 }
