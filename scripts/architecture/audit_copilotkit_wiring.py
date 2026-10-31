@@ -217,6 +217,40 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
             for caller in legacy_import_callers
         )
 
+    # Tests are part of the active quality contract. Importing a physically
+    # deleted adapter from a test must fail before Vitest module collection.
+    # Search actual import/require statements, not descriptions documenting the
+    # historical migration or negative "not.toContain" assertions.
+    retired_test_imports: list[str] = []
+    frontend_tests = root / WEB / "tests"
+    if frontend_tests.is_dir():
+        for test_path in sorted(frontend_tests.rglob("*")):
+            if not test_path.is_file() or test_path.suffix not in {
+                ".ts", ".tsx", ".js", ".jsx",
+            }:
+                continue
+            test_source = _read(test_path)
+            for line in test_source.splitlines():
+                stripped = line.strip()
+                if (
+                    stripped.startswith("import ")
+                    or stripped.startswith("export ")
+                    or stripped.startswith("const ") and "require(" in stripped
+                ) and (
+                    "/assistant-ui/" in stripped
+                    or "from \"@assistant-ui/" in stripped
+                    or "from '@assistant-ui/" in stripped
+                    or "require(\"@assistant-ui/" in stripped
+                    or "require('@assistant-ui/" in stripped
+                ):
+                    retired_test_imports.append(str(test_path.relative_to(root)))
+                    break
+    if require_cutover and copilot_mount and retired_test_imports:
+        violations.extend(
+            "Retired assistant-ui is imported by frontend test: " + caller
+            for caller in retired_test_imports
+        )
+
     lock_path = root / WEB / "package-lock.json"
     ag_ui_client_versions: dict[str, str] = {}
     ag_ui_family_versions: dict[str, str] = {}
@@ -403,6 +437,7 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         "sdk_dependency_declared": copilot_installed,
         "new_sdk_files_checked": len(gateway_files),
         "legacy_import_callers": legacy_import_callers,
+        "retired_test_imports": retired_test_imports,
         "ag_ui_client_versions": unique_client_versions,
         "ag_ui_protocol_versions": ag_ui_protocol_versions,
         "violations": sorted(set(violations)),
