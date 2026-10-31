@@ -52,8 +52,9 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(verified).toContain("parseKarenVerifiedHistory");
     expect(verified).toContain("KarenRestoredExecutionReceipt");
     expect(rail).toContain("useKarenLatestVerifiedExecution()");
-    expect(rail).toContain("agentSteps={[]}");
-    expect(rail).toContain("Historical agent steps are not available in verified replay.");
+    expect(rail).toContain("useKarenLatestVerifiedAgentSteps()");
+    expect(rail).not.toContain("agentSteps={[]}");
+    expect(rail).toContain("No attested agent steps are available for the latest saved assistant turn.");
     expect(rail).not.toContain("projectObservedAgentSteps");
   });
 
