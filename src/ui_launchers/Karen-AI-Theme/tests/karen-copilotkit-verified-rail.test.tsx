@@ -213,6 +213,32 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.getAllByText("latest-model")).toHaveLength(2);
   });
 
+  it("does not reuse an older model receipt for an unverified latest reply", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-old", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-new", role: "assistant" },
+    ];
+    const parts = parseKarenVerifiedHistory([{
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId: "assistant-old",
+      value: {
+        actual_provider: "local", actual_model: "older-model",
+        response_source: "local_inference",
+      },
+    }], transcript);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.queryByText("older-model")).toBeNull();
+    expect(screen.queryByTestId("canonical-conversation-rail")).toBeNull();
+    expect(screen.getAllByTestId("karen-copilot-rail-unverified")).toHaveLength(2);
+  });
+
   it("restores a successful non-degraded execution receipt without inventing fallback", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
