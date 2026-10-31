@@ -130,6 +130,36 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.queryByText("stale-model")).toBeNull();
   });
 
+  it.each([
+    { source: ["authorized_memory_evidence"] },
+    { source: { value: "authorized_memory_evidence" } },
+    { source: 1 },
+    { source: true },
+  ])("rejects coerced evidence provenance $source", ({ source }) => {
+    expect(() => parseKarenVerifiedHistory([{
+      type: "CUSTOM",
+      name: "karen.response_integrity.v1",
+      messageId: "assistant-1",
+      value: {
+        output_truncated: true,
+        evidence_source: source,
+      },
+    }], messages)).toThrow("Unsupported verified response integrity");
+  });
+
+  it("preserves a properly typed authorized evidence provenance", () => {
+    const parts = parseKarenVerifiedHistory([{
+      type: "CUSTOM",
+      name: "karen.response_integrity.v1",
+      messageId: "assistant-1",
+      value: {
+        output_truncated: true,
+        evidence_source: "authorized_memory_evidence",
+      },
+    }], messages);
+    expect(parts.get("assistant-1")).toHaveLength(1);
+  });
+
   it("renders only backend-attested, ordered saved agent activity", () => {
     const value = (sequence: number, status: string) => ({
       type: "CUSTOM",
