@@ -29,7 +29,7 @@ export default async function CopilotKitConsumerAcceptancePage({
         <header className="shrink-0 border-b border-border/60 p-3 text-sm">
           CopilotKit consumer candidate. Acceptance environment only.
         </header>
-        <SessionProvider initialSessionId={conversationId}>
+        <SessionProvider initialSessionId={conversationId} strictInitialSession>
           <KarenCopilotConsumerChat />
         </SessionProvider>
       </main>
