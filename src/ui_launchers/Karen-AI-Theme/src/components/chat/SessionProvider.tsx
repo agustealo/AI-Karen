@@ -50,6 +50,8 @@ interface ConversationApiResponse {
 }
 
 interface SessionContextType {
+  /** True for a server-approved, explicitly pinned conversation identity. */
+  strictInitialSession: boolean;
   currentSession: Session | null;
   workspaceRunId: string | null;
   setWorkspaceRunId: (runId: string | null) => void;
@@ -706,6 +708,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   return (
     <SessionContext.Provider value={{
+      strictInitialSession,
       currentSession,
       workspaceRunId,
       setWorkspaceRunId,
