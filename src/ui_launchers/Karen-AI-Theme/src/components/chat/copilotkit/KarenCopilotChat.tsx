@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/useAuth";
 import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
 import { KarenCopilotControlledChat } from "./KarenCopilotControlledChat";
 import { KarenCopilotVerifiedRail } from "./KarenCopilotVerifiedRail";
-import { KarenPersonaSelector } from "../assistant-ui/KarenPersonaSelector";
+import { KarenPersonaSelector } from "../KarenPersonaSelector";
 
 const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
