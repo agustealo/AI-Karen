@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeDictatedText } from "@/components/chat/assistant-ui/KarenBrowserDictation";
+import { mergeDictatedText } from "@/components/chat/KarenVoiceDraftPort";
 
 describe("browser dictation draft preservation", () => {
   it("preserves existing text and appends recognized speech", () => {

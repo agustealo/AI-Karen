@@ -11,8 +11,8 @@
  */
 import { CopilotChatView, useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KarenLocalDictationCapture } from "../assistant-ui/KarenLocalDictation";
-import { KarenBrowserDictationCapture } from "../assistant-ui/KarenBrowserDictation";
+import { KarenLocalDictationCapture } from "../KarenLocalDictationCapture";
+import { KarenBrowserDictationCapture } from "../KarenBrowserDictationCapture";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
 
