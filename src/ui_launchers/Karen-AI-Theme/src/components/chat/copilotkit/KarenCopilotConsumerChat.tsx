@@ -116,6 +116,8 @@ export function KarenCopilotConsumerChat() {
           <p className="text-xs text-muted-foreground">Karen runtime controls model execution and saved history</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <div id="karen-rail-customize-menu" className="hidden xl:flex" aria-label="Customize conversation intelligence" />
+          <span aria-hidden="true" className="hidden h-6 w-px bg-border xl:block" />
           <button type="button" ref={historyButtonRef} disabled={navigationBusy || runBusy}
             aria-label="Find conversations" aria-expanded={historyOpen}
             aria-controls={historyOpen ? "karen-copilot-history" : undefined}
