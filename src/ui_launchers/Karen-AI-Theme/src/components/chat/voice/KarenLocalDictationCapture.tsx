@@ -5,8 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { Mic, Square } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { mergeDictatedText, type KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
-import { encodeMonoPcmWav } from "../assistant-ui/localVoiceWav";
-import { canCommitVoiceResult, isCurrentVoiceSession } from "../assistant-ui/voiceSessionGuard";
+import { encodeMonoPcmWav } from "./localVoiceWav";
+import { canCommitVoiceResult, isCurrentVoiceSession } from "./voiceSessionGuard";
 
 type Capabilities = { transcription_available: boolean; status: string };
 
