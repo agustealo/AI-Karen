@@ -201,3 +201,27 @@ def test_cutover_enforcement_rejects_missing_chat_mount(tmp_path: Path) -> None:
     dashboard.write_text("export default function Dashboard() { return null; }\n", encoding="utf-8")
     result = AUDITOR.audit(tmp_path, require_cutover=True)
     assert any("CopilotKit is not the active renderer" in item for item in result["violations"])
+
+
+
+def test_strict_cutover_rejects_temporary_ag_ui_alias(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    manifest = tmp_path / AUDITOR.WEB / "package.json"
+    manifest.write_text(
+        json.dumps({"dependencies": {
+            "@copilotkit/react-core": "1.79.1",
+            "@ag-ui/client-v1": "npm:@ag-ui/client@1.0.2",
+        }, "devDependencies": {}}),
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert any(
+        "Temporary AG-UI client-v1 alias" in item
+        for item in result["violations"]
+    )
+    # The default inventory mode remains informative during migration.
+    inventory = AUDITOR.audit(tmp_path)
+    assert not any(
+        "Temporary AG-UI client-v1 alias" in item
+        for item in inventory["violations"]
+    )
