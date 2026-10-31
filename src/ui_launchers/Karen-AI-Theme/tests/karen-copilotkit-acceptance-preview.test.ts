@@ -209,6 +209,8 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
   it("does not disturb the sole consumer chat mount", () => {
     expect(dashboard).toContain("<KarenCopilotConsumerChat />");
     expect(dashboard).not.toContain("<KarenCopilotChat");
-    expect(dashboard.match(/<KarenAssistantChat \/>/g)?.length).toBe(1);
+    expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)?.length).toBe(1);
+    expect(dashboard).not.toContain("<KarenAssistantChat />");
+    expect(dashboard).not.toContain('@/components/chat/assistant-ui/KarenAssistantChat');
   });
 });
