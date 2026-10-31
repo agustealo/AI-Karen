@@ -80,6 +80,21 @@ export function parseKarenVerifiedHistory(
   if (!Array.isArray(value) || value.length > 500 * 8) {
     throw new Error("Unsupported verified conversation events");
   }
+  // The public parser must protect its own identity boundary, rather than
+  // relying solely on the current history-gate caller's text validation.
+  // Duplicate IDs would make a saved CUSTOM event ambiguous across turns.
+  if (!Array.isArray(messages) || messages.length > 500) {
+    throw new Error("Unsupported canonical conversation messages");
+  }
+  const knownIds = new Set<string>();
+  for (const message of messages) {
+    if (!record(message) || (message.role !== "user" && message.role !== "assistant") ||
+      typeof message.id !== "string" || !message.id.trim() ||
+      message.id.length > 200 || knownIds.has(message.id)) {
+      throw new Error("Unsupported canonical conversation message identity");
+    }
+    knownIds.add(message.id);
+  }
   const assistantIds = new Set(messages.filter(m => m.role === "assistant").map(m => m.id));
   const parts = new Map<string, VerifiedPart[]>();
   const counters = new Map<string, {
