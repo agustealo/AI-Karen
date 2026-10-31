@@ -72,8 +72,10 @@ import { Separator } from "@/components/ui/separator";
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
 
-const KarenAssistantChat = dynamic(
-  () => import("@/components/chat/assistant-ui/KarenAssistantChat"),
+const KarenCopilotConsumerChat = dynamic(
+  () => import("@/components/chat/copilotkit/KarenCopilotConsumerChat").then(
+    (module) => module.KarenCopilotConsumerChat,
+  ),
   { ssr: false },
 );
 
@@ -704,7 +706,7 @@ export default function DashboardPage() {
                       : "hidden"}
                     aria-hidden={backendStatus !== "ready" || (activeMainView !== "chat" && !karenPanelOpen)}
                   >
-                    <KarenAssistantChat />
+                    <KarenCopilotConsumerChat />
                   </div>
                   <div
                     key={activeMainView}
