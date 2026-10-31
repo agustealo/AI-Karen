@@ -169,7 +169,7 @@ class DirectCapabilityExecutor:
         normalized = " ".join(query.lower().split()).rstrip("?! .")
         # A reminder request is not a countdown command. Do not even claim it
         # was queued: this service has no worker or delivery receipt.
-        if re.search(r"\\b(remind|reminder|notify|notification)\\b", normalized):
+        if re.search(r"\b(remind|reminder|notify|notification)\b", normalized):
             return unavailable(
                 "timer_notification_unavailable",
                 "I cannot verify any timer reminder was scheduled or delivered. "
@@ -180,9 +180,9 @@ class DirectCapabilityExecutor:
         service = OwnedTimerService()
         correlation = str(request.context.correlation_id or "")
         try:
-            if re.match(r"^(?:please\\s+)?(?:start|set|create|begin)\\b", normalized):
+            if re.match(r"^(?:please\s+)?(?:start|set|create|begin)\b", normalized):
                 match = re.search(
-                    r"\\b(\\d{1,5})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\b",
+                    r"\b(\d{1,5})\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b",
                     normalized,
                 )
                 if not match:
@@ -211,7 +211,7 @@ class DirectCapabilityExecutor:
                     f"Deadline: {receipt['deadline_at']}. "
                     "No reminder or notification has been scheduled."
                 )
-            elif re.match(r"^(?:please\\s+)?(?:cancel|stop)\\b", normalized):
+            elif re.match(r"^(?:please\s+)?(?:cancel|stop)\b", normalized):
                 available = await service.list(user=principal, correlation_id=correlation)
                 active = next((row for row in available if row["status"] == "active"), None)
                 if active is None:
@@ -225,7 +225,7 @@ class DirectCapabilityExecutor:
                     f"Deadline: {receipt['deadline_at']}. "
                     "No reminder delivery is confirmed."
                 )
-            elif re.match(r"^(?:please\\s+)?(?:show|display|open|is|has|what|can|could|would)\\b", normalized):
+            elif re.match(r"^(?:please\s+)?(?:show|display|open|is|has|what|can|could|would)\b", normalized):
                 available = await service.list(user=principal, correlation_id=correlation)
                 if not available:
                     return unavailable("timer_not_found", "No saved countdown timer was found for your account.")
@@ -262,7 +262,7 @@ class DirectCapabilityExecutor:
                 "timer_receipt": receipt,
                 "required_capability": "timer.schedule",
                 "timer_created": receipt["status"] == "active" and
-                    bool(re.match(r"^(?:please\\s+)?(?:start|set|create|begin)\\b", normalized)),
+                    bool(re.match(r"^(?:please\s+)?(?:start|set|create|begin)\b", normalized)),
                 "reminder_delivered": False,
             },
             attempts=[{
