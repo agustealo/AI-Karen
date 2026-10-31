@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { KarenPresentationRegistry, parseKarenPresentation, presentationFromStructuredContent } from "@/components/chat/presentation/KarenPresentationRegistry";
+import { KarenPresentationRegistry, parseKarenPresentation, presentationFromStructuredContent } from "@/components/chat/KarenPresentationRegistry";
 
 const valid = {
   schema_version: 1,
