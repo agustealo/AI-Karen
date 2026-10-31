@@ -118,7 +118,7 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     consumer_end = job.find("\n      - name:", consumer_at)
     assert consumer_start >= 0 and consumer_end > consumer_at
     consumer_step = job[consumer_start:consumer_end]
-    assert "--grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference'" in consumer_step
+    assert "--grep 'CK-CONSUMER-0[12]'" in consumer_step
     assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in consumer_step
     assert "secrets.KAREN_UX_EMAIL" in consumer_step
     assert "secrets.KAREN_UX_PASSWORD" in consumer_step
