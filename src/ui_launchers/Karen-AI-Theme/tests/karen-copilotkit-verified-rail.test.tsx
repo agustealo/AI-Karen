@@ -239,6 +239,22 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.getAllByTestId("karen-copilot-rail-unverified")).toHaveLength(2);
   });
 
+  it.each(["run with spaces", "../foreign", "run/foreign", "x".repeat(101)])(
+    "rejects invalid persisted run ID %s before rendering activity",
+    (run_id) => {
+      expect(() => parseKarenVerifiedHistory([{
+        type: "CUSTOM",
+        name: "karen.agent_step.v1",
+        messageId: "assistant-1",
+        value: {
+          step_id: "step-1", agent_id: "research",
+          status: "completed", event_type: "agent_step_completed",
+          description: "Completed.", run_id, sequence: 2,
+        },
+      }], messages)).toThrow("Unsupported verified agent activity");
+    },
+  );
+
   it("restores a successful non-degraded execution receipt without inventing fallback", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
