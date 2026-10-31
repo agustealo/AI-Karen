@@ -13,7 +13,7 @@ import {
   KarenPresentationRegistry,
   parseKarenPresentation,
   type KarenPresentationEnvelope,
-} from "@/components/chat/assistant-ui/KarenPresentationRegistry";
+} from "@/components/chat/presentation/KarenPresentationRegistry";
 import {
   KarenResponseIntegrity,
   KarenRestoredExecutionReceipt,
