@@ -177,9 +177,9 @@ class DirectCapabilityExecutor:
             )
 
         started = time.perf_counter()
-        service = OwnedTimerService()
         correlation = str(request.context.correlation_id or "")
         try:
+            service = OwnedTimerService()
             if re.match(r"^(?:please\s+)?(?:start|set|create|begin)\b", normalized):
                 match = re.search(
                     r"\b(\d{1,5})\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b",
