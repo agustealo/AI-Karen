@@ -6,22 +6,29 @@ const root = process.cwd();
 const page = readFileSync(resolve(root,
   "src/app/acceptance/copilotkit/[conversationId]/page.tsx"), "utf8");
 const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf8");
+const previewGate = readFileSync(resolve(root,
+  "src/app/acceptance/copilotkit/_lib/preview-gate.ts"), "utf8");
+const consumerPreview = readFileSync(resolve(root,
+  "src/app/acceptance/copilotkit-consumer/[conversationId]/page.tsx"), "utf8");
 const prep = readFileSync(resolve(root, "tools/prepare-copilotkit-styles.mjs"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const ignore = readFileSync(resolve(root, ".gitignore"), "utf8");
 const nativeBrowser = readFileSync(resolve(root,
   "e2e/karen-copilotkit-native-acceptance.spec.ts"), "utf8");
 const nextConfig = readFileSync(resolve(root, "next.config.ts"), "utf8");
+const browserWorkflow = readFileSync(resolve(root,
+  "../../../.github/workflows/karen-history-browser-acceptance.yml"), "utf8");
 const shim = readFileSync(resolve(root,
   "src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css"), "utf8");
 
 describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => {
   it("defaults to a 404 unless both server-only flag and exact host are approved", () => {
-    expect(page).toContain('KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED === "true"');
-    expect(page).toContain('process.env.KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_HOST');
-    expect(page).toContain('incomingHost !== allowedHost');
-    expect(page).toContain('if (!enabled || !APPROVED_HOST.test(allowedHost)) notFound()');
-    expect(page).toContain('if (!UUID.test(conversationId)) notFound()');
+    expect(page).toContain("requireApprovedCopilotKitPreview(conversationId)");
+    expect(previewGate).toContain('KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED === "true"');
+    expect(previewGate).toContain('process.env.KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_HOST');
+    expect(previewGate).toContain('incomingHost !== allowedHost');
+    expect(previewGate).toContain('!APPROVED_HOST.test(allowedHost)');
+    expect(previewGate).toContain('!UUID.test(conversationId)');
     expect(page).not.toMatch(/process\\.env\\.NEXT_PUBLIC_[A-Z_]+/);
     expect(page).not.toContain("x-forwarded-host");
   });
@@ -33,6 +40,18 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(page).toContain("force-dynamic");
     expect(page).toContain("index: false, follow: false");
     expect(page).not.toContain("new InMemoryAgentRunner");
+  });
+
+  it("mounts the canonical consumer candidate on a separately gated preview only", () => {
+    expect(consumerPreview).toContain("requireApprovedCopilotKitPreview(conversationId)");
+    expect(consumerPreview).toContain("<AuthWrapper>");
+    expect(consumerPreview).toContain("<SessionProvider initialSessionId={conversationId}>");
+    expect(consumerPreview).toContain("<KarenCopilotConsumerChat />");
+    expect(consumerPreview).toContain('href="/vendor/copilotkit-v2.css"');
+    expect(consumerPreview).toContain('index: false, follow: false');
+    expect(consumerPreview).not.toContain("process.env.NEXT_PUBLIC_");
+    expect(consumerPreview).not.toContain("x-forwarded-host");
+    expect(dashboard).not.toContain("<KarenCopilotConsumerChat");
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {
@@ -98,6 +117,18 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).not.toContain('native.getByRole("button", { name: /stop/i }).first()');
     expect(nativeBrowser).toContain('runId: payload.runId');
     expect(nativeBrowser).toContain("Cancelled run must not create a falsely completed");
+  });
+
+  it("dispatches consumer acceptance through the existing protected exact-SHA browser workflow", () => {
+    expect(browserWorkflow).toContain("- copilotkit-consumer");
+    expect(browserWorkflow).toContain("inputs.scenario == 'copilotkit-consumer'");
+    expect(browserWorkflow).toContain("Require the current reviewed main commit before checkout");
+    expect(browserWorkflow).toContain("Verify deployed revision before browser acceptance");
+    expect(browserWorkflow).toContain("Verify independent Vercel deployment provenance before browser acceptance");
+    expect(browserWorkflow).toContain("KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED:");
+    expect(browserWorkflow).toContain("--grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference'");
+    expect(browserWorkflow).toContain("Revalidate platform, running deployment and reviewed main head after browser acceptance");
+    expect(nativeBrowser).toContain('test("CK-CONSUMER-01 gated consumer preview restores an owned session without inference"');
   });
 
   it("does not disturb the sole consumer chat mount", () => {

@@ -15,6 +15,7 @@ on:
           - copilotkit-protocol
           - copilotkit-native
           - copilotkit-native-stop
+          - copilotkit-consumer
       target_sha:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
@@ -233,14 +234,14 @@ jobs:
 
   # Read-only SDK-protocol proof only. Native CopilotKit UI parity still unverified.
   authenticated-copilotkit-protocol:
-    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_COPILOTKIT_ACCEPTANCE_URL }}
       KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}
-      KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && 'true' || 'false' }}
+      KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer') && 'true' || 'false' }}
       KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && vars.KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED || 'false' }}
       KAREN_COPILOTKIT_LIVE_STOP_REQUIRED: ${{ inputs.scenario == 'copilotkit-native-stop' && 'true' || 'false' }}
       KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID: ${{ vars.KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID }}
@@ -371,6 +372,20 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts \
+            --config=e2e/playwright.config.ts --project=chromium \
+            --reporter=list --retries=0
+
+      - name: Prove authenticated consumer candidate session and no-inference navigation
+        if: inputs.scenario == 'copilotkit-consumer'
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts \
+            --grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference' \
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
