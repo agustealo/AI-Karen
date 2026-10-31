@@ -12,9 +12,9 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { mergeDictatedText } from "@/components/chat/KarenVoiceDraftPort";
-import { KarenLocalDictationCapture } from "@/components/chat/voice/KarenLocalDictationCapture";
-import { KarenBrowserDictationCapture } from "@/components/chat/voice/KarenBrowserDictationCapture";
-import { canCommitVoiceResult } from "@/components/chat/voice/voiceSessionGuard";
+import { KarenLocalDictationCapture } from "@/components/chat/KarenLocalDictationCapture";
+import { KarenBrowserDictationCapture } from "@/components/chat/KarenBrowserDictationCapture";
+import { canCommitVoiceResult } from "@/components/chat/voiceSessionGuard";
 
 afterEach(() => {
   cleanup();
