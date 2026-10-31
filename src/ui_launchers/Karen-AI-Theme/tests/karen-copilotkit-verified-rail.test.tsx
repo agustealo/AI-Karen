@@ -275,6 +275,38 @@ describe("CopilotKit canonical intelligence rail", () => {
     },
   );
 
+  it("preserves distinct observed agents that share a saved step ID", () => {
+    const receipt = {
+      type: "CUSTOM", name: "karen.execution_receipt.v1",
+      messageId: "assistant-1",
+      value: {
+        actual_provider: "local", actual_model: "verified-model",
+        response_source: "local_inference",
+      },
+    };
+    const step = (agent_id: string, sequence: number) => ({
+      type: "CUSTOM", name: "karen.agent_step.v1",
+      messageId: "assistant-1",
+      value: {
+        step_id: "shared-step", agent_id,
+        status: "completed", event_type: "agent_step_completed",
+        description: "Observed completion.",
+        run_id: "run-owned", sequence,
+      },
+    });
+    const parts = parseKarenVerifiedHistory([
+      step("agent-a", 2), step("agent-b", 4), receipt,
+    ], messages);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByTestId("observed-steps").every(
+      node => node.textContent === "2",
+    )).toBe(true);
+  });
+
   it("restores a successful non-degraded execution receipt without inventing fallback", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
