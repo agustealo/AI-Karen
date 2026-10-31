@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { KarenWeatherPresentation, normalizeWeatherObservation } from "@/components/chat/presentation/KarenWeatherPresentation";
+import { KarenWeatherPresentation, normalizeWeatherObservation } from "@/components/chat/KarenWeatherPresentation";
 
 const observation = {
   location: "Detroit, Michigan, US",
