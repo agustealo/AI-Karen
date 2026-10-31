@@ -248,7 +248,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     setWorkspaceRunId(null);
     const sessionId = createSessionId();
     setIsLoadingSessions(true);
-    setError(null);
+    if (!strictInitialSession) setError(null);
 
     try {
       const conversationResponse = await ensureConversationSession(sessionId);
@@ -491,17 +491,17 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       setSessions(sessionsData);
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
-        setError('Session list is temporarily rate limited. Your current chat remains available.');
+        if (!strictInitialSession) setError('Session list is temporarily rate limited. Your current chat remains available.');
         console.warn('Session list refresh was rate-limited; preserving existing session state.');
       } else {
         console.error('Failed to load sessions:', err);
-        setError('Failed to load sessions list. Some features may be limited.');
+        if (!strictInitialSession) setError('Failed to load sessions list. Some features may be limited.');
       }
     } finally {
       sessionListRefreshInFlightRef.current = null;
       setIsLoadingSessions(false);
     }
-  }, [getRateLimitDelayMs]);
+  }, [getRateLimitDelayMs, strictInitialSession]);
 
   // Sync isActive state whenever currentSession ID changes
   useEffect(() => {
