@@ -110,6 +110,8 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         for name in ("@assistant-ui/react", "@assistant-ui/react-ag-ui")
     ):
         violations.append("Assistant-ui dependencies remain after primary cutover")
+    if require_cutover and "@ag-ui/client-v1" in dependencies:
+        violations.append("Temporary AG-UI client-v1 alias remains after consumer cutover")
 
     runtime_config = root / OWNERS["runtime_config"]
     if runtime_config.is_file() and "enable_ag_ui_bridge" not in _read(runtime_config):
