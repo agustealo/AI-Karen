@@ -40,9 +40,10 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
-    expect(screen.getByTestId("karen-copilot-rail-unverified")).toBeTruthy();
+    expect(screen.getAllByTestId("karen-copilot-rail-unverified")).toHaveLength(2);
+    expect(screen.getByTestId("karen-copilot-mobile-intelligence")).toBeTruthy();
     expect(screen.queryByTestId("canonical-conversation-rail")).toBeNull();
-    expect(screen.getByText(/No backend-verified execution receipt/)).toBeTruthy();
+    expect(screen.getAllByText(/No backend-verified execution receipt/)).toHaveLength(2);
   });
 
   it("renders the existing intelligence rail only from a verified saved receipt", () => {
@@ -64,9 +65,9 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
-    expect(screen.getByTestId("canonical-conversation-rail")).toBeTruthy();
-    expect(screen.getByText("verified-runtime-model")).toBeTruthy();
-    expect(screen.getByTestId("observed-steps").textContent).toBe("0");
+    expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(2);
+    expect(screen.getAllByText("verified-runtime-model")).toHaveLength(2);
+    expect(screen.getAllByTestId("observed-steps").every(node => node.textContent === "0")).toBe(true);
     expect(screen.queryByTestId("karen-copilot-rail-unverified")).toBeNull();
   });
 
@@ -88,8 +89,8 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
-    expect(screen.getByTestId("canonical-conversation-rail")).toBeTruthy();
-    expect(screen.getByText("verified-runtime-model")).toBeTruthy();
+    expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(2);
+    expect(screen.getAllByText("verified-runtime-model")).toHaveLength(2);
   });
 
   it.each(["false", 0, null, {}, []])(
@@ -122,4 +123,28 @@ describe("CopilotKit canonical intelligence rail", () => {
       },
     }], messages)).toThrow();
   });
+  it("presents verified intelligence in an accessible mobile disclosure", () => {
+    const parts = parseKarenVerifiedHistory([{
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId: "assistant-1",
+      value: {
+        actual_provider: "local",
+        actual_model: "verified-runtime-model",
+        response_source: "local_inference",
+        degraded_mode: false,
+      },
+    }], messages);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    const disclosure = screen.getByTestId("karen-copilot-mobile-intelligence");
+    expect(disclosure.tagName).toBe("DETAILS");
+    expect(disclosure.hasAttribute("open")).toBe(false);
+    expect(disclosure.querySelector("summary")?.textContent).toContain("Conversation intelligence");
+    expect(disclosure.querySelector('[data-testid="canonical-conversation-rail"]')).not.toBeNull();
+  });
+
 });
