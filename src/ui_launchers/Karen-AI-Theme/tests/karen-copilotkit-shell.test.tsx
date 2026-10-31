@@ -32,7 +32,7 @@ vi.mock("@copilotkit/react-core/v2", () => ({
   },
 }));
 
-vi.mock("@/components/chat/assistant-ui/KarenPersonaSelector", () => ({
+vi.mock("@/components/chat/persona/KarenPersonaSelector", () => ({
   KarenPersonaSelector: () => <div data-testid="backend-governed-persona" />,
 }));
 
