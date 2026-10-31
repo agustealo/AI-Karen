@@ -680,3 +680,35 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
   expect(inferred, "Ordinary dashboard remains on the existing consumer mount").toEqual([]);
 });
+
+
+test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread", async ({ page }) => {
+  requireApprovedNativeFixture();
+  if (!email || !password || !conversationId) return;
+  await signInApprovedKaren(page, email, password);
+
+  // A fresh random UUID is not an existing owned conversation; fail if it
+  // happens to exist rather than altering any consumer's transcript.
+  const absentId = crypto.randomUUID();
+  const existing = await page.request.get("/api/conversations/" + absentId);
+  expect(existing.status(), "Fixture must be an absent canonical conversation").toBe(404);
+
+  const forbidden: string[] = [];
+  page.context().on("request", request => {
+    if (request.method() !== "POST") return;
+    const path = new URL(request.url()).pathname;
+    if (isInferenceRequest(request.url()) ||
+        path.startsWith("/api/conversations/ensure-session/")) {
+      forbidden.push(path);
+    }
+  });
+
+  await page.goto("/acceptance/copilotkit-consumer/" + absentId);
+  await expect(page.getByTestId("karen-copilot-consumer-acceptance")).toBeVisible();
+  await expect(page.getByText("The requested conversation could not be verified. No replacement conversation was created."))
+    .toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId("karen-copilot-consumer-chat")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "New conversation" })).toHaveCount(0);
+  expect(forbidden, "Failed strict load cannot create a replacement or execute inference")
+    .toEqual([]);
+});
