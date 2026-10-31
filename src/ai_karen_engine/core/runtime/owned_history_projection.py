@@ -13,6 +13,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+from ai_karen_engine.core.runtime.attested_agent_activity import (
+    InvalidAgentActivity, project_attested_agent_activity,
+)
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import ConversationSnapshot
 from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
@@ -54,6 +57,7 @@ def project_owned_history(
     snapshot: ConversationSnapshot,
     *,
     attestations: Mapping[str, tuple[str, str]],
+    observed_activity: Mapping[str, tuple[str, str, str, list[dict[str, Any]]]] | None = None,
 ) -> dict[str, Any]:
     """Build complete text snapshot plus vetted CUSTOM events or fail closed."""
     records = snapshot.messages
@@ -85,7 +89,9 @@ def project_owned_history(
         if metadata.get("presentation_replay_incomplete") is True:
             raise UnreplayableHistory("incomplete_presentation_capture")
 
+        observed = (observed_activity or {}).get(identifier)
         rich = (
+            observed is not None
             any(_carries_value(metadata.get(key)) for key in _RUNTIME_RECEIPT)
             or _carries_value(metadata.get("verified_presentations_v1"))
         )
@@ -109,6 +115,20 @@ def project_owned_history(
                 raise UnreplayableHistory("unserializable_attested_message") from exc
             if not hmac.compare_digest(digest, attestation[1]):
                 raise UnreplayableHistory("modified_attested_message")
+            if observed is not None:
+                if (
+                    len(observed) != 4
+                    or observed[0] != attestation[0]
+                    or not hmac.compare_digest(observed[1], attestation[1])
+                ):
+                    raise UnreplayableHistory("unattested_observed_activity")
+                try:
+                    events.extend(project_attested_agent_activity(
+                        observed[3], message_id=identifier,
+                        transport_run_id=observed[2],
+                    ))
+                except InvalidAgentActivity as exc:
+                    raise UnreplayableHistory("invalid_attested_agent_activity") from exc
             projector = AGUIEventProjection(
                 thread_id=thread_id,
                 run_id="restored_" + identifier.replace("-", "_"),
