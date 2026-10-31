@@ -70,10 +70,11 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "          - copilotkit-protocol" in workflow
     assert "          - copilotkit-native" in workflow
     assert "          - copilotkit-native-stop" in workflow
+    assert "          - copilotkit-consumer" in workflow
     job = workflow.split("  authenticated-copilotkit-protocol:", 1)[1].split(
         "\n  # Operator-controlled Docker host proof.", 1
     )[0]
-    assert "if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && github.ref == 'refs/heads/main'" in job
+    assert "if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer') && github.ref == 'refs/heads/main'" in job
     assert "environment: karen-sanitized-browser-acceptance" in job
     assert "ref: ${{ inputs.target_sha }}" in job
     assert "persist-credentials: false" in job
@@ -84,7 +85,7 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "e2e/karen-copilotkit-protocol-acceptance.spec.ts" in job
     assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}" in job
-    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop') && 'true' || 'false' }}" in job
+    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer') && 'true' || 'false' }}" in job
     assert "if: inputs.scenario == 'copilotkit-native'" in job
     assert "if: inputs.scenario == 'copilotkit-protocol'" in job
     assert 'KAREN_COPILOTKIT_OBSERVED_RUN_ID: ${{ vars.KAREN_COPILOTKIT_OBSERVED_RUN_ID }}' in job
@@ -110,6 +111,18 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "secrets.KAREN_UX_EMAIL" in native
     assert "secrets.KAREN_UX_PASSWORD" in native
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in native
+    consumer_if = "        if: inputs.scenario == 'copilotkit-consumer'"
+    assert job.count(consumer_if) == 1
+    consumer_at = job.index(consumer_if)
+    consumer_start = job.rfind("      - name: ", 0, consumer_at)
+    consumer_end = job.find("\n      - name:", consumer_at)
+    assert consumer_start >= 0 and consumer_end > consumer_at
+    consumer_step = job[consumer_start:consumer_end]
+    assert "--grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference'" in consumer_step
+    assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in consumer_step
+    assert "secrets.KAREN_UX_EMAIL" in consumer_step
+    assert "secrets.KAREN_UX_PASSWORD" in consumer_step
+    assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in consumer_step
     assert "KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED" not in job
 
     # A separately dispatched, main-only and deployment-attested live-model
