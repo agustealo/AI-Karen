@@ -651,6 +651,8 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-copilot-consumer-chat")).toBeVisible({
     timeout: 30000,
   });
+  await expect(page.getByTestId("karen-copilot-consumer-chat"))
+    .toHaveAttribute("data-conversation-id", conversationId);
   await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible({
     timeout: 30000,
   });
@@ -669,6 +671,8 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-copilot-consumer-chat")).toBeVisible({
     timeout: 30000,
   });
+  await expect(page.getByTestId("karen-copilot-consumer-chat"))
+    .toHaveAttribute("data-conversation-id", conversationId);
   await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible();
   expect(inferred, "Consumer reload must not create a model run").toEqual([]);
 

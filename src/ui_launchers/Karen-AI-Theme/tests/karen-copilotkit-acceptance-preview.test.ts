@@ -6,6 +6,8 @@ const root = process.cwd();
 const page = readFileSync(resolve(root,
   "src/app/acceptance/copilotkit/[conversationId]/page.tsx"), "utf8");
 const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf8");
+const canonicalSessions = readFileSync(resolve(root,
+  "src/components/chat/SessionProvider.tsx"), "utf8");
 const previewGate = readFileSync(resolve(root,
   "src/app/acceptance/copilotkit/_lib/preview-gate.ts"), "utf8");
 const consumerPreview = readFileSync(resolve(root,
@@ -45,13 +47,22 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
   it("mounts the canonical consumer candidate on a separately gated preview only", () => {
     expect(consumerPreview).toContain("requireApprovedCopilotKitPreview(conversationId)");
     expect(consumerPreview).toContain("<AuthWrapper>");
-    expect(consumerPreview).toContain("<SessionProvider initialSessionId={conversationId}>");
+    expect(consumerPreview).toContain("<SessionProvider initialSessionId={conversationId} strictInitialSession>");
     expect(consumerPreview).toContain("<KarenCopilotConsumerChat />");
     expect(consumerPreview).toContain('href="/vendor/copilotkit-v2.css"');
     expect(consumerPreview).toContain('index: false, follow: false');
     expect(consumerPreview).not.toContain("process.env.NEXT_PUBLIC_");
     expect(consumerPreview).not.toContain("x-forwarded-host");
     expect(dashboard).not.toContain("<KarenCopilotConsumerChat");
+  });
+
+  it("never replaces an unavailable explicitly scoped acceptance conversation", () => {
+    expect(canonicalSessions).toContain("strictInitialSession?: boolean");
+    expect(canonicalSessions).toContain("strictInitialSession && conversationId !== sessionId");
+    expect(canonicalSessions).toContain("if (strictInitialSession) {");
+    expect(canonicalSessions).toContain("setCurrentSession(null)");
+    expect(canonicalSessions).toContain("No replacement conversation was created.");
+    expect(consumerPreview).toContain("strictInitialSession>");
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {

@@ -162,9 +162,11 @@ export function useSession() {
 interface SessionProviderProps {
   children: ReactNode;
   initialSessionId?: string;
+  /** Fail closed instead of recovering to another conversation on an explicitly scoped acceptance URL. */
+  strictInitialSession?: boolean;
 }
 
-export function SessionProvider({ children, initialSessionId }: SessionProviderProps) {
+export function SessionProvider({ children, initialSessionId, strictInitialSession = false }: SessionProviderProps) {
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [workspaceRunId, setWorkspaceRunId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -365,6 +367,9 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
       }
 
       const conversationId = conversationResponse.id;
+      if (strictInitialSession && conversationId !== sessionId) {
+        throw new Error('Strict conversation identity mismatch');
+      }
       const session: Session = {
         id: conversationId,
         title: conversationResponse.title || generateSessionTitle(conversationResponse.messages?.map(m => ({
@@ -389,6 +394,13 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
         isActive: s.id === conversationId
       })));
     } catch (err) {
+      if (strictInitialSession) {
+        // An acceptance URL must never create a different conversation or
+        // project an unverified ID into a locally fabricated chat session.
+        setCurrentSession(null);
+        setError('The requested conversation could not be verified. No replacement conversation was created.');
+        return;
+      }
       if (err instanceof ApiError && err.status === 429) {
         preserveRequestedSession(
           'Session service is temporarily rate limited. Keeping your current chat available.',
@@ -420,6 +432,7 @@ export function SessionProvider({ children, initialSessionId }: SessionProviderP
     createNewSession,
     getRateLimitDelayMs,
     persistActiveSessionId,
+    strictInitialSession,
   ]);
 
   // Refresh sessions list

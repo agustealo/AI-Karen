@@ -107,7 +107,7 @@ export function KarenCopilotConsumerChat() {
   }
 
   return (
-    <section data-testid="karen-copilot-consumer-chat" aria-label="Karen conversation workspace"
+    <section data-testid="karen-copilot-consumer-chat" data-conversation-id={currentSession.id} aria-label="Karen conversation workspace"
       className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4">
         <div className="min-w-0">
