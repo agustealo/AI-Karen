@@ -150,7 +150,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
     expect(component).not.toContain("clientExecuteTool");
   });
 
-  it("keeps the adapter opt-in until backend and npm dependency proof pass", () => {
+  it("stages the single CopilotKit mount while dependency proof is enforced", () => {
     expect(dashboard).toContain(
       '<KarenCopilotConsumerChat />',
     );
@@ -175,7 +175,7 @@ describe("persistent Karen workspace panel", () => {
     expect(dashboard).toContain("karenPanelOpen");
     expect(dashboard).toContain('aria-label="Collapse Karen conversation"');
     expect(dashboard).toContain('aria-controls="persistent-karen-panel"');
-    expect(dashboard.match(/<KarenAssistantChat \/>/g)?.length).toBe(1);
+    expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)?.length).toBe(1);
     expect(dashboard.match(/<ChatInterface \/>/g)?.length ?? 0).toBe(0);
     expect(dashboard).toContain("backendStatus === \"ready\" && (activeMainView === \"chat\" || karenPanelOpen)");
   });
