@@ -14,7 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 WEB = Path("src/ui_launchers/Karen-AI-Theme")
 LEGACY_MOUNT = '@/components/chat/assistant-ui/KarenAssistantChat'
-COPILOT_MOUNT = '@/components/chat/copilotkit/KarenCopilotChat'
+COPILOT_MOUNT = '@/components/chat/copilotkit/KarenCopilotConsumerChat'
 
 OWNERS = {
     "runtime": "src/ai_karen_engine/core/runtime/chat_runtime.py",
