@@ -9,7 +9,7 @@
  * release parity remain unverified until acceptance runs against that revision.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Plus, Search } from "lucide-react";
+import { Loader2, MoreHorizontal, Plus, Search } from "lucide-react";
 
 import { useSession } from "@/components/chat/SessionProvider";
 import { KarenCopilotChat } from "./KarenCopilotChat";
@@ -24,6 +24,8 @@ export function KarenCopilotConsumerChat() {
     sessions,
     createNewSession,
     loadSession,
+    updateSessionTitle,
+    deleteSession,
     isLoadingSessions,
     error: sessionError,
   } = useSession();
@@ -41,6 +43,10 @@ export function KarenCopilotConsumerChat() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [navigationBusy, setNavigationBusy] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const pendingRef = useRef(false);
@@ -72,6 +78,53 @@ export function KarenCopilotConsumerChat() {
       setNavigationBusy(false);
     }
   }, [closeHistory]);
+
+  const saveTitle = useCallback(async () => {
+    if (!currentSession || pendingRef.current || busyRef.current) return;
+    const title = titleDraft.trim();
+    if (!title || title.length > 160) {
+      setNavigationError("Use a conversation title between 1 and 160 characters.");
+      return;
+    }
+    pendingRef.current = true;
+    setNavigationBusy(true);
+    setNavigationError(null);
+    try {
+      const saved = await updateSessionTitle(currentSession.id, title);
+      if (saved !== true) {
+        setNavigationError("Karen could not save the conversation title.");
+        return;
+      }
+      setEditingTitle(false);
+      setManageOpen(false);
+    } catch {
+      setNavigationError("Karen could not save the conversation title.");
+    } finally {
+      pendingRef.current = false;
+      setNavigationBusy(false);
+    }
+  }, [currentSession, titleDraft, updateSessionTitle]);
+
+  const removeConversation = useCallback(async () => {
+    if (!currentSession || pendingRef.current || busyRef.current || !deleteConfirm) return;
+    pendingRef.current = true;
+    setNavigationBusy(true);
+    setNavigationError(null);
+    try {
+      const removed = await deleteSession(currentSession.id);
+      if (removed !== true) {
+        setNavigationError("Karen could not delete this conversation.");
+        return;
+      }
+      setDeleteConfirm(false);
+      setManageOpen(false);
+    } catch {
+      setNavigationError("Karen could not delete this conversation.");
+    } finally {
+      pendingRef.current = false;
+      setNavigationBusy(false);
+    }
+  }, [currentSession, deleteConfirm, deleteSession]);
 
   const matchingSessions = useMemo(() => {
     const filter = query.trim().toLocaleLowerCase();
@@ -123,6 +176,17 @@ export function KarenCopilotConsumerChat() {
           <span aria-hidden="true" className="hidden h-6 w-px bg-border xl:block" />
           {!strictInitialSession && (
             <>
+            <button type="button" aria-label="Conversation options" aria-expanded={manageOpen}
+              disabled={navigationBusy || runBusy}
+              onClick={() => {
+                setManageOpen(open => !open);
+                setEditingTitle(false);
+                setDeleteConfirm(false);
+                setTitleDraft(currentSession.title || "");
+              }}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
+              <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
+            </button>
             <button type="button" ref={historyButtonRef} disabled={navigationBusy || runBusy}
               aria-label="Find conversations" aria-expanded={historyOpen}
               aria-controls={historyOpen ? "karen-copilot-history" : undefined}
@@ -141,6 +205,53 @@ export function KarenCopilotConsumerChat() {
         </div>
       </header>
       {navigationError && <p role="alert" className="border-b border-destructive/40 px-4 py-2 text-sm text-destructive">{navigationError}</p>}
+      {!strictInitialSession && manageOpen && (
+        <section aria-label="Conversation options" className="shrink-0 border-b border-border/60 bg-background px-4 py-3">
+          {!editingTitle && !deleteConfirm && (
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={navigationBusy || runBusy}
+                onClick={() => { setEditingTitle(true); setTitleDraft(currentSession.title || ""); }}
+                className="min-h-11 rounded-lg border border-input px-3 text-sm">Rename conversation</button>
+              <button type="button" disabled={navigationBusy || runBusy}
+                onClick={() => setDeleteConfirm(true)}
+                className="min-h-11 rounded-lg border border-destructive/50 px-3 text-sm text-destructive">
+                Delete conversation
+              </button>
+            </div>
+          )}
+          {editingTitle && (
+            <form onSubmit={event => { event.preventDefault(); void saveTitle(); }}
+              className="flex flex-wrap items-end gap-2">
+              <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs font-medium">
+                Conversation title
+                <input aria-label="Conversation title" value={titleDraft} maxLength={160}
+                  onChange={event => setTitleDraft(event.target.value)}
+                  className="min-h-11 rounded-lg border border-input bg-background px-3 text-sm" />
+              </label>
+              <button type="submit" disabled={navigationBusy || runBusy || !titleDraft.trim()}
+                className="min-h-11 rounded-lg bg-primary px-3 text-sm text-primary-foreground disabled:opacity-50">
+                Save title
+              </button>
+              <button type="button" onClick={() => setEditingTitle(false)} disabled={navigationBusy}
+                className="min-h-11 rounded-lg border border-input px-3 text-sm">Cancel</button>
+            </form>
+          )}
+          {deleteConfirm && (
+            <div role="group" aria-label="Confirm conversation deletion" className="space-y-2">
+              <p className="text-sm">Delete this conversation and its saved messages? This cannot be undone.</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" disabled={navigationBusy || runBusy}
+                  onClick={() => void removeConversation()}
+                  className="min-h-11 rounded-lg bg-destructive px-3 text-sm text-destructive-foreground disabled:opacity-50">
+                  Confirm delete
+                </button>
+                <button type="button" disabled={navigationBusy} onClick={() => setDeleteConfirm(false)}
+                  className="min-h-11 rounded-lg border border-input px-3 text-sm">Keep conversation</button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
       {!strictInitialSession && historyOpen && (
         <section id="karen-copilot-history" aria-label="Conversation history"
           onKeyDown={event => {
