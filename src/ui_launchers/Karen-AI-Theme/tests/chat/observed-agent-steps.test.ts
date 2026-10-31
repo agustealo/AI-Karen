@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectObservedAgentSteps } from "@/components/chat/assistant-ui/observedAgentSteps";
+import { projectObservedAgentSteps } from "@/components/chat/activity/projectObservedAgentSteps";
 
 const activity = (step_id: string, status: string) => ({
   type: "data",
