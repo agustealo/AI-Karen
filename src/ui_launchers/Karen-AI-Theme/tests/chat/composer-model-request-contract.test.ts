@@ -28,7 +28,8 @@ describe("CopilotKit model request transport", () => {
     expect(catalog).toContain("provider.configured === true");
     expect(catalog).toContain("provider.allowed_for_current_user !== false");
     expect(catalog).toContain("onSelectionChange(null)");
-    expect(catalog).toContain("ChatRuntime validates each execution request");
+    expect(catalog).toContain("Automatic lets Karen choose an available model.");
+    expect(catalog).toContain("Advanced provider and agent details");
   });
 
   it("does not retain a dependency on retired assistant-ui transport", () => {

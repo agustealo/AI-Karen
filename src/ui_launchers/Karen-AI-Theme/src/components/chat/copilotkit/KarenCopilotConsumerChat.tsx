@@ -93,7 +93,7 @@ export function KarenCopilotConsumerChat() {
     return (
       <section aria-label="Start a Karen conversation" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-4">
         <p role={sessionError || navigationError ? "alert" : "status"} className="max-w-md text-center text-sm text-muted-foreground">
-          {navigationError || sessionError || "Start a durable conversation to chat with Karen."}
+          {navigationError || sessionError || "What would you like to work on?"}
         </p>
         {!strictInitialSession && (
           <button
@@ -116,7 +116,7 @@ export function KarenCopilotConsumerChat() {
       <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold">{currentSession.title || "Conversation"}</h2>
-          <p className="text-xs text-muted-foreground">Karen runtime controls model execution and saved history</p>
+          <p className="text-xs text-muted-foreground">Your space to think, create, and get things done</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <div id="karen-rail-customize-menu" className="hidden xl:flex" aria-label="Customize conversation intelligence" />
@@ -175,7 +175,7 @@ export function KarenCopilotConsumerChat() {
       )}
       <details data-testid="karen-copilot-model-discovery" className="shrink-0 border-b border-border/60 px-4 py-2">
         <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-          Model and provider
+          Model preferences
         </summary>
         <fieldset disabled={runBusy} className="max-w-2xl py-2 disabled:opacity-60">
           <KarenComposerRuntimeCatalog selection={modelRequest} onSelectionChange={handleModelRequest} />

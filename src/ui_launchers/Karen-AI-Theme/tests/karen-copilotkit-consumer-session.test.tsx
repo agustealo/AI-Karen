@@ -149,7 +149,7 @@ describe("CopilotKit consumer session adapter", () => {
     state.sessions = [{ id: FIRST, title: "Project Alpha" }];
     render(<KarenCopilotConsumerChat />);
     expect(state.modelProps.at(-1)).toEqual({ preferredProvider: null, preferredModel: null, workspaceRunId: null });
-    fireEvent.click(screen.getByText("Model and provider"));
+    fireEvent.click(screen.getByText("Model preferences"));
     fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
     expect(state.modelProps.at(-1)).toEqual({
       preferredProvider: "local", preferredModel: "selected-model", workspaceRunId: null,
@@ -160,7 +160,7 @@ describe("CopilotKit consumer session adapter", () => {
     state.currentSession = { id: FIRST, title: "Project Alpha" };
     state.sessions = [{ id: FIRST, title: "Project Alpha" }];
     render(<KarenCopilotConsumerChat />);
-    fireEvent.click(screen.getByText("Model and provider"));
+    fireEvent.click(screen.getByText("Model preferences"));
     fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
     const busy = state.onBusyChange;
     const change = state.onModelChange;

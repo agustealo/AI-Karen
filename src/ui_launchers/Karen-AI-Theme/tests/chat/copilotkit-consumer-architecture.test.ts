@@ -19,6 +19,18 @@ const pkg = JSON.parse(read("package.json"));
 const draftHook = read("src/components/chat/copilotkit/useKarenPersistedDraft.ts");
 
 describe("canonical CopilotKit chat ownership", () => {
+  it("puts consumer language first and defers technical inventory", () => {
+    expect(consumer).toContain("What would you like to work on?");
+    expect(consumer).toContain("Your space to think, create, and get things done");
+    expect(consumer).toContain("Model preferences");
+    expect(consumer).not.toContain("Karen runtime controls model execution and saved history");
+    expect(catalog).toContain("Automatic lets Karen choose an available model.");
+    expect(catalog).toContain("Advanced provider and agent details");
+    expect(catalog).toContain("if (!showAdvanced) return;");
+    expect(catalog).toContain("showAdvanced && <div");
+  });
+
+
   it("preserves unsent text and keeps destructive draft recovery secondary", () => {
     expect(controller).toContain('aria-label="Draft recovery"');
     expect(controller).toContain('readOnly value={draft}');
