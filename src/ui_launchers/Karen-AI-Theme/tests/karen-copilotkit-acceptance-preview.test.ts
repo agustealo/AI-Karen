@@ -51,10 +51,10 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(copilotShell).toContain('from "../KarenPersonaSelector"');
     expect(consumerChat).toContain('from "../KarenComposerRuntimeCatalog"');
     expect(verifiedHistory).toContain('from "@/components/chat/KarenPresentationRegistry"');
-    for (const module of [copilotShell, consumerChat, verifiedHistory,
+    for (const sourceModule of [copilotShell, consumerChat, verifiedHistory,
       personaOwner, catalogOwner, presentationOwner]) {
-      expect(module).not.toContain("@assistant-ui/react");
-      expect(module).not.toContain("@assistant-ui/react-ag-ui");
+      expect(sourceModule).not.toContain("@assistant-ui/react");
+      expect(sourceModule).not.toContain("@assistant-ui/react-ag-ui");
     }
     expect(catalogOwner).toContain('"/api/agent-runtime/catalog"');
     expect(presentationOwner).toContain("parseKarenPresentation");
