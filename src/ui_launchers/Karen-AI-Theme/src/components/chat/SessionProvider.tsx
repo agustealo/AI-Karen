@@ -288,7 +288,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     } finally {
       setIsLoadingSessions(false);
     }
-  }, [persistActiveSessionId]);
+  }, [persistActiveSessionId, strictInitialSession]);
 
   // Load a specific session
   const loadSession = useCallback(async (sessionId: string) => {
