@@ -13,7 +13,7 @@ const history = read("src/components/chat/copilotkit/KarenCopilotHistoryGate.tsx
 const verified = read("src/components/chat/copilotkit/KarenCopilotVerifiedHistory.tsx");
 const rail = read("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx");
 const session = read("src/components/chat/SessionProvider.tsx");
-const catalog = read("src/components/chat/runtime/KarenComposerRuntimeCatalog.tsx");
+const catalog = read("src/components/chat/KarenComposerRuntimeCatalog.tsx");
 const pkg = JSON.parse(read("package.json"));
 
 describe("canonical CopilotKit chat ownership", () => {
