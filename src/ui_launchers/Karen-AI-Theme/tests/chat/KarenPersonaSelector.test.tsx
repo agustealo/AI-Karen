@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { KarenPersonaSelector } from "@/components/chat/assistant-ui/KarenPersonaSelector";
+import { KarenPersonaSelector } from "@/components/chat/persona/KarenPersonaSelector";
 import { apiClient } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
