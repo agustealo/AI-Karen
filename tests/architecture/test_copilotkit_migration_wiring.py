@@ -346,3 +346,17 @@ def test_compatibility_facade_is_not_a_production_caller(tmp_path: Path) -> None
     )
     result = AUDITOR.audit(tmp_path)
     assert result["legacy_import_callers"] == []
+
+
+def test_strict_cutover_refuses_retired_renderer_file(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    legacy = tmp_path / AUDITOR.WEB / (
+        "src/components/chat/assistant-ui/KarenAssistantChat.tsx"
+    )
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("export default function OldRenderer() {}\\n", encoding="utf-8")
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert any(
+        "Retired assistant-ui renderer source still exists" in issue
+        for issue in result["violations"]
+    )
