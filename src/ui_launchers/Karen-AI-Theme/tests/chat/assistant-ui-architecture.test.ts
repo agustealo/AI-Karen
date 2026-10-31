@@ -215,9 +215,14 @@ describe("shared governed Agent Runtime context", () => {
 describe("Medusa discovery uses existing canonical runtime catalog", () => {
   it("renders registered agents as non-authoritative discovery", () => {
     const catalog = readFileSync(
+      resolve(process.cwd(), "src/components/chat/KarenComposerRuntimeCatalog.tsx"),
+      "utf8",
+    );
+    const compatibility = readFileSync(
       resolve(process.cwd(), "src/components/chat/assistant-ui/KarenComposerRuntimeCatalog.tsx"),
       "utf8",
     );
+    expect(compatibility).toContain('export { KarenComposerRuntimeCatalog } from "../KarenComposerRuntimeCatalog"');
     expect(catalog).toContain('"/api/agent-runtime/catalog"');
     expect(catalog).toContain("Discovery only.");
     expect(catalog).toContain("eligibility unverified");
