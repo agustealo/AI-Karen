@@ -85,6 +85,7 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     expect(screen.getByTestId("verified-context-rail")).toBeTruthy();
     expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
     expect(sdk.provider[0].runtimeUrl).toBe("/api/copilotkit");
+    expect(sdk.provider[0].enableInspector).toBe(false);
     expect(sdk.provider[0].properties).toBeUndefined();
   });
 
