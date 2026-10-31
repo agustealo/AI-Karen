@@ -158,7 +158,9 @@ describe("CopilotKit canonical conversation hydration", () => {
     );
     render(guardedHistory());
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
-    expect(screen.getByRole("alert").textContent).toContain("interactive or structured content");
+    expect(screen.getByRole("alert").textContent).toContain("cannot faithfully restore");
+    expect(screen.getByRole("alert").textContent).toContain("No partial conversation was opened");
+    expect(screen.getByRole("alert").textContent).not.toContain("existing conversation view");
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
   });

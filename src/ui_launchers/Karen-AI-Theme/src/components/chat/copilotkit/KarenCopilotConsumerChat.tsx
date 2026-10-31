@@ -5,8 +5,8 @@
  *
  * SessionProvider remains the sole owner of persisted conversation identities.
  * This adapter performs no history writes, provider routing, or SDK inference.
- * It is kept out of the active dashboard until the migration's browser and
- * presentation-parity gates are verified.
+ * It is mounted by the dashboard on the draft cutover branch; browser and
+ * release parity remain unverified until acceptance runs against that revision.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, Search } from "lucide-react";
@@ -20,6 +20,7 @@ export function KarenCopilotConsumerChat() {
   const {
     currentSession,
     strictInitialSession,
+    workspaceRunId,
     sessions,
     createNewSession,
     loadSession,
@@ -118,23 +119,29 @@ export function KarenCopilotConsumerChat() {
           <p className="text-xs text-muted-foreground">Karen runtime controls model execution and saved history</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button type="button" ref={historyButtonRef} disabled={navigationBusy || runBusy}
-            aria-label="Find conversations" aria-expanded={historyOpen}
-            aria-controls={historyOpen ? "karen-copilot-history" : undefined}
-            onClick={() => { if (!busyRef.current && !pendingRef.current) setHistoryOpen(open => !open); }}
-            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-input px-3 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
-            <Search aria-hidden="true" className="h-4 w-4" />
-            <span className="hidden sm:inline">Conversations</span>
-          </button>
-          <button type="button" aria-label="New conversation" title="New conversation"
-            disabled={navigationBusy || runBusy} onClick={() => void performNavigation(createNewSession)}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
-            <Plus aria-hidden="true" className="h-4 w-4" />
-          </button>
+          <div id="karen-rail-customize-menu" className="hidden xl:flex" aria-label="Customize conversation intelligence" />
+          <span aria-hidden="true" className="hidden h-6 w-px bg-border xl:block" />
+          {!strictInitialSession && (
+            <>
+            <button type="button" ref={historyButtonRef} disabled={navigationBusy || runBusy}
+              aria-label="Find conversations" aria-expanded={historyOpen}
+              aria-controls={historyOpen ? "karen-copilot-history" : undefined}
+              onClick={() => { if (!busyRef.current && !pendingRef.current) setHistoryOpen(open => !open); }}
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-input px-3 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
+              <Search aria-hidden="true" className="h-4 w-4" />
+              <span className="hidden sm:inline">Conversations</span>
+            </button>
+            <button type="button" aria-label="New conversation" title="New conversation"
+              disabled={navigationBusy || runBusy} onClick={() => void performNavigation(createNewSession)}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
+              <Plus aria-hidden="true" className="h-4 w-4" />
+            </button>
+            </>
+          )}
         </div>
       </header>
       {navigationError && <p role="alert" className="border-b border-destructive/40 px-4 py-2 text-sm text-destructive">{navigationError}</p>}
-      {historyOpen && (
+      {!strictInitialSession && historyOpen && (
         <section id="karen-copilot-history" aria-label="Conversation history"
           onKeyDown={event => {
             if (event.key === "Escape") {
@@ -182,6 +189,7 @@ export function KarenCopilotConsumerChat() {
         conversationId={currentSession.id}
         preferredProvider={modelRequest?.provider ?? null}
         preferredModel={modelRequest?.model ?? null}
+        workspaceRunId={workspaceRunId}
         onBusyChange={handleBusyChange}
       />
     </section>

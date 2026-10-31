@@ -157,7 +157,7 @@ class AGUIEventProjection:
                 return []
             # Stable activity identity is scoped by the AG-UI run. A new run
             # cannot overwrite another run's activity message.
-            activity_id = f"activity-{self.run_id}-{step_id}"
+            activity_id = f"activity-{len(self.run_id)}:{self.run_id}-{len(agent_id)}:{agent_id}-{step_id}"
             source = _text(meta.get("source"), 32)
             activity_kind = _text(meta.get("activity_kind"), 32)
             internal = source == "deepagents" and activity_kind in {

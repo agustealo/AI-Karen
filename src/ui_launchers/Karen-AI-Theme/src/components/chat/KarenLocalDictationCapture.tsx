@@ -1,5 +1,6 @@
 "use client";
 
+/** Local voice dictation only. It never submits or executes the chat message. */
 import { useEffect, useRef, useState } from "react";
 import { Mic, Square } from "lucide-react";
 import { apiClient } from "@/lib/api";

@@ -50,6 +50,7 @@ interface ConversationApiResponse {
 }
 
 interface SessionContextType {
+  /** True for a server-approved, explicitly pinned conversation identity. */
   strictInitialSession: boolean;
   currentSession: Session | null;
   workspaceRunId: string | null;
@@ -246,10 +247,15 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   // Create a new durable session. The UI does not present a conversation
   // as created until the server has acknowledged the canonical session id.
   const createNewSession = useCallback(async () => {
+    // Pinned acceptance conversations cannot mint or switch to another identity.
+    // Enforce at the canonical action boundary, not just by hiding UI controls.
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot create a replacement session');
+    }
     setWorkspaceRunId(null);
     const sessionId = createSessionId();
     setIsLoadingSessions(true);
-    setError(null);
+    if (!strictInitialSession) setError(null);
 
     try {
       const conversationResponse = await ensureConversationSession(sessionId);
@@ -287,10 +293,13 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     } finally {
       setIsLoadingSessions(false);
     }
-  }, [persistActiveSessionId]);
+  }, [persistActiveSessionId, strictInitialSession]);
 
   // Load a specific session
   const loadSession = useCallback(async (sessionId: string) => {
+    if (strictInitialSession && sessionId !== initialSessionId) {
+      throw new Error('Strict conversation cannot load another session');
+    }
     if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null);
     setIsLoadingSessions(true);
     setError(null);
@@ -434,12 +443,13 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     getRateLimitDelayMs,
     persistActiveSessionId,
     strictInitialSession,
+    initialSessionId,
   ]);
 
   // Refresh sessions list
   const refreshSessions = useCallback(async () => {
     setIsLoadingSessions(true);
-    if (!strictInitialSession) setError(null);
+    setError(null);
 
     try {
       let request = sessionListRefreshInFlightRef.current;
@@ -546,6 +556,9 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   // Delete a session
   const deleteSession = useCallback(async (sessionId: string) => {
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot delete sessions');
+    }
     try {
       await apiClient.delete(`/api/conversations/${sessionId}`);
 
@@ -574,10 +587,13 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       setError('Failed to delete session. Please try again.');
       return false;
     }
-  }, [currentSession?.id, createNewSession, persistActiveSessionId, refreshSessions]);
+  }, [currentSession?.id, createNewSession, persistActiveSessionId, refreshSessions, strictInitialSession]);
 
   // Delete multiple sessions
   const deleteSessions = useCallback(async (sessionIds: string[]) => {
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot delete sessions');
+    }
     if (sessionIds.length === 0) return true;
     
     try {
@@ -654,10 +670,13 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       setError('Failed to delete some sessions. Please try again.');
       return false;
     }
-  }, [currentSession, createNewSession, getRateLimitDelayMs, persistActiveSessionId, refreshSessions]);
+  }, [currentSession, createNewSession, getRateLimitDelayMs, persistActiveSessionId, refreshSessions, strictInitialSession]);
 
   // Update a session title
   const updateSessionTitle = useCallback(async (sessionId: string, newTitle: string) => {
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot rename sessions');
+    }
     try {
       await apiClient.put(`/api/conversations/${sessionId}`, { title: newTitle });
       
@@ -674,17 +693,23 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       setError('Failed to rename session. Please try again.');
       return false;
     }
-  }, [currentSession?.id]);
+  }, [currentSession?.id, strictInitialSession]);
 
   // Initialize sessions on mount
   useEffect(() => {
-    const bootstrapKey = `initialize:${initialSessionId || '__new__'}`;
+    const bootstrapKey = `initialize:${strictInitialSession ? 'strict' : 'normal'}:${initialSessionId || '__new__'}`;
     if (shouldSuppressRecentBootstrap(bootstrapKey)) {
       return;
     }
 
     const initializeSessions = async () => {
       setIsLoadingSessions(true);
+      if (strictInitialSession && !initialSessionId) {
+        setCurrentSession(null);
+        setError('Strict conversation requires an explicit verified session ID.');
+        setIsLoadingSessions(false);
+        return;
+      }
       try {
         const preferredSessionId = initialSessionId || getPersistedActiveSessionId();
         if (preferredSessionId) {
@@ -703,7 +728,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     initializeSessions();
     // Only initialize once on mount or when initialSessionId explicitly changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialSessionId, getPersistedActiveSessionId]);
+  }, [initialSessionId, getPersistedActiveSessionId, strictInitialSession]);
 
   return (
     <SessionContext.Provider value={{

@@ -8,8 +8,6 @@ const page = readFileSync(resolve(root,
 const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf8");
 const canonicalSessions = readFileSync(resolve(root,
   "src/components/chat/SessionProvider.tsx"), "utf8");
-const consumerSource = readFileSync(resolve(root,
-  "src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx"), "utf8");
 const previewGate = readFileSync(resolve(root,
   "src/app/acceptance/copilotkit/_lib/preview-gate.ts"), "utf8");
 const consumerPreview = readFileSync(resolve(root,
@@ -17,6 +15,10 @@ const consumerPreview = readFileSync(resolve(root,
 const prep = readFileSync(resolve(root, "tools/prepare-copilotkit-styles.mjs"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const ignore = readFileSync(resolve(root, ".gitignore"), "utf8");
+const gatewaySource = readFileSync(resolve(root,
+  "src/app/api/copilotkit/[[...slug]]/route.ts"), "utf8");
+const npmLock = JSON.parse(readFileSync(resolve(root, "package-lock.json"), "utf8"));
+
 const nativeBrowser = readFileSync(resolve(root,
   "e2e/karen-copilotkit-native-acceptance.spec.ts"), "utf8");
 const nextConfig = readFileSync(resolve(root, "next.config.ts"), "utf8");
@@ -25,7 +27,74 @@ const browserWorkflow = readFileSync(resolve(root,
 const shim = readFileSync(resolve(root,
   "src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css"), "utf8");
 
+const copilotShell = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotChat.tsx"), "utf8");
+const consumerChat = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx"), "utf8");
+const verifiedHistory = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotVerifiedHistory.tsx"), "utf8");
+const personaOwner = readFileSync(resolve(root,
+  "src/components/chat/KarenPersonaSelector.tsx"), "utf8");
+const catalogOwner = readFileSync(resolve(root,
+  "src/components/chat/KarenComposerRuntimeCatalog.tsx"), "utf8");
+const presentationOwner = readFileSync(resolve(root,
+  "src/components/chat/KarenPresentationRegistry.tsx"), "utf8");
+const controlledChat = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotControlledChat.tsx"), "utf8");
+const localCapture = readFileSync(resolve(root,
+  "src/components/chat/KarenLocalDictationCapture.tsx"), "utf8");
+const browserCapture = readFileSync(resolve(root,
+  "src/components/chat/KarenBrowserDictationCapture.tsx"), "utf8");
+
 describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => {
+  it("keeps persona, catalog and verified presentation independent of the legacy renderer", () => {
+    expect(copilotShell).toContain('from "../KarenPersonaSelector"');
+    expect(consumerChat).toContain('from "../KarenComposerRuntimeCatalog"');
+    expect(verifiedHistory).toContain('from "@/components/chat/KarenPresentationRegistry"');
+    for (const sourceModule of [copilotShell, consumerChat, verifiedHistory,
+      personaOwner, catalogOwner, presentationOwner]) {
+      expect(sourceModule).not.toContain("@assistant-ui/react");
+      expect(sourceModule).not.toContain("@assistant-ui/react-ag-ui");
+    }
+    expect(catalogOwner).toContain('"/api/agent-runtime/catalog"');
+    expect(presentationOwner).toContain("parseKarenPresentation");
+  });
+
+  it("routes CopilotKit through the canonical AG-UI client, never a temporary alias", () => {
+    expect(gatewaySource).toContain('import { HttpAgent } from "@ag-ui/client"');
+    expect(gatewaySource).not.toContain("@ag-ui/client-v1");
+    expect(pkg.dependencies["@ag-ui/client"]).toBe("1.0.2");
+    expect(pkg.dependencies["@ag-ui/client-v1"]).toBeUndefined();
+    expect(npmLock.packages[""].dependencies["@ag-ui/client"]).toBe("1.0.2");
+    expect(npmLock.packages[""].dependencies["@ag-ui/client-v1"]).toBeUndefined();
+    expect(npmLock.packages["node_modules/@ag-ui/client"].version).toBe("1.0.2");
+    expect(npmLock.packages["node_modules/@ag-ui/client-v1"]).toBeUndefined();
+    // This test must also pass once the legacy renderer has been removed.
+    // An installed old generation is never evidence of release readiness.
+    const legacy = pkg.dependencies["@assistant-ui/react-ag-ui"];
+    const isolated = npmLock.packages[
+      "node_modules/@assistant-ui/react-ag-ui/node_modules/@ag-ui/client"
+    ];
+    if (legacy) {
+      expect(isolated?.version).toBe("0.0.59");
+    } else {
+      expect(isolated).toBeUndefined();
+      expect(npmLock.packages["node_modules/@assistant-ui/react-ag-ui"]).toBeUndefined();
+    }
+  });
+
+  it("uses only canonical draft-port voice capture, not the retired assistant-ui runtime", () => {
+    expect(controlledChat).toContain('from "../KarenLocalDictationCapture"');
+    expect(controlledChat).toContain('from "../KarenBrowserDictationCapture"');
+    expect(controlledChat).not.toContain('from "../assistant-ui/KarenLocalDictation"');
+    expect(controlledChat).not.toContain('from "../assistant-ui/KarenBrowserDictation"');
+    expect(localCapture).not.toContain("@assistant-ui/react");
+    expect(browserCapture).not.toContain("@assistant-ui/react");
+    expect(localCapture).toContain("KarenVoiceDraftPort");
+    expect(browserCapture).toContain("KarenVoiceDraftPort");
+  });
+
+
   it("defaults to a 404 unless both server-only flag and exact host are approved", () => {
     expect(page).toContain("requireApprovedCopilotKitPreview(conversationId)");
     expect(previewGate).toContain('KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED === "true"');
@@ -55,25 +124,33 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(consumerPreview).toContain('index: false, follow: false');
     expect(consumerPreview).not.toContain("process.env.NEXT_PUBLIC_");
     expect(consumerPreview).not.toContain("x-forwarded-host");
-    expect(dashboard).not.toContain("<KarenCopilotConsumerChat");
+    expect(dashboard).toContain("<KarenCopilotConsumerChat");
   });
 
   it("never replaces an unavailable explicitly scoped acceptance conversation", () => {
     expect(canonicalSessions).toContain("strictInitialSession?: boolean");
+    expect(canonicalSessions).toContain("strictInitialSession: boolean;");
+    expect(canonicalSessions).toContain("}, [persistActiveSessionId, strictInitialSession]);");
+    expect(canonicalSessions).toContain("<SessionContext.Provider value={{\n      strictInitialSession,");
     expect(canonicalSessions).toContain("strictInitialSession && conversationId !== sessionId");
+    expect(canonicalSessions).toContain("if (strictInitialSession && sessionId !== initialSessionId)");
+    expect(canonicalSessions).toContain("Strict conversation cannot load another session");
+    expect(canonicalSessions.match(/Strict conversation cannot delete sessions/g)).toHaveLength(2);
+    expect(canonicalSessions).toContain("refreshSessions, strictInitialSession]);");
+    expect(canonicalSessions).toContain("persistActiveSessionId, refreshSessions, strictInitialSession]);");
+    expect(canonicalSessions).toContain("Strict conversation cannot create a replacement session");
+    expect(canonicalSessions).toContain("Strict conversation cannot rename sessions");
+    expect(canonicalSessions).toContain("Strict conversation requires an explicit verified session ID.");
+    expect(canonicalSessions).toContain("currentSession?.id, strictInitialSession");
+    expect(canonicalSessions).toContain("getPersistedActiveSessionId, strictInitialSession");
+    expect(canonicalSessions).toContain("strictInitialSession ? 'strict' : 'normal'");
+    expect(canonicalSessions).toContain("    initialSessionId,");
     expect(canonicalSessions).toContain("if (strictInitialSession) {");
     expect(canonicalSessions).toContain("setCurrentSession(null)");
     expect(canonicalSessions).toContain("No replacement conversation was created.");
     expect(consumerPreview).toContain("strictInitialSession>");
-  });
-
-  it("preserves strict errors and does not offer a replacement conversation", () => {
-    expect(canonicalSessions).toContain("strictInitialSession: boolean;");
     expect(canonicalSessions).toContain("if (!strictInitialSession) setError(null)");
     expect(canonicalSessions).toContain("if (!strictInitialSession) setError('Failed to load sessions list.");
-    expect(consumerSource).toContain("strictInitialSession,");
-    expect(consumerSource).toContain("{!strictInitialSession && (");
-    expect(consumerSource).toContain("onClick={() => void performNavigation(createNewSession)}");
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {
@@ -149,14 +226,16 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(browserWorkflow).toContain("Verify independent Vercel deployment provenance before browser acceptance");
     expect(browserWorkflow).toContain("KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED:");
     expect(browserWorkflow).toContain("--grep 'CK-CONSUMER-0[12]'");
+    expect(nativeBrowser).toContain('test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread"');
     expect(browserWorkflow).toContain("Revalidate platform, running deployment and reviewed main head after browser acceptance");
     expect(nativeBrowser).toContain('test("CK-CONSUMER-01 gated consumer preview restores an owned session without inference"');
-    expect(nativeBrowser).toContain('test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread"');
   });
 
   it("does not disturb the sole consumer chat mount", () => {
-    expect(dashboard).toContain("<KarenAssistantChat />");
+    expect(dashboard).toContain("<KarenCopilotConsumerChat />");
     expect(dashboard).not.toContain("<KarenCopilotChat");
-    expect(dashboard.match(/<KarenAssistantChat \/>/g)?.length).toBe(1);
+    expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)?.length).toBe(1);
+    expect(dashboard).not.toContain("<KarenAssistantChat />");
+    expect(dashboard).not.toContain('@/components/chat/assistant-ui/KarenAssistantChat');
   });
 });

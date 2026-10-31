@@ -1,9 +1,14 @@
 "use client";
 
-/** Browser-vendor processing is opt-in and never sends a chat message. */
+/**
+ * Optional compatibility dictation. Disabled unless explicitly configured.
+ * Browser speech recognition may send audio to a browser-vendor service.
+ * Never records automatically and never submits the resulting draft.
+ */
 import { useEffect, useRef, useState } from "react";
 import { Mic, MicOff } from "lucide-react";
 import { mergeDictatedText, type KarenVoiceDraftPort } from "./KarenVoiceDraftPort";
+export { mergeDictatedText } from "./KarenVoiceDraftPort";
 
 type SpeechResult = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
 type BrowserRecognition = {

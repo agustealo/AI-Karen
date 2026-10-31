@@ -584,6 +584,105 @@ class SqlChatRunRepository:
             "responseSource": "observed_event_journal",
         }
 
+    async def completed_agent_activity(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+    ) -> dict[str, tuple[str, str, str, list[dict[str, Any]]]]:
+        """Owner-scoped, finalized journal steps correlated to saved messages.
+
+        No inference occurs here. Only completed runs with a committed assistant
+        message and an observed successful journal terminal can contribute.
+        """
+        scope = {
+            "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+        }
+        async with async_transaction_scope(scope["tenant"], user_id=scope["owner"]) as session:
+            result = await session.execute(text("""
+                SELECT r.assistant_message_id::text AS message_id,
+                       r.request_id, r.assistant_message_digest,
+                       r.transport_run_id, e.event_seq, e.event_type,
+                       e.event_payload
+                FROM public.runtime_chat_runs r
+                JOIN conversations c ON c.conversation_id = r.conversation_id
+                  AND c.tenant_id = r.tenant_id AND c.user_id = r.user_id
+                JOIN messages a ON a.conversation_id = c.conversation_id
+                  AND a.message_id::text = r.assistant_message_id::text
+                  AND a.role = 'assistant'
+                JOIN messages u ON u.conversation_id = c.conversation_id
+                  AND u.message_id::text = r.user_message_id::text
+                  AND u.role = 'user'
+                JOIN public.runtime_chat_run_events e
+                  ON e.execution_id = r.execution_id
+                  AND e.tenant_id = r.tenant_id AND e.user_id = r.user_id
+                  AND e.conversation_id = r.conversation_id
+                  AND (e.event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+                    OR (e.event_type = 'CUSTOM'
+                      AND e.event_payload ->> 'name' = 'karen.agent_step'))
+                WHERE r.tenant_id = CAST(:tenant AS uuid)
+                  AND r.user_id = CAST(:owner AS uuid)
+                  AND r.conversation_id = CAST(:conversation AS uuid)
+                  AND r.status = 'completed' AND r.terminal_at IS NOT NULL
+                  AND r.user_message_id IS NOT NULL
+                  AND r.assistant_message_id IS NOT NULL
+                  AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
+                  AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
+                ORDER BY r.created_at, r.execution_id, e.event_seq
+                LIMIT 50001
+            """), scope)
+            rows = result.mappings().all()
+        if len(rows) > 50000:
+            raise RuntimeError("chat_activity_replay_limit_exceeded")
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            message_id = str(row["message_id"])
+            saved = grouped.get(message_id)
+            if saved is None:
+                if len(grouped) >= 500:
+                    raise RuntimeError("chat_activity_message_limit_exceeded")
+                digest = str(row["assistant_message_digest"])
+                if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                    raise RuntimeError("chat_activity_invalid_digest")
+                saved = {
+                    "request_id": str(row["request_id"]), "digest": digest,
+                    "run_id": str(row["transport_run_id"]), "terminal": False,
+                    "events": [],
+                }
+                grouped[message_id] = saved
+            if (saved["request_id"] != str(row["request_id"])
+                    or saved["digest"] != str(row["assistant_message_digest"])
+                    or saved["run_id"] != str(row["transport_run_id"])):
+                raise RuntimeError("chat_activity_multiple_run_owners")
+            event = row["event_payload"]
+            if isinstance(event, str):
+                event = json.loads(event)
+            if not isinstance(event, dict):
+                raise RuntimeError("chat_activity_invalid_journal_payload")
+            if row["event_type"] in {"RUN_FINISHED", "RUN_ERROR"}:
+                if (row["event_type"] != "RUN_FINISHED"
+                        or saved["terminal"] or event.get("type") != "RUN_FINISHED"
+                        or event.get("runId") != saved["run_id"]
+                        or event.get("threadId") != scope["conversation"]):
+                    raise RuntimeError("chat_activity_terminal_mismatch")
+                saved["terminal"] = True
+            else:
+                if saved["terminal"]:
+                    raise RuntimeError("chat_activity_post_terminal_event")
+                saved["events"].append({
+                    "seq": int(row["event_seq"]), "event": event,
+                })
+                if len(saved["events"]) > 100:
+                    raise RuntimeError("chat_activity_step_limit_exceeded")
+        if any(not saved["terminal"] and saved["events"] for saved in grouped.values()):
+            raise RuntimeError("chat_activity_journal_incomplete")
+        return {
+            message_id: (
+                saved["request_id"], saved["digest"],
+                saved["run_id"], saved["events"],
+            )
+            for message_id, saved in grouped.items()
+            if saved["terminal"] and saved["events"]
+        }
+
     async def completed_replay_attestations(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
     ) -> dict[str, tuple[str, str]]:

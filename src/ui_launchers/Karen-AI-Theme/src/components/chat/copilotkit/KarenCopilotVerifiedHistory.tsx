@@ -8,6 +8,7 @@
 import { CopilotChatAssistantMessage } from "@copilotkit/react-core/v2";
 import { createContext, useContext } from "react";
 import type { ComponentProps, ReactNode } from "react";
+import type { AgentStepEvent } from "@/lib/types";
 
 import {
   KarenPresentationRegistry,
@@ -22,7 +23,8 @@ import {
 type VerifiedPart =
   | { type: "presentation"; value: KarenPresentationEnvelope }
   | { type: "receipt"; value: Record<string, unknown> }
-  | { type: "integrity"; value: Record<string, unknown> };
+  | { type: "integrity"; value: Record<string, unknown> }
+  | { type: "agent_step"; value: AgentStepEvent; sequence: number };
 export type VerifiedHistoryParts = ReadonlyMap<string, readonly VerifiedPart[]>;
 
 const ALLOWED_RECEIPT = new Set([
@@ -62,8 +64,9 @@ function validIntegrity(value: unknown): value is Record<string, unknown> {
   if (value.personal_recall_grounded !== undefined &&
       typeof value.personal_recall_grounded !== "boolean") return false;
   if (value.evidence_source !== undefined &&
-      !["authorized_memory_evidence", "authorized_conversation_evidence"].includes(
-        String(value.evidence_source))) return false;
+      (typeof value.evidence_source !== "string" ||
+       !["authorized_memory_evidence", "authorized_conversation_evidence"].includes(
+         value.evidence_source))) return false;
   return value.output_truncated === true ||
     (value.cortex_intent === "memory.recall" &&
      typeof value.personal_recall_grounded === "boolean");
@@ -74,16 +77,63 @@ function validIntegrity(value: unknown): value is Record<string, unknown> {
  * Unknown events, duplicate receipts, unbound IDs and unsupported presentation
  * versions are hard errors. No "best-effort" partial transcript playback.
  */
+function parseSavedAgentStep(value: Record<string, unknown>): {
+  event: AgentStepEvent; sequence: number;
+} | null {
+  if (Object.keys(value).some(key => ![
+    "step_id", "agent_id", "status", "event_type", "description", "run_id", "sequence",
+  ].includes(key))) return null;
+  const { step_id, agent_id, status, event_type, description, run_id, sequence } = value;
+  if (typeof step_id !== "string" || !step_id.trim() || step_id.length > 128 ||
+      typeof agent_id !== "string" || !agent_id.trim() || agent_id.length > 128 ||
+      typeof event_type !== "string" || event_type.length > 64 ||
+      typeof description !== "string" || description.length > 2000 ||
+      typeof run_id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(run_id) ||
+      typeof sequence !== "number" || !Number.isInteger(sequence) ||
+      sequence < 1 || sequence > 2048 ||
+      typeof status !== "string" ||
+      !["running", "completed", "failed", "cancelled", "skipped"].includes(status)) {
+    return null;
+  }
+  const type: AgentStepEvent["type"] = status === "completed"
+    ? "agent_step_completed" : status === "failed" || status === "cancelled"
+    ? "agent_step_failed" : status === "skipped"
+    ? "agent_step_skipped" : "agent_step_started";
+  return { sequence, event: {
+    type, step_id,
+    metadata: {
+      agent_id, run_id, observed_status: status,
+      event_type, description, sequence, response_source: "persisted_history",
+    },
+  } };
+}
+
 export function parseKarenVerifiedHistory(
   value: unknown, messages: ReadonlyArray<{ id: string; role: string }>,
 ): VerifiedHistoryParts {
-  if (!Array.isArray(value) || value.length > 500 * 8) {
+  if (!Array.isArray(value) || value.length > 500 * 108) {
     throw new Error("Unsupported verified conversation events");
+  }
+  // The public parser must protect its own identity boundary, rather than
+  // relying solely on the current history-gate caller's text validation.
+  // Duplicate IDs would make a saved CUSTOM event ambiguous across turns.
+  if (!Array.isArray(messages) || messages.length > 500) {
+    throw new Error("Unsupported canonical conversation messages");
+  }
+  const knownIds = new Set<string>();
+  for (const message of messages) {
+    if (!record(message) || (message.role !== "user" && message.role !== "assistant") ||
+      typeof message.id !== "string" || !message.id.trim() ||
+      message.id.length > 200 || knownIds.has(message.id)) {
+      throw new Error("Unsupported canonical conversation message identity");
+    }
+    knownIds.add(message.id);
   }
   const assistantIds = new Set(messages.filter(m => m.role === "assistant").map(m => m.id));
   const parts = new Map<string, VerifiedPart[]>();
   const counters = new Map<string, {
     presentation: number; receipt: number; integrity: number;
+    steps: number; lastStepSequence: number; stepRunId: string | null;
     presentationIds: Set<string>;
   }>();
   for (const candidate of value) {
@@ -97,6 +147,7 @@ export function parseKarenVerifiedHistory(
     const id = candidate.messageId;
     const seen = counters.get(id) || {
       presentation: 0, receipt: 0, integrity: 0,
+      steps: 0, lastStepSequence: 0, stepRunId: null,
       presentationIds: new Set<string>(),
     };
     let part: VerifiedPart;
@@ -118,13 +169,30 @@ export function parseKarenVerifiedHistory(
         throw new Error("Unsupported verified response integrity");
       }
       part = { type: "integrity", value: candidate.value };
+    } else if (name === "karen.agent_step.v1") {
+      const observed = parseSavedAgentStep(candidate.value);
+      if (!observed || ++seen.steps > 100 ||
+          observed.sequence <= seen.lastStepSequence ||
+          (seen.stepRunId !== null && seen.stepRunId !== candidate.value.run_id)) {
+        throw new Error("Unsupported verified agent activity");
+      }
+      seen.lastStepSequence = observed.sequence;
+      seen.stepRunId = candidate.value.run_id as string;
+      part = { type: "agent_step", value: observed.event, sequence: observed.sequence };
     } else {
       throw new Error("Unsupported verified conversation event");
     }
     counters.set(id, seen);
     parts.set(id, [...(parts.get(id) || []), part]);
   }
-  return parts;
+  // Event arrival order is not conversation order. The intelligence rail must
+  // identify the latest saved execution by canonical assistant message order,
+  // even when the backend sends valid CUSTOM events in another sequence.
+  // Include every canonical assistant message, including those without rich
+  // events. Otherwise the rail can mistake an older turn with saved activity
+  // for the latest assistant turn when the newest reply has no agent steps.
+  return new Map(messages.filter(message => message.role === "assistant")
+    .map(message => [message.id, parts.get(message.id) ?? []] as const));
 }
 
 const VerifiedHistoryContext = createContext<VerifiedHistoryParts>(new Map());
@@ -145,16 +213,33 @@ export function KarenVerifiedHistoryProvider({
  */
 export function useKarenLatestVerifiedExecution(): Record<string, unknown> | null {
   const verified = useContext(VerifiedHistoryContext);
-  let latest: Record<string, unknown> | null = null;
-  for (const parts of verified.values()) {
-    for (const part of parts) {
-      if (part.type === "receipt") latest = part.value;
-    }
-  }
-  return latest;
+  // Model attribution belongs to the latest canonical assistant turn.
+  // Never display an older verified model as the executor of a newer reply.
+  const latestParts = Array.from(verified.values()).at(-1) ?? [];
+  const receipt = latestParts.find(part => part.type === "receipt");
+  return receipt?.type === "receipt" ? receipt.value : null;
 }
 
 /** Preserve the SDK's default assistant message (including its toolbar). */
+/** Only saved, validated steps for the latest assistant turn populate the rail. */
+export function useKarenLatestVerifiedAgentSteps(): AgentStepEvent[] {
+  const verified = useContext(VerifiedHistoryContext);
+  const latest = Array.from(verified.values()).at(-1) || [];
+  const steps = latest.filter(
+    (part): part is Extract<VerifiedPart, { type: "agent_step" }> =>
+      part.type === "agent_step",
+  );
+  const lifecycle = new Map<string, AgentStepEvent>();
+  for (const part of steps) {
+    // A step identifier is only unique within its originating agent.
+    // Do not collapse two separately observed agents into one timeline item.
+    const agentId = part.value.metadata?.agent_id;
+    if (typeof agentId !== "string") continue;
+    lifecycle.set(JSON.stringify([agentId, part.value.step_id]), part.value);
+  }
+  return Array.from(lifecycle.values());
+}
+
 export function KarenCopilotAssistantMessage(
   props: ComponentProps<typeof CopilotChatAssistantMessage>,
 ) {

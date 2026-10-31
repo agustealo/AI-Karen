@@ -11,16 +11,10 @@ const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
- * CopilotKit v2 compatibility entry point. This component is deliberately
- * NOT mounted until the authenticated runtime gateway, server-owned thread
- * history and feature-parity tests have been completed.
- *
- * The dashboard retains the current assistant-ui implementation for now.
- * The isolated acceptance-only route may mount this candidate if its server-
- * side exact-host gate is explicitly enabled; it is not a consumer cutover.
- * The high-level CopilotChat starts inference on first mount, so this shell
- * uses the native controlled CopilotChatView with explicit submit-only runs.
- * Consumer cutover still requires exact-revision browser and UX acceptance.
+ * Canonical CopilotKit v2 chat shell, staged as the dashboard renderer on PR #585.
+ * Runtime, authentication, saved history and execution receipts remain backend-owned.
+ * The controlled view starts runs only on explicit user submission.
+ * No claim of deployment or browser acceptance is made by this mount.
  */
 export interface KarenCopilotChatProps {
   /** Canonical persisted conversation ID, obtained through SessionProvider. */
@@ -28,6 +22,8 @@ export interface KarenCopilotChatProps {
   /** Optional user preference from Karen's backend-owned model catalog. */
   preferredProvider?: string | null;
   preferredModel?: string | null;
+  /** Authorized, session-scoped Agent Runtime handoff, not a routing command. */
+  workspaceRunId?: string | null;
   onBusyChange?: (busy: boolean) => void;
 }
 
@@ -35,6 +31,7 @@ export function KarenCopilotChat({
   conversationId,
   preferredProvider = null,
   preferredModel = null,
+  workspaceRunId = null,
   onBusyChange,
 }: KarenCopilotChatProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -66,12 +63,17 @@ export function KarenCopilotChat({
       </p>
     );
   }
-  const properties = preferredProvider !== null && preferredModel !== null
-    ? {
-        preferred_llm_provider: preferredProvider.trim(),
-        preferred_model: preferredModel.trim(),
-      }
-    : undefined;
+  if (workspaceRunId !== null &&
+      (typeof workspaceRunId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(workspaceRunId))) {
+    return <p role="alert" className="text-sm text-destructive">Invalid Agent Runtime workspace reference.</p>;
+  }
+  const properties = {
+    ...(preferredProvider !== null && preferredModel !== null
+      ? { preferred_llm_provider: preferredProvider.trim(), preferred_model: preferredModel.trim() }
+      : {}),
+    ...(workspaceRunId !== null ? { workspace_run_id: workspaceRunId } : {}),
+  };
+  const forwardedProperties = Object.keys(properties).length > 0 ? properties : undefined;
 
   const scopeKey = [user.tenant_id, user.user_id, conversationId].join(":");
   return (
@@ -79,9 +81,9 @@ export function KarenCopilotChat({
       aria-label="Karen CopilotKit conversation"
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
     >
-      <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
+      <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={forwardedProperties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
-          <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
               <div data-testid="karen-copilot-persona-footer"

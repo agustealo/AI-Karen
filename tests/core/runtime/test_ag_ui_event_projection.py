@@ -71,7 +71,7 @@ def test_agent_activity_does_not_fabricate_langgraph_progress():
     assert [event["type"] for event in events] == [
         "ACTIVITY_SNAPSHOT", "CUSTOM",
     ]
-    assert events[0]["messageId"] == "activity-run-s1"
+    assert events[0]["messageId"] == "activity-3:run-10:researcher-s1"
     assert events[0]["activityType"] == "KAREN_AGENT_STEP"
     assert events[0]["content"]["status"] == "completed"
     assert events[0]["content"]["runId"] == "run"
@@ -80,6 +80,42 @@ def test_agent_activity_does_not_fabricate_langgraph_progress():
     assert events[1]["value"]["status"] == "completed"
     assert "secret" not in str(events)
     assert p.project(chunk("status", "Waiting"))[0]["name"] == "karen.status"
+
+
+def test_agent_activity_id_is_unique_per_agent_even_when_step_id_matches():
+    projector = AGUIEventProjection(thread_id="thread", run_id="run-1")
+    projector.begin()
+    first = projector.project(chunk(
+        "agent_step", "First agent working",
+        step_id="shared-step", agent_id="researcher",
+        status="running", event_type="agent_step_started",
+    ))
+    second = projector.project(chunk(
+        "agent_step", "Second agent working",
+        step_id="shared-step", agent_id="writer",
+        status="running", event_type="agent_step_started",
+    ))
+    finished = projector.project(chunk(
+        "agent_step", "First agent finished",
+        step_id="shared-step", agent_id="researcher",
+        status="completed", event_type="agent_step_completed",
+    ))
+    assert first[0]["messageId"] != second[0]["messageId"]
+    assert first[0]["messageId"] == finished[0]["messageId"]
+    assert first[0]["content"]["agentId"] == "researcher"
+    assert second[0]["content"]["agentId"] == "writer"
+
+
+def test_agent_activity_ids_do_not_collide_on_delimiter_boundaries():
+    projector = AGUIEventProjection(thread_id="thread", run_id="run")
+    projector.begin()
+    one = projector.project(chunk(
+        "agent_step", step_id="c", agent_id="a-b", status="running",
+    ))
+    two = projector.project(chunk(
+        "agent_step", step_id="b-c", agent_id="a", status="running",
+    ))
+    assert one[0]["messageId"] != two[0]["messageId"]
 
 
 def test_tool_projection_never_exposes_args_or_invents_unseen_start():

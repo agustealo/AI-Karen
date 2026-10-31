@@ -1,4 +1,4 @@
-import { HttpAgent } from "@ag-ui/client-v1";
+import { HttpAgent } from "@ag-ui/client";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getBackendBaseUrl } from "../../_lib/backend-proxy";

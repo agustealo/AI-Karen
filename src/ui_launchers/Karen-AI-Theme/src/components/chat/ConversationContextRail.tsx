@@ -45,6 +45,8 @@ interface ApprovalAttentionItem {
 interface ConversationContextRailProps {
   metadata?: JsonRecord;
   agentSteps: AgentStepEvent[];
+  /** Show the canonical intelligence deck within a bounded mobile disclosure. */
+  embedded?: boolean;
   approvals?: ApprovalAttentionItem[];
   approvalsLoadState?: 'idle' | 'loading' | 'ready' | 'unavailable';
   systemResources?: PlatformResourceSnapshot | null;
@@ -411,6 +413,7 @@ const EmptyTruth = ({ children }: { children: React.ReactNode }) => (
 function RailContent({
   metadata,
   agentSteps,
+  embedded = false,
   approvals = [],
   approvalsLoadState = 'idle',
   systemResources = null,
@@ -473,7 +476,7 @@ function RailContent({
     approvalsLoadState === 'unavailable';
 
   return (
-    <CustomizableCardDeck>
+    <CustomizableCardDeck portalEnabled={!embedded}>
       <Card className="karen-surface border-border/70 bg-card/70">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
@@ -1479,7 +1482,7 @@ export default function ConversationContextRail(
 
   useEffect(() => {
     let cancelled = false;
-    if (!window.matchMedia('(min-width: 1280px)').matches) {
+    if (props.embedded || !window.matchMedia('(min-width: 1280px)').matches) {
       return () => {
         cancelled = true;
       };
@@ -1513,7 +1516,7 @@ export default function ConversationContextRail(
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [props.embedded]);
 
   const metadata = props.metadata || {};
   const runtime = normalizeRuntimeInsight(metadata);
@@ -1525,7 +1528,9 @@ export default function ConversationContextRail(
 
   return (
     <aside
-      className="hidden h-full min-h-0 w-[21rem] shrink-0 overflow-y-auto overscroll-contain border-l border-border/70 bg-background/45 p-3 xl:block 2xl:w-[22rem]"
+      className={props.embedded
+        ? "h-full min-h-0 w-full overflow-y-auto overscroll-contain bg-background/45 p-3"
+        : "hidden h-full min-h-0 w-[21rem] shrink-0 overflow-y-auto overscroll-contain border-l border-border/70 bg-background/45 p-3 xl:block 2xl:w-[22rem]"}
       aria-label="Conversation intelligence deck"
       data-testid="conversation-context-rail"
     >

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   currentSession: null as null | { id: string; title: string },
+  workspaceRunId: null as string | null,
   strictInitialSession: false,
   sessions: [] as Array<{ id: string; title: string }>,
   isLoadingSessions: false,
@@ -11,7 +12,7 @@ const state = vi.hoisted(() => ({
   createNewSession: vi.fn(),
   loadSession: vi.fn(),
   mounts: [] as string[],
-  modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null}>,
+  modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null}>,
   onModelChange: null as null | ((value: {provider: string; model: string} | null) => void),
   onBusyChange: null as null | ((busy: boolean) => void),
 }));
@@ -19,6 +20,7 @@ const state = vi.hoisted(() => ({
 vi.mock("@/components/chat/SessionProvider", () => ({
   useSession: () => ({
     currentSession: state.currentSession,
+    workspaceRunId: state.workspaceRunId,
     strictInitialSession: state.strictInitialSession,
     sessions: state.sessions,
     isLoadingSessions: state.isLoadingSessions,
@@ -35,9 +37,9 @@ vi.mock("@/components/chat/KarenComposerRuntimeCatalog", () => ({
 }));
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotChat", () => ({
-  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, onBusyChange }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; onBusyChange: (busy: boolean) => void }) => {
+  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, workspaceRunId, onBusyChange }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null; onBusyChange: (busy: boolean) => void }) => {
     state.mounts.push(conversationId);
-    state.modelProps.push({ preferredProvider, preferredModel });
+    state.modelProps.push({ preferredProvider, preferredModel, workspaceRunId });
     state.onBusyChange = onBusyChange;
     return <div data-testid="owned-copilot-chat">{conversationId}</div>;
   },
@@ -50,6 +52,7 @@ const SECOND = "7aaebd2c-1b53-4f55-9e34-2c4593b477c5";
 
 beforeEach(() => {
   state.currentSession = null;
+  state.workspaceRunId = null;
   state.strictInitialSession = false;
   state.sessions = [];
   state.isLoadingSessions = false;
@@ -75,11 +78,28 @@ describe("CopilotKit consumer session adapter", () => {
     expect(state.mounts).toHaveLength(0);
   });
 
+  it("requires a durable new session instead of inventing a local thread", async () => {
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    await waitFor(() => expect(state.createNewSession).toHaveBeenCalledTimes(1));
+    expect(state.mounts).toHaveLength(0);
+  });
+
+  it("never creates a replacement when the pinned conversation cannot be verified", () => {
+    state.strictInitialSession = true;
+    state.error = "The requested conversation could not be verified.";
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.getByRole("alert").textContent).toContain("could not be verified");
+    expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.mounts).toHaveLength(0);
+  });
+
   it("fails closed on an unavailable strict acceptance conversation without offering a replacement", () => {
     state.strictInitialSession = true;
     state.error = "The requested conversation could not be verified. No replacement conversation was created.";
     render(<KarenCopilotConsumerChat />);
-
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("No replacement conversation was created.");
     expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
@@ -89,12 +109,20 @@ describe("CopilotKit consumer session adapter", () => {
     expect(state.mounts).toHaveLength(0);
   });
 
-  it("requires a durable new session instead of inventing a local thread", async () => {
+  it("locks navigation to an already verified strictly pinned conversation", () => {
+    state.strictInitialSession = true;
+    state.currentSession = { id: FIRST, title: "Pinned conversation" };
+    state.sessions = [
+      { id: FIRST, title: "Pinned conversation" },
+      { id: SECOND, title: "Another owned conversation" },
+    ];
     render(<KarenCopilotConsumerChat />);
-    expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
-    await waitFor(() => expect(state.createNewSession).toHaveBeenCalledTimes(1));
-    expect(state.mounts).toHaveLength(0);
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+    expect(screen.queryByRole("button", { name: "Find conversations" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
+    expect(screen.queryByRole("searchbox", { name: "Find a conversation" })).toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.loadSession).not.toHaveBeenCalled();
   });
 
   it("binds the authorized selected session and searches owned titles only", async () => {
@@ -120,11 +148,11 @@ describe("CopilotKit consumer session adapter", () => {
     state.currentSession = { id: FIRST, title: "Project Alpha" };
     state.sessions = [{ id: FIRST, title: "Project Alpha" }];
     render(<KarenCopilotConsumerChat />);
-    expect(state.modelProps.at(-1)).toEqual({ preferredProvider: null, preferredModel: null });
+    expect(state.modelProps.at(-1)).toEqual({ preferredProvider: null, preferredModel: null, workspaceRunId: null });
     fireEvent.click(screen.getByText("Model and provider"));
     fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
     expect(state.modelProps.at(-1)).toEqual({
-      preferredProvider: "local", preferredModel: "selected-model",
+      preferredProvider: "local", preferredModel: "selected-model", workspaceRunId: null,
     });
   });
 
@@ -141,13 +169,21 @@ describe("CopilotKit consumer session adapter", () => {
     expect(screen.getByRole("status").textContent).toContain("Model changes are unavailable");
     act(() => change(null));
     expect(state.modelProps.at(-1)).toEqual({
-      preferredProvider: "local", preferredModel: "selected-model",
+      preferredProvider: "local", preferredModel: "selected-model", workspaceRunId: null,
     });
     act(() => busy(false));
     act(() => change(null));
     expect(state.modelProps.at(-1)).toEqual({
-      preferredProvider: null, preferredModel: null,
+      preferredProvider: null, preferredModel: null, workspaceRunId: null,
     });
+  });
+
+  it("preserves the canonical Agent Runtime handoff in its owned conversation", () => {
+    state.currentSession = { id: FIRST, title: "Agent Runtime" };
+    state.sessions = [{ id: FIRST, title: "Agent Runtime" }];
+    state.workspaceRunId = "run_approved_17";
+    render(<KarenCopilotConsumerChat />);
+    expect(state.modelProps.at(-1)?.workspaceRunId).toBe("run_approved_17");
   });
 
   it("blocks conversation changes while an owned CopilotKit run is active", () => {

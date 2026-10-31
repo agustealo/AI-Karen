@@ -135,15 +135,34 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
     // Responsive geometry is read-only and must not submit, reflow offscreen or
     // hide access to the shared native composer at a mobile viewport width.
     await page.setViewportSize({ width: 375, height: 812 });
+    const mobileIntelligence = page.getByTestId("karen-copilot-mobile-intelligence");
+    await expect(mobileIntelligence).toBeVisible();
+    const intelligenceToggle = mobileIntelligence.locator("summary");
+    await expect(intelligenceToggle).toContainText("Conversation intelligence");
+    await intelligenceToggle.click();
+    await expect(mobileIntelligence).toHaveAttribute("open", "");
+    const verifiedMobileDeck = mobileIntelligence.getByTestId("canonical-conversation-rail");
+    const unverifiedMobileDeck = mobileIntelligence.getByTestId("karen-copilot-rail-unverified");
+    const verifiedCount = await verifiedMobileDeck.count();
+    const unverifiedCount = await unverifiedMobileDeck.count();
+    expect(verifiedCount + unverifiedCount,
+      "Mobile deck must show canonical verified insight or an explicit unverified state").toBe(1);
+    if (verifiedCount) await expect(verifiedMobileDeck).toBeVisible();
+    else await expect(unverifiedMobileDeck).toBeVisible();
+    await intelligenceToggle.click();
+    await expect(mobileIntelligence).not.toHaveAttribute("open", "");
     await expect(restored).toBeVisible();
     await expect(page.getByTestId("karen-copilot-persona-footer")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth))
       .toBeLessThanOrEqual(375);
     expect(runs).toBe(0);
 
-    // Current consumer route remains unchanged after visiting candidate.
+    // The real consumer dashboard now uses the same canonical CopilotKit shell.
+    // Navigation must never trigger an implicit model execution.
     await page.goto("/dashboard");
-    await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
+    await expect(page.getByTestId("karen-copilot-consumer-chat")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("karen-assistant-ui-chat")).toHaveCount(0);
+    expect(runs, "Dashboard navigation must not start inference").toBe(0);
   } finally {
     await clearOnlyOwnAcceptanceDraft(page.request, draftUrl, [text]);
   }
@@ -687,7 +706,6 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
   expect(inferred, "Ordinary dashboard remains on the existing consumer mount").toEqual([]);
 });
-
 
 test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread", async ({ page }) => {
   requireApprovedNativeFixture();
