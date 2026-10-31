@@ -697,7 +697,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   // Initialize sessions on mount
   useEffect(() => {
-    const bootstrapKey = `initialize:${initialSessionId || '__new__'}`;
+    const bootstrapKey = `initialize:${strictInitialSession ? 'strict' : 'normal'}:${initialSessionId || '__new__'}`;
     if (shouldSuppressRecentBootstrap(bootstrapKey)) {
       return;
     }
@@ -728,7 +728,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     initializeSessions();
     // Only initialize once on mount or when initialSessionId explicitly changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialSessionId, getPersistedActiveSessionId]);
+  }, [initialSessionId, getPersistedActiveSessionId, strictInitialSession]);
 
   return (
     <SessionContext.Provider value={{
