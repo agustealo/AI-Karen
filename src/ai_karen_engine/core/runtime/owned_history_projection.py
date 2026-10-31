@@ -64,6 +64,13 @@ def project_owned_history(
     if len(records) > _MAX_MESSAGES:
         raise UnreplayableHistory("history_message_limit")
     thread_id = str(snapshot.conversation.id)
+    if observed_activity:
+        eligible_ids = {
+            str(message.id) for message in records
+            if str(message.role) == "assistant"
+        }
+        if any(identifier not in eligible_ids for identifier in observed_activity):
+            raise UnreplayableHistory("orphaned_observed_activity")
     messages: list[dict[str, str]] = []
     events: list[dict[str, Any]] = []
     seen_message_ids: set[str] = set()
