@@ -81,7 +81,7 @@ export function KarenCopilotChat({
     >
       <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
-          <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
               <div data-testid="karen-copilot-persona-footer"

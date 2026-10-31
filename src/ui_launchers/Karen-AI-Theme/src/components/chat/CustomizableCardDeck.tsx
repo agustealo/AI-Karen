@@ -77,14 +77,14 @@ function restore(): CardPreference {
 }
 
 /** Presentation preferences only. Cards and their evidence remain backend-owned. */
-export default function CustomizableCardDeck({ children }: { children: ReactNode }) {
+export default function CustomizableCardDeck({ children, portalEnabled = true }: { children: ReactNode; portalEnabled?: boolean }) {
   const [preferences, setPreferences] = useState<CardPreference>({ order: [], hidden: [] });
   const [editing, setEditing] = useState(false);
   const [dragging, setDragging] = useState<string | null>(null);
   const [headerTarget, setHeaderTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    setHeaderTarget(document.getElementById('karen-rail-customize-menu'));
-  }, []);
+    if (portalEnabled) setHeaderTarget(document.getElementById('karen-rail-customize-menu'));
+  }, [portalEnabled]);
   useEffect(() => setPreferences(restore()), []);
   const cards = Children.toArray(children).map((element, index) => {
     const title = findTitle(element) || `Card ${index + 1}`;
@@ -128,7 +128,7 @@ export default function CustomizableCardDeck({ children }: { children: ReactNode
         onClick={() => setEditing(!editing)} className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
         <Settings2 className="h-4 w-4" />
       </button>;
-      return headerTarget ? createPortal(trigger, headerTarget) : trigger;
+      return portalEnabled && headerTarget ? createPortal(trigger, headerTarget) : trigger;
     })()}
     <h3 className="text-sm font-semibold tracking-tight">Cards</h3>
     {editing && <p className="text-xs text-muted-foreground">Show, hide, drag, or use arrows to arrange cards. Saved in this browser.</p>}
