@@ -145,7 +145,7 @@ describe("CopilotKit consumer session adapter", () => {
     act(() => busy(false));
     act(() => change(null));
     expect(state.modelProps.at(-1)).toEqual({
-      preferredProvider: null, preferredModel: null,
+      preferredProvider: null, preferredModel: null, workspaceRunId: null,
     });
   });
 
