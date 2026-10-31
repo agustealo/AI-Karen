@@ -87,7 +87,7 @@ function parseSavedAgentStep(value: Record<string, unknown>): {
       typeof agent_id !== "string" || !agent_id.trim() || agent_id.length > 128 ||
       typeof event_type !== "string" || event_type.length > 64 ||
       typeof description !== "string" || description.length > 2000 ||
-      typeof run_id !== "string" || !run_id.trim() || run_id.length > 100 ||
+      typeof run_id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(run_id) ||
       typeof sequence !== "number" || !Number.isInteger(sequence) ||
       sequence < 1 || sequence > 2048 ||
       !["running", "completed", "failed", "cancelled", "skipped"].includes(String(status))) {
