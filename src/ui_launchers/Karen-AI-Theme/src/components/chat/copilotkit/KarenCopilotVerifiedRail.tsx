@@ -6,14 +6,14 @@
  * Neither layout projects SDK state into execution claims.
  */
 import ConversationContextRail from "@/components/chat/ConversationContextRail";
-import { useKarenLatestVerifiedExecution } from "./KarenCopilotVerifiedHistory";
+import { useKarenLatestVerifiedExecution, useKarenLatestVerifiedAgentSteps } from "./KarenCopilotVerifiedHistory";
 
-/** The authenticated replay contract does not yet attest historical agent steps. */
+/** Show the honest absence when the latest saved turn lacks verified steps. */
 function ActivityReplayNotice() {
   return (
     <p role="status" data-testid="karen-copilot-activity-replay-unavailable"
       className="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
-      Historical agent steps are not available in verified replay. No activity is inferred from SDK state.
+      No attested agent steps are available for the latest saved assistant turn. No activity is inferred from SDK state.
     </p>
   );
 }
@@ -36,6 +36,7 @@ function RailUnavailable({ embedded = false }: { embedded?: boolean }) {
 
 export function KarenCopilotVerifiedRail() {
   const receipt = useKarenLatestVerifiedExecution();
+  const agentSteps = useKarenLatestVerifiedAgentSteps();
   return (
     <>
       <details data-testid="karen-copilot-mobile-intelligence"
@@ -45,12 +46,12 @@ export function KarenCopilotVerifiedRail() {
         </summary>
         <div className="max-h-[min(55dvh,28rem)] min-h-0 overflow-y-auto overscroll-contain border-t border-border/60">
           {receipt
-            ? <><ConversationContextRail metadata={receipt} agentSteps={[]} embedded /><ActivityReplayNotice /></>
+            ? <><ConversationContextRail metadata={receipt} agentSteps={agentSteps} embedded />{agentSteps.length === 0 && <ActivityReplayNotice />}</>
             : <RailUnavailable embedded />}
         </div>
       </details>
       {receipt
-        ? <><ConversationContextRail metadata={receipt} agentSteps={[]} /><ActivityReplayNotice /></>
+        ? <><ConversationContextRail metadata={receipt} agentSteps={agentSteps} />{agentSteps.length === 0 && <ActivityReplayNotice />}</>
         : <RailUnavailable />}
     </>
   );
