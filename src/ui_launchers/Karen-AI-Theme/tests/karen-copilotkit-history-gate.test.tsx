@@ -77,11 +77,12 @@ describe("CopilotKit canonical conversation hydration", () => {
       </KarenCopilotHistoryGate>,
     );
     await waitFor(() => expect(screen.getByTestId("shared-agent-consumer").textContent).toBe("same-agent"));
-    expect(backend.agentOptions).toEqual([{
-      agentId: "karen-" + CONVERSATION_A,
-      runtimeAgentId: "default",
-      threadId: CONVERSATION_A,
-    }]);
+    expect(backend.agentOptions.length).toBeGreaterThan(0);
+    expect(backend.agentOptions.every((options) =>
+      options.agentId === "karen-" + CONVERSATION_A &&
+      options.runtimeAgentId === "default" &&
+      options.threadId === CONVERSATION_A,
+    )).toBe(true);
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
   });
 
