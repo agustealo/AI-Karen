@@ -103,6 +103,18 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
   });
 
+  it("forwards the canonical workspace run reference without changing the selected model", () => {
+    render(<KarenCopilotChat conversationId={CONVERSATION} workspaceRunId="run_approved_17" />);
+    expect(sdk.provider[0].properties).toEqual({ workspace_run_id: "run_approved_17" });
+    expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
+  });
+
+  it("rejects malformed workspace run references before mounting the SDK", () => {
+    render(<KarenCopilotChat conversationId={CONVERSATION} workspaceRunId="../bad" />);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(sdk.provider).toHaveLength(0);
+  });
+
   it("updates idle provider preferences without remounting the owned SDK thread", () => {
     const view = render(<KarenCopilotChat conversationId={CONVERSATION} />);
     expect(sdk.providerMounts).toBe(1);
