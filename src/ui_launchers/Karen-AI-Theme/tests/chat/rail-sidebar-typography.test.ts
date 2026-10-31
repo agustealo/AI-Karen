@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 describe('conversation rail sidebar typography', () => {
   it('uses the conversation sidebar scale for card headings and explanatory empty states', () => {
     const rail = readFileSync(resolve(process.cwd(), 'src/components/chat/ConversationContextRail.tsx'), 'utf8');
-    const chat = readFileSync(resolve(process.cwd(), 'src/components/chat/assistant-ui/KarenAssistantChat.tsx'), 'utf8');
+    const chat = readFileSync(resolve(process.cwd(), 'src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx'), 'utf8');
     const titles = [...rail.matchAll(/<CardTitle className="([^"]+)"/g)].map((match) => match[1]);
     expect(titles.length).toBeGreaterThan(0);
     expect(titles.every((classes) => classes.includes('text-sm font-medium'))).toBe(true);
