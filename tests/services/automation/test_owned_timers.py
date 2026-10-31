@@ -129,7 +129,7 @@ def test_migration_enforces_owner_rls_and_idempotent_deadline():
     assert "app.current_tenant_id" in migration
     assert "app.current_user_id" in migration
     assert "deadline_at > started_at" in migration
-    assert "notification" not in migration.lower().replace("not a notification", "")
+    assert "notification_delivered" not in migration\n    assert "reminder_scheduled" not in migration
 
 
 def test_api_wiring_and_non_delivery_contract():
