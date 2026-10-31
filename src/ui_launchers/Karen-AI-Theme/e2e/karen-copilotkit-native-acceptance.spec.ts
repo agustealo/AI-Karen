@@ -157,9 +157,12 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
       .toBeLessThanOrEqual(375);
     expect(runs).toBe(0);
 
-    // Current consumer route remains unchanged after visiting candidate.
+    // The real consumer dashboard now uses the same canonical CopilotKit shell.
+    // Navigation must never trigger an implicit model execution.
     await page.goto("/dashboard");
-    await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
+    await expect(page.getByTestId("karen-copilot-consumer-chat")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("karen-assistant-ui-chat")).toHaveCount(0);
+    expect(runs, "Dashboard navigation must not start inference").toBe(0);
   } finally {
     await clearOnlyOwnAcceptanceDraft(page.request, draftUrl, [text]);
   }
