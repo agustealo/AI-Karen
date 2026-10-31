@@ -413,6 +413,7 @@ const EmptyTruth = ({ children }: { children: React.ReactNode }) => (
 function RailContent({
   metadata,
   agentSteps,
+  embedded = false,
   approvals = [],
   approvalsLoadState = 'idle',
   systemResources = null,
@@ -475,7 +476,7 @@ function RailContent({
     approvalsLoadState === 'unavailable';
 
   return (
-    <CustomizableCardDeck>
+    <CustomizableCardDeck portalEnabled={!embedded}>
       <Card className="karen-surface border-border/70 bg-card/70">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm font-medium tracking-normal normal-case text-foreground">
