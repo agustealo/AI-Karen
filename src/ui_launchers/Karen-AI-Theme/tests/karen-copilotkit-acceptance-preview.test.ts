@@ -36,7 +36,7 @@ const verifiedHistory = readFileSync(resolve(root,
 const personaOwner = readFileSync(resolve(root,
   "src/components/chat/persona/KarenPersonaSelector.tsx"), "utf8");
 const catalogOwner = readFileSync(resolve(root,
-  "src/components/chat/runtime/KarenComposerRuntimeCatalog.tsx"), "utf8");
+  "src/components/chat/KarenComposerRuntimeCatalog.tsx"), "utf8");
 const presentationOwner = readFileSync(resolve(root,
   "src/components/chat/presentation/KarenPresentationRegistry.tsx"), "utf8");
 const controlledChat = readFileSync(resolve(root,
@@ -49,7 +49,7 @@ const browserCapture = readFileSync(resolve(root,
 describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => {
   it("keeps persona, catalog and verified presentation independent of the legacy renderer", () => {
     expect(copilotShell).toContain('from "../persona/KarenPersonaSelector"');
-    expect(consumerChat).toContain('from "../runtime/KarenComposerRuntimeCatalog"');
+    expect(consumerChat).toContain('from "../KarenComposerRuntimeCatalog"');
     expect(verifiedHistory).toContain('from "@/components/chat/presentation/KarenPresentationRegistry"');
     for (const module of [copilotShell, consumerChat, verifiedHistory,
       personaOwner, catalogOwner, presentationOwner]) {
