@@ -59,7 +59,21 @@ def fixture(root: Path, *, copilot: bool = False) -> None:
 
 def test_live_repository_has_single_owner_mount() -> None:
     result = AUDITOR.audit()
-    assert result["violations"] == []
+    # The staged consumer branch must not declare release readiness while the
+    # retired assistant-ui packages and their second AG-UI client still exist.
+    # Strict architecture violations are reported, never silently ignored.
+    assert result["chat_mount"] in {"assistant-ui", "copilotkit"}
+    if result["chat_mount"] == "copilotkit":
+        assert any(
+            "Assistant-ui dependencies remain after primary cutover" in message
+            for message in result["violations"]
+        )
+        assert any(
+            "requires one AG-UI client version" in message
+            for message in result["violations"]
+        )
+    else:
+        assert result["violations"] == []
     assert result["runtime_verification"] == "not_run"
     assert result["static_evidence_only"] is True
     assert result["schema_version"] == 2
