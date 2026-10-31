@@ -64,14 +64,22 @@ def test_live_repository_has_single_owner_mount() -> None:
     # Strict architecture violations are reported, never silently ignored.
     assert result["chat_mount"] in {"assistant-ui", "copilotkit"}
     if result["chat_mount"] == "copilotkit":
+        manifest = json.loads(
+            (AUDITOR.ROOT / AUDITOR.WEB / "package.json").read_text(encoding="utf-8")
+        )
+        dependencies = manifest.get("dependencies", {})
+        legacy_present = any(
+            package in dependencies
+            for package in ("@assistant-ui/react", "@assistant-ui/react-ag-ui")
+        )
         assert any(
             "Assistant-ui dependencies remain after primary cutover" in message
             for message in result["violations"]
-        )
+        ) is legacy_present
         assert any(
             "requires one AG-UI client version" in message
             for message in result["violations"]
-        )
+        ) is (len(result["ag_ui_client_versions"]) > 1)
     else:
         assert result["violations"] == []
     assert result["runtime_verification"] == "not_run"
