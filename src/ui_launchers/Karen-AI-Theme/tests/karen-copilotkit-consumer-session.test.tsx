@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   currentSession: null as null | { id: string; title: string },
   workspaceRunId: null as string | null,
+  strictInitialSession: false,
   sessions: [] as Array<{ id: string; title: string }>,
   isLoadingSessions: false,
   error: null as string | null,
@@ -20,6 +21,7 @@ vi.mock("@/components/chat/SessionProvider", () => ({
   useSession: () => ({
     currentSession: state.currentSession,
     workspaceRunId: state.workspaceRunId,
+    strictInitialSession: state.strictInitialSession,
     sessions: state.sessions,
     isLoadingSessions: state.isLoadingSessions,
     error: state.error,
@@ -51,6 +53,7 @@ const SECOND = "7aaebd2c-1b53-4f55-9e34-2c4593b477c5";
 beforeEach(() => {
   state.currentSession = null;
   state.workspaceRunId = null;
+  state.strictInitialSession = false;
   state.sessions = [];
   state.isLoadingSessions = false;
   state.error = null;
@@ -80,6 +83,16 @@ describe("CopilotKit consumer session adapter", () => {
     expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
     await waitFor(() => expect(state.createNewSession).toHaveBeenCalledTimes(1));
+    expect(state.mounts).toHaveLength(0);
+  });
+
+  it("never creates a replacement when the pinned conversation cannot be verified", () => {
+    state.strictInitialSession = true;
+    state.error = "The requested conversation could not be verified.";
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.getByRole("alert").textContent).toContain("could not be verified");
+    expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
     expect(state.mounts).toHaveLength(0);
   });
 
