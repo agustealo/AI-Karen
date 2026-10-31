@@ -8,6 +8,8 @@ const page = readFileSync(resolve(root,
 const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf8");
 const canonicalSessions = readFileSync(resolve(root,
   "src/components/chat/SessionProvider.tsx"), "utf8");
+const consumerSource = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx"), "utf8");
 const previewGate = readFileSync(resolve(root,
   "src/app/acceptance/copilotkit/_lib/preview-gate.ts"), "utf8");
 const consumerPreview = readFileSync(resolve(root,
@@ -63,6 +65,15 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(canonicalSessions).toContain("setCurrentSession(null)");
     expect(canonicalSessions).toContain("No replacement conversation was created.");
     expect(consumerPreview).toContain("strictInitialSession>");
+  });
+
+  it("preserves strict errors and does not offer a replacement conversation", () => {
+    expect(canonicalSessions).toContain("strictInitialSession: boolean;");
+    expect(canonicalSessions).toContain("if (!strictInitialSession) setError(null)");
+    expect(canonicalSessions).toContain("if (!strictInitialSession) setError('Failed to load sessions list.");
+    expect(consumerSource).toContain("strictInitialSession,");
+    expect(consumerSource).toContain("{!strictInitialSession && (");
+    expect(consumerSource).toContain("onClick={() => void performNavigation(createNewSession)}");
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {
