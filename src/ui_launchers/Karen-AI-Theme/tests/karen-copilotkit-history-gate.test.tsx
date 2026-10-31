@@ -62,7 +62,7 @@ function guardedHistory(id = CONVERSATION_A) {
 
 function SharedAgentConsumer() {
   const { agent, isReady } = useKarenScopedAgent();
-  return <div data-testid="shared-agent-consumer">{isReady && agent === backend.agent ? "same-agent" : "unavailable"}</div>;
+  return <div data-testid="shared-agent-consumer">{isReady && Object.is(agent, backend.agent) ? "same-agent" : "unavailable"}</div>;
 }
 
 describe("CopilotKit canonical conversation hydration", () => {
