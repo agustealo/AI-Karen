@@ -309,3 +309,40 @@ def test_declared_ag_ui_version_must_match_root_lock_and_installed_version(
         "Canonical AG-UI client manifest and lockfile disagree" in item
         for item in result["violations"]
     )
+
+
+def test_strict_cutover_finds_legacy_caller_outside_chat_tree(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    route = tmp_path / AUDITOR.WEB_GATEWAY / "[[...slug]]" / "route.ts"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text(
+        'import { CopilotRuntime } from "@copilotkit/runtime/v2";\n',
+        encoding="utf-8",
+    )
+    caller = tmp_path / AUDITOR.WEB / "src/app/settings/old-chat.tsx"
+    caller.parent.mkdir(parents=True, exist_ok=True)
+    caller.write_text(
+        'import Legacy from "@/components/chat/assistant-ui/KarenAssistantChat";\n',
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert result["legacy_import_callers"] == [
+        str(caller.relative_to(tmp_path))
+    ]
+    assert any(
+        "Retired assistant-ui is still imported by production source" in item
+        for item in result["violations"]
+    )
+
+
+def test_compatibility_facade_is_not_a_production_caller(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    legacy = (tmp_path / AUDITOR.WEB /
+              "src/components/chat/assistant-ui/KarenPersonaSelector.tsx")
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        'export * from "../persona/KarenPersonaSelector";\n',
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path)
+    assert result["legacy_import_callers"] == []
