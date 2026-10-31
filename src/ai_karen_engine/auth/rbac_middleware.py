@@ -85,6 +85,10 @@ class Permission(str, Enum):
     PLANNER_READ = "planner:read"
     PLANNER_WRITE = "planner:write"
 
+    # Personal countdowns, distinct from training automation scheduling
+    TIMER_READ = "timer:read"
+    TIMER_WRITE = "timer:write"
+
     # Scheduler
     SCHEDULER_READ = "scheduler:read"
     SCHEDULER_WRITE = "scheduler:write"
@@ -220,6 +224,8 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
                 Permission.DATA_READ.value,
                 Permission.PLANNER_READ.value,
                 Permission.PLANNER_WRITE.value,
+                Permission.TIMER_READ.value,
+                Permission.TIMER_WRITE.value,
             ],
         },
         Role.READONLY.value: {
