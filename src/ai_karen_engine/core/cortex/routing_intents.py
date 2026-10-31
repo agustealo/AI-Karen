@@ -3,6 +3,25 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    "timer.manage": {
+        # Timer commands require a durable scheduler receipt. In-memory alarm
+        # definitions and generated prose are not execution evidence.
+        "triggers": ["start timer", "set a timer", "timer running", "show timer", "timer reminder"],
+        "patterns": [
+            r"^(?:please\s+)?(?:start|set|create|begin)\s+(?:(?:me\s+)?a\s+)?(?:\d+\s*(?:second|minute|hour|sec|min|hr)s?\s+)?timer(?:\s+(?:for|of)\s+\d+\s*(?:second|minute|hour|sec|min|hr)s?)?[?!.]*$",
+            r"^(?:please\s+)?(?:start|set|create|begin)\s+(?:me\s+)?(?:a\s+)?timer\s+(?:for|of)\s+\d+\s*(?:second|minute|hour|sec|min|hr)s?[?!.]*$",
+            r"^(?:please\s+)?(?:show|display|open|hide|stop|pause|resume|cancel|restart|reset)\s+(?:(?:me\s+)?(?:the|my|a|live)\s+)?(?:live\s+)?timer[?!.]*$",
+            r"^(?:can|could|would)\s+you\s+(?:please\s+)?(?:show|display|open|hide|stop|pause|resume|cancel)\s+(?:(?:me\s+)?(?:the|my|a|live)\s+)?(?:live\s+)?timer[?!.]*$",
+            r"^(?:can|could|would)\s+you\s+not\s+(?:show|display)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?timer[?!.]*$",
+            r"^(?:is|has)\s+(?:my|the)\s+timer\s+(?:still\s+)?(?:active|running|finished|expired|started|stopped)[?!.]*$",
+            r"^(?:what(?:'s|\s+is)\s+)?(?:the\s+)?(?:status|remaining\s+time|time\s+left)\s+(?:of|on|for)\s+(?:my|the)\s+timer[?!.]*$",
+            r"^(?:i\s+)?(?:didn'?t|did\s+not|haven'?t|have\s+not)\s+(?:get|receive)\s+(?:any|the|my|a)\s+(?:timer\s+)?reminder[?!.]*$",
+            r"^(?:will|did|can)\s+(?:you|karen)\s+(?:send|notify|remind)\s+me\s+(?:when|after)\s+(?:my|the)\s+timer\s+(?:ends|finishes|expires)[?!.]*$",
+        ],
+        "required_capability": "timer.schedule",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "planner.read": {
         "triggers": ["show my planner", "list my tasks", "show my tasks"],
         "patterns": [
