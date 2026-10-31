@@ -25,6 +25,7 @@ vi.mock("@/lib/api", () => ({
 
 import {
   KarenCopilotHistoryGate,
+  useKarenScopedAgent,
   karenScopedAgentId,
   toCopilotTextMessages,
 } from "@/components/chat/copilotkit/KarenCopilotHistoryGate";
@@ -59,7 +60,32 @@ function guardedHistory(id = CONVERSATION_A) {
   );
 }
 
+function SharedAgentConsumer() {
+  const { agent, isReady } = useKarenScopedAgent();
+  return <div data-testid="shared-agent-consumer">{isReady && agent === backend.agent ? "same-agent" : "unavailable"}</div>;
+}
+
 describe("CopilotKit canonical conversation hydration", () => {
+  it("registers one SDK agent when history hydration and the controlled view share the scope", async () => {
+    backend.fetchConversation.mockResolvedValue({
+      threadId: CONVERSATION_A,
+      messages: [{ id: "m1", role: "assistant", content: "Saved response" }],
+    });
+    render(
+      <KarenCopilotHistoryGate conversationId={CONVERSATION_A}>
+        <SharedAgentConsumer />
+      </KarenCopilotHistoryGate>,
+    );
+    await waitFor(() => expect(screen.getByTestId("shared-agent-consumer").textContent).toBe("same-agent"));
+    expect(backend.agentOptions).toEqual([{
+      agentId: "karen-" + CONVERSATION_A,
+      runtimeAgentId: "default",
+      threadId: CONVERSATION_A,
+    }]);
+    expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
+  });
+
+
   it("allocates distinct local agent identities for different conversations", () => {
     expect(karenScopedAgentId(CONVERSATION_A)).not.toBe(karenScopedAgentId(CONVERSATION_B));
   });
