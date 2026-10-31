@@ -139,6 +139,21 @@ export function KarenVerifiedHistoryProvider({
   );
 }
 
+/**
+ * Read-only projection of the most recent backend-validated execution receipt.
+ * Never infer execution from a requested model, agent state or an empty event.
+ */
+export function useKarenLatestVerifiedExecution(): Record<string, unknown> | null {
+  const verified = useContext(VerifiedHistoryContext);
+  let latest: Record<string, unknown> | null = null;
+  for (const parts of verified.values()) {
+    for (const part of parts) {
+      if (part.type === "receipt") latest = part.value;
+    }
+  }
+  return latest;
+}
+
 /** Preserve the SDK's default assistant message (including its toolbar). */
 export function KarenCopilotAssistantMessage(
   props: ComponentProps<typeof CopilotChatAssistantMessage>,
