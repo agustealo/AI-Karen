@@ -36,6 +36,10 @@ vi.mock("@/components/chat/assistant-ui/KarenPersonaSelector", () => ({
   KarenPersonaSelector: () => <div data-testid="backend-governed-persona" />,
 }));
 
+vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedRail", () => ({
+  KarenCopilotVerifiedRail: () => <aside data-testid="verified-context-rail" />,
+}));
+
 vi.mock("@/components/chat/copilotkit/KarenCopilotControlledChat", () => ({
   KarenCopilotControlledChat: (props: Record<string, unknown>) => {
     sdk.controlled.push(props);
@@ -78,6 +82,7 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     expect(screen.getByTestId("copilot-controlled-chat")).toBeTruthy();
     expect(screen.getByTestId("karen-copilot-persona-footer")).toBeTruthy();
     expect(screen.getByTestId("backend-governed-persona")).toBeTruthy();
+    expect(screen.getByTestId("verified-context-rail")).toBeTruthy();
     expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
     expect(sdk.provider[0].runtimeUrl).toBe("/api/copilotkit");
     expect(sdk.provider[0].properties).toBeUndefined();
