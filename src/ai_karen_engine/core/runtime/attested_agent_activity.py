@@ -9,12 +9,14 @@ This module never creates an attestation or reads an alternate store.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import re
 from typing import Any
 
 _ALLOWED_STATUSES = frozenset({"running", "completed", "failed", "cancelled", "skipped"})
 _MAX_EVENTS_PER_MESSAGE = 100
 _MAX_FIELD = 200
 _MAX_DESCRIPTION = 2000
+_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
 
 class InvalidAgentActivity(ValueError):
@@ -37,8 +39,7 @@ def project_attested_agent_activity(
         not isinstance(message_id, str) or not message_id.strip()
         or len(message_id) > _MAX_FIELD
         or not isinstance(transport_run_id, str)
-        or not transport_run_id
-        or len(transport_run_id) > 100
+        or _RUN_ID_PATTERN.fullmatch(transport_run_id) is None
         or not isinstance(events, (list, tuple))
         or len(events) > _MAX_EVENTS_PER_MESSAGE
     ):
