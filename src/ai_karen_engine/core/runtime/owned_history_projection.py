@@ -92,7 +92,7 @@ def project_owned_history(
         observed = (observed_activity or {}).get(identifier)
         rich = (
             observed is not None
-            any(_carries_value(metadata.get(key)) for key in _RUNTIME_RECEIPT)
+            or any(_carries_value(metadata.get(key)) for key in _RUNTIME_RECEIPT)
             or _carries_value(metadata.get("verified_presentations_v1"))
         )
         if rich:
