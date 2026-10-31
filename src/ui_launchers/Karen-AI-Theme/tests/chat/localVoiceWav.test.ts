@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { encodeMonoPcmWav } from "@/components/chat/assistant-ui/localVoiceWav";
+import { encodeMonoPcmWav } from "@/components/chat/voice/localVoiceWav";
 
 function audio(seconds: number) {
   const samples = new Float32Array(Math.floor(48000 * seconds));
