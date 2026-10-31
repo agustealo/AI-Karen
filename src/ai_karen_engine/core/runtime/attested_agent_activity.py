@@ -73,7 +73,7 @@ def project_attested_agent_activity(
             or len(step_id) > 128
             or not isinstance(agent_id, str) or not agent_id.strip()
             or len(agent_id) > 128
-            or status not in _ALLOWED_STATUSES
+            or not isinstance(status, str) or status not in _ALLOWED_STATUSES
             or not isinstance(event_type, str) or len(event_type) > 64
             or not isinstance(description, str)
             or len(description) > _MAX_DESCRIPTION
