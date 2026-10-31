@@ -62,6 +62,7 @@ export function KarenCopilotControlledChat({
   const { agent, isReady } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
+  const [draftRecoveryFeedback, setDraftRecoveryFeedback] = useState<string | null>(null);
   const [stopStatus, setStopStatus] = useState<string | null>(null);
   const [checkableRunId, setCheckableRunId] = useState<string | null>(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
@@ -77,7 +78,7 @@ export function KarenCopilotControlledChat({
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const {
     draft, setText: setDraftText, readText: readDraftText,
-    status: draftStatus, synced: draftSynced, clearBeforeSubmit,
+    status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, clearBeforeSubmit,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
   const onDraftChange = useCallback((value: string) => {
@@ -309,24 +310,64 @@ export function KarenCopilotControlledChat({
     return <p role="status" className="text-sm text-muted-foreground">Loading verified conversation and saved draft...</p>;
   }
   if (draftStatus === "conflict" || draftStatus === "unavailable") {
+    const conflict = draftStatus === "conflict";
+    const explanation = conflict
+      ? "This draft changed in another window. We have not replaced your local text."
+      : draftFailureStatus === 401 || draftFailureStatus === 403
+        ? "Your session must be verified before Karen can access saved drafts."
+        : draftFailureStatus === 404
+          ? "Karen could not find an authorized draft for this conversation."
+          : "Karen could not confirm that your draft was saved. No message was sent.";
     return (
-      <div data-testid="karen-copilot-unsynced-draft"
-        className="flex min-w-0 flex-1 flex-col gap-2 p-3">
-        <p role="alert" className="text-sm text-destructive">
-          {draftStatus === "conflict"
-            ? "Draft changed in another window. Your local text was not overwritten."
-            : "Draft storage is unavailable. Your current text is not confirmed saved."}
-        </p>
-        <textarea aria-label="Unsynced draft, copy before reload" readOnly
-          value={draft} className="min-h-24 w-full rounded-lg border border-input p-2 text-sm" />
-        <div className="flex gap-2">
-          {draftStatus === "unavailable" &&
-            <button type="button" onClick={retry}>Retry draft synchronization</button>}
-          <button type="button" onClick={discardAndReload}>
-            Reload saved draft (discard local changes)
-          </button>
+      <section data-testid="karen-copilot-unsynced-draft"
+        aria-label="Draft recovery" className="flex min-h-0 min-w-0 flex-1 flex-col justify-end gap-3 p-3 sm:p-4">
+        <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/5 p-3">
+          <h3 className="text-sm font-semibold">{conflict ? "Draft conflict" : "Draft not saved"}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{explanation}</p>
+          {draftFailureStatus === 503 && <p className="mt-1 text-xs text-muted-foreground">
+            Draft service is temporarily unavailable. Your message is not confirmed saved.
+          </p>}
         </div>
-      </div>
+        <div className="rounded-2xl border border-border bg-background p-3">
+          <label htmlFor="karen-unsynced-draft" className="mb-2 block text-xs font-medium text-muted-foreground">
+            Unsent message (preserved on this screen)
+          </label>
+          <textarea id="karen-unsynced-draft" aria-label="Unsynced draft, copy before reload"
+            readOnly value={draft}
+            placeholder="No recoverable draft text is available in this session."
+            className="min-h-24 max-h-[35dvh] w-full resize-y rounded-lg bg-muted/30 p-3 text-sm focus-visible:outline-2 focus-visible:outline-ring" />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {!conflict && <button type="button" onClick={retry}
+              className="min-h-11 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground">
+              Try saving again
+            </button>}
+            <button type="button" disabled={!draft} onClick={() => {
+              if (!navigator.clipboard?.writeText) {
+                setDraftRecoveryFeedback("Clipboard is unavailable. Select the message above to copy it.");
+                return;
+              }
+              void navigator.clipboard.writeText(draft)
+                .then(() => setDraftRecoveryFeedback("Unsent message copied."))
+                .catch(() => setDraftRecoveryFeedback("Copy failed. Select the message above to copy it."));
+            }} className="min-h-11 rounded-lg border border-input px-4 text-sm disabled:opacity-50">
+              Copy unsent text
+            </button>
+            {draftRecoveryFeedback && <p role="status" className="text-xs text-muted-foreground">{draftRecoveryFeedback}</p>}
+          </div>
+        </div>
+        <details className="rounded-xl border border-border/60 p-3">
+          <summary className="cursor-pointer text-sm font-medium">
+            {conflict ? "Resolve draft conflict" : "Other recovery options"}
+          </summary>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Reloading fetches the server draft and discards unsaved local changes. Copy your message first.
+          </p>
+          <button type="button" onClick={discardAndReload}
+            className="mt-2 min-h-11 rounded-lg border border-input px-3 text-sm">
+            Discard local changes and reload saved draft
+          </button>
+        </details>
+      </section>
     );
   }
 
