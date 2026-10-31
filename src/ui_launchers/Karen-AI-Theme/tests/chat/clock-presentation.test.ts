@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { displayClockObservation } from "../../src/components/chat/assistant-ui/KarenPresentationRegistry";
+import { displayClockObservation } from "../../src/components/chat/presentation/KarenPresentationRegistry";
 
 describe("consumer-facing clock presentation", () => {
   it("formats backed wall-clock observations without shifting the instant", () => {
