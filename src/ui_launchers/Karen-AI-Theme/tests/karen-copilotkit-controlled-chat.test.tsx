@@ -45,10 +45,10 @@ vi.mock("@/lib/api", () => ({
   apiClient: { post: sdk.post, get: sdk.get },
 }));
 
-vi.mock("@/components/chat/voice/KarenLocalDictationCapture", () => ({
+vi.mock("@/components/chat/KarenLocalDictationCapture", () => ({
   KarenLocalDictationCapture: () => <div data-testid="shared-local-dictation" />,
 }));
-vi.mock("@/components/chat/voice/KarenBrowserDictationCapture", () => ({
+vi.mock("@/components/chat/KarenBrowserDictationCapture", () => ({
   KarenBrowserDictationCapture: () => <div data-testid="shared-browser-dictation" />,
 }));
 
