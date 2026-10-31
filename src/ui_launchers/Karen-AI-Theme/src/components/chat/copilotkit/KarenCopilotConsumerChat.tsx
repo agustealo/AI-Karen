@@ -19,6 +19,7 @@ import type { ComposerModelRequest } from "../assistant-ui/KarenComposerRuntimeC
 export function KarenCopilotConsumerChat() {
   const {
     currentSession,
+    workspaceRunId,
     sessions,
     createNewSession,
     loadSession,
@@ -179,6 +180,7 @@ export function KarenCopilotConsumerChat() {
         conversationId={currentSession.id}
         preferredProvider={modelRequest?.provider ?? null}
         preferredModel={modelRequest?.model ?? null}
+        workspaceRunId={workspaceRunId}
         onBusyChange={handleBusyChange}
       />
     </section>
