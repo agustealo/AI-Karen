@@ -50,7 +50,7 @@ function validReceipt(value: unknown): value is Record<string, unknown> {
     if (["degraded_mode", "fallback_level"].includes(key)) continue;
     if (typeof val !== "string" || val.length > 200) return false;
   }
-  return (value.degraded_mode === undefined || typeof value.degraded_mode === "boolean") &&
+  return (value.degraded_mode === undefined || value.degraded_mode === true) &&
     (value.fallback_level === undefined ||
       (typeof value.fallback_level === "number" &&
        Number.isInteger(value.fallback_level) && value.fallback_level >= 0 &&
