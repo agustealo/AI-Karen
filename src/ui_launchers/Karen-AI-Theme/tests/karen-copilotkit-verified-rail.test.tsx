@@ -255,6 +255,22 @@ describe("CopilotKit canonical intelligence rail", () => {
     },
   );
 
+  it.each([["completed"], ["running"], 1, true, null, { state: "completed" }])(
+    "rejects non-string saved agent status %j",
+    (status) => {
+      expect(() => parseKarenVerifiedHistory([{
+        type: "CUSTOM",
+        name: "karen.agent_step.v1",
+        messageId: "assistant-1",
+        value: {
+          step_id: "step-1", agent_id: "research", status,
+          event_type: "agent_step_completed",
+          description: "Observed.", run_id: "run-1", sequence: 2,
+        },
+      }], messages)).toThrow("Unsupported verified agent activity");
+    },
+  );
+
   it("restores a successful non-degraded execution receipt without inventing fallback", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
