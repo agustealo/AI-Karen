@@ -556,6 +556,9 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   // Delete a session
   const deleteSession = useCallback(async (sessionId: string) => {
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot delete sessions');
+    }
     try {
       await apiClient.delete(`/api/conversations/${sessionId}`);
 
@@ -584,10 +587,13 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       setError('Failed to delete session. Please try again.');
       return false;
     }
-  }, [currentSession?.id, createNewSession, persistActiveSessionId, refreshSessions]);
+  }, [currentSession?.id, createNewSession, persistActiveSessionId, refreshSessions, strictInitialSession]);
 
   // Delete multiple sessions
   const deleteSessions = useCallback(async (sessionIds: string[]) => {
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot delete sessions');
+    }
     if (sessionIds.length === 0) return true;
     
     try {
@@ -664,7 +670,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       setError('Failed to delete some sessions. Please try again.');
       return false;
     }
-  }, [currentSession, createNewSession, getRateLimitDelayMs, persistActiveSessionId, refreshSessions]);
+  }, [currentSession, createNewSession, getRateLimitDelayMs, persistActiveSessionId, refreshSessions, strictInitialSession]);
 
   // Update a session title
   const updateSessionTitle = useCallback(async (sessionId: string, newTitle: string) => {
