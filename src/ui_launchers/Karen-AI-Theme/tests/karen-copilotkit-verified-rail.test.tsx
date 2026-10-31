@@ -171,6 +171,48 @@ describe("CopilotKit canonical intelligence rail", () => {
     ], messages)).toThrow("Unsupported verified conversation event");
   });
 
+  it("never carries observed activity into a newer assistant turn without steps", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-old", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-new", role: "assistant" },
+    ];
+    const events = [
+      {
+        type: "CUSTOM",
+        name: "karen.agent_step.v1",
+        messageId: "assistant-old",
+        value: {
+          step_id: "old-step", agent_id: "research",
+          status: "completed", event_type: "agent_step_completed",
+          description: "Previous request completed.",
+          run_id: "old-run", sequence: 2,
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: "karen.execution_receipt.v1",
+        messageId: "assistant-new",
+        value: {
+          actual_provider: "local", actual_model: "latest-model",
+          response_source: "local_inference",
+        },
+      },
+    ];
+    const parts = parseKarenVerifiedHistory(events, transcript);
+    expect(parts.has("assistant-new")).toBe(true);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByTestId("observed-steps").every(
+      node => node.textContent === "0",
+    )).toBe(true);
+    expect(screen.getAllByText("latest-model")).toHaveLength(2);
+  });
+
   it("restores a successful non-degraded execution receipt without inventing fallback", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
