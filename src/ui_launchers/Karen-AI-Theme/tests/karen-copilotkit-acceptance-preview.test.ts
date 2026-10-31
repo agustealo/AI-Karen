@@ -15,6 +15,10 @@ const consumerPreview = readFileSync(resolve(root,
 const prep = readFileSync(resolve(root, "tools/prepare-copilotkit-styles.mjs"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const ignore = readFileSync(resolve(root, ".gitignore"), "utf8");
+const gatewaySource = readFileSync(resolve(root,
+  "src/app/api/copilotkit/[[...slug]]/route.ts"), "utf8");
+const npmLock = JSON.parse(readFileSync(resolve(root, "package-lock.json"), "utf8"));
+
 const nativeBrowser = readFileSync(resolve(root,
   "e2e/karen-copilotkit-native-acceptance.spec.ts"), "utf8");
 const nextConfig = readFileSync(resolve(root, "next.config.ts"), "utf8");
@@ -54,6 +58,22 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     }
     expect(catalogOwner).toContain('"/api/agent-runtime/catalog"');
     expect(presentationOwner).toContain("parseKarenPresentation");
+  });
+
+  it("routes CopilotKit through the canonical AG-UI client, never a temporary alias", () => {
+    expect(gatewaySource).toContain('import { HttpAgent } from "@ag-ui/client"');
+    expect(gatewaySource).not.toContain("@ag-ui/client-v1");
+    expect(pkg.dependencies["@ag-ui/client"]).toBe("1.0.2");
+    expect(pkg.dependencies["@ag-ui/client-v1"]).toBeUndefined();
+    expect(npmLock.packages[""].dependencies["@ag-ui/client"]).toBe("1.0.2");
+    expect(npmLock.packages[""].dependencies["@ag-ui/client-v1"]).toBeUndefined();
+    expect(npmLock.packages["node_modules/@ag-ui/client"].version).toBe("1.0.2");
+    expect(npmLock.packages["node_modules/@ag-ui/client-v1"]).toBeUndefined();
+    // Legacy assistant-ui still owns an isolated 0.0.x client until its
+    // renderer has been fully audited and removed. Never call this release-ready.
+    expect(npmLock.packages[
+      "node_modules/@assistant-ui/react-ag-ui/node_modules/@ag-ui/client"
+    ].version).toBe("0.0.59");
   });
 
   it("uses only canonical draft-port voice capture, not the retired assistant-ui runtime", () => {
