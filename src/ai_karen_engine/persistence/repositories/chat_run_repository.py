@@ -615,7 +615,7 @@ class SqlChatRunRepository:
                   ON e.execution_id = r.execution_id
                   AND e.tenant_id = r.tenant_id AND e.user_id = r.user_id
                   AND e.conversation_id = r.conversation_id
-                  AND (e.event_type = 'RUN_FINISHED'
+                  AND (e.event_type IN ('RUN_FINISHED', 'RUN_ERROR')
                     OR (e.event_type = 'CUSTOM'
                       AND e.event_payload ->> 'name' = 'karen.agent_step'))
                 WHERE r.tenant_id = CAST(:tenant AS uuid)
@@ -657,8 +657,9 @@ class SqlChatRunRepository:
                 event = json.loads(event)
             if not isinstance(event, dict):
                 raise RuntimeError("chat_activity_invalid_journal_payload")
-            if row["event_type"] == "RUN_FINISHED":
-                if (saved["terminal"] or event.get("type") != "RUN_FINISHED"
+            if row["event_type"] in {"RUN_FINISHED", "RUN_ERROR"}:
+                if (row["event_type"] != "RUN_FINISHED"
+                        or saved["terminal"] or event.get("type") != "RUN_FINISHED"
                         or event.get("runId") != saved["run_id"]
                         or event.get("threadId") != scope["conversation"]):
                     raise RuntimeError("chat_activity_terminal_mismatch")
