@@ -90,7 +90,8 @@ function parseSavedAgentStep(value: Record<string, unknown>): {
       typeof run_id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(run_id) ||
       typeof sequence !== "number" || !Number.isInteger(sequence) ||
       sequence < 1 || sequence > 2048 ||
-      !["running", "completed", "failed", "cancelled", "skipped"].includes(String(status))) {
+      typeof status !== "string" ||
+      !["running", "completed", "failed", "cancelled", "skipped"].includes(status)) {
     return null;
   }
   const type: AgentStepEvent["type"] = status === "completed"
