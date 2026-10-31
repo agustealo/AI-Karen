@@ -4,13 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   currentSession: null as null | { id: string; title: string },
+  workspaceRunId: null as string | null,
   sessions: [] as Array<{ id: string; title: string }>,
   isLoadingSessions: false,
   error: null as string | null,
   createNewSession: vi.fn(),
   loadSession: vi.fn(),
   mounts: [] as string[],
-  modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null}>,
+  modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null}>,
   onModelChange: null as null | ((value: {provider: string; model: string} | null) => void),
   onBusyChange: null as null | ((busy: boolean) => void),
 }));
@@ -18,6 +19,7 @@ const state = vi.hoisted(() => ({
 vi.mock("@/components/chat/SessionProvider", () => ({
   useSession: () => ({
     currentSession: state.currentSession,
+    workspaceRunId: state.workspaceRunId,
     sessions: state.sessions,
     isLoadingSessions: state.isLoadingSessions,
     error: state.error,
@@ -48,6 +50,7 @@ const SECOND = "7aaebd2c-1b53-4f55-9e34-2c4593b477c5";
 
 beforeEach(() => {
   state.currentSession = null;
+  state.workspaceRunId = null;
   state.sessions = [];
   state.isLoadingSessions = false;
   state.error = null;
