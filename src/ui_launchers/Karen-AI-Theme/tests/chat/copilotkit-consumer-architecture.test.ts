@@ -38,6 +38,15 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(session).toContain("workspaceRunId: string | null");
   });
 
+  it("registers a scoped SDK agent from one canonical owner only", () => {
+    expect(history).toContain("const registration = useAgent({");
+    expect(history).toContain("ScopedAgentContext.Provider value={registration}");
+    expect(history).toContain("export function useKarenScopedAgent()");
+    expect(controller).toContain("const { agent, isReady } = useKarenScopedAgent()");
+    expect(controller).not.toContain("useAgent(");
+    expect(controller).not.toContain("registerProxiedAgent");
+  });
+
   it("requires explicit submission, backend stop receipts and durable draft clearance", () => {
     expect(controller).toContain("clearBeforeSubmit(text)");
     expect(controller).toContain("copilotkit.runAgent({ agent })");

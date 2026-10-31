@@ -32,10 +32,6 @@ vi.mock("@copilotkit/react-core/v2", () => ({
     sdk.views.push(props);
     return <div data-testid="native-copilot-view" />;
   },
-  useAgent: (props: Record<string, unknown>) => {
-    sdk.useAgentOptions.push(props);
-    return { agent: sdk.agent, isReady: sdk.isReady };
-  },
   useCopilotKit: () => ({
     copilotkit: { runAgent: sdk.runAgent, stopAgent: sdk.stopAgent },
   }),
@@ -77,9 +73,11 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedHistory", () => ({
   KarenCopilotAssistantSlot: () => null,
 }));
 
-vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => ({
-  karenScopedAgentId: (id: string) => "karen-" + id,
-}));
+vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
+  return {
+    useKarenScopedAgent: () => ({ agent: sdk.agent, isReady: sdk.isReady }),
+  };
+});
 
 import { KarenCopilotControlledChat } from "@/components/chat/copilotkit/KarenCopilotControlledChat";
 
@@ -138,11 +136,9 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(screen.getByTestId("karen-copilot-sdk-chat")).toBeTruthy();
     expect(screen.getByTestId("shared-local-dictation")).toBeTruthy();
     expect(screen.getByTestId("shared-browser-dictation")).toBeTruthy();
-    expect(sdk.useAgentOptions).toEqual([{
-      agentId: "karen-" + THREAD,
-      runtimeAgentId: "default",
-      threadId: THREAD,
-    }]);
+    // Registration belongs exclusively to KarenCopilotHistoryGate.
+    // The controlled chat only consumes its existing scoped agent.
+    expect(sdk.useAgentOptions).toHaveLength(0);
     expect(sdk.runAgent).not.toHaveBeenCalled();
     expect(sdk.agent.addMessage).not.toHaveBeenCalled();
     expect(sdk.views.at(-1)?.messages).toEqual(sdk.agent.messages);

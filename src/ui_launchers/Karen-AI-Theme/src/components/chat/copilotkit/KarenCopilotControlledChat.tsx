@@ -9,14 +9,14 @@
  * Karen's authenticated runtime still owns policy, model selection and
  * persistence; there are no frontend tools or client-owned checkpoints.
  */
-import { CopilotChatView, useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
+import { CopilotChatView, useCopilotKit } from "@copilotkit/react-core/v2";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { KarenLocalDictationCapture } from "../KarenLocalDictationCapture";
 import { KarenBrowserDictationCapture } from "../KarenBrowserDictationCapture";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
 
-import { karenScopedAgentId } from "./KarenCopilotHistoryGate";
+import { useKarenScopedAgent } from "./KarenCopilotHistoryGate";
 import { KarenCopilotAssistantSlot } from "./KarenCopilotVerifiedHistory";
 import { useKarenPersistedDraft } from "./useKarenPersistedDraft";
 
@@ -59,11 +59,7 @@ export function KarenCopilotControlledChat({
   conversationId: string;
   onBusyChange?: (busy: boolean) => void;
 }) {
-  const { agent, isReady } = useAgent({
-    agentId: karenScopedAgentId(conversationId),
-    runtimeAgentId: "default",
-    threadId: conversationId,
-  });
+  const { agent, isReady } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
   const [stopStatus, setStopStatus] = useState<string | null>(null);
