@@ -258,6 +258,35 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         except (TypeError, AttributeError, ValueError, OSError) as exc:
             violations.append(f"Canonical AG-UI dependency verification failed: {exc}")
 
+    # Removed UI packages must also be absent from the committed lock, not
+    # merely omitted from package.json while npm still installs their graph.
+    if copilot_mount and lock_path.is_file():
+        try:
+            lock_data = json.loads(_read(lock_path))
+            lock_packages = lock_data.get("packages", {})
+            if not isinstance(lock_packages, dict):
+                raise ValueError("Invalid packages mapping")
+            retired = [
+                key for key in lock_packages
+                if isinstance(key, str) and (
+                    key.startswith("node_modules/@assistant-ui/")
+                    or "/node_modules/@assistant-ui/" in key
+                )
+            ]
+            lock_root = lock_packages.get("", {})
+            lock_root_deps = lock_root.get("dependencies", {})
+            if any(key in lock_root_deps for key in (
+                "@assistant-ui/react", "@assistant-ui/react-ag-ui",
+            )):
+                retired.append("root dependencies")
+            if retired:
+                violations.append(
+                    "Retired assistant-ui packages remain in committed npm lock: "
+                    + ", ".join(sorted(retired)[:10])
+                )
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            violations.append(f"Retired npm package audit failed: {exc}")
+
     unique_client_versions = sorted(set(ag_ui_client_versions.values()))
     if copilot_installed and len(unique_client_versions) > 1:
         if copilot_mount:
