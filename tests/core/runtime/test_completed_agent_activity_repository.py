@@ -50,6 +50,7 @@ async def _read(
             assert "r.conversation_id = CAST(:conversation AS uuid)" in sql
             assert "e.execution_id = r.execution_id" in sql
             assert "r.status = 'completed'" in sql
+            assert "e.event_type IN ('RUN_FINISHED', 'RUN_ERROR')" in sql
             assert params == {
                 "tenant": tenant, "owner": owner, "conversation": conversation,
             }
@@ -143,6 +144,37 @@ async def test_completed_journal_rejects_foreign_conversation_terminal(
     rows = [
         _row("assistant-1", "run-1", 1, "CUSTOM", conversation),
         _row("assistant-1", "run-1", 2, "RUN_FINISHED", foreign_conversation),
+    ]
+    with pytest.raises(RuntimeError, match="chat_activity_terminal_mismatch"):
+        await _read(monkeypatch, rows, conversation_id=conversation)
+
+
+@pytest.mark.asyncio
+async def test_completed_ledger_with_error_terminal_is_never_replayed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = str(uuid4())
+    rows = [
+        _row("assistant-1", "run-1", 1, "CUSTOM", conversation),
+        _row("assistant-1", "run-1", 2, "RUN_ERROR", conversation),
+    ]
+    rows[1]["event_payload"] = {
+        "type": "RUN_ERROR", "message": "Interrupted",
+        "code": "CHAT_SSE_MISSING_TERMINAL",
+    }
+    with pytest.raises(RuntimeError, match="chat_activity_terminal_mismatch"):
+        await _read(monkeypatch, rows, conversation_id=conversation)
+
+
+@pytest.mark.asyncio
+async def test_success_followed_by_error_terminal_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = str(uuid4())
+    rows = [
+        _row("assistant-1", "run-1", 1, "CUSTOM", conversation),
+        _row("assistant-1", "run-1", 2, "RUN_FINISHED", conversation),
+        _row("assistant-1", "run-1", 3, "RUN_ERROR", conversation),
     ]
     with pytest.raises(RuntimeError, match="chat_activity_terminal_mismatch"):
         await _read(monkeypatch, rows, conversation_id=conversation)
