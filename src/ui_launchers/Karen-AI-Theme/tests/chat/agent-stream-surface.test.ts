@@ -8,8 +8,12 @@ const apiSource = readFileSync(
   "utf8",
 );
 
-const chatSource = readFileSync(
-  resolve(process.cwd(), "src/components/chat/assistant-ui/KarenAssistantChat.tsx"),
+const verifiedRail = readFileSync(
+  resolve(process.cwd(), "src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx"),
+  "utf8",
+);
+const verifiedHistory = readFileSync(
+  resolve(process.cwd(), "src/components/chat/copilotkit/KarenCopilotVerifiedHistory.tsx"),
   "utf8",
 );
 
@@ -23,9 +27,13 @@ describe("canonical agent stream surface", () => {
     expect(apiSource).toContain("case 'approval':");
   });
 
-  it("renders agent activity in the canonical chat surface", () => {
-    expect(chatSource).toContain("function KarenActivity(");
-    expect(chatSource).toContain('<KarenActivity data={data} category="Agent step" />');
-    expect(chatSource).toContain("MessagePrimitive.Parts");
+  it("renders only backend-attested saved agent activity in the canonical context rail", () => {
+    expect(verifiedRail).toContain("useKarenLatestVerifiedAgentSteps()");
+    expect(verifiedRail).toContain("<ConversationContextRail metadata={receipt} agentSteps={agentSteps}");
+    expect(verifiedRail).toContain("No attested agent steps are available");
+    expect(verifiedRail).not.toContain("projectObservedAgentSteps");
+    expect(verifiedHistory).toContain('name === "karen.agent_step.v1"');
+    expect(verifiedHistory).toContain("parseSavedAgentStep(candidate.value)");
+    expect(verifiedHistory).toContain("response_source: \"persisted_history\"");
   });
 });
