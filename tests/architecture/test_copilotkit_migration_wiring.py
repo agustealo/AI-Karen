@@ -225,3 +225,65 @@ def test_strict_cutover_rejects_temporary_ag_ui_alias(tmp_path: Path) -> None:
         "Temporary AG-UI client-v1 alias" in item
         for item in inventory["violations"]
     )
+
+
+def test_strict_cutover_rejects_legacy_import_inside_copilotkit(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    component = tmp_path / AUDITOR.WEB_SDK_ROOT / "KarenCopilotChat.tsx"
+    component.parent.mkdir(parents=True, exist_ok=True)
+    component.write_text(
+        'import { KarenPersonaSelector } from "../assistant-ui/KarenPersonaSelector";\\n',
+        encoding="utf-8",
+    )
+    route = tmp_path / AUDITOR.WEB_GATEWAY / "[[...slug]]" / "route.ts"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text(
+        'import { CopilotRuntime } from "@copilotkit/runtime/v2";\\n',
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert any(
+        "CopilotKit production path imports retired assistant-ui" in item
+        for item in result["violations"]
+    )
+
+
+def test_declared_ag_ui_version_must_match_root_lock_and_installed_version(
+    tmp_path: Path,
+) -> None:
+    fixture(tmp_path, copilot=True)
+    manifest = tmp_path / AUDITOR.WEB / "package.json"
+    manifest.write_text(
+        json.dumps({"dependencies": {
+            "@copilotkit/react-core": "1.79.1",
+            "@ag-ui/client": "1.0.2",
+        }}),
+        encoding="utf-8",
+    )
+    lock = tmp_path / AUDITOR.WEB / "package-lock.json"
+    for direct, installed in [("0.0.59", "1.0.2"), ("1.0.2", "0.0.59")]:
+        lock.write_text(
+            json.dumps({"packages": {
+                "": {"dependencies": {"@ag-ui/client": direct}},
+                "node_modules/@ag-ui/client": {"version": installed},
+            }}),
+            encoding="utf-8",
+        )
+        result = AUDITOR.audit(tmp_path, require_cutover=True)
+        assert any(
+            "Canonical AG-UI client manifest and lockfile disagree" in item
+            for item in result["violations"]
+        )
+
+    lock.write_text(
+        json.dumps({"packages": {
+            "": {"dependencies": {"@ag-ui/client": "1.0.2"}},
+            "node_modules/@ag-ui/client": {"version": "1.0.2"},
+        }}),
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path)
+    assert not any(
+        "Canonical AG-UI client manifest and lockfile disagree" in item
+        for item in result["violations"]
+    )
