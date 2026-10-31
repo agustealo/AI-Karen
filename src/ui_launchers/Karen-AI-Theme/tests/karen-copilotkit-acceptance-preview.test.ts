@@ -135,6 +135,9 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(canonicalSessions).toContain("strictInitialSession && conversationId !== sessionId");
     expect(canonicalSessions).toContain("if (strictInitialSession && sessionId !== initialSessionId)");
     expect(canonicalSessions).toContain("Strict conversation cannot load another session");
+    expect(canonicalSessions.match(/Strict conversation cannot delete sessions/g)).toHaveLength(2);
+    expect(canonicalSessions).toContain("refreshSessions, strictInitialSession]);");
+    expect(canonicalSessions).toContain("persistActiveSessionId, refreshSessions, strictInitialSession]);");
     expect(canonicalSessions).toContain("Strict conversation cannot create a replacement session");
     expect(canonicalSessions).toContain("    initialSessionId,");
     expect(canonicalSessions).toContain("if (strictInitialSession) {");
