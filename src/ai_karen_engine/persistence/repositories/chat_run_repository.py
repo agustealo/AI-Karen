@@ -587,345 +587,70 @@ class SqlChatRunRepository:
     async def completed_agent_activity(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
     ) -> dict[str, tuple[str, str, str, list[dict[str, Any]]]]:
-        """Read finalized observed steps bound to committed assistant message digests.
+        """Owner-scoped, finalized journal steps correlated to saved messages.
 
-        Empty journals from pre-journal runs produce no activity. A journal
-        containing steps but missing its observed RUN_FINISHED is unusable.
-        All rows are read under the same owner/tenant RLS transaction.
+        No inference occurs here. Only completed runs with a committed assistant
+        message and an observed successful journal terminal can contribute.
         """
         scope = {
             "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
             "conversation": _uuid(conversation_id),
         }
-        async with async_transaction_scope(
-            scope["tenant"], user_id=scope["owner"],
-        ) as session:
-            result = await session.execute(
-                text("""
-                    SELECT r.assistant_message_id::text AS message_id,
-                           r.request_id, r.assistant_message_digest,
-                           r.transport_run_id, e.event_seq, e.event_type,
-                           e.event_payload
-                    FROM public.runtime_chat_runs r
-                    JOIN conversations c
-                      ON c.conversation_id = r.conversation_id
-                     AND c.tenant_id = r.tenant_id
-                     AND c.user_id = r.user_id
-                    JOIN messages a
-                      ON a.conversation_id = c.conversation_id
-                     AND a.message_id::text = r.assistant_message_id::text
-                     AND a.role = 'assistant'
-                    JOIN messages u
-                      ON u.conversation_id = c.conversation_id
-                     AND u.message_id::text = r.user_message_id::text
-                     AND u.role = 'user'
-                    JOIN public.runtime_chat_run_events e
-                      ON e.execution_id = r.execution_id
-                     AND e.tenant_id = r.tenant_id
-                     AND e.user_id = r.user_id
-                     AND e.conversation_id = r.conversation_id
-                     AND (e.event_type = 'RUN_FINISHED'
-                          OR (e.event_type = 'CUSTOM'
-                              AND e.event_payload ->> 'name' = 'karen.agent_step'))
-                    WHERE r.tenant_id = CAST(:tenant AS uuid)
-                      AND r.user_id = CAST(:owner AS uuid)
-                      AND r.conversation_id = CAST(:conversation AS uuid)
-                      AND r.status = 'completed'
-                      AND r.terminal_at IS NOT NULL
-                      AND r.user_message_id IS NOT NULL
-                      AND r.assistant_message_id IS NOT NULL
-                      AND r.assistant_message_digest ~ '^[0-9a-f]{64}        self, *, tenant_id: str, user_id: str, conversation_id: str,
-    ) -> dict[str, tuple[str, str]]:
-        """Read message ID to (request ID, saved digest) under owner RLS.
-
-        The result maps only exact assistant message UUIDs to the request ID
-        whose transcript and completion committed in the same transaction.
-        No message payload, hidden tool content, or SDK state is returned.
-        """
-        scope = {
-            "tenant": _uuid(tenant_id),
-            "owner": _uuid(user_id),
-            "conversation": _uuid(conversation_id),
-        }
-        async with async_transaction_scope(
-            scope["tenant"], user_id=scope["owner"],
-        ) as session:
-            result = await session.execute(
-                text("""
-                    SELECT r.assistant_message_id::text AS message_id,
-                           r.request_id, r.assistant_message_digest
-                    FROM public.runtime_chat_runs r
-                    JOIN conversations c
-                      ON c.conversation_id = r.conversation_id
-                     AND c.tenant_id = r.tenant_id
-                     AND c.user_id = r.user_id
-                    JOIN messages a
-                      ON a.conversation_id = c.conversation_id
-                     AND a.message_id::text = r.assistant_message_id::text
-                     AND a.role = 'assistant'
-                    JOIN messages u
-                      ON u.conversation_id = c.conversation_id
-                     AND u.message_id::text = r.user_message_id::text
-                     AND u.role = 'user'
-                    WHERE r.tenant_id = CAST(:tenant AS uuid)
-                      AND r.user_id = CAST(:owner AS uuid)
-                      AND r.conversation_id = CAST(:conversation AS uuid)
-                      AND r.status = 'completed'
-                      AND r.terminal_at IS NOT NULL
-                      AND r.user_message_id IS NOT NULL
-                      AND r.assistant_message_id IS NOT NULL
-                      AND r.assistant_message_digest ~ '^[0-9a-f]{64}$'
-                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
-                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
-                    ORDER BY r.created_at, r.execution_id
-                    LIMIT 501
-                """),
-                scope,
-            )
-            rows = result.mappings().all()
-            if len(rows) > 500:
-                raise RuntimeError("chat_replay_attestation_limit_exceeded")
-            return {
-                str(row["message_id"]): (
-                    str(row["request_id"]),
-                    str(row["assistant_message_digest"]),
-                )
-                for row in rows
-            }
-
-    async def completed(self, lease: ChatRunLease) -> bool:
-        """Check terminal status while upstream finishes post-commit telemetry."""
-        async with async_transaction_scope(
-            lease.tenant_id, user_id=lease.user_id,
-        ) as session:
-            result = await session.execute(
-                text("""
-                    SELECT 1
-                    FROM public.runtime_chat_runs
-                    WHERE execution_id = CAST(:execution AS uuid)
-                      AND tenant_id = CAST(:tenant AS uuid)
-                      AND user_id = CAST(:owner AS uuid)
-                      AND conversation_id = CAST(:conversation AS uuid)
-                      AND transport_run_id = :transport_run_id
-                      AND request_id = :request_id
-                      AND correlation_id = :correlation_id
-                      AND status = 'completed'
-                      AND terminal_at IS NOT NULL
-                """),
-                {
-                    **self._scope(lease),
-                    "transport_run_id": lease.transport_run_id,
-                    "request_id": lease.request_id,
-                    "correlation_id": lease.correlation_id,
-                },
-            )
-            return result.scalar_one_or_none() is not None
-
-    async def request_cancel(
-        self,
-        *,
-        tenant_id: str,
-        user_id: str,
-        conversation_id: str,
-        transport_run_id: str,
-    ) -> Optional[str]:
-        """Atomically request stop for ONE owned run; never cancel by thread alone.
-
-        Row locking serializes stop with terminal transition. A repeated stop
-        returns 'cancelling', not a second side effect. Terminal statuses are
-        immutable. A missing or foreign run returns None without disclosure.
-        """
-        if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
-            raise ValueError("invalid_transport_run_id")
-        scope = {
-            "tenant": _uuid(tenant_id),
-            "owner": _uuid(user_id),
-            "conversation": _uuid(conversation_id),
-            "run_id": transport_run_id,
-        }
         async with async_transaction_scope(scope["tenant"], user_id=scope["owner"]) as session:
-            locked = await session.execute(
-                text(
-                    """
-                    SELECT status, lease_expires_at
-                    FROM public.runtime_chat_runs
-                    WHERE tenant_id = CAST(:tenant AS uuid)
-                      AND user_id = CAST(:owner AS uuid)
-                      AND conversation_id = CAST(:conversation AS uuid)
-                      AND transport_run_id = :run_id
-                    FOR UPDATE
-                    """
-                ),
-                scope,
-            )
-            row = locked.mappings().one_or_none()
-            if row is None:
-                return None
-            status = str(row["status"])
-            if status not in {"running", "cancelling"}:
-                return status
-            # Repeated stops on an expired cancelling worker must not lie.
-            # Lease expiry is checked inside the same transaction.
-            result = await session.execute(
-                text(
-                    """
-                    UPDATE public.runtime_chat_runs
-                    SET status = CASE
-                            WHEN lease_expires_at > NOW() THEN 'cancelling'
-                            ELSE 'orphaned'
-                        END,
-                        cancel_requested_at = CASE
-                            WHEN lease_expires_at > NOW()
-                                THEN COALESCE(cancel_requested_at, NOW())
-                            ELSE NULL
-                        END,
-                        terminal_at = CASE
-                            WHEN lease_expires_at > NOW() THEN NULL
-                            ELSE NOW()
-                        END,
-                        terminal_error_code = CASE
-                            WHEN lease_expires_at > NOW() THEN NULL
-                            ELSE 'CHAT_RUN_LEASE_EXPIRED'
-                        END,
-                        lease_token = CASE
-                            WHEN lease_expires_at > NOW() THEN lease_token
-                            ELSE NULL
-                        END,
-                        updated_at = NOW()
-                    WHERE tenant_id = CAST(:tenant AS uuid)
-                      AND user_id = CAST(:owner AS uuid)
-                      AND conversation_id = CAST(:conversation AS uuid)
-                      AND transport_run_id = :run_id
-                      AND status IN ('running', 'cancelling')
-                    RETURNING status
-                    """
-                ),
-                scope,
-            )
-            next_status = result.scalar_one_or_none()
-            if next_status is None:
-                raise RuntimeError("chat_run_cancel_concurrent_state_changed")
-            return str(next_status)
-
-    async def read_status(
-        self, *, tenant_id: str, user_id: str, conversation_id: str,
-        transport_run_id: str,
-    ) -> Optional[dict[str, Any]]:
-        """Read one tenant/owner-scoped durable outcome, without mutation.
-
-        A transport run ID is correlation only, never a bearer authorization.
-        This works even when the optional AG-UI event journal is disabled.
-        """
-        if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
-            raise ValueError("invalid_transport_run_id")
-        scope = {
-            "tenant": _uuid(tenant_id),
-            "owner": _uuid(user_id),
-            "conversation": _uuid(conversation_id),
-            "run_id": transport_run_id,
-        }
-        async with async_transaction_scope(
-            scope["tenant"], user_id=scope["owner"],
-        ) as session:
-            result = await session.execute(
-                text("""
-                    SELECT status,
-                           cancel_requested_at IS NOT NULL AS stop_requested,
-                           terminal_at IS NOT NULL AS terminal_recorded,
-                           lease_expires_at > clock_timestamp() AS lease_live
-                    FROM public.runtime_chat_runs
-                    WHERE tenant_id = CAST(:tenant AS uuid)
-                      AND user_id = CAST(:owner AS uuid)
-                      AND conversation_id = CAST(:conversation AS uuid)
-                      AND transport_run_id = :run_id
-                    LIMIT 1
-                """),
-                scope,
-            )
-            row = result.mappings().one_or_none()
-        if row is None:
-            return None
-        status = str(row["status"])
-        if status not in {
-            "running", "cancelling", "cancelled", "completed",
-            "failed", "orphaned",
-        }:
-            raise RuntimeError("unrecognized_chat_run_status")
-        requested = row["stop_requested"] is True
-        terminal = row["terminal_recorded"] is True
-        if status in {"completed", "cancelled", "failed", "orphaned"} and not terminal:
-            raise RuntimeError("unverified_chat_run_terminal")
-        if status in {"running", "cancelling"} and row["lease_live"] is not True:
-            status = "interrupted"
-        return {
-            "status": status,
-            "cancel_requested": requested,
-            "cancellation_confirmed": (
-                status == "cancelled" and requested and terminal
-            ),
-        }
-
-    async def cancel_requested(self, lease: ChatRunLease) -> bool:
-        """Observe an authorized stop without accepting a caller's SDK token."""
-        async with async_transaction_scope(lease.tenant_id, user_id=lease.user_id) as session:
-            result = await session.execute(
-                text(
-                    """
-                    SELECT status
-                    FROM public.runtime_chat_runs
-                    WHERE execution_id = CAST(:execution AS uuid)
-                      AND tenant_id = CAST(:tenant AS uuid)
-                      AND user_id = CAST(:owner AS uuid)
-                      AND conversation_id = CAST(:conversation AS uuid)
-                      AND lease_token = CAST(:token AS uuid)
-                      AND lease_expires_at > NOW()
-                      AND status = 'cancelling'
-                      AND cancel_requested_at IS NOT NULL
-                    """
-                ),
-                self._scope(lease),
-            )
-            return result.scalar_one_or_none() == "cancelling"
-
-    @staticmethod
-    def _scope(lease: ChatRunLease, **extra: object) -> dict[str, object]:
-        return {
-            "execution": lease.execution_id,
-            "tenant": lease.tenant_id,
-            "owner": lease.user_id,
-            "conversation": lease.conversation_id,
-            "token": lease.lease_token,
-            **extra,
-        }
-
-                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
-                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
-                    ORDER BY r.created_at, r.execution_id, e.event_seq
-                    LIMIT 50001
-                """),
-                scope,
-            )
+            result = await session.execute(text("""
+                SELECT r.assistant_message_id::text AS message_id,
+                       r.request_id, r.assistant_message_digest,
+                       r.transport_run_id, e.event_seq, e.event_type,
+                       e.event_payload
+                FROM public.runtime_chat_runs r
+                JOIN conversations c ON c.conversation_id = r.conversation_id
+                  AND c.tenant_id = r.tenant_id AND c.user_id = r.user_id
+                JOIN messages a ON a.conversation_id = c.conversation_id
+                  AND a.message_id::text = r.assistant_message_id::text
+                  AND a.role = 'assistant'
+                JOIN messages u ON u.conversation_id = c.conversation_id
+                  AND u.message_id::text = r.user_message_id::text
+                  AND u.role = 'user'
+                JOIN public.runtime_chat_run_events e
+                  ON e.execution_id = r.execution_id
+                  AND e.tenant_id = r.tenant_id AND e.user_id = r.user_id
+                  AND e.conversation_id = r.conversation_id
+                  AND (e.event_type = 'RUN_FINISHED'
+                    OR (e.event_type = 'CUSTOM'
+                      AND e.event_payload ->> 'name' = 'karen.agent_step'))
+                WHERE r.tenant_id = CAST(:tenant AS uuid)
+                  AND r.user_id = CAST(:owner AS uuid)
+                  AND r.conversation_id = CAST(:conversation AS uuid)
+                  AND r.status = 'completed' AND r.terminal_at IS NOT NULL
+                  AND r.user_message_id IS NOT NULL
+                  AND r.assistant_message_id IS NOT NULL
+                  AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
+                  AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
+                ORDER BY r.created_at, r.execution_id, e.event_seq
+                LIMIT 50001
+            """), scope)
             rows = result.mappings().all()
         if len(rows) > 50000:
             raise RuntimeError("chat_activity_replay_limit_exceeded")
         grouped: dict[str, dict[str, Any]] = {}
         for row in rows:
             message_id = str(row["message_id"])
-            if message_id not in grouped:
+            saved = grouped.get(message_id)
+            if saved is None:
                 if len(grouped) >= 500:
                     raise RuntimeError("chat_activity_message_limit_exceeded")
-                grouped[message_id] = {
-                    "request_id": str(row["request_id"]),
-                    "digest": str(row["assistant_message_digest"]),
-                    "run_id": str(row["transport_run_id"]),
-                    "terminal": False, "events": [],
+                digest = str(row["assistant_message_digest"])
+                if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                    raise RuntimeError("chat_activity_invalid_digest")
+                saved = {
+                    "request_id": str(row["request_id"]), "digest": digest,
+                    "run_id": str(row["transport_run_id"]), "terminal": False,
+                    "events": [],
                 }
-            saved = grouped[message_id]
-            if (
-                saved["request_id"] != str(row["request_id"])
-                or saved["digest"] != str(row["assistant_message_digest"])
-                or saved["run_id"] != str(row["transport_run_id"])
-            ):
+                grouped[message_id] = saved
+            if (saved["request_id"] != str(row["request_id"])
+                    or saved["digest"] != str(row["assistant_message_digest"])
+                    or saved["run_id"] != str(row["transport_run_id"])):
                 raise RuntimeError("chat_activity_multiple_run_owners")
             event = row["event_payload"]
             if isinstance(event, str):
@@ -933,18 +658,21 @@ class SqlChatRunRepository:
             if not isinstance(event, dict):
                 raise RuntimeError("chat_activity_invalid_journal_payload")
             if row["event_type"] == "RUN_FINISHED":
-                if saved["terminal"] or event.get("type") != "RUN_FINISHED":
+                if (saved["terminal"] or event.get("type") != "RUN_FINISHED"
+                        or event.get("runId") != saved["run_id"]
+                        or event.get("threadId") != scope["conversation"]):
                     raise RuntimeError("chat_activity_terminal_mismatch")
-                if (event.get("threadId") != scope["conversation"]
-                        or event.get("runId") != saved["run_id"]):
-                    raise RuntimeError("chat_activity_terminal_identity_mismatch")
                 saved["terminal"] = True
             else:
                 if saved["terminal"]:
                     raise RuntimeError("chat_activity_post_terminal_event")
-                saved["events"].append({"seq": int(row["event_seq"]), "event": event})
+                saved["events"].append({
+                    "seq": int(row["event_seq"]), "event": event,
+                })
                 if len(saved["events"]) > 100:
                     raise RuntimeError("chat_activity_step_limit_exceeded")
+        if any(not saved["terminal"] and saved["events"] for saved in grouped.values()):
+            raise RuntimeError("chat_activity_journal_incomplete")
         return {
             message_id: (
                 saved["request_id"], saved["digest"],
@@ -952,13 +680,7 @@ class SqlChatRunRepository:
             )
             for message_id, saved in grouped.items()
             if saved["terminal"] and saved["events"]
-        } if all(saved["terminal"] or not saved["events"] for saved in grouped.values()) else (
-            self._reject_incomplete_agent_activity()
-        )
-
-    @staticmethod
-    def _reject_incomplete_agent_activity() -> dict[str, Any]:
-        raise RuntimeError("chat_activity_journal_incomplete")
+        }
 
     async def completed_replay_attestations(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
