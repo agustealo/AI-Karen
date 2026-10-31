@@ -96,6 +96,22 @@ describe("CopilotKit consumer session adapter", () => {
     expect(state.mounts).toHaveLength(0);
   });
 
+  it("locks navigation to an already verified strictly pinned conversation", () => {
+    state.strictInitialSession = true;
+    state.currentSession = { id: FIRST, title: "Pinned conversation" };
+    state.sessions = [
+      { id: FIRST, title: "Pinned conversation" },
+      { id: SECOND, title: "Another owned conversation" },
+    ];
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+    expect(screen.queryByRole("button", { name: "Find conversations" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
+    expect(screen.queryByRole("searchbox", { name: "Find a conversation" })).toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.loadSession).not.toHaveBeenCalled();
+  });
+
   it("binds the authorized selected session and searches owned titles only", async () => {
     state.currentSession = { id: FIRST, title: "Project Alpha" };
     state.sessions = [
