@@ -414,3 +414,57 @@ def test_stale_ag_ui_protocol_module_blocks_cutover_even_with_one_client_version
         "requires one AG-UI protocol generation" in issue
         for issue in good["violations"]
     )
+
+
+def test_ag_ui_lock_dependency_edge_rejects_stale_or_missing_protocol(
+    tmp_path: Path,
+) -> None:
+    fixture(tmp_path, copilot=True)
+    lock = tmp_path / AUDITOR.WEB / "package-lock.json"
+    for encoder_edge in ("0.0.59", "1.0.2"):
+        packages = {
+            "node_modules/@ag-ui/client": {
+                "version": "1.0.2",
+                "dependencies": {"@ag-ui/encoder": encoder_edge},
+            },
+            "node_modules/@ag-ui/encoder": {"version": "1.0.2"},
+        }
+        lock.write_text(json.dumps({"packages": packages}), encoding="utf-8")
+        observed = AUDITOR.audit(tmp_path, require_cutover=True)
+        assert any(
+            "AG-UI protocol lock dependency edge is unresolved" in issue
+            for issue in observed["violations"]
+        ) is (encoder_edge != "1.0.2")
+
+    lock.write_text(json.dumps({"packages": {
+        "node_modules/@ag-ui/client": {
+            "version": "1.0.2",
+            "dependencies": {"@ag-ui/proto": "1.0.2"},
+        },
+    }}), encoding="utf-8")
+    missing = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert any(
+        "AG-UI protocol lock dependency edge is unresolved" in issue
+        for issue in missing["violations"]
+    )
+
+
+def test_ag_ui_lock_nearest_nested_protocol_dependency_is_valid(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    lock = tmp_path / AUDITOR.WEB / "package-lock.json"
+    lock.write_text(json.dumps({"packages": {
+        "node_modules/@ag-ui/client": {"version": "1.0.2"},
+        "node_modules/@ag-ui/core": {"version": "1.0.2"},
+        "node_modules/@copilotkit/runtime": {
+            "version": "1.79.1",
+            "dependencies": {"@ag-ui/core": "1.0.2"},
+        },
+        "node_modules/@copilotkit/runtime/node_modules/@ag-ui/core": {
+            "version": "1.0.2",
+        },
+    }}), encoding="utf-8")
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert not any(
+        "AG-UI protocol lock dependency edge is unresolved" in issue
+        for issue in result["violations"]
+    )
