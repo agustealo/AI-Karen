@@ -71,6 +71,39 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.queryByTestId("karen-copilot-rail-unverified")).toBeNull();
   });
 
+  it("uses canonical transcript order when verified receipt events arrive out of order", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-older", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-newer", role: "assistant" },
+    ];
+    const receipt = (messageId: string, actual_model: string) => ({
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId,
+      value: {
+        actual_provider: "local",
+        actual_model,
+        response_source: "local_inference",
+        degraded_mode: false,
+      },
+    });
+    // The older event arrives last. It must not override the newer
+    // execution merely because event replay ordering differs.
+    const parts = parseKarenVerifiedHistory([
+      receipt("assistant-newer", "newest-model"),
+      receipt("assistant-older", "stale-model"),
+    ], transcript);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByText("newest-model")).toHaveLength(2);
+    expect(screen.queryByText("stale-model")).toBeNull();
+  });
+
   it("restores a successful non-degraded execution receipt without inventing fallback", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
