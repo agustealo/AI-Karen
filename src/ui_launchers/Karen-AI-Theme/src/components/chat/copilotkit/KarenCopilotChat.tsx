@@ -11,16 +11,10 @@ const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
- * CopilotKit v2 compatibility entry point. This component is deliberately
- * NOT mounted until the authenticated runtime gateway, server-owned thread
- * history and feature-parity tests have been completed.
- *
- * The dashboard retains the current assistant-ui implementation for now.
- * The isolated acceptance-only route may mount this candidate if its server-
- * side exact-host gate is explicitly enabled; it is not a consumer cutover.
- * The high-level CopilotChat starts inference on first mount, so this shell
- * uses the native controlled CopilotChatView with explicit submit-only runs.
- * Consumer cutover still requires exact-revision browser and UX acceptance.
+ * Canonical CopilotKit v2 chat shell, staged as the dashboard renderer on PR #585.
+ * Runtime, authentication, saved history and execution receipts remain backend-owned.
+ * The controlled view starts runs only on explicit user submission.
+ * No claim of deployment or browser acceptance is made by this mount.
  */
 export interface KarenCopilotChatProps {
   /** Canonical persisted conversation ID, obtained through SessionProvider. */
