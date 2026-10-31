@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   currentSession: null as null | { id: string; title: string },
+  strictInitialSession: false,
   sessions: [] as Array<{ id: string; title: string }>,
   isLoadingSessions: false,
   error: null as string | null,
@@ -18,6 +19,7 @@ const state = vi.hoisted(() => ({
 vi.mock("@/components/chat/SessionProvider", () => ({
   useSession: () => ({
     currentSession: state.currentSession,
+    strictInitialSession: state.strictInitialSession,
     sessions: state.sessions,
     isLoadingSessions: state.isLoadingSessions,
     error: state.error,
@@ -48,6 +50,7 @@ const SECOND = "7aaebd2c-1b53-4f55-9e34-2c4593b477c5";
 
 beforeEach(() => {
   state.currentSession = null;
+  state.strictInitialSession = false;
   state.sessions = [];
   state.isLoadingSessions = false;
   state.error = null;
@@ -69,6 +72,20 @@ describe("CopilotKit consumer session adapter", () => {
     render(<KarenCopilotConsumerChat />);
     expect(screen.getByRole("status").textContent).toContain("Loading conversations");
     expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
+    expect(state.mounts).toHaveLength(0);
+  });
+
+  it("fails closed on an unavailable strict acceptance conversation without offering a replacement", () => {
+    state.strictInitialSession = true;
+    state.error = "The requested conversation could not be verified. No replacement conversation was created.";
+    render(<KarenCopilotConsumerChat />);
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("No replacement conversation was created.");
+    expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
+    expect(screen.queryByTestId("owned-copilot-chat")).toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.loadSession).not.toHaveBeenCalled();
     expect(state.mounts).toHaveLength(0);
   });
 
