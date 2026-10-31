@@ -176,6 +176,12 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
                     + str(path.relative_to(root))
                 )
 
+    retired_renderer = root / WEB / "src/components/chat/assistant-ui/KarenAssistantChat.tsx"
+    if require_cutover and copilot_mount and retired_renderer.is_file():
+        violations.append(
+            "Retired assistant-ui renderer source still exists after consumer cutover"
+        )
+
     # Inspect *all* production frontend sources before deleting the retired
     # renderer. A missing import from a different route must block cutover too.
     # Existing legacy compatibility files are accounted for by the dependency
