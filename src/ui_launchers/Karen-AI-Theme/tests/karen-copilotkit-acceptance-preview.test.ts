@@ -16,6 +16,8 @@ const ignore = readFileSync(resolve(root, ".gitignore"), "utf8");
 const nativeBrowser = readFileSync(resolve(root,
   "e2e/karen-copilotkit-native-acceptance.spec.ts"), "utf8");
 const nextConfig = readFileSync(resolve(root, "next.config.ts"), "utf8");
+const browserWorkflow = readFileSync(resolve(root,
+  "../../../.github/workflows/karen-history-browser-acceptance.yml"), "utf8");
 const shim = readFileSync(resolve(root,
   "src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css"), "utf8");
 
@@ -115,6 +117,18 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(nativeBrowser).not.toContain('native.getByRole("button", { name: /stop/i }).first()');
     expect(nativeBrowser).toContain('runId: payload.runId');
     expect(nativeBrowser).toContain("Cancelled run must not create a falsely completed");
+  });
+
+  it("dispatches consumer acceptance through the existing protected exact-SHA browser workflow", () => {
+    expect(browserWorkflow).toContain("- copilotkit-consumer");
+    expect(browserWorkflow).toContain("inputs.scenario == 'copilotkit-consumer'");
+    expect(browserWorkflow).toContain("Require the current reviewed main commit before checkout");
+    expect(browserWorkflow).toContain("Verify deployed revision before browser acceptance");
+    expect(browserWorkflow).toContain("Verify independent Vercel deployment provenance before browser acceptance");
+    expect(browserWorkflow).toContain("KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED:");
+    expect(browserWorkflow).toContain("--grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference'");
+    expect(browserWorkflow).toContain("Revalidate platform, running deployment and reviewed main head after browser acceptance");
+    expect(nativeBrowser).toContain('test("CK-CONSUMER-01 gated consumer preview restores an owned session without inference"');
   });
 
   it("does not disturb the sole consumer chat mount", () => {
