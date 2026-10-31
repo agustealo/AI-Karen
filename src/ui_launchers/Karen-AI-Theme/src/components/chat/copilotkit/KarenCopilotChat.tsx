@@ -4,6 +4,7 @@ import { CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { useAuth } from "@/lib/useAuth";
 import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
 import { KarenCopilotControlledChat } from "./KarenCopilotControlledChat";
+import { KarenCopilotVerifiedRail } from "./KarenCopilotVerifiedRail";
 import { KarenPersonaSelector } from "../assistant-ui/KarenPersonaSelector";
 
 const CONVERSATION_UUID =
@@ -80,10 +81,15 @@ export function KarenCopilotChat({
     >
       <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
-          <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
-          <div data-testid="karen-copilot-persona-footer"
-            className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
-            <KarenPersonaSelector />
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
+              <div data-testid="karen-copilot-persona-footer"
+                className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
+                <KarenPersonaSelector />
+              </div>
+            </div>
+            <KarenCopilotVerifiedRail />
           </div>
         </KarenCopilotHistoryGate>
       </CopilotKitProvider>
