@@ -13,8 +13,8 @@ import { Loader2, Plus, Search } from "lucide-react";
 
 import { useSession } from "@/components/chat/SessionProvider";
 import { KarenCopilotChat } from "./KarenCopilotChat";
-import { KarenComposerRuntimeCatalog } from "../assistant-ui/KarenComposerRuntimeCatalog";
-import type { ComposerModelRequest } from "../assistant-ui/KarenComposerRuntimeCatalog";
+import { KarenComposerRuntimeCatalog } from "../KarenComposerRuntimeCatalog";
+import type { ComposerModelRequest } from "../KarenComposerRuntimeCatalog";
 
 export function KarenCopilotConsumerChat() {
   const {
