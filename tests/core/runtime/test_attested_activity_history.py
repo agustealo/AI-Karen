@@ -99,3 +99,38 @@ def test_modified_saved_assistant_message_is_never_restored_as_verified(
                 "assistant-1": ("request-owned", DIGEST, "run-owned", [activity()]),
             },
         )
+
+
+
+def test_orphaned_observed_activity_fails_closed() -> None:
+    """An observed journal entry cannot refer to an absent assistant turn."""
+    with pytest.raises(
+        projection.UnreplayableHistory, match="orphaned_observed_activity",
+    ):
+        projection.project_owned_history(
+            snapshot(),
+            attestations={},
+            observed_activity={
+                "foreign-assistant": (
+                    "request-owned", DIGEST, "run-owned", [activity()],
+                ),
+            },
+        )
+
+
+def test_activity_bound_to_user_message_fails_closed() -> None:
+    """Agent execution belongs to an attested assistant, never a user turn."""
+    saved = snapshot()
+    saved.messages[0].role = "user"
+    with pytest.raises(
+        projection.UnreplayableHistory, match="orphaned_observed_activity",
+    ):
+        projection.project_owned_history(
+            saved,
+            attestations={},
+            observed_activity={
+                "assistant-1": (
+                    "request-owned", DIGEST, "run-owned", [activity()],
+                ),
+            },
+        )
