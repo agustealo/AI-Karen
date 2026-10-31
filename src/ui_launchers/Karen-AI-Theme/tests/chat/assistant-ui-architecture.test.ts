@@ -2,227 +2,73 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const component = readFileSync(
-  resolve(process.cwd(), "src/components/chat/assistant-ui/KarenAssistantChat.tsx"),
-  "utf8",
-);
-const sessionSource = readFileSync(resolve(process.cwd(), "src/components/chat/SessionProvider.tsx"), "utf8");
-const dashboard = readFileSync(
-  resolve(process.cwd(), "src/app/dashboard/page.tsx"),
-  "utf8",
-);
-const packageJson = JSON.parse(
-  readFileSync(resolve(process.cwd(), "package.json"), "utf8"),
-);
+const read = (relative: string): string =>
+  readFileSync(resolve(process.cwd(), relative), "utf8");
 
-describe("governed assistant-ui AG-UI chat boundary", () => {
-  it("uses the official AG-UI runtime with a same-origin canonical proxy", () => {
-    expect(component).toContain("useAgUiRuntime({");
-    expect(component).toContain('new HttpAgent({ url: "/api/chat/ag-ui", threadId })');
-    expect(component).toContain("AssistantRuntimeProvider");
-    expect(component).toContain("ThreadPrimitive.Messages");
-    expect(component).toContain("ComposerPrimitive.Input");
-    expect(component).toContain("ComposerPrimitive.Cancel");
-    expect(component).toContain("ComposerPrimitive.Send");
-    expect(packageJson.dependencies["@assistant-ui/react"]).toBeDefined();
-    expect(packageJson.dependencies["@assistant-ui/react-ag-ui"]).toBeDefined();
-    expect(packageJson.dependencies["@ag-ui/client"]).toBeDefined();
-  });
+const dashboard = read("src/app/dashboard/page.tsx");
+const consumer = read("src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx");
+const shell = read("src/components/chat/copilotkit/KarenCopilotChat.tsx");
+const controller = read("src/components/chat/copilotkit/KarenCopilotControlledChat.tsx");
+const history = read("src/components/chat/copilotkit/KarenCopilotHistoryGate.tsx");
+const verified = read("src/components/chat/copilotkit/KarenCopilotVerifiedHistory.tsx");
+const rail = read("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx");
+const session = read("src/components/chat/SessionProvider.tsx");
+const catalog = read("src/components/chat/runtime/KarenComposerRuntimeCatalog.tsx");
+const pkg = JSON.parse(read("package.json"));
 
-  it("reuses official assistant-ui copy controls without unauthorized retry or edit", () => {
-    expect(component).toContain("ActionBarPrimitive.Root");
-    expect(component).toContain("ActionBarPrimitive.Copy");
-    expect(component).toContain('aria-label="Copy message"');
-    expect(component).toContain("group-data-[copied]/copy:inline");
-    expect(component).toContain("<KarenCopyAction />");
-    expect(component).not.toContain("ActionBarPrimitive.Reload");
-    expect(component).not.toContain("ActionBarPrimitive.Edit");
-  });
-
-  it("renders assistant text as safe GitHub-flavored Markdown without an HTML escape hatch", () => {
-    expect(component).toContain('import ReactMarkdown from "react-markdown"');
-    expect(component).toContain('import remarkGfm from "remark-gfm"');
-    expect(component).toContain('Text: KarenMarkdownText');
-    expect(component).toContain('skipHtml');
-    expect(component).toContain('urlTransform={(url) => /^(https?:|mailto:)/i.test(url) ? url : ""}');
-    expect(component).not.toContain('rehypeRaw');
-    expect(component).not.toContain('dangerouslySetInnerHTML');
-  });
-
-  it("renders fenced code in a scrollable region with accessible copy and truthful clipboard state", () => {
-    expect(component).toContain("function KarenCodeBlock");
-    expect(component).toContain("components={{ pre: KarenCodeBlock }}");
-    expect(component).toContain('aria-label={copied ? "Code copied" : "Copy code block"}');
-    expect(component).toContain("await navigator.clipboard.writeText(source)");
-    expect(component).toContain("setCopied(false)");
-    expect(component).toContain("overflow-x-auto");
-    expect(component).not.toContain("dangerouslySetInnerHTML");
-  });
-
-  it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
+describe("canonical CopilotKit chat ownership", () => {
+  it("has exactly one dashboard renderer and no old assistant-ui import", () => {
+    expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)).toHaveLength(1);
+    expect(dashboard).not.toContain("<KarenAssistantChat");
+    expect(dashboard).not.toContain("@/components/chat/assistant-ui/KarenAssistantChat");
     expect(dashboard).toContain("<SessionProvider>");
-    expect(dashboard).toContain("<KarenCopilotConsumerChat />");
-    expect(component).toContain('import { useSession } from "@/components/chat/SessionProvider"');
-    expect(component).toContain("/api/conversations/");
-    expect(component).toContain("ExportedMessageRepository.fromArray");
-    expect(component).toContain("fromAgUiMessages");
-    expect(component).toContain("threadId,");
-    expect(component).not.toContain("localStorage.setItem");
-    expect(component).not.toContain("selectedModel");
-    expect(component).not.toContain("setSelectedProvider");
-  });
-
-  it("never calls React hooks conditionally for malformed activity events", () => {
-    const activity = component.slice(component.indexOf("function KarenActivity("), component.indexOf("function KarenLearningDecision("));
-    expect(activity.indexOf("const disclosureRef = useRef")).toBeLessThan(activity.indexOf("if (!data || typeof data !=="));
-    expect(activity.indexOf("useEffect(() =>")).toBeLessThan(activity.indexOf("if (!data || typeof data !=="));
-  });
-
-  it("does not interpret unknown agent statuses as successful execution", () => {
-    expect(component).toContain('["failed", "failure", "error", "errored", "cancelled", "canceled"].includes(normalized)');
-    expect(component).toContain('["finished", "completed", "complete", "succeeded", "success"].includes(normalized)');
-    expect(component).not.toContain('normalized.includes("success")');
-    expect(component).not.toContain('normalized.includes("complete")');
-  });
-
-  it("renders runtime-supplied event provenance without fabricating task ordering", () => {
-    expect(component).toContain('typeof value.runId === "string"');
-    expect(component).toContain('typeof value.eventId === "string"');
-    expect(component).toContain('Number.isNaN(Date.parse(rawTimestamp))');
-    expect(component).toContain('typeof fields.run_id === "string"');
-    expect(component).toContain('typeof fields.event_id === "string"');
-    expect(component).toContain('typeof fields.step_id === "string"');
-    expect(component).toContain('AG-UI run: {runId}');
-    expect(component).toContain('Event: {eventId}');
-    expect(component).toContain('Reported: {reportedAt}');
-    expect(component).not.toContain('Date.now()');
-    expect(component).not.toContain('fakeTimeline');
-  });
-
-  it("labels observed plans, subagents and steps without adding an execution path", () => {
-    expect(component).toContain('"agui-activity/KAREN_AGENT_STEP": KarenAgentStep');
-    expect(component).toContain('"agui-activity/KAREN_DEEPAGENTS_PLAN": KarenAgentPlan');
-    expect(component).toContain('"agui-activity/KAREN_DEEPAGENTS_SUBAGENT": KarenSubagent');
-    expect(component).toContain('category="Plan"');
-    expect(component).toContain('category="Subagent"');
-    expect(component).toContain('Reported status:');
-    expect(component).not.toContain("executeSubagent(");
-  });
-
-  it("only exposes backend-observed data parts and does not invent resume or tool execution", () => {
-    expect(component).toContain("agui-activity/KAREN_AGENT_STEP");
-    expect(component).toContain("agui-activity/KAREN_DEEPAGENTS_PLAN");
-    expect(component).toContain("agui-activity/KAREN_DEEPAGENTS_SUBAGENT");
-    expect(component).toContain("karen.learning_decision");
-    expect(component).toContain("karen.checkpoint");
-    expect(component).toContain("karen.approval_required");
-    expect(component).toContain("No resume action is available");
-    expect(component).toContain("No action will execute from this informational notice");
-    expect(component).not.toContain("useAgUiSetState");
-    expect(component).not.toContain("addToolResult");
-    expect(component).not.toContain("autoApprove");
-  });
-
-  it("exposes only persisted conversation history and observed expandable activity", () => {
-    expect(component).toContain('id="karen-history-search"');
-    expect(component).toContain("matchingSessions.map((session)");
-    expect(component).toContain("onClick={() => void switchConversation(session.id)}");
-    expect(component).toContain('aria-expanded={historyOpen}');
-    expect(component).toContain("historySearchRef.current?.focus()");
-    expect(component).toContain('event.key === "Escape"');
-    expect(component).toContain("historyTriggerRef.current?.focus()");
-    expect(component).toContain("await loadSession(id)");
-    expect(component).toContain("await createNewSession()");
-    expect(component).toContain("Unable to open that conversation.");
-    expect(component).toContain("Unable to create a conversation.");
-    expect(component).toContain('{navigationError && <p role="alert"');
-    expect(component).toContain('data-testid="karen-agent-activity"');
-    expect(component).toContain("ref={disclosureRef}");
-    expect(component).toContain("disclosureRef.current.open = true");
-    expect(component).not.toContain("open={failed || undefined}");
-    expect(component).toContain('<details data-testid="karen-learning-provenance"');
-    expect(component).toContain('<details data-testid="karen-checkpoint-evidence"');
-    expect(component).toContain("value.stepId");
-    expect(component).not.toContain("localStorage.setItem");
-    expect(component).toContain('data-testid="karen-observed-tool"');
-    expect(component).toContain("Only Karen&apos;s governed execution receipt");
-    expect(component).toContain("It does not confirm that an external action succeeded.");
-    expect(component).not.toContain("clientExecuteTool");
-  });
-
-  it("stages the single CopilotKit mount while dependency proof is enforced", () => {
-    expect(dashboard).toContain(
-      '<KarenCopilotConsumerChat />',
-    );
-    expect(dashboard).toContain('{ ssr: false }');
-    expect(component).toContain("showThinking: false");
-  });
-});
-
-describe("Agent Runtime original-conversation handoff", () => {
-  it("uses shared SessionProvider rather than a new chat provider", () => {
-    expect(dashboard).toContain("function AgentWorkspaceView");
-    expect(dashboard).toContain("const { loadSession, setWorkspaceRunId } = useSession()");
-    expect(dashboard).toContain("await loadSession(conversationId)");
-    expect(dashboard).toContain("onOpenConversation={openConversation}");
-    expect(dashboard).not.toContain("<AgentsPage onAskKaren={() => setActiveMainView");
-  });
-});
-
-describe("persistent Karen workspace panel", () => {
-  it("keeps exactly one mounted chat and presents it across dashboard workspaces", () => {
     expect(dashboard).toContain('data-testid="persistent-karen-conversation"');
-    expect(dashboard).toContain("karenPanelOpen");
-    expect(dashboard).toContain('aria-label="Collapse Karen conversation"');
-    expect(dashboard).toContain('aria-controls="persistent-karen-panel"');
-    expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)?.length).toBe(1);
-    expect(dashboard.match(/<ChatInterface \/>/g)?.length ?? 0).toBe(0);
-    expect(dashboard).toContain("backendStatus === \"ready\" && (activeMainView === \"chat\" || karenPanelOpen)");
   });
-});
 
-describe("Karen cross-workspace panel accessibility contract", () => {
-  it("supports Escape, focus restoration and mobile-safe panel geometry", () => {
-    expect(dashboard).toContain('event.key === "Escape"');
-    expect(dashboard).toContain("karenLauncherRef.current?.focus()");
-    expect(dashboard).toContain("karenPanelRef.current?.focus()");
-    expect(dashboard).toContain('aria-label={activeMainView !== "chat" && karenPanelOpen ? "Karen conversation" : undefined}');
-    expect(dashboard).toContain("inset-x-2 top-16 bottom-20");
-    expect(dashboard).toContain("sm:w-[min(440px,calc(100vw-24px))]");
+  it("uses the governed runtime, canonical session and verified history", () => {
+    expect(consumer).toContain("useSession()");
+    expect(consumer).toContain("<KarenCopilotChat");
+    expect(consumer).toContain("workspaceRunId={workspaceRunId}");
+    expect(shell).toContain('runtimeUrl="/api/copilotkit"');
+    expect(shell).toContain("<KarenCopilotHistoryGate conversationId={conversationId}>");
+    expect(shell).toContain("<KarenCopilotVerifiedRail />");
+    expect(history).toContain("parseKarenVerifiedHistory(");
+    expect(history).toContain("agent.setMessages(messages)");
+    expect(history).toContain("snapshot.threadId !== conversationId");
+    expect(session).toContain("workspaceRunId: string | null");
   });
-});
 
-describe("shared governed Agent Runtime context", () => {
-  it("keeps one workspace reference in the canonical session and both chat transports", () => {
-    expect(sessionSource).toContain("workspaceRunId: string | null");
-    expect(sessionSource).toContain("setWorkspaceRunId: (runId: string | null) => void");
-    expect(component).toContain("workspace_run_id: workspaceRunId");
-    expect(component).toContain("workspaceRunId } = useSession()");
-    expect(component).toContain("forwardedProps: {");
-    expect(component).toContain("workspace_run_id: workspaceRunId");
-    expect(component).toContain("preferred_llm_provider: modelRequestRef.current.provider");
-    expect(component).toContain("preferred_model: modelRequestRef.current.model");
+  it("requires explicit submission, backend stop receipts and durable draft clearance", () => {
+    expect(controller).toContain("clearBeforeSubmit(text)");
+    expect(controller).toContain("copilotkit.runAgent({ agent })");
+    expect(controller).toContain("validStopReceipt(receipt)");
+    expect(controller).toContain("copilotkit.stopAgent({ agent })");
+    expect(controller).toContain("KarenLocalDictationCapture");
+    expect(controller).toContain("KarenBrowserDictationCapture");
+    expect(controller).not.toContain("@assistant-ui/");
+  });
+
+  it("renders verified receipts and no invented historical agent activity", () => {
+    expect(verified).toContain("parseKarenVerifiedHistory");
+    expect(verified).toContain("KarenRestoredExecutionReceipt");
+    expect(rail).toContain("useKarenLatestVerifiedExecution()");
+    expect(rail).toContain("agentSteps={[]}");
+    expect(rail).toContain("Historical agent steps are not available in verified replay.");
+    expect(rail).not.toContain("projectObservedAgentSteps");
+  });
+
+  it("retains canonical agent workspace handoff and model discovery", () => {
+    expect(dashboard).toContain("function AgentWorkspaceView");
     expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
-  });
-
-  it("clears scoped work reference when switching conversations", () => {
-    expect(sessionSource).toContain("if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null)");
-    expect(sessionSource).toContain("setWorkspaceRunId(null);");
-  });
-});
-
-
-describe("Medusa discovery uses existing canonical runtime catalog", () => {
-  it("renders registered agents as non-authoritative discovery", () => {
-    const catalog = readFileSync(
-      resolve(process.cwd(), "src/components/chat/runtime/KarenComposerRuntimeCatalog.tsx"),
-      "utf8",
-    );
     expect(catalog).toContain('"/api/agent-runtime/catalog"');
     expect(catalog).toContain("Discovery only.");
-    expect(catalog).toContain("eligibility unverified");
-    expect(catalog).not.toContain("preferred_agent_id:");
     expect(catalog).not.toContain("executeAgent(");
-    expect(catalog).toContain("ComposerModelRequest");
+  });
+
+  it("rejects assistant-ui packages after renderer retirement", () => {
+    expect(pkg.dependencies["@copilotkit/react-core"]).toBe("1.79.1");
+    expect(pkg.dependencies["@assistant-ui/react"]).toBeUndefined();
+    expect(pkg.dependencies["@assistant-ui/react-ag-ui"]).toBeUndefined();
+    expect(pkg.dependencies["@ag-ui/client"]).toBe("1.0.2");
   });
 });
