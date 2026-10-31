@@ -300,6 +300,50 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             violations.append(f"Retired npm package audit failed: {exc}")
 
+    # Validate every locked AG-UI protocol dependency edge against npm's
+    # nearest node_modules resolution path. Matching package versions alone do
+    # not prove that the dependency graph is satisfiable after manual pruning.
+    if copilot_mount and lock_path.is_file():
+        try:
+            edge_packages = json.loads(_read(lock_path)).get("packages", {})
+            protocol_names = {
+                "@ag-ui/client", "@ag-ui/core",
+                "@ag-ui/encoder", "@ag-ui/proto",
+            }
+            if not isinstance(edge_packages, dict):
+                raise ValueError("Invalid npm package map")
+            for package_path, metadata in edge_packages.items():
+                if not isinstance(package_path, str) or not isinstance(metadata, dict):
+                    continue
+                edges = metadata.get("dependencies", {})
+                if not isinstance(edges, dict):
+                    raise ValueError("Invalid npm dependency edges")
+                for dependency, required_version in edges.items():
+                    if dependency not in protocol_names:
+                        continue
+                    location = package_path
+                    resolved = None
+                    while location:
+                        nested = location + "/node_modules/" + dependency
+                        if nested in edge_packages:
+                            resolved = nested
+                            break
+                        boundary = location.rfind("/node_modules/")
+                        location = location[:boundary] if boundary >= 0 else ""
+                    if resolved is None:
+                        root_dependency = "node_modules/" + dependency
+                        if root_dependency in edge_packages:
+                            resolved = root_dependency
+                    if resolved is None or (
+                        edge_packages[resolved].get("version") != required_version
+                    ):
+                        violations.append(
+                            "AG-UI protocol lock dependency edge is unresolved: "
+                            + package_path + " -> " + dependency
+                        )
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            violations.append(f"AG-UI protocol edge audit failed: {exc}")
+
     # Every AG-UI protocol module must match, not just the HttpAgent client.
     # A stale root core/encoder/proto can survive dependency pruning and
     # silently reintroduce a second protocol generation.
