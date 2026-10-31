@@ -674,6 +674,9 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   // Update a session title
   const updateSessionTitle = useCallback(async (sessionId: string, newTitle: string) => {
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot rename sessions');
+    }
     try {
       await apiClient.put(`/api/conversations/${sessionId}`, { title: newTitle });
       
@@ -690,7 +693,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       setError('Failed to rename session. Please try again.');
       return false;
     }
-  }, [currentSession?.id]);
+  }, [currentSession?.id, strictInitialSession]);
 
   // Initialize sessions on mount
   useEffect(() => {
@@ -701,6 +704,12 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
     const initializeSessions = async () => {
       setIsLoadingSessions(true);
+      if (strictInitialSession && !initialSessionId) {
+        setCurrentSession(null);
+        setError('Strict conversation requires an explicit verified session ID.');
+        setIsLoadingSessions(false);
+        return;
+      }
       try {
         const preferredSessionId = initialSessionId || getPersistedActiveSessionId();
         if (preferredSessionId) {
