@@ -297,6 +297,9 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   // Load a specific session
   const loadSession = useCallback(async (sessionId: string) => {
+    if (strictInitialSession && sessionId !== initialSessionId) {
+      throw new Error('Strict conversation cannot load another session');
+    }
     if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null);
     setIsLoadingSessions(true);
     setError(null);
@@ -440,6 +443,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     getRateLimitDelayMs,
     persistActiveSessionId,
     strictInitialSession,
+    initialSessionId,
   ]);
 
   // Refresh sessions list
