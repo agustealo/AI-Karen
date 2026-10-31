@@ -18,6 +18,8 @@ describe("canonical CopilotKit conversation intelligence restoration", () => {
     expect(rail).toContain("<ConversationContextRail metadata={receipt} agentSteps={[]} embedded />");
     expect(rail).toContain("<ConversationContextRail metadata={receipt} agentSteps={[]} />");
     expect(rail).toContain("<RailUnavailable />");
+    expect(rail).toContain("<ActivityReplayNotice />");
+    expect(rail).toContain("Historical agent steps are not available in verified replay.");
     expect(history).toContain("parseKarenVerifiedHistory(");
     expect(history).toContain("agent.setMessages(messages)");
     expect(history).toContain("snapshot.threadId !== conversationId");
