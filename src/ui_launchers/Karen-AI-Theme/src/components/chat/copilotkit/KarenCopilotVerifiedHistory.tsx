@@ -64,8 +64,9 @@ function validIntegrity(value: unknown): value is Record<string, unknown> {
   if (value.personal_recall_grounded !== undefined &&
       typeof value.personal_recall_grounded !== "boolean") return false;
   if (value.evidence_source !== undefined &&
-      !["authorized_memory_evidence", "authorized_conversation_evidence"].includes(
-        String(value.evidence_source))) return false;
+      (typeof value.evidence_source !== "string" ||
+       !["authorized_memory_evidence", "authorized_conversation_evidence"].includes(
+         value.evidence_source))) return false;
   return value.output_truncated === true ||
     (value.cortex_intent === "memory.recall" &&
      typeof value.personal_recall_grounded === "boolean");
