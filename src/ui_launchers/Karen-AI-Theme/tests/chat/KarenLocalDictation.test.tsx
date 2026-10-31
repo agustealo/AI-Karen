@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { KarenLocalDictationCapture } from "@/components/chat/voice/KarenLocalDictationCapture";
+import { KarenLocalDictationCapture } from "@/components/chat/KarenLocalDictationCapture";
 import { apiClient } from "@/lib/api";
 
 const { composer } = vi.hoisted(() => ({
