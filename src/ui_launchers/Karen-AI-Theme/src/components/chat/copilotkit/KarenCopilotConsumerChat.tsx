@@ -19,6 +19,7 @@ import type { ComposerModelRequest } from "../assistant-ui/KarenComposerRuntimeC
 export function KarenCopilotConsumerChat() {
   const {
     currentSession,
+    strictInitialSession,
     sessions,
     createNewSession,
     loadSession,
@@ -93,15 +94,17 @@ export function KarenCopilotConsumerChat() {
         <p role={sessionError || navigationError ? "alert" : "status"} className="max-w-md text-center text-sm text-muted-foreground">
           {navigationError || sessionError || "Start a durable conversation to chat with Karen."}
         </p>
-        <button
-          type="button"
-          disabled={navigationBusy || runBusy}
-          onClick={() => void performNavigation(createNewSession)}
-          className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-        >
-          <Plus aria-hidden="true" className="h-4 w-4" />
-          New conversation
-        </button>
+        {!strictInitialSession && (
+          <button
+            type="button"
+            disabled={navigationBusy || runBusy}
+            onClick={() => void performNavigation(createNewSession)}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            New conversation
+          </button>
+        )}
       </section>
     );
   }

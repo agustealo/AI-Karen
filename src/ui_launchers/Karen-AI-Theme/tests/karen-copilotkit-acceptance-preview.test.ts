@@ -8,6 +8,8 @@ const page = readFileSync(resolve(root,
 const dashboard = readFileSync(resolve(root, "src/app/dashboard/page.tsx"), "utf8");
 const canonicalSessions = readFileSync(resolve(root,
   "src/components/chat/SessionProvider.tsx"), "utf8");
+const consumerSource = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx"), "utf8");
 const previewGate = readFileSync(resolve(root,
   "src/app/acceptance/copilotkit/_lib/preview-gate.ts"), "utf8");
 const consumerPreview = readFileSync(resolve(root,
@@ -63,6 +65,15 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(canonicalSessions).toContain("setCurrentSession(null)");
     expect(canonicalSessions).toContain("No replacement conversation was created.");
     expect(consumerPreview).toContain("strictInitialSession>");
+  });
+
+  it("preserves strict errors and does not offer a replacement conversation", () => {
+    expect(canonicalSessions).toContain("strictInitialSession: boolean;");
+    expect(canonicalSessions).toContain("if (!strictInitialSession) setError(null)");
+    expect(canonicalSessions).toContain("if (!strictInitialSession) setError('Failed to load sessions list.");
+    expect(consumerSource).toContain("strictInitialSession,");
+    expect(consumerSource).toContain("{!strictInitialSession && (");
+    expect(consumerSource).toContain("onClick={() => void performNavigation(createNewSession)}");
   });
 
   it("copies pinned vendor CSS outside the Tailwind v3 PostCSS pipeline", () => {
@@ -137,9 +148,10 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(browserWorkflow).toContain("Verify deployed revision before browser acceptance");
     expect(browserWorkflow).toContain("Verify independent Vercel deployment provenance before browser acceptance");
     expect(browserWorkflow).toContain("KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED:");
-    expect(browserWorkflow).toContain("--grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference'");
+    expect(browserWorkflow).toContain("--grep 'CK-CONSUMER-0[12]'");
     expect(browserWorkflow).toContain("Revalidate platform, running deployment and reviewed main head after browser acceptance");
     expect(nativeBrowser).toContain('test("CK-CONSUMER-01 gated consumer preview restores an owned session without inference"');
+    expect(nativeBrowser).toContain('test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread"');
   });
 
   it("does not disturb the sole consumer chat mount", () => {
