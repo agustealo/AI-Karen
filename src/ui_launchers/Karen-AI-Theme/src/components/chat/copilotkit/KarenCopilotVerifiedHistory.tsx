@@ -211,13 +211,11 @@ export function KarenVerifiedHistoryProvider({
  */
 export function useKarenLatestVerifiedExecution(): Record<string, unknown> | null {
   const verified = useContext(VerifiedHistoryContext);
-  let latest: Record<string, unknown> | null = null;
-  for (const parts of verified.values()) {
-    for (const part of parts) {
-      if (part.type === "receipt") latest = part.value;
-    }
-  }
-  return latest;
+  // Model attribution belongs to the latest canonical assistant turn.
+  // Never display an older verified model as the executor of a newer reply.
+  const latestParts = Array.from(verified.values()).at(-1) ?? [];
+  const receipt = latestParts.find(part => part.type === "receipt");
+  return receipt?.type === "receipt" ? receipt.value : null;
 }
 
 /** Preserve the SDK's default assistant message (including its toolbar). */
