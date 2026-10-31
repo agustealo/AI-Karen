@@ -121,7 +121,7 @@ async function readKarenGovernedHistory(
     if (Object.keys(e).some((key) => !["type", "name", "value", "messageId"].includes(key)) ||
         e.type !== "CUSTOM" ||
         !["karen.presentation.v1", "karen.execution_receipt.v1",
-          "karen.response_integrity.v1"].includes(String(e.name)) ||
+          "karen.response_integrity.v1", "karen.agent_step.v1"].includes(String(e.name)) ||
         typeof e.messageId !== "string" || owners.get(e.messageId) !== "assistant" ||
         !e.value || typeof e.value !== "object" || Array.isArray(e.value)) {
       return failure("Invalid governed replay event", 502);
