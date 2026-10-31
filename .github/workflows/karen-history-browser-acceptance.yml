@@ -385,7 +385,7 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts \
-            --grep 'CK-CONSUMER-01 gated consumer preview restores an owned session without inference' \
+            --grep 'CK-CONSUMER-0[12]' \
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
