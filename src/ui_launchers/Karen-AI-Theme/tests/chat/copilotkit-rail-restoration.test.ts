@@ -15,11 +15,11 @@ describe("canonical CopilotKit conversation intelligence restoration", () => {
     expect(shell).toContain("<KarenCopilotVerifiedRail />");
     expect(shell.match(/<KarenCopilotVerifiedRail \/>/g)).toHaveLength(1);
     expect(rail).toContain("useKarenLatestVerifiedExecution()");
-    expect(rail).toContain("<ConversationContextRail metadata={receipt} agentSteps={[]} embedded />");
-    expect(rail).toContain("<ConversationContextRail metadata={receipt} agentSteps={[]} />");
+    expect(rail).toContain("<ConversationContextRail metadata={receipt} agentSteps={agentSteps} embedded />");
+    expect(rail).toContain("<ConversationContextRail metadata={receipt} agentSteps={agentSteps} />");
     expect(rail).toContain("<RailUnavailable />");
     expect(rail).toContain("<ActivityReplayNotice />");
-    expect(rail).toContain("Historical agent steps are not available in verified replay.");
+    expect(rail).toContain("No attested agent steps are available for the latest saved assistant turn.");
     expect(history).toContain("parseKarenVerifiedHistory(");
     expect(history).toContain("agent.setMessages(messages)");
     expect(history).toContain("snapshot.threadId !== conversationId");
@@ -29,6 +29,7 @@ describe("canonical CopilotKit conversation intelligence restoration", () => {
     const rail = source("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx");
     expect(rail).not.toContain("projectObservedAgentSteps");
     expect(rail).not.toContain("state.thread.messages");
-    expect(rail).toContain("agentSteps={[]}");
+    expect(rail).toContain("useKarenLatestVerifiedAgentSteps()");
+    expect(rail).not.toContain("agentSteps={[]}");
   });
 });
