@@ -502,3 +502,38 @@ def test_historical_mentions_without_import_are_not_retired_test_callers(
     )
     result = AUDITOR.audit(tmp_path, require_cutover=True)
     assert result["retired_test_imports"] == []
+
+
+def test_strict_cutover_rejects_unrestored_agent_activity(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    rail = tmp_path / AUDITOR.WEB_SDK_ROOT / "KarenCopilotVerifiedRail.tsx"
+    rail.parent.mkdir(parents=True, exist_ok=True)
+    rail.write_text(
+        "export const Rail = () => <ConversationContextRail agentSteps={[]} />;\\n",
+        encoding="utf-8",
+    )
+    preview = AUDITOR.audit(tmp_path)
+    assert preview["activity_replay_placeholder"] is True
+    assert not any(
+        "history parity incomplete" in issue for issue in preview["violations"]
+    )
+
+    strict = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert strict["activity_replay_placeholder"] is True
+    assert any(
+        "history parity incomplete" in issue for issue in strict["violations"]
+    )
+
+    # A consumer that no longer contains the known empty-activity placeholder
+    # passes this one static assertion, not runtime/history acceptance.
+    rail.write_text(
+        "export const Rail = () => <ConversationContextRail "
+        "agentSteps={verifiedAgentSteps} />;\\n",
+        encoding="utf-8",
+    )
+    changed = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert changed["activity_replay_placeholder"] is False
+    assert not any(
+        "history parity incomplete" in issue for issue in changed["violations"]
+    )
+    assert changed["consumer_cutover"]["release_ready"] is False
