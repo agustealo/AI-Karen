@@ -69,11 +69,18 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(npmLock.packages[""].dependencies["@ag-ui/client-v1"]).toBeUndefined();
     expect(npmLock.packages["node_modules/@ag-ui/client"].version).toBe("1.0.2");
     expect(npmLock.packages["node_modules/@ag-ui/client-v1"]).toBeUndefined();
-    // Legacy assistant-ui still owns an isolated 0.0.x client until its
-    // renderer has been fully audited and removed. Never call this release-ready.
-    expect(npmLock.packages[
+    // This test must also pass once the legacy renderer has been removed.
+    // An installed old generation is never evidence of release readiness.
+    const legacy = pkg.dependencies["@assistant-ui/react-ag-ui"];
+    const isolated = npmLock.packages[
       "node_modules/@assistant-ui/react-ag-ui/node_modules/@ag-ui/client"
-    ].version).toBe("0.0.59");
+    ];
+    if (legacy) {
+      expect(isolated?.version).toBe("0.0.59");
+    } else {
+      expect(isolated).toBeUndefined();
+      expect(npmLock.packages["node_modules/@assistant-ui/react-ag-ui"]).toBeUndefined();
+    }
   });
 
   it("uses only canonical draft-port voice capture, not the retired assistant-ui runtime", () => {
