@@ -71,6 +71,33 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.queryByTestId("karen-copilot-rail-unverified")).toBeNull();
   });
 
+  it("rejects duplicate or malformed canonical message identities before event replay", () => {
+    const receipt = {
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId: "assistant-1",
+      value: {
+        actual_provider: "local",
+        actual_model: "verified-runtime-model",
+        response_source: "local_inference",
+      },
+    };
+    expect(() => parseKarenVerifiedHistory([receipt], [
+      { id: "assistant-1", role: "assistant" },
+      { id: "assistant-1", role: "assistant" },
+    ])).toThrow("Unsupported canonical conversation message identity");
+    expect(() => parseKarenVerifiedHistory([receipt], [
+      { id: "assistant-1", role: "assistant" },
+      { id: "user-2", role: "system" },
+    ])).toThrow("Unsupported canonical conversation message identity");
+    expect(() => parseKarenVerifiedHistory([receipt], [
+      { id: "", role: "assistant" },
+    ])).toThrow("Unsupported canonical conversation message identity");
+    expect(() => parseKarenVerifiedHistory([receipt], Array.from(
+      { length: 501 }, (_, i) => ({ id: `assistant-${i}`, role: "assistant" }),
+    ))).toThrow("Unsupported canonical conversation messages");
+  });
+
   it("uses canonical transcript order when verified receipt events arrive out of order", () => {
     const transcript = [
       { id: "user-1", role: "user" },
