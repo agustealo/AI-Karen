@@ -28,7 +28,7 @@ vi.mock("@/components/chat/SessionProvider", () => ({
   }),
 }));
 
-vi.mock("@/components/chat/assistant-ui/KarenComposerRuntimeCatalog", () => ({
+vi.mock("@/components/chat/KarenComposerRuntimeCatalog", () => ({
   KarenComposerRuntimeCatalog: ({ onSelectionChange }: { onSelectionChange: (selection: { provider: string; model: string } | null) => void }) => (
     <button type="button" onClick={() => { state.onModelChange = onSelectionChange; onSelectionChange({ provider: "local", model: "selected-model" }); }}>Choose available model</button>
   ),
