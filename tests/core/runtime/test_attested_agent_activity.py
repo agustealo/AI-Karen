@@ -87,6 +87,19 @@ def test_rejects_oversized_activity_and_bad_run_binding() -> None:
         )
 
 
+@pytest.mark.parametrize("invalid_run_id", [
+    "run with spaces", "run/foreign", "../run", "run\\nother",
+    "éxternal", "x" * 101,
+])
+def test_rejects_noncanonical_transport_run_id(invalid_run_id: str) -> None:
+    with pytest.raises(InvalidAgentActivity, match="envelope"):
+        project_attested_agent_activity(
+            [observed(1)],
+            message_id="assistant-owned",
+            transport_run_id=invalid_run_id,
+        )
+
+
 def test_rejects_raw_reasoning_length() -> None:
     invalid = deepcopy(observed(1))
     invalid["event"]["value"]["description"] = "private" * 500
