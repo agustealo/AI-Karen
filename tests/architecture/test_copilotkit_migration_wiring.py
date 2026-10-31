@@ -381,3 +381,36 @@ def test_legacy_packages_still_in_lock_block_cutover(tmp_path: Path) -> None:
         "Retired assistant-ui packages remain in committed npm lock" in issue
         for issue in result["violations"]
     )
+
+
+def test_stale_ag_ui_protocol_module_blocks_cutover_even_with_one_client_version(
+    tmp_path: Path,
+) -> None:
+    fixture(tmp_path, copilot=True)
+    lock = tmp_path / AUDITOR.WEB / "package-lock.json"
+    lock.write_text(json.dumps({"packages": {
+        "node_modules/@ag-ui/client": {"version": "1.0.2"},
+        "node_modules/@ag-ui/core": {"version": "0.0.59"},
+        "node_modules/@ag-ui/encoder": {"version": "1.0.2"},
+        "node_modules/@ag-ui/proto": {"version": "1.0.2"},
+    }}), encoding="utf-8")
+    bad = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert bad["ag_ui_client_versions"] == ["1.0.2"]
+    assert bad["ag_ui_protocol_versions"] == ["0.0.59", "1.0.2"]
+    assert any(
+        "requires one AG-UI protocol generation" in issue
+        for issue in bad["violations"]
+    )
+
+    lock.write_text(json.dumps({"packages": {
+        "node_modules/@ag-ui/client": {"version": "1.0.2"},
+        "node_modules/@ag-ui/core": {"version": "1.0.2"},
+        "node_modules/@ag-ui/encoder": {"version": "1.0.2"},
+        "node_modules/@ag-ui/proto": {"version": "1.0.2"},
+    }}), encoding="utf-8")
+    good = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert good["ag_ui_protocol_versions"] == ["1.0.2"]
+    assert not any(
+        "requires one AG-UI protocol generation" in issue
+        for issue in good["violations"]
+    )
