@@ -360,3 +360,24 @@ def test_strict_cutover_refuses_retired_renderer_file(tmp_path: Path) -> None:
         "Retired assistant-ui renderer source still exists" in issue
         for issue in result["violations"]
     )
+
+
+def test_legacy_packages_still_in_lock_block_cutover(tmp_path: Path) -> None:
+    fixture(tmp_path, copilot=True)
+    route = tmp_path / AUDITOR.WEB_GATEWAY / "[[...slug]]" / "route.ts"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text(
+        'import { CopilotRuntime } from "@copilotkit/runtime/v2";\n',
+        encoding="utf-8",
+    )
+    lock = tmp_path / AUDITOR.WEB / "package-lock.json"
+    lock.write_text(json.dumps({"packages": {
+        "": {"dependencies": {"@assistant-ui/react": "0.15.29"}},
+        "node_modules/@assistant-ui/react": {"version": "0.15.29"},
+        "node_modules/@ag-ui/client": {"version": "1.0.2"},
+    }}), encoding="utf-8")
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert any(
+        "Retired assistant-ui packages remain in committed npm lock" in issue
+        for issue in result["violations"]
+    )
