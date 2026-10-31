@@ -1,7 +1,7 @@
 "use client";
 
 import { useAgent } from "@copilotkit/react-core/v2";
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { apiClient } from "@/lib/api";
@@ -24,6 +24,20 @@ type KarenOwnedThreadResponse = {
   // supports text. Never silently discard presentation/receipt provenance.
   replayEvents?: unknown;
 };
+
+// The history gate owns the sole SDK agent registration for this conversation.
+// Children consume the same instance; a second useAgent call with the same ID
+// causes CopilotKitCore.registerProxiedAgent to reject the duplicate.
+type ScopedAgentRegistration = ReturnType<typeof useAgent>;
+const ScopedAgentContext = createContext<ScopedAgentRegistration | null>(null);
+
+export function useKarenScopedAgent(): ScopedAgentRegistration {
+  const registration = useContext(ScopedAgentContext);
+  if (!registration) {
+    throw new Error("CopilotKit conversation agent is unavailable outside its verified history gate");
+  }
+  return registration;
+}
 
 /** One private local UI agent per owned conversation, all routing to Karen default runtime. */
 export function karenScopedAgentId(conversationId: string): string {
@@ -84,11 +98,12 @@ export function KarenCopilotHistoryGate({
   conversationId: string;
   children: ReactNode;
 }) {
-  const { agent, isReady } = useAgent({
+  const registration = useAgent({
     agentId: karenScopedAgentId(conversationId),
     runtimeAgentId: "default",
     threadId: conversationId,
   });
+  const { agent, isReady } = registration;
   const [loaded, setLoaded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
@@ -198,8 +213,10 @@ export function KarenCopilotHistoryGate({
     );
   }
   return (
-    <KarenVerifiedHistoryProvider parts={verifiedParts}>
-      {children}
-    </KarenVerifiedHistoryProvider>
+    <ScopedAgentContext.Provider value={registration}>
+      <KarenVerifiedHistoryProvider parts={verifiedParts}>
+        {children}
+      </KarenVerifiedHistoryProvider>
+    </ScopedAgentContext.Provider>
   );
 }
