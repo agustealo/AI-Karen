@@ -131,6 +131,46 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.queryByText("stale-model")).toBeNull();
   });
 
+  it("renders only backend-attested, ordered saved agent activity", () => {
+    const value = (sequence: number, status: string) => ({
+      type: "CUSTOM",
+      name: "karen.agent_step.v1",
+      messageId: "assistant-1",
+      value: {
+        step_id: "step-1", agent_id: "research", status,
+        event_type: "agent_step_" + status,
+        description: "Observed agent activity.",
+        run_id: "run-1", sequence,
+      },
+    });
+    const receipt = {
+      type: "CUSTOM", name: "karen.execution_receipt.v1",
+      messageId: "assistant-1",
+      value: {
+        actual_provider: "local", actual_model: "verified-model",
+        response_source: "local_inference",
+      },
+    };
+    const parts = parseKarenVerifiedHistory([
+      value(1, "running"), value(3, "completed"), receipt,
+    ], messages);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByTestId("observed-steps").every(
+      node => node.textContent === "1",
+    )).toBe(true);
+    expect(screen.queryByTestId("karen-copilot-activity-replay-unavailable")).toBeNull();
+    expect(() => parseKarenVerifiedHistory([
+      value(3, "completed"), value(1, "running"), receipt,
+    ], messages)).toThrow("Unsupported verified agent activity");
+    expect(() => parseKarenVerifiedHistory([
+      { ...value(1, "completed"), messageId: "user-1" },
+    ], messages)).toThrow("Unsupported verified conversation event");
+  });
+
   it("restores a successful non-degraded execution receipt without inventing fallback", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
