@@ -113,7 +113,6 @@ describe("CopilotKit canonical intelligence rail", () => {
         actual_provider: "local",
         actual_model,
         response_source: "local_inference",
-        degraded_mode: false,
       },
     });
     // The older event arrives last. It must not override the newer
@@ -316,7 +315,6 @@ describe("CopilotKit canonical intelligence rail", () => {
         actual_provider: "local",
         actual_model: "verified-runtime-model",
         response_source: "local_inference",
-        degraded_mode: false,
         fallback_level: 0,
       },
     }], messages);
@@ -329,8 +327,8 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.getAllByText("verified-runtime-model")).toHaveLength(2);
   });
 
-  it.each(["false", 0, null, {}, []])(
-    "rejects untrusted non-boolean degraded_mode %j",
+  it.each([false, "false", 0, null, {}, []])(
+    "rejects unverified degraded_mode value %j",
     (degraded_mode) => {
       expect(() => parseKarenVerifiedHistory([{
         type: "CUSTOM",
@@ -368,7 +366,6 @@ describe("CopilotKit canonical intelligence rail", () => {
         actual_provider: "local",
         actual_model: "verified-runtime-model",
         response_source: "local_inference",
-        degraded_mode: false,
       },
     }], messages);
     render(
