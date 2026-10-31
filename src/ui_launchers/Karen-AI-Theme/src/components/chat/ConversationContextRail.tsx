@@ -1481,7 +1481,7 @@ export default function ConversationContextRail(
 
   useEffect(() => {
     let cancelled = false;
-    if (!window.matchMedia('(min-width: 1280px)').matches) {
+    if (props.embedded || !window.matchMedia('(min-width: 1280px)').matches) {
       return () => {
         cancelled = true;
       };
@@ -1515,7 +1515,7 @@ export default function ConversationContextRail(
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [props.embedded]);
 
   const metadata = props.metadata || {};
   const runtime = normalizeRuntimeInsight(metadata);
