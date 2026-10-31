@@ -14,7 +14,7 @@ import {
   KarenPresentationRegistry,
   parseKarenPresentation,
   type KarenPresentationEnvelope,
-} from "@/components/chat/presentation/KarenPresentationRegistry";
+} from "@/components/chat/KarenPresentationRegistry";
 import {
   KarenResponseIntegrity,
   KarenRestoredExecutionReceipt,
