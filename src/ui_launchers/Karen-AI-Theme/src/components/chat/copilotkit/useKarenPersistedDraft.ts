@@ -238,8 +238,49 @@ export function useKarenPersistedDraft(conversationId: string) {
 
     if (dirtyRef.current) {
       // Keep unsent edits intact and retry the existing revision-fenced write.
-      // No known revision means we must not invent a safe CAS base.
-      if (revisionRef.current === null) return;
+      // After an initial read outage, recover the canonical CAS baseline
+      // without overwriting text composed during the outage.
+      if (revisionRef.current === null) {
+        busyRef.current = true;
+        const generation = generationRef.current;
+        const sequence = ++readSequenceRef.current;
+        void (async () => {
+          try {
+            const response: unknown = await apiClient.get<DraftRecord>(endpoint);
+            if (!activeRef.current || generationRef.current !== generation ||
+                readSequenceRef.current !== sequence) return;
+            if (!validDraft(response)) throw new Error("Invalid server draft receipt");
+            const saved = response as DraftRecord;
+            revisionRef.current = saved.revision;
+            if (saved.text !== "" && saved.text !== textRef.current) {
+              setStatus("conflict");
+              setSynced(false);
+              return;
+            }
+            if (saved.text === textRef.current) {
+              dirtyRef.current = false;
+              setSynced(true);
+            } else {
+              // Local input is still dirty. Its first save must use the
+              // retrieved server revision, never a fabricated zero.
+              setSynced(false);
+              setVersion(v => v + 1);
+            }
+            setFailureStatus(null);
+            setStatus("ready");
+          } catch (error) {
+            if (activeRef.current && generationRef.current === generation &&
+                readSequenceRef.current === sequence) {
+              setStatus("unavailable");
+              setFailureStatus(error instanceof ApiError ? error.status : null);
+              setSynced(false);
+            }
+          } finally {
+            busyRef.current = false;
+          }
+        })();
+        return;
+      }
       setStatus("ready");
       setVersion(v => v + 1);
       return;

@@ -330,16 +330,16 @@ export function KarenCopilotControlledChat({
         </div>
         <div className="rounded-2xl border border-border bg-background p-3">
           <label htmlFor="karen-unsynced-draft" className="mb-2 block text-xs font-medium text-muted-foreground">
-            Unsent message (preserved on this screen)
+            Unsent message (not yet saved)
           </label>
-          <textarea id="karen-unsynced-draft" aria-label="Unsynced draft, copy before reload"
-            readOnly value={draft}
-            placeholder="No recoverable draft text is available in this session."
+          <textarea id="karen-unsynced-draft" aria-label="Unsaved message"
+            value={draft} onChange={event => setDraftText(event.target.value)}
+            placeholder="Write your message here. Karen will not send until saving is verified."
             className="min-h-24 max-h-[35dvh] w-full resize-y rounded-lg bg-muted/30 p-3 text-sm focus-visible:outline-2 focus-visible:outline-ring" />
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {!conflict && <button type="button" onClick={retry}
               className="min-h-11 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground">
-              Try saving again
+              Reconnect and save
             </button>}
             <button type="button" disabled={!draft} onClick={() => {
               if (!navigator.clipboard?.writeText) {

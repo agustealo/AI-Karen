@@ -33,9 +33,9 @@ describe("canonical CopilotKit chat ownership", () => {
 
   it("preserves unsent text and keeps destructive draft recovery secondary", () => {
     expect(controller).toContain('aria-label="Draft recovery"');
-    expect(controller).toContain('readOnly value={draft}');
+    expect(controller).toContain('value={draft} onChange={event => setDraftText(event.target.value)}');
     expect(controller).toContain("Copy unsent text");
-    expect(controller).toContain("Try saving again");
+    expect(controller).toContain("Reconnect and save");
     expect(controller).toContain("<details");
     expect(controller).toContain("Discard local changes and reload saved draft");
     expect(controller).toContain('draftStatus === "conflict" || draftStatus === "unavailable"');

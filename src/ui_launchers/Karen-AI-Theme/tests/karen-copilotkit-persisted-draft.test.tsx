@@ -217,6 +217,44 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     expect(backend.put).not.toHaveBeenCalled();
   });
 
+  it("recovers typed text after initial 503 using the real server revision", async () => {
+    backend.get.mockRejectedValueOnce(new ApiError(503, "storage outage"))
+      .mockResolvedValueOnce({ text: "", revision: 0 });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("unavailable"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Written while offline" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("ready"));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledWith(
+      TARGET, { text: "Written while offline", expected_revision: 0 },
+      expect.objectContaining({ signal: expect.any(Object) }),
+    ), { timeout: 4000 });
+    await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
+      .toBe("true"));
+  });
+
+  it("does not overwrite locally written text if recovery finds an existing remote draft", async () => {
+    backend.get.mockRejectedValueOnce(new ApiError(503, "storage outage"))
+      .mockResolvedValueOnce({ text: "Remote saved draft", revision: 7 });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("unavailable"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Local unsaved message" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
+      .toBe("conflict"));
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
+      .toBe("Local unsaved message");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("false");
+    expect(backend.put).not.toHaveBeenCalled();
+  });
+
   it("recovers from a failed first read using an authenticated reread, without a fake save", async () => {
     backend.get.mockRejectedValueOnce(new ApiError(503, "temporarily unavailable"))
       .mockResolvedValueOnce({ text: "Saved after recovery", revision: 3 });
