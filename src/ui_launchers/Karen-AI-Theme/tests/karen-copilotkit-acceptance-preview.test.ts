@@ -53,7 +53,7 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(consumerPreview).toContain('index: false, follow: false');
     expect(consumerPreview).not.toContain("process.env.NEXT_PUBLIC_");
     expect(consumerPreview).not.toContain("x-forwarded-host");
-    expect(dashboard).not.toContain("<KarenCopilotConsumerChat");
+    expect(dashboard).toContain("<KarenCopilotConsumerChat");
   });
 
   it("never replaces an unavailable explicitly scoped acceptance conversation", () => {
@@ -143,7 +143,7 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
   });
 
   it("does not disturb the sole consumer chat mount", () => {
-    expect(dashboard).toContain("<KarenAssistantChat />");
+    expect(dashboard).toContain("<KarenCopilotConsumerChat />");
     expect(dashboard).not.toContain("<KarenCopilotChat");
     expect(dashboard.match(/<KarenAssistantChat \/>/g)?.length).toBe(1);
   });
