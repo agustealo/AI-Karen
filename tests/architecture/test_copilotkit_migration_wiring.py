@@ -468,3 +468,37 @@ def test_ag_ui_lock_nearest_nested_protocol_dependency_is_valid(tmp_path: Path) 
         "AG-UI protocol lock dependency edge is unresolved" in issue
         for issue in result["violations"]
     )
+
+
+def test_strict_cutover_rejects_test_import_of_deleted_renderer(
+    tmp_path: Path,
+) -> None:
+    fixture(tmp_path, copilot=True)
+    target = tmp_path / AUDITOR.WEB / "tests/chat/retired-renderer.test.ts"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        'import Old from "@/components/chat/assistant-ui/KarenAssistantChat";\n',
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert result["retired_test_imports"] == [
+        str(target.relative_to(tmp_path))
+    ]
+    assert any(
+        "Retired assistant-ui is imported by frontend test" in message
+        for message in result["violations"]
+    )
+
+
+def test_historical_mentions_without_import_are_not_retired_test_callers(
+    tmp_path: Path,
+) -> None:
+    fixture(tmp_path, copilot=True)
+    target = tmp_path / AUDITOR.WEB / "tests/chat/retirement-contract.test.ts"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        'expect(source).not.toContain("@/components/chat/assistant-ui/Legacy");\n',
+        encoding="utf-8",
+    )
+    result = AUDITOR.audit(tmp_path, require_cutover=True)
+    assert result["retired_test_imports"] == []
