@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -62,6 +63,7 @@ class DirectCapabilityResult:
                 "provider",
                 "search_providers",
                 "crawl_provider",
+                "timer_receipt",
             )
             if self.payload.get(key) is not None
         }
@@ -119,6 +121,157 @@ class DirectCapabilityExecutor:
     executes that already-authorized single-step plan.
     """
 
+    @staticmethod
+    def _timer_unavailable(reason: str, message: str) -> DirectCapabilityResult:
+        return DirectCapabilityResult(
+            handled=True, text=message, success=False, degraded=True,
+            source="capability_unavailable", source_id="timer.schedule",
+            error=reason,
+            payload={
+                "status": "unavailable",
+                "required_capability": "timer.schedule",
+                "scheduler_verified": False,
+                "timer_created": False,
+                "reminder_delivered": False,
+            },
+            attempts=[{
+                "type": "capability", "id": "timer.schedule",
+                "status": "unavailable", "error": reason,
+            }],
+        )
+
+    async def _execute_timer(
+        self,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ) -> DirectCapabilityResult:
+        """One canonical owner for chat timer admission and receipt truth.
+
+        The SQL timer ledger records durable deadlines, not notification jobs.
+        Never infer delivery, pause/resume support or an active state from prose.
+        """
+        from ai_karen_engine.services.automation.timers import (
+            OwnedTimerService, TimerAuthorizationError, TimerNotFoundError,
+        )
+
+        unavailable = self._timer_unavailable
+        if "timer.schedule" not in set(plan.allowed_capabilities):
+            return unavailable("timer_not_authorized", "Timer access is not authorized for this request. No timer was started.")
+        try:
+            principal = request.context.require_authenticated_user()
+        except PermissionError:
+            return unavailable("timer_principal_unverified", "Timer identity could not be verified. No timer was started.")
+        if not await meter.consume_tool_call():
+            return unavailable("timer_budget_exhausted", "Timer execution budget is exhausted. No timer was started.")
+
+        query = self._latest_user_text(request).strip()
+        normalized = " ".join(query.lower().split()).rstrip("?! .")
+        # A reminder request is not a countdown command. Do not even claim it
+        # was queued: this service has no worker or delivery receipt.
+        if re.search(r"\b(remind|reminder|notify|notification)\b", normalized):
+            return unavailable(
+                "timer_notification_unavailable",
+                "I cannot verify any timer reminder was scheduled or delivered. "
+                "Countdown storage does not send notifications.",
+            )
+
+        started = time.perf_counter()
+        correlation = str(request.context.correlation_id or "")
+        try:
+            service = OwnedTimerService()
+            if re.match(r"^(?:please\s+)?(?:start|set|create|begin)\b", normalized):
+                match = re.search(
+                    r"\b(\d{1,5})\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b",
+                    normalized,
+                )
+                if not match:
+                    return unavailable("timer_duration_missing", "Specify a timer duration in seconds, minutes or hours. No timer was started.")
+                quantity = int(match.group(1))
+                unit = match.group(2)
+                factor = 3600 if unit.startswith(("hour", "hr")) else 60 if unit.startswith(("minute", "min")) else 1
+                seconds = quantity * factor
+                if seconds < 1 or seconds > 86400:
+                    return unavailable("timer_duration_invalid", "Timer duration must be from 1 second through 24 hours. No timer was started.")
+                stable_id = str(request.context.request_id or correlation).strip()
+                if not stable_id or not correlation:
+                    return unavailable("timer_request_identity_missing", "A verified timer request ID is required. No timer was started.")
+                # Stable retry identity scoped to the authenticated request.
+                key = uuid.uuid5(uuid.NAMESPACE_URL,
+                    ":".join(("karen-timer-v1", str(principal.tenant_id),
+                              str(principal.user_id),
+                              request.context.require_conversation_id(), stable_id)))
+                receipt = await service.create(
+                    user=principal, duration_seconds=seconds, title="Timer",
+                    idempotency_key=key, correlation_id=correlation,
+                )
+                verb = "started" if receipt["status"] == "active" else receipt["status"]
+                message = (
+                    f"Timer {verb}. ID: {receipt['timer_id']}. "
+                    f"Deadline: {receipt['deadline_at']}. "
+                    "No reminder or notification has been scheduled."
+                )
+            elif re.match(r"^(?:please\s+)?(?:cancel|stop)\b", normalized):
+                available = await service.list(user=principal, correlation_id=correlation)
+                active = next((row for row in available if row["status"] == "active"), None)
+                if active is None:
+                    return unavailable("timer_not_found", "There is no active timer to cancel.")
+                receipt = await service.cancel(
+                    user=principal, timer_id=uuid.UUID(active["timer_id"]),
+                    correlation_id=correlation,
+                )
+                message = (
+                    f"Timer status: {receipt['status']}. ID: {receipt['timer_id']}. "
+                    f"Deadline: {receipt['deadline_at']}. "
+                    "No reminder delivery is confirmed."
+                )
+            elif re.match(r"^(?:please\s+)?(?:show|display|open|is|has|what|can|could|would)\b", normalized):
+                available = await service.list(user=principal, correlation_id=correlation)
+                if not available:
+                    return unavailable("timer_not_found", "No saved countdown timer was found for your account.")
+                receipt = next((row for row in available if row["status"] == "active"), available[0])
+                message = (
+                    f"Timer status: {receipt['status']}. ID: {receipt['timer_id']}. "
+                    f"Deadline: {receipt['deadline_at']}. "
+                    "This is a saved countdown deadline, not a notification."
+                )
+            else:
+                return unavailable(
+                    "timer_action_unsupported",
+                    "This timer action is not supported by the durable countdown service. "
+                    "No timer was changed.",
+                )
+        except (TimerAuthorizationError, TimerNotFoundError, ValueError):
+            return unavailable("timer_scope_or_input_denied", "Timer access or requested action could not be verified. No timer change is confirmed.")
+        except Exception as exc:
+            # Database unavailable, migration missing or audit failure must
+            # never become a model-generated success or another scheduler.
+            import logging
+            logging.getLogger(__name__).warning(
+                "timer_action_unavailable",
+                extra={"correlation_id": correlation, "error_type": type(exc).__name__},
+            )
+            return unavailable("timer_persistence_unavailable", "Timer storage is unavailable. No timer change is confirmed.")
+
+        return DirectCapabilityResult(
+            handled=True, success=True, degraded=False,
+            text=message, source="durable_timer_ledger",
+            source_id="timer.schedule",
+            payload={
+                "status": receipt["status"],
+                "timer_receipt": receipt,
+                "required_capability": "timer.schedule",
+                "timer_created": receipt["status"] == "active" and
+                    bool(re.match(r"^(?:please\s+)?(?:start|set|create|begin)\b", normalized)),
+                "reminder_delivered": False,
+            },
+            attempts=[{
+                "type": "capability", "id": "timer.schedule",
+                "status": "success", "source": "postgresql_timer_ledger",
+            }],
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
     def can_handle(self, decision: ExecutionDecision) -> bool:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
         if not route or not route.get("requires_live_data"):
@@ -142,37 +295,7 @@ class DirectCapabilityExecutor:
             return DirectCapabilityResult(handled=False)
 
         if decision.intent == "timer.manage":
-            # The installed time-query alarm implementation is explicitly
-            # in-memory and has no scheduler worker. No authenticated durable
-            # timer executor is registered yet. Fail closed before any model
-            # generation, tool/plugin call or fictitious delivery promise.
-            return DirectCapabilityResult(
-                handled=True,
-                text=(
-                    "I could not verify a scheduled timer or reminder. "
-                    "No timer was started or resumed by this request, "
-                    "and I cannot confirm that an earlier timer is running. "
-                    "Karen's durable timer and notification service is not available."
-                ),
-                success=False,
-                degraded=True,
-                source="capability_unavailable",
-                source_id="timer.schedule",
-                error="durable_timer_scheduler_unavailable",
-                payload={
-                    "status": "unavailable",
-                    "required_capability": "timer.schedule",
-                    "scheduler_verified": False,
-                    "timer_created": False,
-                    "reminder_delivered": False,
-                },
-                attempts=[{
-                    "type": "capability",
-                    "id": "timer.schedule",
-                    "status": "unavailable",
-                    "error": "durable_timer_scheduler_unavailable",
-                }],
-            )
+            return await self._execute_timer(request, plan, meter)
 
         if decision.intent == "planner.read":
             from ai_karen_engine.config.runtime import get_runtime_settings
