@@ -247,6 +247,11 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   // Create a new durable session. The UI does not present a conversation
   // as created until the server has acknowledged the canonical session id.
   const createNewSession = useCallback(async () => {
+    // Pinned acceptance conversations cannot mint or switch to another identity.
+    // Enforce at the canonical action boundary, not just by hiding UI controls.
+    if (strictInitialSession) {
+      throw new Error('Strict conversation cannot create a replacement session');
+    }
     setWorkspaceRunId(null);
     const sessionId = createSessionId();
     setIsLoadingSessions(true);
