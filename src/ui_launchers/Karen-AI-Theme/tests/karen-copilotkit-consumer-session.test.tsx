@@ -35,9 +35,9 @@ vi.mock("@/components/chat/assistant-ui/KarenComposerRuntimeCatalog", () => ({
 }));
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotChat", () => ({
-  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, onBusyChange }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; onBusyChange: (busy: boolean) => void }) => {
+  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, workspaceRunId, onBusyChange }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null; onBusyChange: (busy: boolean) => void }) => {
     state.mounts.push(conversationId);
-    state.modelProps.push({ preferredProvider, preferredModel });
+    state.modelProps.push({ preferredProvider, preferredModel, workspaceRunId });
     state.onBusyChange = onBusyChange;
     return <div data-testid="owned-copilot-chat">{conversationId}</div>;
   },
@@ -106,11 +106,11 @@ describe("CopilotKit consumer session adapter", () => {
     state.currentSession = { id: FIRST, title: "Project Alpha" };
     state.sessions = [{ id: FIRST, title: "Project Alpha" }];
     render(<KarenCopilotConsumerChat />);
-    expect(state.modelProps.at(-1)).toEqual({ preferredProvider: null, preferredModel: null });
+    expect(state.modelProps.at(-1)).toEqual({ preferredProvider: null, preferredModel: null, workspaceRunId: null });
     fireEvent.click(screen.getByText("Model and provider"));
     fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
     expect(state.modelProps.at(-1)).toEqual({
-      preferredProvider: "local", preferredModel: "selected-model",
+      preferredProvider: "local", preferredModel: "selected-model", workspaceRunId: null,
     });
   });
 
@@ -127,7 +127,7 @@ describe("CopilotKit consumer session adapter", () => {
     expect(screen.getByRole("status").textContent).toContain("Model changes are unavailable");
     act(() => change(null));
     expect(state.modelProps.at(-1)).toEqual({
-      preferredProvider: "local", preferredModel: "selected-model",
+      preferredProvider: "local", preferredModel: "selected-model", workspaceRunId: null,
     });
     act(() => busy(false));
     act(() => change(null));
