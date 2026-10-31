@@ -60,7 +60,7 @@ def _new_sdk_files(root: Path) -> list[Path]:
     return sorted(files)
 
 
-def audit(root: Path = ROOT) -> dict[str, Any]:
+def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]:
     """Return a reproducible report with distinct observation and violation lists."""
     evidence = {name: (root / path).is_file() for name, path in OWNERS.items()}
     violations: list[str] = []
@@ -193,6 +193,10 @@ def audit(root: Path = ROOT) -> dict[str, Any]:
 
     if legacy_mount:
         warnings.append("Assistant-ui still owns the consumer chat mount")
+        if require_cutover:
+            violations.append("Consumer cutover required: dashboard still mounts assistant-ui")
+    if require_cutover and not copilot_mount:
+        violations.append("Consumer cutover required: CopilotKit is not the active renderer")
     if not (root / WEB_GATEWAY).exists():
         warnings.append("CopilotKit production runtime gateway not installed")
 
@@ -216,6 +220,7 @@ def audit(root: Path = ROOT) -> dict[str, Any]:
         "schema_version": 2,
         "consumer_cutover": consumer_cutover,
         "static_evidence_only": True,
+        "cutover_required": require_cutover,
         "runtime_verification": "not_run",
         "owners": evidence,
         "chat_mount": "copilotkit" if copilot_mount else "assistant-ui" if legacy_mount else "unknown",
@@ -231,8 +236,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable evidence")
+    parser.add_argument(
+        "--require-cutover", action="store_true",
+        help="Fail when assistant-ui still owns the dashboard; does not certify runtime or UX",
+    )
     args = parser.parse_args()
-    result = audit(args.root.resolve())
+    result = audit(args.root.resolve(), require_cutover=args.require_cutover)
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
