@@ -158,6 +158,24 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
     else:
         warnings.append("CopilotKit v2 React package not declared: migration not installed")
 
+    # Cutover must not keep runtime dependencies on the retired UI framework.
+    # Restrict this check to production CopilotKit code, not migration tests or
+    # compatibility shims whose removal is tracked separately.
+    if require_cutover and copilot_mount:
+        for path in gateway_files:
+            source = _read(path)
+            if any(token in source for token in (
+                'from "@assistant-ui/', "from '@assistant-ui/",
+                'import("@assistant-ui/', "import('@assistant-ui/",
+                'from "../assistant-ui/Karen', "from '../assistant-ui/Karen",
+                'from "@/components/chat/assistant-ui/',
+                "from '@/components/chat/assistant-ui/",
+            )):
+                violations.append(
+                    "CopilotKit production path imports retired assistant-ui: "
+                    + str(path.relative_to(root))
+                )
+
     lock_path = root / WEB / "package-lock.json"
     ag_ui_client_versions: dict[str, str] = {}
     if lock_path.is_file():
@@ -179,6 +197,25 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
             violations.append(f"AG-UI dependency lockfile is unreadable: {exc}")
     elif copilot_installed:
         violations.append("CopilotKit dependency declared without a committed package-lock.json")
+
+    # A direct runtime import can be resolved differently from what a stale
+    # root package-lock claims. Compare only declared dependencies so that
+    # historical minimal fixtures without a pinned direct client remain valid.
+    if lock_path.is_file() and dependencies.get("@ag-ui/client"):
+        try:
+            lock_data = json.loads(_read(lock_path))
+            lock_packages = lock_data.get("packages", {})
+            root_packages = lock_packages.get("", {})
+            lock_dependencies = root_packages.get("dependencies", {})
+            declared = dependencies["@ag-ui/client"]
+            installed = lock_packages.get("node_modules/@ag-ui/client", {})
+            if (lock_dependencies.get("@ag-ui/client") != declared
+                    or installed.get("version") != declared):
+                violations.append(
+                    "Canonical AG-UI client manifest and lockfile disagree"
+                )
+        except (TypeError, AttributeError, ValueError, OSError) as exc:
+            violations.append(f"Canonical AG-UI dependency verification failed: {exc}")
 
     unique_client_versions = sorted(set(ag_ui_client_versions.values()))
     if copilot_installed and len(unique_client_versions) > 1:
