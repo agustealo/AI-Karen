@@ -62,6 +62,7 @@ def project_owned_history(
     thread_id = str(snapshot.conversation.id)
     messages: list[dict[str, str]] = []
     events: list[dict[str, Any]] = []
+    seen_message_ids: set[str] = set()
 
     for message in records:
         role = str(message.role)
@@ -69,11 +70,13 @@ def project_owned_history(
         content = message.content
         if (
             role not in {"user", "assistant"}
-            or not identifier or len(identifier) > 200
+            or not identifier or not identifier.strip() or len(identifier) > 200
+            or identifier in seen_message_ids
             or not isinstance(content, str)
             or len(content) > _MAX_TEXT
         ):
             raise UnreplayableHistory("invalid_canonical_message")
+        seen_message_ids.add(identifier)
         metadata = message.metadata
         if not isinstance(metadata, Mapping):
             raise UnreplayableHistory("invalid_message_metadata")
