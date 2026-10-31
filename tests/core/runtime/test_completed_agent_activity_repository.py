@@ -37,8 +37,10 @@ def _row(
 
 async def _read(
     monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, object]],
+    *, conversation_id: str | None = None,
 ) -> dict[str, object]:
-    tenant, owner, conversation = (str(uuid4()) for _ in range(3))
+    tenant, owner = (str(uuid4()) for _ in range(2))
+    conversation = conversation_id or str(uuid4())
 
     class Session:
         async def execute(self, statement: object, params: object) -> object:
@@ -112,3 +114,35 @@ async def test_mismatched_terminal_run_is_rejected(
     }
     with pytest.raises(RuntimeError, match="chat_activity_terminal_mismatch"):
         await _read(monkeypatch, rows)
+
+
+@pytest.mark.asyncio
+async def test_completed_owner_matched_journal_returns_exact_saved_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = str(uuid4())
+    rows = [
+        _row("assistant-1", "run-1", 2, "CUSTOM", conversation),
+        _row("assistant-1", "run-1", 7, "RUN_FINISHED", conversation),
+    ]
+    result = await _read(monkeypatch, rows, conversation_id=conversation)
+    assert set(result) == {"assistant-1"}
+    request_id, digest, run_id, events = result["assistant-1"]
+    assert request_id == "request-1"
+    assert digest == "a" * 64
+    assert run_id == "run-1"
+    assert events == [{"seq": 2, "event": rows[0]["event_payload"]}]
+
+
+@pytest.mark.asyncio
+async def test_completed_journal_rejects_foreign_conversation_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = str(uuid4())
+    foreign_conversation = str(uuid4())
+    rows = [
+        _row("assistant-1", "run-1", 1, "CUSTOM", conversation),
+        _row("assistant-1", "run-1", 2, "RUN_FINISHED", foreign_conversation),
+    ]
+    with pytest.raises(RuntimeError, match="chat_activity_terminal_mismatch"):
+        await _read(monkeypatch, rows, conversation_id=conversation)
