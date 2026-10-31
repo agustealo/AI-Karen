@@ -61,7 +61,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
 
   it("reuses the existing durable conversation owner and allows no local fake persistence", () => {
     expect(dashboard).toContain("<SessionProvider>");
-    expect(dashboard).toContain("<KarenAssistantChat />");
+    expect(dashboard).toContain("<KarenCopilotConsumerChat />");
     expect(component).toContain('import { useSession } from "@/components/chat/SessionProvider"');
     expect(component).toContain("/api/conversations/");
     expect(component).toContain("ExportedMessageRepository.fromArray");
@@ -152,7 +152,7 @@ describe("governed assistant-ui AG-UI chat boundary", () => {
 
   it("keeps the adapter opt-in until backend and npm dependency proof pass", () => {
     expect(dashboard).toContain(
-      '<KarenAssistantChat />',
+      '<KarenCopilotConsumerChat />',
     );
     expect(dashboard).toContain('{ ssr: false }');
     expect(component).toContain("showThinking: false");
