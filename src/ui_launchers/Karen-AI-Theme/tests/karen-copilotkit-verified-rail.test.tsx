@@ -255,9 +255,13 @@ describe("CopilotKit canonical intelligence rail", () => {
     },
   );
 
-  it.each([["completed"], ["running"], 1, true, null, { state: "completed" }])(
-    "rejects non-string saved agent status %j",
-    (status) => {
+  it.each([
+    { status: ["completed"] }, { status: ["running"] },
+    { status: 1 }, { status: true }, { status: null },
+    { status: { state: "completed" } },
+  ])(
+    "rejects non-string saved agent status $status",
+    ({ status }) => {
       expect(() => parseKarenVerifiedHistory([{
         type: "CUSTOM",
         name: "karen.agent_step.v1",
