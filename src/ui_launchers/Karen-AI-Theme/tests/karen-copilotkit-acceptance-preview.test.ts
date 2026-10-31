@@ -129,6 +129,8 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
 
   it("never replaces an unavailable explicitly scoped acceptance conversation", () => {
     expect(canonicalSessions).toContain("strictInitialSession?: boolean");
+    expect(canonicalSessions).toContain("strictInitialSession: boolean;");
+    expect(canonicalSessions).toContain("<SessionContext.Provider value={{\n      strictInitialSession,");
     expect(canonicalSessions).toContain("strictInitialSession && conversationId !== sessionId");
     expect(canonicalSessions).toContain("if (strictInitialSession) {");
     expect(canonicalSessions).toContain("setCurrentSession(null)");
