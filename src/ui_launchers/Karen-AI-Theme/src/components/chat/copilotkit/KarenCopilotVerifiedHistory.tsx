@@ -229,7 +229,13 @@ export function useKarenLatestVerifiedAgentSteps(): AgentStepEvent[] {
       part.type === "agent_step",
   );
   const lifecycle = new Map<string, AgentStepEvent>();
-  for (const part of steps) lifecycle.set(part.value.step_id, part.value);
+  for (const part of steps) {
+    // A step identifier is only unique within its originating agent.
+    // Do not collapse two separately observed agents into one timeline item.
+    const agentId = part.value.metadata?.agent_id;
+    if (typeof agentId !== "string") continue;
+    lifecycle.set(JSON.stringify([agentId, part.value.step_id]), part.value);
+  }
   return Array.from(lifecycle.values());
 }
 
