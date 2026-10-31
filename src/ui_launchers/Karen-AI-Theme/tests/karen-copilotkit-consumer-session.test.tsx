@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   error: null as string | null,
   createNewSession: vi.fn(),
   loadSession: vi.fn(),
+  updateSessionTitle: vi.fn(),
+  deleteSession: vi.fn(),
   mounts: [] as string[],
   modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null}>,
   onModelChange: null as null | ((value: {provider: string; model: string} | null) => void),
@@ -27,6 +29,8 @@ vi.mock("@/components/chat/SessionProvider", () => ({
     error: state.error,
     createNewSession: state.createNewSession,
     loadSession: state.loadSession,
+    updateSessionTitle: state.updateSessionTitle,
+    deleteSession: state.deleteSession,
   }),
 }));
 
@@ -63,6 +67,8 @@ beforeEach(() => {
   state.onBusyChange = null;
   state.createNewSession.mockReset().mockResolvedValue(undefined);
   state.loadSession.mockReset().mockResolvedValue(undefined);
+  state.updateSessionTitle.mockReset().mockResolvedValue(true);
+  state.deleteSession.mockReset().mockResolvedValue(true);
 });
 afterEach(() => {
   cleanup();
@@ -142,6 +148,46 @@ describe("CopilotKit consumer session adapter", () => {
     expect(screen.queryByRole("searchbox")).toBeNull();
     // No optimistic local session switch: SessionProvider decides the identity.
     expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("renames through the existing session authority only after confirmed persistence", async () => {
+    state.currentSession = { id: FIRST, title: "Original title" };
+    state.sessions = [{ id: FIRST, title: "Original title" }];
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rename conversation" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Conversation title" }), {
+      target: { value: "  New title  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save title" }));
+    await waitFor(() => expect(state.updateSessionTitle).toHaveBeenCalledWith(FIRST, "New title"));
+    expect(state.deleteSession).not.toHaveBeenCalled();
+  });
+
+  it("prevents accidental deletion and delegates only after explicit confirmation", async () => {
+    state.currentSession = { id: FIRST, title: "Protected" };
+    state.sessions = [{ id: FIRST, title: "Protected" }];
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    expect(state.deleteSession).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Keep conversation" }));
+    expect(state.deleteSession).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(state.deleteSession).toHaveBeenCalledWith(FIRST));
+  });
+
+  it("disables conversation management while a verified run is active", () => {
+    state.currentSession = { id: FIRST, title: "Running" };
+    state.sessions = [{ id: FIRST, title: "Running" }];
+    render(<KarenCopilotConsumerChat />);
+    const busy = state.onBusyChange;
+    if (!busy) throw new Error("Missing run callback");
+    act(() => busy(true));
+    expect(screen.getByRole("button", { name: "Conversation options" }).hasAttribute("disabled")).toBe(true);
+    expect(state.updateSessionTitle).not.toHaveBeenCalled();
+    expect(state.deleteSession).not.toHaveBeenCalled();
   });
 
   it("uses the existing backend catalog to request a model without choosing runtime execution", () => {
