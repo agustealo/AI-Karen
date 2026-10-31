@@ -136,6 +136,14 @@ describe("CopilotKit consumer session adapter", () => {
     });
   });
 
+  it("preserves the canonical Agent Runtime handoff in its owned conversation", () => {
+    state.currentSession = { id: FIRST, title: "Agent Runtime" };
+    state.sessions = [{ id: FIRST, title: "Agent Runtime" }];
+    state.workspaceRunId = "run_approved_17";
+    render(<KarenCopilotConsumerChat />);
+    expect(state.modelProps.at(-1)?.workspaceRunId).toBe("run_approved_17");
+  });
+
   it("blocks conversation changes while an owned CopilotKit run is active", () => {
     state.currentSession = { id: FIRST, title: "Original" };
     state.sessions = [
