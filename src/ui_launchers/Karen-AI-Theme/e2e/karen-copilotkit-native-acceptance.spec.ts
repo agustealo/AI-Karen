@@ -656,6 +656,13 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible({
     timeout: 30000,
   });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const intelligence = page.locator(
+    '[data-testid="conversation-context-rail"], [data-testid="karen-copilot-rail-unverified"]',
+  );
+  await expect(intelligence, "The CopilotKit desktop must render exactly one canonical intelligence rail")
+    .toHaveCount(1);
+  await expect(intelligence).toBeVisible();
   await expect(page.getByTestId("karen-copilot-model-discovery")).toBeVisible();
   await expect(page.getByRole("button", { name: "Find conversations" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "New conversation" })).toBeEnabled();
