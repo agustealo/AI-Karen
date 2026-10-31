@@ -124,7 +124,11 @@ export function parseKarenVerifiedHistory(
     counters.set(id, seen);
     parts.set(id, [...(parts.get(id) || []), part]);
   }
-  return parts;
+  // Event arrival order is not conversation order. The intelligence rail must
+  // identify the latest saved execution by canonical assistant message order,
+  // even when the backend sends valid CUSTOM events in another sequence.
+  return new Map(messages.filter(message => message.role === "assistant" && parts.has(message.id))
+    .map(message => [message.id, parts.get(message.id)!] as const));
 }
 
 const VerifiedHistoryContext = createContext<VerifiedHistoryParts>(new Map());
