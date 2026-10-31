@@ -139,6 +139,11 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(canonicalSessions).toContain("refreshSessions, strictInitialSession]);");
     expect(canonicalSessions).toContain("persistActiveSessionId, refreshSessions, strictInitialSession]);");
     expect(canonicalSessions).toContain("Strict conversation cannot create a replacement session");
+    expect(canonicalSessions).toContain("Strict conversation cannot rename sessions");
+    expect(canonicalSessions).toContain("Strict conversation requires an explicit verified session ID.");
+    expect(canonicalSessions).toContain("currentSession?.id, strictInitialSession");
+    expect(canonicalSessions).toContain("getPersistedActiveSessionId, strictInitialSession");
+    expect(canonicalSessions).toContain("strictInitialSession ? 'strict' : 'normal'");
     expect(canonicalSessions).toContain("    initialSessionId,");
     expect(canonicalSessions).toContain("if (strictInitialSession) {");
     expect(canonicalSessions).toContain("setCurrentSession(null)");
