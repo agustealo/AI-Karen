@@ -28,6 +28,8 @@ export interface KarenCopilotChatProps {
   /** Optional user preference from Karen's backend-owned model catalog. */
   preferredProvider?: string | null;
   preferredModel?: string | null;
+  /** Authorized, session-scoped Agent Runtime handoff, not a routing command. */
+  workspaceRunId?: string | null;
   onBusyChange?: (busy: boolean) => void;
 }
 
@@ -35,6 +37,7 @@ export function KarenCopilotChat({
   conversationId,
   preferredProvider = null,
   preferredModel = null,
+  workspaceRunId = null,
   onBusyChange,
 }: KarenCopilotChatProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -66,12 +69,17 @@ export function KarenCopilotChat({
       </p>
     );
   }
-  const properties = preferredProvider !== null && preferredModel !== null
-    ? {
-        preferred_llm_provider: preferredProvider.trim(),
-        preferred_model: preferredModel.trim(),
-      }
-    : undefined;
+  if (workspaceRunId !== null &&
+      (typeof workspaceRunId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(workspaceRunId))) {
+    return <p role="alert" className="text-sm text-destructive">Invalid Agent Runtime workspace reference.</p>;
+  }
+  const properties = {
+    ...(preferredProvider !== null && preferredModel !== null
+      ? { preferred_llm_provider: preferredProvider.trim(), preferred_model: preferredModel.trim() }
+      : {}),
+    ...(workspaceRunId !== null ? { workspace_run_id: workspaceRunId } : {}),
+  };
+  const forwardedProperties = Object.keys(properties).length > 0 ? properties : undefined;
 
   const scopeKey = [user.tenant_id, user.user_id, conversationId].join(":");
   return (
@@ -79,7 +87,7 @@ export function KarenCopilotChat({
       aria-label="Karen CopilotKit conversation"
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
     >
-      <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={properties}>
+      <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" properties={forwardedProperties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
