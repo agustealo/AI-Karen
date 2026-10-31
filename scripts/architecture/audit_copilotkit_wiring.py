@@ -219,6 +219,7 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
 
     lock_path = root / WEB / "package-lock.json"
     ag_ui_client_versions: dict[str, str] = {}
+    ag_ui_family_versions: dict[str, str] = {}
     if lock_path.is_file():
         try:
             lock = json.loads(_read(lock_path))
@@ -226,6 +227,18 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
             if not isinstance(packages, dict):
                 raise ValueError("packages must be an object")
             for package_path, metadata in packages.items():
+                if (
+                    isinstance(package_path, str)
+                    and isinstance(metadata, dict)
+                    and isinstance(metadata.get("version"), str)
+                    and (
+                        package_path.startswith("node_modules/@ag-ui/")
+                        or "/node_modules/@ag-ui/" in package_path
+                    )
+                ):
+                    family_name = package_path.rsplit("/@ag-ui/", 1)[-1]
+                    if family_name in {"client", "core", "encoder", "proto"}:
+                        ag_ui_family_versions[package_path] = metadata["version"]
                 if (
                     isinstance(package_path, str)
                     and (package_path == "node_modules/@ag-ui/client"
@@ -287,6 +300,16 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             violations.append(f"Retired npm package audit failed: {exc}")
 
+    # Every AG-UI protocol module must match, not just the HttpAgent client.
+    # A stale root core/encoder/proto can survive dependency pruning and
+    # silently reintroduce a second protocol generation.
+    ag_ui_protocol_versions = sorted(set(ag_ui_family_versions.values()))
+    if copilot_mount and len(ag_ui_protocol_versions) > 1:
+        violations.append(
+            "CopilotKit cutover requires one AG-UI protocol generation; found "
+            + ", ".join(ag_ui_protocol_versions)
+        )
+
     unique_client_versions = sorted(set(ag_ui_client_versions.values()))
     if copilot_installed and len(unique_client_versions) > 1:
         if copilot_mount:
@@ -337,6 +360,7 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         "new_sdk_files_checked": len(gateway_files),
         "legacy_import_callers": legacy_import_callers,
         "ag_ui_client_versions": unique_client_versions,
+        "ag_ui_protocol_versions": ag_ui_protocol_versions,
         "violations": sorted(set(violations)),
         "warnings": sorted(set(warnings)),
     }
