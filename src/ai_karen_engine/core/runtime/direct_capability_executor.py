@@ -141,6 +141,39 @@ class DirectCapabilityExecutor:
         if not route:
             return DirectCapabilityResult(handled=False)
 
+        if decision.intent == "timer.manage":
+            # The installed time-query alarm implementation is explicitly
+            # in-memory and has no scheduler worker. No authenticated durable
+            # timer executor is registered yet. Fail closed before any model
+            # generation, tool/plugin call or fictitious delivery promise.
+            return DirectCapabilityResult(
+                handled=True,
+                text=(
+                    "I could not verify a scheduled timer or reminder. "
+                    "No timer was started or resumed by this request, "
+                    "and I cannot confirm that an earlier timer is running. "
+                    "Karen's durable timer and notification service is not available."
+                ),
+                success=False,
+                degraded=True,
+                source="capability_unavailable",
+                source_id="timer.schedule",
+                error="durable_timer_scheduler_unavailable",
+                payload={
+                    "status": "unavailable",
+                    "required_capability": "timer.schedule",
+                    "scheduler_verified": False,
+                    "timer_created": False,
+                    "reminder_delivered": False,
+                },
+                attempts=[{
+                    "type": "capability",
+                    "id": "timer.schedule",
+                    "status": "unavailable",
+                    "error": "durable_timer_scheduler_unavailable",
+                }],
+            )
+
         if decision.intent == "planner.read":
             from ai_karen_engine.config.runtime import get_runtime_settings
             from ai_karen_engine.services.personal_planner import PersonalPlannerService
