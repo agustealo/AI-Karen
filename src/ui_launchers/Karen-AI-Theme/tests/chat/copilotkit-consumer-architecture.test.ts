@@ -16,7 +16,23 @@ const session = read("src/components/chat/SessionProvider.tsx");
 const catalog = read("src/components/chat/KarenComposerRuntimeCatalog.tsx");
 const pkg = JSON.parse(read("package.json"));
 
+const draftHook = read("src/components/chat/copilotkit/useKarenPersistedDraft.ts");
+
 describe("canonical CopilotKit chat ownership", () => {
+  it("preserves unsent text and keeps destructive draft recovery secondary", () => {
+    expect(controller).toContain('aria-label="Draft recovery"');
+    expect(controller).toContain('readOnly value={draft}');
+    expect(controller).toContain("Copy unsent text");
+    expect(controller).toContain("Try saving again");
+    expect(controller).toContain("<details");
+    expect(controller).toContain("Discard local changes and reload saved draft");
+    expect(controller).toContain('draftStatus === "conflict" || draftStatus === "unavailable"');
+    expect(draftHook).toContain("failureStatus");
+    expect(draftHook).toContain("error instanceof ApiError ? error.status : null");
+    expect(draftHook).toContain("revisionRef.current === null");
+  });
+
+
   it("has exactly one dashboard renderer and no old assistant-ui import", () => {
     expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)).toHaveLength(1);
     expect(dashboard).not.toContain("<KarenAssistantChat");
