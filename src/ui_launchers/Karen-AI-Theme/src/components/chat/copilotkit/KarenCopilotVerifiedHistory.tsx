@@ -109,7 +109,7 @@ function parseSavedAgentStep(value: Record<string, unknown>): {
 export function parseKarenVerifiedHistory(
   value: unknown, messages: ReadonlyArray<{ id: string; role: string }>,
 ): VerifiedHistoryParts {
-  if (!Array.isArray(value) || value.length > 500 * 8) {
+  if (!Array.isArray(value) || value.length > 500 * 108) {
     throw new Error("Unsupported verified conversation events");
   }
   // The public parser must protect its own identity boundary, rather than
