@@ -106,6 +106,155 @@ def _cron_row(row: Any) -> Dict[str, Any]:
 class SqlAutomationRepository:
     """Single durable source of truth for automation definitions and cron claims."""
 
+    @staticmethod
+    def _timer_snapshot(row: Any) -> Dict[str, Any]:
+        data = dict(row)
+        deadline = data["deadline_at"]
+        observed_at = data["observed_at"]
+        status = str(data["status"])
+        if status == "active" and deadline <= observed_at:
+            status = "expired"
+        return {
+            "timer_id": str(data["timer_id"]),
+            "duration_seconds": int(data["duration_seconds"]),
+            "title": str(data["title"]),
+            "status": status,
+            "started_at": data["started_at"].isoformat(),
+            "deadline_at": deadline.isoformat(),
+            "cancelled_at": (
+                data["cancelled_at"].isoformat()
+                if data["cancelled_at"] is not None else None
+            ),
+            "observed_at": observed_at.isoformat(),
+            "scheduler_source": "postgresql_timer_ledger",
+            "durable": True,
+            "reminder_scheduled": False,
+            "notification_delivered": False,
+        }
+
+    async def create_owned_timer(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        duration_seconds: int,
+        title: str,
+        idempotency_key: uuid.UUID,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Persist exactly one countdown per scoped idempotency key.
+
+        DB server time owns the deadline. The insert and replay read share
+        one transaction; conflicting replay payloads must not mutate it.
+        """
+        if not 1 <= duration_seconds <= 86400:
+            raise ValueError("Timer duration must be between 1 and 86400 seconds")
+        if not title.strip() or len(title) > 240:
+            raise ValueError("Invalid timer title")
+        if not correlation_id.strip() or len(correlation_id) > 128:
+            raise ValueError("Invalid correlation ID")
+        async with async_transaction_scope(tenant_id, user_id=owner_id) as session:
+            row = (await session.execute(text("""
+                INSERT INTO public.automation_timers (
+                    timer_id, tenant_id, owner_id, idempotency_key,
+                    duration_seconds, title, deadline_at, correlation_id
+                ) VALUES (
+                    :timer_id, CAST(:tenant_id AS uuid), CAST(:owner_id AS uuid),
+                    CAST(:idempotency_key AS uuid), :duration_seconds,
+                    :title, now() + make_interval(secs => :duration_seconds),
+                    :correlation_id
+                )
+                ON CONFLICT (tenant_id, owner_id, idempotency_key) DO NOTHING
+                RETURNING *, now() AS observed_at
+            """), {
+                "timer_id": str(uuid.uuid4()), "tenant_id": tenant_id,
+                "owner_id": owner_id, "idempotency_key": str(idempotency_key),
+                "duration_seconds": duration_seconds, "title": title.strip(),
+                "correlation_id": correlation_id,
+            })).mappings().one_or_none()
+            if row is None:
+                row = (await session.execute(text("""
+                    SELECT *, now() AS observed_at
+                    FROM public.automation_timers
+                    WHERE tenant_id = CAST(:tenant_id AS uuid)
+                      AND owner_id = CAST(:owner_id AS uuid)
+                      AND idempotency_key = CAST(:idempotency_key AS uuid)
+                """), {
+                    "tenant_id": tenant_id, "owner_id": owner_id,
+                    "idempotency_key": str(idempotency_key),
+                })).mappings().one()
+                if (
+                    int(row["duration_seconds"]) != duration_seconds
+                    or str(row["title"]) != title.strip()
+                ):
+                    raise ValueError("Timer idempotency key conflicts with a different request")
+            return self._timer_snapshot(row)
+
+    async def get_owned_timer(
+        self, *, tenant_id: str, owner_id: str, timer_id: uuid.UUID,
+    ) -> Optional[Dict[str, Any]]:
+        async with async_transaction_scope(tenant_id, user_id=owner_id) as session:
+            row = (await session.execute(text("""
+                SELECT *, now() AS observed_at
+                FROM public.automation_timers
+                WHERE timer_id = CAST(:timer_id AS uuid)
+                  AND tenant_id = CAST(:tenant_id AS uuid)
+                  AND owner_id = CAST(:owner_id AS uuid)
+            """), {
+                "timer_id": str(timer_id), "tenant_id": tenant_id,
+                "owner_id": owner_id,
+            })).mappings().one_or_none()
+            return self._timer_snapshot(row) if row is not None else None
+
+    async def list_owned_timers(
+        self, *, tenant_id: str, owner_id: str, limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("Invalid timer list limit")
+        async with async_transaction_scope(tenant_id, user_id=owner_id) as session:
+            rows = (await session.execute(text("""
+                SELECT *, now() AS observed_at
+                FROM public.automation_timers
+                WHERE tenant_id = CAST(:tenant_id AS uuid)
+                  AND owner_id = CAST(:owner_id AS uuid)
+                ORDER BY started_at DESC, timer_id DESC
+                LIMIT :limit
+            """), {
+                "tenant_id": tenant_id, "owner_id": owner_id, "limit": limit,
+            })).mappings().all()
+            return [self._timer_snapshot(row) for row in rows]
+
+    async def cancel_owned_timer(
+        self, *, tenant_id: str, owner_id: str, timer_id: uuid.UUID,
+    ) -> Optional[Dict[str, Any]]:
+        """Cancel if active; otherwise return the unchanged scoped record."""
+        async with async_transaction_scope(tenant_id, user_id=owner_id) as session:
+            row = (await session.execute(text("""
+                UPDATE public.automation_timers
+                SET status = 'cancelled', cancelled_at = now(), updated_at = now()
+                WHERE timer_id = CAST(:timer_id AS uuid)
+                  AND tenant_id = CAST(:tenant_id AS uuid)
+                  AND owner_id = CAST(:owner_id AS uuid)
+                  AND status = 'active'
+                  AND deadline_at > now()
+                RETURNING *, now() AS observed_at
+            """), {
+                "timer_id": str(timer_id), "tenant_id": tenant_id,
+                "owner_id": owner_id,
+            })).mappings().one_or_none()
+            if row is None:
+                row = (await session.execute(text("""
+                    SELECT *, now() AS observed_at
+                    FROM public.automation_timers
+                    WHERE timer_id = CAST(:timer_id AS uuid)
+                      AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND owner_id = CAST(:owner_id AS uuid)
+                """), {
+                    "timer_id": str(timer_id), "tenant_id": tenant_id,
+                    "owner_id": owner_id,
+                })).mappings().one_or_none()
+            return self._timer_snapshot(row) if row is not None else None
+
     async def create_task(
         self,
         *,
