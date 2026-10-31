@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canCommitVoiceResult, isCurrentVoiceSession } from "@/components/chat/voice/voiceSessionGuard";
+import { canCommitVoiceResult, isCurrentVoiceSession } from "@/components/chat/voiceSessionGuard";
 
 describe("voice generation guard", () => {
   it("accepts only the mounted active recording", () => {
