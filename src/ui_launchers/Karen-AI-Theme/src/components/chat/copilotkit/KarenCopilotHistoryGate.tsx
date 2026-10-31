@@ -147,7 +147,7 @@ export function KarenCopilotHistoryGate({
               const status = error && typeof error === "object" && "status" in error
                 ? (error as { status?: unknown }).status : undefined;
               setError(status === 409
-                ? "This conversation contains interactive or structured content that CopilotKit cannot restore yet. Use the existing conversation view."
+                ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Retry after the required presentation support is available."
                 : "Karen could not verify or restore this conversation.");
               restored = false;
             }
