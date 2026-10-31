@@ -410,6 +410,19 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
     if not (root / WEB_GATEWAY).exists():
         warnings.append("CopilotKit production runtime gateway not installed")
 
+    # An empty activity array in the production rail is an explicit replay
+    # parity gap. Never let package retirement alone certify cutover while
+    # historical observed agent activity is silently discarded.
+    rail_path = root / WEB_SDK_ROOT / "KarenCopilotVerifiedRail.tsx"
+    activity_replay_placeholder = (
+        rail_path.is_file() and "agentSteps={[]}" in _read(rail_path)
+    )
+    if require_cutover and copilot_mount and activity_replay_placeholder:
+        violations.append(
+            "CopilotKit history parity incomplete: intelligence rail still "
+            "passes an empty agentSteps array"
+        )
+
     # Static SDK or acceptance-preview presence is not consumer cutover proof.
     consumer_cutover = {
         "consumer_entry": str(WEB / "src/app/dashboard/page.tsx"),
@@ -438,6 +451,7 @@ def audit(root: Path = ROOT, *, require_cutover: bool = False) -> dict[str, Any]
         "new_sdk_files_checked": len(gateway_files),
         "legacy_import_callers": legacy_import_callers,
         "retired_test_imports": retired_test_imports,
+        "activity_replay_placeholder": activity_replay_placeholder,
         "ag_ui_client_versions": unique_client_versions,
         "ag_ui_protocol_versions": ag_ui_protocol_versions,
         "violations": sorted(set(violations)),
