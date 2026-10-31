@@ -15,7 +15,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { ApiError } from "@/lib/api";
-import { KarenPersonaSelector } from "@/components/chat/assistant-ui/KarenPersonaSelector";
+import { KarenPersonaSelector } from "@/components/chat/persona/KarenPersonaSelector";
 
 const preferences = {
   revision: 7,
