@@ -70,7 +70,7 @@ export function KarenCopilotChat({
     );
   }
   if (workspaceRunId !== null &&
-      (typeof workspaceRunId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(workspaceRunId))) {
+      (typeof workspaceRunId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(workspaceRunId))) {
     return <p role="alert" className="text-sm text-destructive">Invalid Agent Runtime workspace reference.</p>;
   }
   const properties = {
