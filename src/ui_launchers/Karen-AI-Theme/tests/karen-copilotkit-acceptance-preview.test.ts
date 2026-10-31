@@ -23,7 +23,26 @@ const browserWorkflow = readFileSync(resolve(root,
 const shim = readFileSync(resolve(root,
   "src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css"), "utf8");
 
+const controlledChat = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotControlledChat.tsx"), "utf8");
+const localCapture = readFileSync(resolve(root,
+  "src/components/chat/voice/KarenLocalDictationCapture.tsx"), "utf8");
+const browserCapture = readFileSync(resolve(root,
+  "src/components/chat/voice/KarenBrowserDictationCapture.tsx"), "utf8");
+
 describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => {
+  it("uses only canonical draft-port voice capture, not the retired assistant-ui runtime", () => {
+    expect(controlledChat).toContain('from "../voice/KarenLocalDictationCapture"');
+    expect(controlledChat).toContain('from "../voice/KarenBrowserDictationCapture"');
+    expect(controlledChat).not.toContain('from "../assistant-ui/KarenLocalDictation"');
+    expect(controlledChat).not.toContain('from "../assistant-ui/KarenBrowserDictation"');
+    expect(localCapture).not.toContain("@assistant-ui/react");
+    expect(browserCapture).not.toContain("@assistant-ui/react");
+    expect(localCapture).toContain("KarenVoiceDraftPort");
+    expect(browserCapture).toContain("KarenVoiceDraftPort");
+  });
+
+
   it("defaults to a 404 unless both server-only flag and exact host are approved", () => {
     expect(page).toContain("requireApprovedCopilotKitPreview(conversationId)");
     expect(previewGate).toContain('KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED === "true"');
