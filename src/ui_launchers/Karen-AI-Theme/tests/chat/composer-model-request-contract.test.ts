@@ -21,7 +21,7 @@ describe("CopilotKit model request transport", () => {
   });
 
   it("discovers only backend-reported eligible providers without owning runtime selection", () => {
-    const catalog = read("runtime/KarenComposerRuntimeCatalog.tsx");
+    const catalog = read("KarenComposerRuntimeCatalog.tsx");
     expect(catalog).toContain("Automatic routing (Karen default)");
     expect(catalog).toContain("model.available === true");
     expect(catalog).toContain("provider.healthy === true");
