@@ -233,3 +233,22 @@ def test_production_boot_requires_canonical_composer_draft_schema() -> None:
     assert source.index("proving composer-draft schema") < source.index(
         "booting production API image"
     )
+
+
+def test_base_image_package_retry_preserves_integrity_checks() -> None:
+    """A transient Debian mirror mismatch is retried, never worked around unsafely."""
+    dockerfile = _read(ROOT / "Dockerfile")
+    base = dockerfile.split("FROM ${KAREN_PYTHON_BASE_IMAGE} AS base", 1)[1].split(
+        "FROM base AS runtime", 1
+    )[0]
+    assert "for attempt in 1 2 3; do" in base
+    assert "rm -rf /var/lib/apt/lists/*" in base
+    assert "apt-get update -o Acquire::Retries=3" in base
+    assert "apt-get -o Acquire::Retries=3 install -y" in base
+    assert 'if [ "$attempt" -eq 3 ]; then' in base
+    assert "exit 1" in base
+    assert "apt-get clean" in base
+    assert "sleep \"$((attempt * 5))\"" in base
+    assert "--allow-unauthenticated" not in base
+    assert "--allow-insecure-repositories" not in base
+    assert "--fix-missing" not in base
