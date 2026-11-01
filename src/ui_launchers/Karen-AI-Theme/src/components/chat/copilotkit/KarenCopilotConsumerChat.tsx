@@ -60,7 +60,7 @@ export function KarenCopilotConsumerChat() {
     historyButtonRef.current?.focus();
   }, []);
 
-  const performNavigation = useCallback(async (operation: () => Promise<void>) => {
+  const performNavigation = useCallback(async (operation: () => Promise<boolean | void>) => {
     if (pendingRef.current || busyRef.current) {
       if (busyRef.current) setNavigationError("Stop or finish the current run before changing conversations.");
       return;
@@ -69,7 +69,11 @@ export function KarenCopilotConsumerChat() {
     setNavigationBusy(true);
     setNavigationError(null);
     try {
-      await operation();
+      const verified = await operation();
+      if (verified === false) {
+        setNavigationError("The requested conversation was not verified. Your conversation history remains open.");
+        return;
+      }
       closeHistory();
     } catch {
       setNavigationError("Conversation change could not be saved. Your current conversation is unchanged.");
