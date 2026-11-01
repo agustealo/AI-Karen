@@ -198,6 +198,74 @@ describe("single canonical backend proxy authority", () => {
     expect(forwarded.has("cookie")).toBe(false);
   });
 
+  it.each([
+    ["", "missing"],
+    ["http://api:8000", "local_only"],
+    ["http://127.0.0.1:8000", "local_only"],
+    ["http://host.docker.internal:8000", "local_only"],
+    ["not-a-backend-url", "invalid"],
+    ["http://backend.example", "insecure"],
+    ["https://user:password@backend.example", "invalid"],
+    ["https://backend.example/path", "invalid"],
+  ])("fails closed for Vercel backend %s (%s) without making a request", async (target, reason) => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("KAREN_BACKEND_URL", target);
+    vi.stubEnv("BACKEND_URL", "");
+    vi.resetModules();
+    const { getBackendTargetStatus, proxyToBackend: configuredProxy } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    expect(getBackendTargetStatus()).toBe(reason);
+    const response = await configuredProxy(request("POST"), "/api/conversations");
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toMatchObject({
+      error_code: "BACKEND_TARGET_NOT_CONFIGURED",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(errors.mock.calls)).not.toContain(target);
+  });
+
+  it("permits a configured HTTPS Vercel backend without choosing an alternate target", async () => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("KAREN_BACKEND_URL", "https://canonical-backend.example");
+    vi.stubEnv("BACKEND_URL", "");
+    vi.resetModules();
+    const { getBackendTargetStatus, proxyToBackend: configuredProxy } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    const spy = vi.fn().mockResolvedValue(new Response('{"status":"ok"}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", spy);
+    expect(getBackendTargetStatus()).toBe("configured");
+    const response = await configuredProxy(request("GET"), "/ready");
+    expect(response.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe("https://canonical-backend.example/ready");
+  });
+
+  it("keeps canonical Docker service routing when not hosted by Vercel", async () => {
+    vi.stubEnv("VERCEL", "");
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("KAREN_BACKEND_URL", "");
+    vi.stubEnv("BACKEND_URL", "");
+    vi.stubEnv("KAREN_DOCKER", "true");
+    vi.resetModules();
+    const { getBackendTargetStatus, getBackendBaseUrl: configured } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    expect(getBackendTargetStatus()).toBe("configured");
+    expect(configured()).toBe("http://api:8000");
+  });
+
   it("does not silently rewrite an explicitly configured backend in Docker", async () => {
     vi.stubEnv("KAREN_DOCKER", "true");
     vi.stubEnv("KAREN_BACKEND_URL", "http://127.0.0.1:9988");
