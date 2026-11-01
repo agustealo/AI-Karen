@@ -71,75 +71,14 @@ interface SessionContextType {
   updateSessionTitle: (sessionId: string, newTitle: string) => Promise<boolean>;
 }
 
-const SESSION_BOOTSTRAP_SUPPRESSION_WINDOW_MS = 1500;
-
-type ConversationBootstrapCacheEntry = {
-  response: ConversationResponse;
-  expiresAt: number;
-};
-
-const sessionConversationBootstrapCache = new Map<string, ConversationBootstrapCacheEntry>();
-const sessionConversationBootstrapRequests = new Map<string, Promise<ConversationResponse>>();
-
-const invalidateConversationBootstrap = (sessionId: string): void => {
-  sessionConversationBootstrapCache.delete(sessionId);
-  sessionConversationBootstrapRequests.delete(sessionId);
-};
-
-/*
- * React Strict Mode and session restore can request the same conversation twice.
- * This short-lived cache deduplicates bootstrap calls without replacing server
- * persistence as the source of truth.
+/**
+ * Always reauthorize conversation bootstrap through the canonical API.
+ * A process/module-level cache keyed only by a conversation ID could outlive
+ * logout and serve one principal's transcript to another principal.
+ * React Strict Mode replay is guarded within SessionProvider itself.
  */
-const cacheConversationBootstrap = (sessionId: string, response: ConversationResponse) => {
-  sessionConversationBootstrapCache.set(sessionId, {
-    response,
-    expiresAt: Date.now() + SESSION_BOOTSTRAP_SUPPRESSION_WINDOW_MS,
-  });
-};
-
-const takeConversationBootstrap = (sessionId: string): ConversationResponse | null => {
-  const cached = sessionConversationBootstrapCache.get(sessionId);
-  if (!cached) {
-    return null;
-  }
-
-  if (cached.expiresAt < Date.now()) {
-    sessionConversationBootstrapCache.delete(sessionId);
-    return null;
-  }
-
-  sessionConversationBootstrapCache.delete(sessionId);
-  return cached.response;
-};
-
-export const fetchConversationBootstrap = async (conversationId: string): Promise<ConversationResponse> => {
-  const cached = takeConversationBootstrap(conversationId);
-  if (cached) {
-    return cached;
-  }
-
-  const existingRequest = sessionConversationBootstrapRequests.get(conversationId);
-  if (existingRequest) {
-    return existingRequest;
-  }
-
-  const request = apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`)
-    .then((response) => {
-      if (sessionConversationBootstrapRequests.get(conversationId) === request) {
-        cacheConversationBootstrap(conversationId, response);
-      }
-      return response;
-    })
-    .finally(() => {
-      if (sessionConversationBootstrapRequests.get(conversationId) === request) {
-        sessionConversationBootstrapRequests.delete(conversationId);
-      }
-    });
-
-  sessionConversationBootstrapRequests.set(conversationId, request);
-  return request;
-};
+export const fetchConversationBootstrap = (conversationId: string): Promise<ConversationResponse> =>
+  apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`);
 
 const ensureConversationSession = async (sessionId: string): Promise<ConversationResponse> =>
   apiClient.post<ConversationResponse>(`/api/conversations/ensure-session/${sessionId}`);
@@ -549,7 +488,6 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
     // The server has acknowledged deletion. Later errors cannot reverse that fact.
     confirmedDeletedSessionIdsRef.current.add(sessionId);
-    invalidateConversationBootstrap(sessionId);
     removeSessionState(sessionId);
     setSessions(prev => prev.filter(s => s.id !== sessionId));
     const wasActive = currentSessionRef.current?.id === sessionId;
@@ -633,7 +571,6 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       if (deletedIds.size > 0) {
         deletedIds.forEach((sessionId) => {
           confirmedDeletedSessionIdsRef.current.add(sessionId);
-          invalidateConversationBootstrap(sessionId);
           removeSessionState(sessionId);
         });
         setSessions(prev => prev.filter(s => !deletedIds.has(s.id)));
