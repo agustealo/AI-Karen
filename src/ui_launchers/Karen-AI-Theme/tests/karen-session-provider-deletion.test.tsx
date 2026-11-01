@@ -123,6 +123,34 @@ describe("canonical SessionProvider deletion outcomes", () => {
     expect(provider?.error).toContain("last verified conversation");
   });
 
+  it("reports a refresh outage separately from a server-confirmed deletion", async () => {
+    render(
+      <SessionProvider initialSessionId={FIRST}>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
+    backend.get.mockImplementation(async (path: string) => {
+      if (path === "/api/conversations") throw new Error("History service unavailable");
+      if (path === `/api/conversations/${FIRST}`) return firstConversation;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+
+    let outcome: SessionDeletionOutcome | undefined;
+    await act(async () => {
+      outcome = await provider!.deleteSessionWithOutcome(FIRST);
+    });
+
+    expect(outcome).toEqual({
+      deleted: true,
+      replacementCreated: false,
+      historyRefreshed: false,
+    });
+    expect(provider?.currentSession).toBeNull();
+    expect(provider?.sessions.some(session => session.id === FIRST)).toBe(false);
+    expect(provider?.error).toContain("Conversation deleted");
+  });
+
   it("never claims successful deletion when the server rejects the delete", async () => {
     backend.delete.mockRejectedValue(new Error("Server rejected deletion"));
     render(
