@@ -111,6 +111,19 @@ describe("canonical SessionProvider deletion outcomes", () => {
     expect(provider?.sessions.some(session => session.id === FIRST)).toBe(false);
     expect(provider?.error).toContain("Conversation deleted");
     expect(window.localStorage.getItem("karen.active_session_id")).toBeNull();
+    const loadCountBefore = backend.get.mock.calls.filter(
+      ([path]) => path === `/api/conversations/${FIRST}`,
+    ).length;
+    let reopened: boolean | undefined;
+    await act(async () => {
+      reopened = await provider!.loadSession(FIRST);
+    });
+    expect(reopened).toBe(false);
+    expect(provider?.currentSession).toBeNull();
+    expect(provider?.error).toContain("deleted");
+    expect(backend.get.mock.calls.filter(
+      ([path]) => path === `/api/conversations/${FIRST}`,
+    )).toHaveLength(loadCountBefore);
   });
 
   it("does not replace the last verified conversation after an unverified navigation", async () => {
