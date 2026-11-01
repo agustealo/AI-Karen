@@ -40,13 +40,30 @@ export async function POST(request: NextRequest) {
     }
 
     if (!upstream.ok) {
-      const errorBody = await upstream.text().catch(() => 'Upstream error');
-      console.error(
-        `[StreamProxy] Upstream returned ${upstream.status}: ${errorBody.slice(0, 200)}`,
-      );
+      // Preserve canonical backend auth/validation status codes, but never
+      // forward an HTML proxy page or log user content, secrets or URLs.
+      const contentType = upstream.headers.get('content-type') || '';
+      const correlationId = upstream.headers.get('x-correlation-id') || '';
+      console.error('[StreamProxy] canonical_stream_rejected', {
+        status: upstream.status,
+        correlation_id: correlationId,
+      });
+      const isJson = /^application\/(?:[\w.+-]+\+)?json(?:\s*;|\s*$)/i.test(contentType);
+      if (!isJson) {
+        await upstream.body?.cancel().catch(() => undefined);
+        return NextResponse.json(
+          {
+            detail: 'The canonical backend rejected the chat stream request.',
+            error_code: 'CHAT_STREAM_UPSTREAM_REJECTED',
+            correlation_id: correlationId || undefined,
+          },
+          { status: upstream.status, headers: { 'cache-control': 'no-store' } },
+        );
+      }
+      const errorBody = await upstream.text();
       return new NextResponse(errorBody, {
         status: upstream.status,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       });
     }
 
