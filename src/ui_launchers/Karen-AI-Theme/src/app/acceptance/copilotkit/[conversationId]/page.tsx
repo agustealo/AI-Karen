@@ -20,7 +20,6 @@ export default async function CopilotKitAcceptancePage({
 
   return (
     <AuthWrapper>
-      <link rel="stylesheet" href="/vendor/copilotkit-v2.css" />
       <main data-testid="karen-copilot-acceptance-preview"
         className="flex h-dvh min-h-0 flex-col bg-background text-foreground">
         <header className="shrink-0 border-b border-border/60 p-3 text-sm">
