@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 
 import { AuthWrapper } from "@/components/AuthWrapper";
+import { useAuth } from "@/lib/useAuth";
 import SettingsDialogComponent from "@/components/settings/SettingsDialog";
 import PersonaSettings from "@/components/settings/PersonaSettings";
 import { PluginHost } from "@/components/plugins/PluginHost";
@@ -71,6 +72,25 @@ import { Separator } from "@/components/ui/separator";
 
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
+
+/**
+ * Browser recovery keys are owned by the same authenticated identity as chat.
+ * AuthWrapper remounts the subtree on tenant or user changes.
+ */
+function PrincipalScopedSessionProvider({ children }: { children: React.ReactNode }) {
+  const { user, isAuthenticated } = useAuth();
+  if (!isAuthenticated || !user?.tenant_id?.trim() || !user?.user_id?.trim()) {
+    return <p role="status">Verifying account identity...</p>;
+  }
+  return (
+    <SessionProvider storagePrincipal={{
+      tenant_id: user.tenant_id,
+      user_id: user.user_id,
+    }}>
+      {children}
+    </SessionProvider>
+  );
+}
 
 const KarenCopilotConsumerChat = dynamic(
   () => import("@/components/chat/copilotkit/KarenCopilotConsumerChat").then(
@@ -472,7 +492,7 @@ export default function DashboardPage() {
 
   return (
     <AuthWrapper>
-      <SessionProvider>
+      <PrincipalScopedSessionProvider>
       <SidebarProvider>
         <div className="karen-app-shell flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background text-foreground">
           <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl md:px-4">
@@ -733,7 +753,7 @@ export default function DashboardPage() {
           </div>
         </div>
       </SidebarProvider>
-      </SessionProvider>
+      </PrincipalScopedSessionProvider>
     </AuthWrapper>
   );
 }
