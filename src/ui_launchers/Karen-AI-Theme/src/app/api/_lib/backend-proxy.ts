@@ -407,6 +407,16 @@ export async function proxyToBackend(
       clearInitTimeout(redirectInit);
     }
 
+    // A redirect without a safe, completed target is not an API result.
+    // Do not return a stripped 3xx that a caller might misinterpret as success.
+    if (upstream.status >= 300 && upstream.status < 400) {
+      clearInitTimeout(init);
+      return NextResponse.json(
+        { detail: 'Backend redirect rejected.', error_code: 'BACKEND_REDIRECT_REJECTED' },
+        { status: 502, headers: { 'cache-control': 'no-store' } },
+      );
+    }
+
     const responseBody = await upstream.text();
     const headers = new Headers(upstream.headers);
     clearInitTimeout(init);
