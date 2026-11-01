@@ -153,7 +153,7 @@ describe("canonical SessionProvider deletion outcomes", () => {
     await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
     backend.get.mockImplementation(async (path: string) => {
       if (path === `/api/conversations/${requested}`) {
-        return { ...firstConversation, id: unrelated, session_id: unrelated };
+        return { ...firstConversation, id: unrelated, session_id: requested };
       }
       if (path === `/api/conversations/${FIRST}`) return firstConversation;
       if (path === "/api/conversations") return staleList;
