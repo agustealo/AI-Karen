@@ -79,6 +79,22 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).not.toContain("authenticatedRequest.get");
   });
 
+  it("requires a live non-cacheable backend before approved browser sign-in", () => {
+    const preflight = "await requireLiveCanonicalBackend(page, target);";
+    expect(liveBrowser.split(preflight)).toHaveLength(3);
+    const firstSignIn = liveBrowser.indexOf("await signInApprovedKaren(page, approvedEmail!, approvedPassword!)");
+    const secondSignIn = liveBrowser.lastIndexOf("await signInApprovedKaren(page, approvedEmail!, approvedPassword!)");
+    const firstCheck = liveBrowser.indexOf(preflight);
+    const secondCheck = liveBrowser.lastIndexOf(preflight);
+    expect(firstCheck).toBeLessThan(firstSignIn);
+    expect(secondCheck).toBeLessThan(secondSignIn);
+    expect(liveBrowser).toContain("backend_ready: true");
+    expect(liveBrowser).toContain('new URL("/api/health", target)');
+    expect(liveBrowser).toContain("maxRedirects: 0");
+    expect(liveBrowser).toContain('response.headers()["cache-control"] ?? ""');
+    expect(liveBrowser).toContain('expectVerifiedExecutionReceipt(page, id!, persistedAnswer)');
+  });
+
   it("uses the governed runtime, canonical session and verified history", () => {
     expect(consumer).toContain("useSession()");
     expect(consumer).toContain("<KarenCopilotChat");
