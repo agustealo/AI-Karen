@@ -60,7 +60,7 @@ interface SessionContextType {
   error: string | null;
   createNewSession: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<boolean>;
-  refreshSessions: () => Promise<void>;
+  refreshSessions: () => Promise<boolean>;
   deleteSession: (sessionId: string) => Promise<boolean | void>;
   deleteSessions: (sessionIds: string[]) => Promise<boolean>;
   updateSessionTitle: (sessionId: string, newTitle: string) => Promise<boolean>;
@@ -304,37 +304,6 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     setIsLoadingSessions(true);
     setError(null);
 
-    const preserveRequestedSession = (message: string) => {
-      const existingSession =
-        currentSessionRef.current?.id === sessionId
-          ? currentSessionRef.current
-          : sessionsRef.current.find((session) => session.id === sessionId);
-
-      const preservedSession: Session = existingSession
-        ? { ...existingSession, isActive: true }
-        : {
-            id: sessionId,
-            title: 'Current Chat',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            messageCount: 0,
-            isActive: true,
-          };
-
-      setCurrentSession(preservedSession);
-      setSessions((prev) => {
-        const exists = prev.some((session) => session.id === sessionId);
-        return exists
-          ? prev.map((session) => ({
-              ...session,
-              isActive: session.id === sessionId,
-            }))
-          : [preservedSession, ...prev.map((session) => ({ ...session, isActive: false }))];
-      });
-      persistActiveSessionId(sessionId);
-      setError(message);
-    };
-
     try {
       const MAX_ATTEMPTS = 3;
       let conversationResponse: ConversationResponse | null = null;
@@ -413,34 +382,24 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
         return false;
       }
       if (err instanceof ApiError && err.status === 429) {
-        preserveRequestedSession(
-          'Session service is temporarily rate limited. Keeping your current chat available.',
-        );
+        setError('Session service is temporarily rate limited. Your last verified conversation is unchanged.');
         console.warn('Session load was rate-limited; preserving the requested conversation.');
         return false;
       }
 
       if (err instanceof ApiError && err.status === 404) {
-        console.warn('Session was not found on server, starting fresh.');
-        setError('Saved session was not found. Starting a fresh chat.');
-        try {
-          await createNewSession();
-        } catch {
-          // createNewSession already exposes truthful failure state.
-        }
+        console.warn('Requested conversation was not found on server; no replacement was created.');
+        setError('Saved conversation was not found. No replacement was created. Choose an existing conversation or start a new one.');
         return false;
       }
 
-      console.warn('Session load failed transiently; preserving the requested conversation.', err);
-      preserveRequestedSession(
-        'Session service is temporarily unavailable. Keeping your current chat available.',
-      );
+      console.warn('Session load failed transiently; retaining the last verified conversation.', err);
+      setError('Session service is temporarily unavailable. Your last verified conversation is unchanged.');
       return false;
     } finally {
       setIsLoadingSessions(false);
     }
   }, [
-    createNewSession,
     getRateLimitDelayMs,
     persistActiveSessionId,
     strictInitialSession,
@@ -448,7 +407,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   ]);
 
   // Refresh sessions list
-  const refreshSessions = useCallback(async () => {
+  const refreshSessions = useCallback(async (): Promise<boolean> => {
     setIsLoadingSessions(true);
     setError(null);
 
@@ -501,6 +460,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       })) || [];
 
       setSessions(sessionsData);
+      return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
         if (!strictInitialSession) setError('Session list is temporarily rate limited. Your current chat remains available.');
@@ -509,6 +469,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
         console.error('Failed to load sessions:', err);
         if (!strictInitialSession) setError('Failed to load sessions list. Some features may be limited.');
       }
+      return false;
     } finally {
       sessionListRefreshInFlightRef.current = null;
       setIsLoadingSessions(false);
