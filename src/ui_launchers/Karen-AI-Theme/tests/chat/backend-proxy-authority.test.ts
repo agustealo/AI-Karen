@@ -139,6 +139,44 @@ describe("single canonical backend proxy authority", () => {
     expect(response.headers.get("location")).toBeNull();
   });
 
+  it("rejects cross-origin GET redirects without replaying credentials or rewriting paths", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, {
+      status: 302,
+      headers: { location: "https://other-origin.example/admin?token=secret" },
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const response = await proxyToBackend(request("GET"), "/api/conversations", {
+      followRedirects: true,
+      retryAttempts: 1,
+    });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error_code: "BACKEND_REDIRECT_REJECTED",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows same-origin GET redirects to the configured backend", async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(new Response(null, {
+        status: 307,
+        headers: { location: "/ready" },
+      }))
+      .mockResolvedValueOnce(new Response('{"ready":true}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const response = await proxyToBackend(request("GET"), "/api/conversations", {
+      followRedirects: true,
+      retryAttempts: 1,
+    });
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(new URL(fetchSpy.mock.calls[1][0]).pathname).toBe("/ready");
+  });
+
   it("never repeats DELETE or PATCH even when callers request retries", async () => {
     const fetchSpy = vi.fn().mockRejectedValue(new Error("connection reset"));
     vi.stubGlobal("fetch", fetchSpy);
