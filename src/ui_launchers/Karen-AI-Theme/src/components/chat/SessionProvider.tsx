@@ -49,6 +49,10 @@ interface ConversationApiResponse {
   has_more: boolean;
 }
 
+export type SessionDeletionOutcome =
+  | { deleted: false; replacementCreated: null; historyRefreshed: null }
+  | { deleted: true; replacementCreated: boolean | null; historyRefreshed: boolean };
+
 interface SessionContextType {
   /** True for a server-approved, explicitly pinned conversation identity. */
   strictInitialSession: boolean;
@@ -62,6 +66,7 @@ interface SessionContextType {
   loadSession: (sessionId: string) => Promise<boolean>;
   refreshSessions: () => Promise<boolean>;
   deleteSession: (sessionId: string) => Promise<boolean | void>;
+  deleteSessionWithOutcome: (sessionId: string) => Promise<SessionDeletionOutcome>;
   deleteSessions: (sessionIds: string[]) => Promise<boolean>;
   updateSessionTitle: (sessionId: string, newTitle: string) => Promise<boolean>;
 }
@@ -516,40 +521,53 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     };
   }, [currentSession?.runtimeSessionId]);
 
-  // Delete a session
-  const deleteSession = useCallback(async (sessionId: string) => {
+  // One canonical delete implementation; the legacy boolean action remains an adapter.
+  const deleteSessionWithOutcome = useCallback(async (sessionId: string): Promise<SessionDeletionOutcome> => {
     if (strictInitialSession) {
       throw new Error('Strict conversation cannot delete sessions');
     }
+
     try {
       await apiClient.delete(`/api/conversations/${sessionId}`);
-
-      // Remove stale browser recovery only after durable server deletion succeeds.
-      removeSessionState(sessionId);
-      setSessions(prev => prev.filter(s => s.id !== sessionId));
-
-      let replacementFailed = false;
-      if (currentSession?.id === sessionId) {
-        setCurrentSession(null);
-        persistActiveSessionId(null);
-        try {
-          await createNewSession();
-        } catch {
-          replacementFailed = true;
-        }
-      }
-
-      await refreshSessions();
-      if (replacementFailed) {
-        setError('Chat deleted, but a replacement chat could not be created yet.');
-      }
-      return true;
     } catch (err) {
       console.error('Failed to delete session:', err);
       setError('Failed to delete session. Please try again.');
-      return false;
+      return { deleted: false, replacementCreated: null, historyRefreshed: null };
     }
-  }, [currentSession?.id, createNewSession, persistActiveSessionId, refreshSessions, strictInitialSession]);
+
+    // The server has acknowledged deletion. Later errors cannot reverse that fact.
+    removeSessionState(sessionId);
+    setSessions(prev => prev.filter(s => s.id !== sessionId));
+    const wasActive = currentSessionRef.current?.id === sessionId;
+    let replacementCreated: boolean | null = null;
+
+    if (wasActive) {
+      setCurrentSession(null);
+      persistActiveSessionId(null);
+      try {
+        await createNewSession();
+        replacementCreated = true;
+      } catch {
+        replacementCreated = false;
+      }
+    }
+
+    const historyRefreshed = await refreshSessions();
+    if (replacementCreated === false) {
+      setError('Conversation deleted, but a new conversation could not be created. Start a new conversation to continue.');
+    } else if (!historyRefreshed) {
+      setError('Conversation deleted, but conversation history could not be refreshed yet.');
+    }
+
+    return { deleted: true, replacementCreated, historyRefreshed };
+  }, [createNewSession, persistActiveSessionId, refreshSessions, strictInitialSession]);
+
+  // Compatibility action for existing consumers: true means server-side deletion,
+  // not that optional replacement and refresh operations succeeded.
+  const deleteSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    const result = await deleteSessionWithOutcome(sessionId);
+    return result.deleted;
+  }, [deleteSessionWithOutcome]);
 
   // Delete multiple sessions
   const deleteSessions = useCallback(async (sessionIds: string[]) => {
@@ -714,6 +732,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       loadSession,
       refreshSessions,
       deleteSession,
+      deleteSessionWithOutcome,
       deleteSessions,
       updateSessionTitle,
     }}>
