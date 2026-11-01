@@ -79,6 +79,27 @@ async function expectVerifiedExecutionReceipt(
   }).toBe(true);
 }
 
+/**
+ * A matching Next.js SHA does not establish that the canonical API exists.
+ * Do not send approved login credentials to a frontend whose backend is down.
+ * The same fail-closed readiness contract is enforced by the workflow's
+ * independent verify_deployment_revision.py before Playwright starts.
+ */
+async function requireLiveCanonicalBackend(page: Page, target: URL): Promise<void> {
+  const response = await page.context().request.get(
+    new URL("/api/health", target).toString(),
+    { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
+  );
+  expect(response.status(), "Canonical API must be reachable before authenticated browser acceptance").toBe(200);
+  expect(response.headers()["content-type"] ?? "").toMatch(/^application\/json(?:;|$)/i);
+  expect(response.headers()["cache-control"] ?? "").toContain("no-store");
+  const payload: unknown = await response.json();
+  expect(payload, "Canonical backend health must contain a verified ready state").toEqual({
+    status: "ok",
+    backend_ready: true,
+  });
+}
+
 async function expectRealCopilotKitStyles(page: Page): Promise<void> {
   const selector = 'link[rel="stylesheet"][href="/vendor/copilotkit-v2.css"]';
   await expect(page.locator(selector)).toHaveCount(1);
@@ -99,13 +120,14 @@ async function expectRealCopilotKitStyles(page: Page): Promise<void> {
 
 /**
  * Release-only, real-browser boot proof for the canonical CopilotKit chat.
- * It runs on any approved local/Docker or remote deployment. No route mocks,
- * source-generated messages, Vercel credentials, or external team membership.
+ * Runs against an approved HTTPS deployment with a matching source revision
+ * and a genuinely reachable canonical API. No route mocks or synthetic replies.
  *
  * Required when KAREN_CHAT_BOOT_ACCEPTANCE=1:
- *   KAREN_BASE_URL=http://localhost:8010
- *   KAREN_E2E_AUTH_STATE=/secure/path/authorized-storage-state.json
+ *   KAREN_BASE_URL=<approved clean HTTPS origin>
  *   KAREN_CHAT_BOOT_REVISION=<exact expected full commit SHA>
+ *   KAREN_E2E_AUTH_STATE=<preapproved storage state>, or the workflow's
+ *   KAREN_UX_EMAIL and KAREN_UX_PASSWORD for approved sign-in.
  *
  * The served application must expose its canonical deployed revision at
  * /api/deployment-revision. This test fails closed if that is unavailable.
@@ -166,6 +188,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect(revisionResponse.ok(), "The deployed revision must be available").toBe(true);
     const revision: unknown = await revisionResponse.json();
     expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
+    await requireLiveCanonicalBackend(page, target);
 
     if (!authState) {
       await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
@@ -292,6 +315,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const revision = revisionPayload as Record<string, unknown>;
     const servedSha = revision.revision ?? revision.sha ?? revision.commit_sha ?? revision.git_sha;
     expect(servedSha, "The deployed revision must equal the reviewed Git commit").toBe(expectedRevision);
+    await requireLiveCanonicalBackend(page, target);
 
     const failures: string[] = [];
     const capturePageFailure = (error: Error) => {
