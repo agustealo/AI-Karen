@@ -80,6 +80,8 @@ jobs:
           pytest tests/architecture/test_operational_health_authority.py -q
 
       - name: Prove production compose renders
+        env:
+          KARI_CORS_ORIGINS: https://consumer-ci.example.invalid
         run: |
           cp .env.production.example .env.production
           docker compose \
@@ -97,6 +99,8 @@ jobs:
 
 
       - name: Prove signed images replace local builds without relaxing private ports
+        env:
+          KARI_CORS_ORIGINS: https://consumer-ci.example.invalid
         shell: bash
         run: |
           set -euo pipefail
