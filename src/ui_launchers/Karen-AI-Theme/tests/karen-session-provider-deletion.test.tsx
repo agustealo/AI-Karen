@@ -14,7 +14,7 @@ vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
     status: number;
     details: unknown;
-    constructor(message: string, status = 500) {
+    constructor(status: number, message: string) {
       super(message);
       this.status = status;
       this.details = null;
@@ -176,7 +176,7 @@ describe("canonical SessionProvider deletion outcomes", () => {
     );
     await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
     backend.get.mockImplementation(async (path: string) => {
-      if (path === `/api/conversations/${legacy}`) throw new ApiError("Not found", 404);
+      if (path === `/api/conversations/${legacy}`) throw new ApiError(404, "Not found");
       if (path === `/api/conversations/by-session/${legacy}`) {
         return { ...firstConversation, id: canonical, session_id: legacy };
       }
