@@ -58,7 +58,46 @@ const RETRYABLE_PROXY_ERROR_CODES = new Set([
   'UND_ERR_SOCKET',
 ]);
 
+export type BackendTargetStatus =
+  | 'configured'
+  | 'missing'
+  | 'invalid'
+  | 'local_only'
+  | 'insecure';
+
+/**
+ * Vercel is a distinct network from local Docker. An absent or Docker-only
+ * backend URL is a deployment configuration failure, not a local fallback.
+ */
+function getBackendTargetStatus(): BackendTargetStatus {
+  const hostedOnVercel = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+  if (!hostedOnVercel) return 'configured';
+  if (!EXPLICIT_BACKEND_URL.trim()) return 'missing';
+  try {
+    const target = new URL(EXPLICIT_BACKEND_URL);
+    if (
+      !['http:', 'https:'].includes(target.protocol) ||
+      !target.hostname ||
+      target.username || target.password ||
+      (target.pathname !== '/' && target.pathname !== '') ||
+      target.search || target.hash
+    ) return 'invalid';
+    const scope = backendTargetScope(EXPLICIT_BACKEND_URL);
+    if (scope === 'loopback' || scope === 'docker_only') return 'local_only';
+    if (scope === 'invalid') return 'invalid';
+    if (scope === 'public_or_routed' && target.protocol !== 'https:') {
+      return 'insecure';
+    }
+    return 'configured';
+  } catch {
+    return 'invalid';
+  }
+}
+
 function getBackendBaseUrl(): string {
+  if (getBackendTargetStatus() !== 'configured') {
+    throw new Error('Canonical backend target is not configured for this deployment');
+  }
   return DEFAULT_BACKEND_URL.replace(/\/$/, '');
 }
 
@@ -175,7 +214,7 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   return nextHeaders;
 }
 
-export { getBackendBaseUrl, normalizeForwardedProto, sanitizeHeaders };
+export { getBackendBaseUrl, getBackendTargetStatus, normalizeForwardedProto, sanitizeHeaders };
 
 async function buildInit(
   request: NextRequest,
@@ -247,6 +286,19 @@ export async function proxyToBackend(
     followRedirects?: boolean;
   },
 ): Promise<NextResponse> {
+  const targetStatus = getBackendTargetStatus();
+  if (targetStatus !== 'configured') {
+    console.error('[BackendProxy] canonical_backend_configuration_invalid', {
+      target_status: targetStatus,
+    });
+    return NextResponse.json(
+      {
+        detail: 'Canonical backend connection is not configured for this deployment.',
+        error_code: 'BACKEND_TARGET_NOT_CONFIGURED',
+      },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    );
+  }
   const backendBaseUrl = getBackendBaseUrl();
   const timeoutMs = options?.longTimeout ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
   // Only safe read methods may be retried or followed through redirects.
