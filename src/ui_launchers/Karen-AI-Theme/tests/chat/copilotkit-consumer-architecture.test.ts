@@ -15,6 +15,9 @@ const rail = read("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx")
 const session = read("src/components/chat/SessionProvider.tsx");
 const catalog = read("src/components/chat/KarenComposerRuntimeCatalog.tsx");
 const pkg = JSON.parse(read("package.json"));
+const liveBrowser = read("e2e/copilotkit-consumer-boot.spec.ts");
+const nativePreview = read("src/app/acceptance/copilotkit/[conversationId]/page.tsx");
+const consumerPreview = read("src/app/acceptance/copilotkit-consumer/[conversationId]/page.tsx");
 
 const draftHook = read("src/components/chat/copilotkit/useKarenPersistedDraft.ts");
 
@@ -54,6 +57,26 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(dashboard).toContain("tenant_id: user.tenant_id");
     expect(dashboard).toContain("user_id: user.user_id");
     expect(dashboard).toContain('data-testid="persistent-karen-conversation"');
+  });
+
+  it("loads CopilotKit CSS from the real shared chat shell, not from previews alone", () => {
+    expect(shell).toContain('<link rel="stylesheet" href="/vendor/copilotkit-v2.css" />');
+    expect(shell).toContain('enableInspector={false}');
+    expect(dashboard).toContain("<KarenCopilotConsumerChat />");
+    expect(nativePreview).not.toContain('href="/vendor/copilotkit-v2.css"');
+    expect(consumerPreview).not.toContain('href="/vendor/copilotkit-v2.css"');
+    expect(liveBrowser).toContain("await expectRealCopilotKitStyles(page)");
+    expect(liveBrowser).toContain('link.sheet.cssRules.length > 0');
+  });
+
+  it("verifies persisted messages through the real browser's bearer and cookie context", () => {
+    expect(liveBrowser).toContain("readAuthorizedSameOriginJson(page, draftEndpoint)");
+    expect(liveBrowser).toContain("readAuthorizedSameOriginJson(page, endpoint)");
+    expect(liveBrowser).toContain('window.localStorage.getItem("access_token")');
+    expect(liveBrowser).toContain('credentials: "same-origin"');
+    expect(liveBrowser).toContain('redirect: "error"');
+    expect(liveBrowser).toContain('url.origin !== window.location.origin');
+    expect(liveBrowser).not.toContain("authenticatedRequest.get");
   });
 
   it("uses the governed runtime, canonical session and verified history", () => {
