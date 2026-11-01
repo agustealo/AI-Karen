@@ -45,7 +45,9 @@ runs `scripts/ci/production-first-boot-smoke.sh` against isolated PostgreSQL
 and Redis containers. This is a **short-lived CI boot proof**, not a deployed
 public API endpoint or proof of a persistent model-serving backend.
 
-**Do not deploy the root `docker-compose.yml` as production configuration.**
+**Use the existing canonical production overlay at `deploy/compose/docker-compose.prod.yml` when deploying the Compose stack.** It is layered on top of the root Compose file with `-f docker-compose.yml -f deploy/compose/docker-compose.prod.yml`, requires `KAREN_DEPLOYED_COMMIT_SHA` and production secrets, overrides inherited development environment files and published ports, and removes mutable application source mounts. It still requires an operator-provided persistent host, PostgreSQL, TLS ingress, correctly governed secret storage, and successful `/ready` verification. The overlay does not provision hosting or a public backend address.
+
+**Do not deploy the root `docker-compose.yml` alone as production configuration.**
 Its `api` service explicitly specifies development mode, debugging, local
 database addresses and development database credentials. Those settings can
 override values from `.env`. Likewise, the smoke harness contains
