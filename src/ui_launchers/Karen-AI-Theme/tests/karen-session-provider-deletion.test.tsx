@@ -140,6 +140,64 @@ describe("canonical SessionProvider deletion outcomes", () => {
     )).toHaveLength(loadCountBefore);
   });
 
+  it("rejects mismatched server conversation identity without switching threads", async () => {
+    const requested = "1778439a-3ca2-462a-8ed6-5566b1960bc7";
+    const unrelated = "be41b2f8-60a8-470b-b868-824d9ca24c01";
+    render(
+      <SessionProvider initialSessionId={FIRST}>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
+    backend.get.mockImplementation(async (path: string) => {
+      if (path === `/api/conversations/${requested}`) {
+        return { ...firstConversation, id: unrelated, session_id: unrelated };
+      }
+      if (path === `/api/conversations/${FIRST}`) return firstConversation;
+      if (path === "/api/conversations") return staleList;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    let verified: boolean | undefined;
+    await act(async () => { verified = await provider!.loadSession(requested); });
+    expect(verified).toBe(false);
+    expect(provider?.currentSession?.id).toBe(FIRST);
+    expect(window.localStorage.getItem("karen.active_session_id")).toBe(FIRST);
+  });
+
+  it("accepts a legacy session alias only when the returned session_id matches", async () => {
+    const legacy = "d565c10d-3caf-486d-85ac-ff21bda19c52";
+    const canonical = "f0dfb9fd-7950-4e12-8fb1-8cf8252a57a8";
+    render(
+      <SessionProvider initialSessionId={FIRST}>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
+    backend.get.mockImplementation(async (path: string) => {
+      if (path === `/api/conversations/${legacy}`) {
+        const error = new Error("Not found") as Error & { status: number };
+        error.status = 404;
+        throw error;
+      }
+      if (path === `/api/conversations/${FIRST}`) return firstConversation;
+      if (path === "/api/conversations") return staleList;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    // The mocked ApiError must be used to enter the canonical legacy lookup.
+    backend.get.mockImplementation(async (path: string) => {
+      if (path === `/api/conversations/${legacy}`) return {
+        ...firstConversation, id: canonical, session_id: legacy,
+      };
+      if (path === `/api/conversations/${FIRST}`) return firstConversation;
+      if (path === "/api/conversations") return staleList;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    let verified: boolean | undefined;
+    await act(async () => { verified = await provider!.loadSession(legacy); });
+    expect(verified).toBe(true);
+    expect(provider?.currentSession?.id).toBe(canonical);
+  });
+
   it("does not replace the last verified conversation after an unverified navigation", async () => {
     const missing = "73935a82-bdf1-4d43-97a1-2b7c708b549d";
     render(
