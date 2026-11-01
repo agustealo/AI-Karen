@@ -69,6 +69,25 @@ afterEach(() => {
 });
 
 describe("canonical SessionProvider deletion outcomes", () => {
+  it("bootstraps each new provider mount even when the same session was just mounted", async () => {
+    const first = render(
+      <SessionProvider initialSessionId={FIRST}>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
+    first.unmount();
+    provider = null;
+
+    render(
+      <SessionProvider initialSessionId={FIRST}>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
+    expect(backend.get).toHaveBeenCalledWith("/api/conversations");
+  });
+
   it("keeps server-deleted conversations absent despite stale history and reports failed replacement", async () => {
     render(
       <SessionProvider initialSessionId={FIRST}>
