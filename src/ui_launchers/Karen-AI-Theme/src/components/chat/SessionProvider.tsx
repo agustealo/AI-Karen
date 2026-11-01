@@ -182,6 +182,8 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   const currentSessionRef = useRef<Session | null>(currentSession);
   const sessionsRef = useRef<Session[]>(sessions);
   const sessionListRefreshInFlightRef = useRef<Promise<ConversationApiResponse> | null>(null);
+  // Backend-confirmed deletions must not reappear in an eventually consistent history response.
+  const confirmedDeletedSessionIdsRef = useRef<Set<string>>(new Set());
 
   const persistActiveSessionId = useCallback((sessionId: string | null) => {
     if (typeof window === 'undefined') return;
@@ -451,7 +453,9 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       }
 
       const response = await request;
-      const sessionsData: Session[] = response.conversations?.map((session) => ({
+      const sessionsData: Session[] = response.conversations?.filter(
+        session => !confirmedDeletedSessionIdsRef.current.has(session.id),
+      ).map((session) => ({
         id: session.id,
         title: session.title || 'Untitled Chat',
         createdAt: new Date(session.created_at),
@@ -536,6 +540,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     }
 
     // The server has acknowledged deletion. Later errors cannot reverse that fact.
+    confirmedDeletedSessionIdsRef.current.add(sessionId);
     removeSessionState(sessionId);
     setSessions(prev => prev.filter(s => s.id !== sessionId));
     const wasActive = currentSessionRef.current?.id === sessionId;
@@ -617,7 +622,10 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       }
 
       if (deletedIds.size > 0) {
-        deletedIds.forEach((sessionId) => removeSessionState(sessionId));
+        deletedIds.forEach((sessionId) => {
+          confirmedDeletedSessionIdsRef.current.add(sessionId);
+          removeSessionState(sessionId);
+        });
         setSessions(prev => prev.filter(s => !deletedIds.has(s.id)));
       }
 
