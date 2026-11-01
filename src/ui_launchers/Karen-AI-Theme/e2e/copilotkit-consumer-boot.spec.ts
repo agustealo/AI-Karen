@@ -64,6 +64,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
 
     await page.goto(new URL("/dashboard", target).toString());
+    // Use the browser context's HTTP client for auth-scoped reads. Unlike the
+    // standalone Playwright request fixture it shares refreshed session cookies
+    // with the page throughout this long-running real-model acceptance.
+    const authenticatedRequest = page.context().request;
     const shell = page.getByTestId("karen-copilot-consumer-chat");
     const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
     if (!(await shell.isVisible().catch(() => false)) &&
@@ -100,7 +104,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     // draft endpoint to confirm this exact prompt before submitting.
     const draftEndpoint = new URL(`/api/conversations/${id}/draft`, target).toString();
     await expect.poll(async () => {
-      const response = await request.get(draftEndpoint, { failOnStatusCode: false });
+      const response = await authenticatedRequest.get(draftEndpoint, { failOnStatusCode: false });
       if (!response.ok()) return false;
       const draft: unknown = await response.json();
       return Boolean(draft && typeof draft === "object" &&
@@ -118,7 +122,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const endpoint = new URL(`/api/conversations/${id}`, target).toString();
     let persistedAnswer = "";
     await expect.poll(async () => {
-      const response = await request.get(endpoint, { failOnStatusCode: false });
+      const response = await authenticatedRequest.get(endpoint, { failOnStatusCode: false });
       if (!response.ok()) return false;
       const body: unknown = await response.json();
       if (!body || typeof body !== "object" || !Array.isArray((body as Record<string, unknown>).messages)) {
