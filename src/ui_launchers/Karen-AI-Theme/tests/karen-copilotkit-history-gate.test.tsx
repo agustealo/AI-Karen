@@ -88,6 +88,20 @@ describe("CopilotKit canonical conversation hydration", () => {
       expect(parseKarenVerifiedHistory(event(value), messages).get("answer-1"))
         .toEqual([{ type: "receipt", value }]);
     }
+    const automatic = {
+      ...baseReceipt,
+      degraded_mode: false,
+      requested_provider: null,
+      requested_model: null,
+      runtime_engine: null,
+      degradation_reason: null,
+      fallback_level: null,
+    };
+    expect(parseKarenVerifiedHistory(event(automatic), messages).get("answer-1"))
+      .toEqual([{ type: "receipt", value: automatic }]);
+    expect(() => parseKarenVerifiedHistory(
+      event({ ...automatic, actual_model: null }), messages,
+    )).toThrow("Unsupported verified execution receipt");
     expect(() => parseKarenVerifiedHistory(
       event({ ...baseReceipt, degraded_mode: "false" }), messages,
     )).toThrow("Unsupported verified execution receipt");
