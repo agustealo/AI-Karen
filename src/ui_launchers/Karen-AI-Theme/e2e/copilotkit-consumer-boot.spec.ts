@@ -11,7 +11,7 @@ import { expect, test } from "@playwright/test";
  *   KAREN_CHAT_BOOT_REVISION=<exact expected full commit SHA>
  *
  * The served application must expose its canonical deployed revision at
- * /api/deployment/revision. This test fails closed if that is unavailable.
+ * /api/deployment-revision. This test fails closed if that is unavailable.
  * Never attach authenticated traces, screenshots or videos to public CI.
  */
 const enabled = process.env.KAREN_CHAT_BOOT_ACCEPTANCE === "1";
@@ -38,7 +38,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page, request }) => {
     test.setTimeout(120_000);
     const target = new URL(approvedUrl!);
-    const revisionResponse = await request.get(new URL("/api/deployment/revision", target).toString());
+    const revisionResponse = await request.get(new URL("/api/deployment-revision", target).toString());
     expect(revisionResponse.ok(), "Exact deployed revision endpoint must be available").toBe(true);
     const revisionPayload: unknown = await revisionResponse.json();
     expect(revisionPayload, "Revision endpoint must return an object").toBeTruthy();
