@@ -129,14 +129,19 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         return false;
       }
       const messages = (body as { messages: Array<{ role?: string; content?: string }> }).messages;
-      const submitted = messages.some(message => message.role === "user" && message.content === prompt);
-      const promptIndex = messages.findIndex(message => message.role === "user" && message.content === prompt);
-      const assistant = promptIndex >= 0
-        ? messages.slice(promptIndex + 1).find(message => message.role === "assistant" &&
-            typeof message.content === "string" && message.content.trim().length > 0)
+      const matchingPromptIndices = messages.flatMap((message, index) =>
+        message.role === "user" && message.content === prompt ? [index] : []);
+      // A unique submitted turn must occur exactly once, and its immediate
+      // successor must be the model reply. A reply to an unrelated later turn
+      // cannot satisfy the acceptance contract.
+      const promptIndex = matchingPromptIndices[0];
+      const assistant = matchingPromptIndices.length === 1
+        ? messages[promptIndex + 1]
         : undefined;
-      persistedAnswer = assistant?.content ?? "";
-      return submitted && Boolean(assistant);
+      const accepted = assistant?.role === "assistant" &&
+        typeof assistant.content === "string" && assistant.content.trim().length > 0;
+      persistedAnswer = accepted ? assistant.content! : "";
+      return accepted;
     }, {
       timeout: 120_000,
       intervals: [1000, 2000, 3000],
