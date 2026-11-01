@@ -42,6 +42,12 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     page.on("pageerror", error => {
       browserErrors.push(`Uncaught page error: ${error.message}`);
     });
+    page.on("console", message => {
+      if (message.type() === "error" &&
+          /ChunkLoadError|Loading chunk|web-inspector|Failed to fetch dynamically imported module/i.test(message.text())) {
+        browserErrors.push(`Console chunk error: ${message.text()}`);
+      }
+    });
     page.on("response", response => {
       if (response.status() >= 400 && /\/_next\/static\/chunks\//.test(response.url())) {
         browserErrors.push(`Chunk HTTP ${response.status()}: ${response.url()}`);
