@@ -94,6 +94,35 @@ describe("canonical SessionProvider deletion outcomes", () => {
     expect(window.localStorage.getItem("karen.active_session_id")).toBeNull();
   });
 
+  it("does not replace the last verified conversation after an unverified navigation", async () => {
+    const missing = "73935a82-bdf1-4d43-97a1-2b7c708b549d";
+    render(
+      <SessionProvider initialSessionId={FIRST}>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
+
+    backend.get.mockImplementation(async (path: string) => {
+      if (path === `/api/conversations/${missing}`) {
+        throw new Error("Temporary backend outage");
+      }
+      if (path === "/api/conversations") return staleList;
+      if (path === `/api/conversations/${FIRST}`) return firstConversation;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+
+    let verified: boolean | undefined;
+    await act(async () => {
+      verified = await provider!.loadSession(missing);
+    });
+
+    expect(verified).toBe(false);
+    expect(provider?.currentSession?.id).toBe(FIRST);
+    expect(backend.post).not.toHaveBeenCalled();
+    expect(provider?.error).toContain("last verified conversation");
+  });
+
   it("never claims successful deletion when the server rejects the delete", async () => {
     backend.delete.mockRejectedValue(new Error("Server rejected deletion"));
     render(
