@@ -177,6 +177,37 @@ describe("single canonical backend proxy authority", () => {
     expect(new URL(fetchSpy.mock.calls[1][0]).pathname).toBe("/ready");
   });
 
+  it("fails closed when a safe-read redirect chain cannot complete", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, {
+      status: 307,
+      headers: { location: "/loop" },
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const response = await proxyToBackend(request("GET"), "/api/conversations", {
+      followRedirects: true,
+      retryAttempts: 1,
+    });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error_code: "BACKEND_REDIRECT_REJECTED",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(6);
+  });
+
+  it("rejects non-followed backend redirects instead of returning a misleading 3xx", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, {
+      status: 302,
+      headers: { location: "/other" },
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const response = await proxyToBackend(request("GET"), "/ready", {
+      followRedirects: false,
+      retryAttempts: 1,
+    });
+    expect(response.status).toBe(502);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("never repeats DELETE or PATCH even when callers request retries", async () => {
     const fetchSpy = vi.fn().mockRejectedValue(new Error("connection reset"));
     vi.stubGlobal("fetch", fetchSpy);
