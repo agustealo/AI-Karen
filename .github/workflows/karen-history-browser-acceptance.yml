@@ -389,6 +389,20 @@ jobs:
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
+      - name: Prove real consumer message, live UI, reload and inspector chunk absence
+        if: inputs.scenario == 'copilotkit-consumer'
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          KAREN_CHAT_BOOT_ACCEPTANCE: "1"
+          KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          npx playwright test e2e/copilotkit-consumer-boot.spec.ts \
+            --config=e2e/playwright.config.ts --project=chromium \
+            --reporter=list --retries=0
+
       # Mutating model acceptance has its own explicit operator dispatch.
       # Grep selects ONLY the positive test; a skipped test cannot make a
       # wider native suite appear to have proven real cancellation.
