@@ -157,7 +157,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     // The active CopilotKit view must render the real assistant response
     // before any reload, not only during a later history replay.
     await expect(
-      shell.getByText(persistedAnswer, { exact: false }).first(),
+      shell.getByTestId("karen-copilot-assistant-message").filter({ hasText: persistedAnswer }).last(),
       "The live chat must render the persisted assistant reply before reload",
     ).toBeVisible({ timeout: 30_000 });
 
@@ -173,7 +173,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     });
     await expect(restored.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(
-      restored.getByText(persistedAnswer, { exact: false }).first(),
+      restored.getByTestId("karen-copilot-assistant-message").filter({ hasText: persistedAnswer }).last(),
       "The actual persisted assistant reply must be rendered after reload",
     ).toBeVisible({ timeout: 30_000 });
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
