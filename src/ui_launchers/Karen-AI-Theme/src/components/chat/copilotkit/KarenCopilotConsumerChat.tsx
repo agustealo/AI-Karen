@@ -25,7 +25,7 @@ export function KarenCopilotConsumerChat() {
     createNewSession,
     loadSession,
     updateSessionTitle,
-    deleteSession,
+    deleteSessionWithOutcome,
     isLoadingSessions,
     error: sessionError,
   } = useSession();
@@ -115,20 +115,25 @@ export function KarenCopilotConsumerChat() {
     setNavigationBusy(true);
     setNavigationError(null);
     try {
-      const removed = await deleteSession(currentSession.id);
-      if (removed !== true) {
+      const result = await deleteSessionWithOutcome(currentSession.id);
+      if (!result.deleted) {
         setNavigationError("Karen could not delete this conversation.");
         return;
       }
       setDeleteConfirm(false);
       setManageOpen(false);
+      if (result.replacementCreated === false) {
+        setNavigationError("Conversation deleted, but a new conversation could not be created. Start a new conversation to continue.");
+      } else if (!result.historyRefreshed) {
+        setNavigationError("Conversation deleted, but the history list could not be refreshed.");
+      }
     } catch {
       setNavigationError("Karen could not delete this conversation.");
     } finally {
       pendingRef.current = false;
       setNavigationBusy(false);
     }
-  }, [currentSession, deleteConfirm, deleteSession]);
+  }, [currentSession, deleteConfirm, deleteSessionWithOutcome]);
 
   const matchingSessions = useMemo(() => {
     const filter = query.trim().toLocaleLowerCase();
