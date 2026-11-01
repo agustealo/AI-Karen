@@ -22,6 +22,8 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+import { ApiError } from "@/lib/api";
+
 import {
   SessionProvider,
   useSession,
@@ -174,20 +176,10 @@ describe("canonical SessionProvider deletion outcomes", () => {
     );
     await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
     backend.get.mockImplementation(async (path: string) => {
-      if (path === `/api/conversations/${legacy}`) {
-        const error = new Error("Not found") as Error & { status: number };
-        error.status = 404;
-        throw error;
+      if (path === `/api/conversations/${legacy}`) throw new ApiError("Not found", 404);
+      if (path === `/api/conversations/by-session/${legacy}`) {
+        return { ...firstConversation, id: canonical, session_id: legacy };
       }
-      if (path === `/api/conversations/${FIRST}`) return firstConversation;
-      if (path === "/api/conversations") return staleList;
-      throw new Error(`Unexpected GET ${path}`);
-    });
-    // The mocked ApiError must be used to enter the canonical legacy lookup.
-    backend.get.mockImplementation(async (path: string) => {
-      if (path === `/api/conversations/${legacy}`) return {
-        ...firstConversation, id: canonical, session_id: legacy,
-      };
       if (path === `/api/conversations/${FIRST}`) return firstConversation;
       if (path === "/api/conversations") return staleList;
       throw new Error(`Unexpected GET ${path}`);
