@@ -69,14 +69,14 @@ function getBackendBaseUrl(): string {
  */
 function backendTargetScope(baseUrl: string): string {
   try {
-    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
-    if (/^(?:localhost|0\\.0\\.0\\.0|127(?:\\.\\d{1,3}){3}|::1)$/.test(host)) {
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (/^(?:localhost|0\.0\.0\.0|127(?:\.\d{1,3}){3}|::1)$/.test(host)) {
       return 'loopback';
     }
     if (host === 'api' || host === 'host.docker.internal' || host.endsWith('.docker.internal')) {
       return 'docker_only';
     }
-    if (/^(?:10\\.|192\\.168\\.|172\\.(?:1[6-9]|2\\d|3[01])\\.)/.test(host)) {
+    if (/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host)) {
       return 'private_ip';
     }
     if (host.endsWith('.internal') || host.endsWith('.local') || !host.includes('.')) {
