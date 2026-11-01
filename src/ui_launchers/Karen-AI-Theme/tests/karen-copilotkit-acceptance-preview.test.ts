@@ -109,7 +109,8 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
   it("mounts the real governed candidate only under authenticated acceptance", () => {
     expect(page).toContain("<AuthWrapper>");
     expect(page).toContain("<KarenCopilotChat conversationId={conversationId} />");
-    expect(page).toContain('href="/vendor/copilotkit-v2.css"');
+    expect(copilotShell).toContain('<link rel="stylesheet" href="/vendor/copilotkit-v2.css" />');
+    expect(page).not.toContain('href="/vendor/copilotkit-v2.css"');
     expect(page).toContain("force-dynamic");
     expect(page).toContain("index: false, follow: false");
     expect(page).not.toContain("new InMemoryAgentRunner");
@@ -120,7 +121,7 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(consumerPreview).toContain("<AuthWrapper>");
     expect(consumerPreview).toContain("<SessionProvider initialSessionId={conversationId} strictInitialSession>");
     expect(consumerPreview).toContain("<KarenCopilotConsumerChat />");
-    expect(consumerPreview).toContain('href="/vendor/copilotkit-v2.css"');
+    expect(consumerPreview).not.toContain('href="/vendor/copilotkit-v2.css"');
     expect(consumerPreview).toContain('index: false, follow: false');
     expect(consumerPreview).not.toContain("process.env.NEXT_PUBLIC_");
     expect(consumerPreview).not.toContain("x-forwarded-host");
