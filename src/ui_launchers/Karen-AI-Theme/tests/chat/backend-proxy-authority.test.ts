@@ -59,6 +59,34 @@ describe("single canonical backend proxy authority", () => {
     expect((await result.text())).not.toContain("backend-host.example");
   });
 
+  it.each([
+    ["http://127.0.0.1:8000", "loopback"],
+    ["http://api:8000", "docker_only"],
+    ["http://192.168.1.40:8000", "private_ip"],
+    ["https://canonical-backend.example", "public_or_routed"],
+    ["http://backend.internal:8000", "private_dns"],
+  ])("classifies %s without disclosing the configured host", async (target, expectedScope) => {
+    vi.stubEnv("KAREN_BACKEND_URL", target);
+    vi.resetModules();
+    const { proxyToBackend: configuredProxy } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    const logs = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("transport unavailable")));
+    const response = await configuredProxy(request("GET"), "/ready", {
+      retryAttempts: 1,
+    });
+    expect(response.status).toBe(502);
+    expect(logs).toHaveBeenCalledWith(
+      "[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({
+        configuration_source: "explicit",
+        target_scope: expectedScope,
+      }),
+    );
+    expect(JSON.stringify(logs.mock.calls)).not.toContain(new URL(target).hostname);
+  });
+
   it("never replays a mutating POST when the backend returns an HTTP 502", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response('{"detail":"unavailable"}', { status: 502 }),
