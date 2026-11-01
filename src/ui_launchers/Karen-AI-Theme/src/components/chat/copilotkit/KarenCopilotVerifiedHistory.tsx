@@ -46,12 +46,19 @@ function validReceipt(value: unknown): value is Record<string, unknown> {
     if (typeof value[key] !== "string" ||
         !(value[key] as string).trim() || (value[key] as string).length > 200) return false;
   }
+  // An automatic request has no explicitly requested provider or model.
+  // Healthy responses may have no degradation reason or fallback level.
+  // Null means absent for these optional fields, never for executor identity.
+  const nullable = new Set([
+    "requested_provider", "requested_model", "runtime_engine", "degradation_reason",
+  ]);
   for (const [key, val] of Object.entries(value)) {
     if (["degraded_mode", "fallback_level"].includes(key)) continue;
+    if (val === null && nullable.has(key)) continue;
     if (typeof val !== "string" || val.length > 200) return false;
   }
   return (value.degraded_mode === undefined || typeof value.degraded_mode === "boolean") &&
-    (value.fallback_level === undefined ||
+    (value.fallback_level === undefined || value.fallback_level === null ||
       (typeof value.fallback_level === "number" &&
        Number.isInteger(value.fallback_level) && value.fallback_level >= 0 &&
        value.fallback_level <= 100));
