@@ -1,5 +1,29 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import type { Page } from "@playwright/test";
+
+/**
+ * The preview route previously owned this CSS, so the dashboard could render
+ * an unstyled SDK and still pass preview-only acceptance. Assert the real
+ * browser loaded the *nonempty same-origin* pinned vendor stylesheet.
+ */
+async function expectRealCopilotKitStyles(page: Page): Promise<void> {
+  const selector = 'link[rel="stylesheet"][href="/vendor/copilotkit-v2.css"]';
+  await expect(page.locator(selector)).toHaveCount(1);
+  await expect.poll(async () => page.evaluate((linkSelector) => {
+    const link = document.querySelector<HTMLLinkElement>(linkSelector);
+    if (!link?.sheet) return false;
+    try {
+      return link.sheet.cssRules.length > 0;
+    } catch {
+      return false;
+    }
+  }, selector), {
+    timeout: 30_000,
+    message: "The actual dashboard must load nonempty CopilotKit vendor CSS",
+  }).toBe(true);
+}
+
 
 /**
  * Release-only, real-browser boot proof for the canonical CopilotKit chat.
@@ -89,6 +113,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
       timeout: 30_000,
     });
+    await expectRealCopilotKitStyles(page);
 
     // Never inject acceptance prompts into an arbitrary existing user thread.
     // Create a separate durable conversation through the actual user UI.
@@ -103,6 +128,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
       timeout: 30_000,
     });
+    await expectRealCopilotKitStyles(page);
 
     const id = await shell.getAttribute("data-conversation-id");
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
@@ -177,6 +203,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(restored.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
       timeout: 30_000,
     });
+    await expectRealCopilotKitStyles(page);
     await expect(restored.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(
       restored.getByTestId("karen-copilot-assistant-message").filter({ hasText: persistedAnswer }).last(),
@@ -243,6 +270,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       }
       await expect(shell, "Authenticated canonical CopilotKit chat must mount").toBeVisible({ timeout: 30_000 });
       await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible({ timeout: 30_000 });
+      await expectRealCopilotKitStyles(page);
       await expect(shell.getByRole("button", { name: "Find conversations" })).toBeVisible();
       await expect(shell.getByRole("button", { name: "Conversation options" })).toBeVisible();
       const conversationId = await shell.getAttribute("data-conversation-id");
