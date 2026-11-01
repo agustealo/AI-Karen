@@ -112,7 +112,7 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "secrets.KAREN_UX_PASSWORD" in native
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in native
     consumer_if = "        if: inputs.scenario == 'copilotkit-consumer'"
-    assert job.count(consumer_if) == 1
+    assert job.count(consumer_if) == 2
     consumer_at = job.index(consumer_if)
     consumer_start = job.rfind("      - name: ", 0, consumer_at)
     consumer_end = job.find("\n      - name:", consumer_at)
@@ -123,6 +123,18 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "secrets.KAREN_UX_EMAIL" in consumer_step
     assert "secrets.KAREN_UX_PASSWORD" in consumer_step
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in consumer_step
+    live_at = job.index(consumer_if, consumer_at + len(consumer_if))
+    live_start = job.rfind("      - name: ", 0, live_at)
+    live_end = job.find("\n      - name:", live_at)
+    assert live_start >= 0 and live_end > live_at
+    live_step = job[live_start:live_end]
+    assert "e2e/copilotkit-consumer-boot.spec.ts" in live_step
+    assert 'KAREN_CHAT_BOOT_ACCEPTANCE: "1"' in live_step
+    assert "KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}" in live_step
+    assert "secrets.KAREN_UX_EMAIL" in live_step
+    assert "secrets.KAREN_UX_PASSWORD" in live_step
+    assert "KAREN_E2E_AUTH_STATE" not in live_step
+    assert "persist-credentials: true" not in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED" not in job
 
     # A separately dispatched, main-only and deployment-attested live-model
