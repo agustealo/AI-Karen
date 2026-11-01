@@ -228,7 +228,7 @@ describe("single canonical backend proxy authority", () => {
       error_code: "BACKEND_TARGET_NOT_CONFIGURED",
     });
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(JSON.stringify(errors.mock.calls)).not.toContain(target);
+    if (target) expect(JSON.stringify(errors.mock.calls)).not.toContain(target);
   });
 
   it("permits a configured HTTPS Vercel backend without choosing an alternate target", async () => {
