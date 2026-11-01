@@ -111,6 +111,13 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       message: "A real user turn and subsequent assistant response must be persisted by the canonical backend",
     }).toBe(true);
     expect(persistedAnswer.trim().length).toBeGreaterThan(0);
+    // A saved backend answer alone is not a functioning consumer chat.
+    // The active CopilotKit view must render the real assistant response
+    // before any reload, not only during a later history replay.
+    await expect(
+      shell.getByText(persistedAnswer, { exact: false }).first(),
+      "The live chat must render the persisted assistant reply before reload",
+    ).toBeVisible({ timeout: 30_000 });
 
     await page.reload();
     const restored = page.getByTestId("karen-copilot-consumer-chat");
