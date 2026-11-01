@@ -35,6 +35,76 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     video: "off",
   });
 
+  test("persists a real user message and a real assistant reply", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const target = new URL(approvedUrl!);
+    const revisionResponse = await request.get(new URL("/api/deployment-revision", target).toString());
+    expect(revisionResponse.ok(), "The deployed revision must be available").toBe(true);
+    const revision: unknown = await revisionResponse.json();
+    expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
+
+    await page.goto(new URL("/dashboard", target).toString());
+    const shell = page.getByTestId("karen-copilot-consumer-chat");
+    const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await shell.isVisible().catch(() => false)) &&
+        await launch.isVisible().catch(() => false)) {
+      await launch.click();
+    }
+    await expect(shell).toBeVisible({ timeout: 30_000 });
+    await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const id = await shell.getAttribute("data-conversation-id");
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    const prompt = `Karen live acceptance ${crypto.randomUUID()}: Please respond with a brief greeting.`;
+    const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+    await expect(composer, "CopilotKit must present a usable composer").toBeVisible();
+    await composer.fill(prompt);
+    // The persisted draft gate must finish before the user can send.
+    await expect(shell.getByText("Saving draft to your conversation…")).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await composer.press("Enter");
+
+    const endpoint = new URL(`/api/conversations/${id}`, target).toString();
+    let persistedAnswer = "";
+    await expect.poll(async () => {
+      const response = await request.get(endpoint, { failOnStatusCode: false });
+      if (!response.ok()) return false;
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object" || !Array.isArray((body as Record<string, unknown>).messages)) {
+        return false;
+      }
+      const messages = (body as { messages: Array<{ role?: string; content?: string }> }).messages;
+      const submitted = messages.some(message => message.role === "user" && message.content === prompt);
+      const promptIndex = messages.findIndex(message => message.role === "user" && message.content === prompt);
+      const assistant = promptIndex >= 0
+        ? messages.slice(promptIndex + 1).find(message => message.role === "assistant" &&
+            typeof message.content === "string" && message.content.trim().length > 0)
+        : undefined;
+      persistedAnswer = assistant?.content ?? "";
+      return submitted && Boolean(assistant);
+    }, {
+      timeout: 120_000,
+      intervals: [1000, 2000, 3000],
+      message: "A real user turn and subsequent assistant response must be persisted by the canonical backend",
+    }).toBe(true);
+    expect(persistedAnswer.trim().length).toBeGreaterThan(0);
+
+    await page.reload();
+    const restored = page.getByTestId("karen-copilot-consumer-chat");
+    if (!(await restored.isVisible().catch(() => false)) &&
+        await launch.isVisible().catch(() => false)) {
+      await launch.click();
+    }
+    await expect(restored).toHaveAttribute("data-conversation-id", id!);
+    await expect(restored.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(restored.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
+  });
+
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page, request }) => {
     test.setTimeout(120_000);
     const target = new URL(approvedUrl!);
