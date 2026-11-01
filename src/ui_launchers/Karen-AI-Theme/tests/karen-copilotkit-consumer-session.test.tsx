@@ -193,6 +193,19 @@ describe("CopilotKit consumer session adapter", () => {
     await waitFor(() => expect(state.deleteSession).toHaveBeenCalledWith(FIRST));
   });
 
+  it("keeps delete confirmation open when canonical deletion is rejected", async () => {
+    state.currentSession = { id: FIRST, title: "Original" };
+    state.sessions = [{ id: FIRST, title: "Original" }];
+    state.deleteSession.mockResolvedValue(false);
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not delete"));
+    expect(screen.getByRole("group", { name: "Confirm conversation deletion" })).not.toBeNull();
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
   it("disables conversation management while a verified run is active", () => {
     state.currentSession = { id: FIRST, title: "Running" };
     state.sessions = [{ id: FIRST, title: "Running" }];
