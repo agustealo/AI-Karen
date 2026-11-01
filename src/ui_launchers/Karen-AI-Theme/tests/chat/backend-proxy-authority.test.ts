@@ -231,6 +231,40 @@ describe("single canonical backend proxy authority", () => {
     if (target) expect(JSON.stringify(errors.mock.calls)).not.toContain(target);
   });
 
+  it("rejects legacy BACKEND_URL as a hosted Vercel authority", async () => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("KAREN_BACKEND_URL", "");
+    vi.stubEnv("BACKEND_URL", "https://legacy-backend.example");
+    vi.resetModules();
+    const { getBackendTargetStatus, proxyToBackend: configuredProxy } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    const spy = vi.fn();
+    vi.stubGlobal("fetch", spy);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(getBackendTargetStatus()).toBe("missing");
+    const response = await configuredProxy(request("GET"), "/ready");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error_code: "BACKEND_TARGET_NOT_CONFIGURED",
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("retains BACKEND_URL as a local compatibility alias", async () => {
+    vi.stubEnv("VERCEL", "");
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("KAREN_BACKEND_URL", "");
+    vi.stubEnv("BACKEND_URL", "http://127.0.0.1:9988");
+    vi.resetModules();
+    const { getBackendBaseUrl: configured } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    expect(configured()).toBe("http://127.0.0.1:9988");
+  });
+
   it("permits a configured HTTPS Vercel backend without choosing an alternate target", async () => {
     vi.stubEnv("VERCEL", "1");
     vi.stubEnv("VERCEL_ENV", "preview");
