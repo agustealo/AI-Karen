@@ -11,7 +11,10 @@ describe("Persona Studio canonical integration", () => {
     expect(shell).toContain('key: "personaStudio"');
     expect(shell).toContain('data-testid="persona-studio-workspace"');
     expect(shell).toContain("<PersonaSettings />");
-    expect(shell.match(/<SessionProvider>/g)).toHaveLength(1);
+    expect(shell.match(/<SessionProvider storagePrincipal=\\{\\{/g)).toHaveLength(1);
+    expect(shell.match(/<PrincipalScopedSessionProvider>/g)).toHaveLength(1);
+    expect(shell).toContain("tenant_id: user.tenant_id");
+    expect(shell).toContain("user_id: user.user_id");
     expect(shell.match(/data-testid="persistent-karen-conversation"/g)).toHaveLength(1);
     expect(editor).not.toContain("<SessionProvider");
     expect(editor).not.toContain("<KarenAssistantChat");
