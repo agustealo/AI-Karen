@@ -83,8 +83,10 @@ services:
         generateValue: true
       - key: KARI_DUCKDB_PASSWORD
         generateValue: true
+      # The job encryption key is consumed as encoded key material; generic
+      # generated text cannot be assumed to satisfy its required format.
       - key: KARI_JOB_ENC_KEY
-        generateValue: true
+        sync: false
       - key: KARI_JOB_SIGNING_KEY
         generateValue: true
       - key: KARI_MODEL_SIGNING_KEY
