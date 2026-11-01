@@ -80,7 +80,6 @@ type ConversationBootstrapCacheEntry = {
 
 const sessionConversationBootstrapCache = new Map<string, ConversationBootstrapCacheEntry>();
 const sessionConversationBootstrapRequests = new Map<string, Promise<ConversationResponse>>();
-const recentSessionBootstrapRuns = new Map<string, number>();
 
 /*
  * React Strict Mode and session restore can request the same conversation twice.
@@ -141,17 +140,6 @@ const ensureConversationSession = async (sessionId: string): Promise<Conversatio
 const fetchConversationByLegacySession = async (sessionId: string): Promise<ConversationResponse> =>
   apiClient.get<ConversationResponse>(`/api/conversations/by-session/${sessionId}`);
 
-const shouldSuppressRecentBootstrap = (key: string): boolean => {
-  const now = Date.now();
-  const lastRunAt = recentSessionBootstrapRuns.get(key);
-  if (typeof lastRunAt === 'number' && now - lastRunAt < SESSION_BOOTSTRAP_SUPPRESSION_WINDOW_MS) {
-    return true;
-  }
-
-  recentSessionBootstrapRuns.set(key, now);
-  return false;
-};
-
 // Session Context
 const SessionContext = createContext<SessionContextType | undefined>(undefined);
 const ACTIVE_SESSION_STORAGE_KEY = 'karen.active_session_id';
@@ -182,6 +170,8 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   const currentSessionRef = useRef<Session | null>(currentSession);
   const sessionsRef = useRef<Session[]>(sessions);
   const sessionListRefreshInFlightRef = useRef<Promise<ConversationApiResponse> | null>(null);
+  // Strict Mode effect replays are instance-local; a fresh provider must bootstrap normally.
+  const lastInitializedBootstrapKeyRef = useRef<string | null>(null);
   // Backend-confirmed deletions must not reappear in an eventually consistent history response.
   const confirmedDeletedSessionIdsRef = useRef<Set<string>>(new Set());
 
@@ -686,9 +676,10 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   // Initialize sessions on mount
   useEffect(() => {
     const bootstrapKey = `initialize:${strictInitialSession ? 'strict' : 'normal'}:${initialSessionId || '__new__'}`;
-    if (shouldSuppressRecentBootstrap(bootstrapKey)) {
+    if (lastInitializedBootstrapKeyRef.current === bootstrapKey) {
       return;
     }
+    lastInitializedBootstrapKeyRef.current = bootstrapKey;
 
     const initializeSessions = async () => {
       setIsLoadingSessions(true);
