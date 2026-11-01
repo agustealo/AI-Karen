@@ -47,6 +47,7 @@ export function KarenCopilotConsumerChat() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [managedConversationId, setManagedConversationId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const pendingRef = useRef(false);
@@ -54,6 +55,14 @@ export function KarenCopilotConsumerChat() {
   useEffect(() => {
     if (historyOpen) inputRef.current?.focus();
   }, [historyOpen]);
+
+  useEffect(() => {
+    setManageOpen(false);
+    setEditingTitle(false);
+    setDeleteConfirm(false);
+    setTitleDraft("");
+    setManagedConversationId(null);
+  }, [currentSession?.id]);
 
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
@@ -84,7 +93,7 @@ export function KarenCopilotConsumerChat() {
   }, [closeHistory]);
 
   const saveTitle = useCallback(async () => {
-    if (!currentSession || pendingRef.current || busyRef.current) return;
+    if (!currentSession || managedConversationId !== currentSession.id || pendingRef.current || busyRef.current) return;
     const title = titleDraft.trim();
     if (!title || title.length > 160) {
       setNavigationError("Use a conversation title between 1 and 160 characters.");
@@ -94,7 +103,7 @@ export function KarenCopilotConsumerChat() {
     setNavigationBusy(true);
     setNavigationError(null);
     try {
-      const saved = await updateSessionTitle(currentSession.id, title);
+      const saved = await updateSessionTitle(managedConversationId, title);
       if (saved !== true) {
         setNavigationError("Karen could not save the conversation title.");
         return;
@@ -107,15 +116,15 @@ export function KarenCopilotConsumerChat() {
       pendingRef.current = false;
       setNavigationBusy(false);
     }
-  }, [currentSession, titleDraft, updateSessionTitle]);
+  }, [currentSession, managedConversationId, titleDraft, updateSessionTitle]);
 
   const removeConversation = useCallback(async () => {
-    if (!currentSession || pendingRef.current || busyRef.current || !deleteConfirm) return;
+    if (!currentSession || managedConversationId !== currentSession.id || pendingRef.current || busyRef.current || !deleteConfirm) return;
     pendingRef.current = true;
     setNavigationBusy(true);
     setNavigationError(null);
     try {
-      const result = await deleteSessionWithOutcome(currentSession.id);
+      const result = await deleteSessionWithOutcome(managedConversationId);
       if (!result.deleted) {
         setNavigationError("Karen could not delete this conversation.");
         return;
@@ -133,7 +142,7 @@ export function KarenCopilotConsumerChat() {
       pendingRef.current = false;
       setNavigationBusy(false);
     }
-  }, [currentSession, deleteConfirm, deleteSessionWithOutcome]);
+  }, [currentSession, managedConversationId, deleteConfirm, deleteSessionWithOutcome]);
 
   const matchingSessions = useMemo(() => {
     const filter = query.trim().toLocaleLowerCase();
@@ -221,10 +230,12 @@ export function KarenCopilotConsumerChat() {
             <button type="button" aria-label="Conversation options" aria-expanded={manageOpen}
               disabled={navigationBusy || runBusy}
               onClick={() => {
-                setManageOpen(open => !open);
+                const opening = !manageOpen;
+                setManageOpen(opening);
                 setEditingTitle(false);
                 setDeleteConfirm(false);
-                setTitleDraft(currentSession.title || "");
+                setTitleDraft(opening ? currentSession.title || "" : "");
+                setManagedConversationId(opening ? currentSession.id : null);
               }}
               className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-input hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
               <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
