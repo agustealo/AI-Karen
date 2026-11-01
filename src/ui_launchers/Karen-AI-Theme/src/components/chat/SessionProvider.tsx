@@ -59,7 +59,7 @@ interface SessionContextType {
   isLoadingSessions: boolean;
   error: string | null;
   createNewSession: () => Promise<void>;
-  loadSession: (sessionId: string) => Promise<void>;
+  loadSession: (sessionId: string) => Promise<boolean>;
   refreshSessions: () => Promise<void>;
   deleteSession: (sessionId: string) => Promise<boolean | void>;
   deleteSessions: (sessionIds: string[]) => Promise<boolean>;
@@ -296,7 +296,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   }, [persistActiveSessionId, strictInitialSession]);
 
   // Load a specific session
-  const loadSession = useCallback(async (sessionId: string) => {
+  const loadSession = useCallback(async (sessionId: string): Promise<boolean> => {
     if (strictInitialSession && sessionId !== initialSessionId) {
       throw new Error('Strict conversation cannot load another session');
     }
@@ -403,20 +403,21 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
         ...s,
         isActive: s.id === conversationId
       })));
+      return true;
     } catch (err) {
       if (strictInitialSession) {
         // An acceptance URL must never create a different conversation or
         // project an unverified ID into a locally fabricated chat session.
         setCurrentSession(null);
         setError('The requested conversation could not be verified. No replacement conversation was created.');
-        return;
+        return false;
       }
       if (err instanceof ApiError && err.status === 429) {
         preserveRequestedSession(
           'Session service is temporarily rate limited. Keeping your current chat available.',
         );
         console.warn('Session load was rate-limited; preserving the requested conversation.');
-        return;
+        return false;
       }
 
       if (err instanceof ApiError && err.status === 404) {
@@ -427,14 +428,14 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
         } catch {
           // createNewSession already exposes truthful failure state.
         }
-        return;
+        return false;
       }
 
       console.warn('Session load failed transiently; preserving the requested conversation.', err);
       preserveRequestedSession(
         'Session service is temporarily unavailable. Keeping your current chat available.',
       );
-      return;
+      return false;
     } finally {
       setIsLoadingSessions(false);
     }
