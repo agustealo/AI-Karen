@@ -95,6 +95,36 @@ describe("CopilotKit consumer session adapter", () => {
     expect(state.mounts).toHaveLength(0);
   });
 
+  it("offers saved-conversation recovery when no active conversation is verified", async () => {
+    state.currentSession = null;
+    state.sessions = [
+      { id: FIRST, title: "Saved conversation" },
+      { id: SECOND, title: "Other conversation" },
+    ];
+    state.loadSession.mockResolvedValue(true);
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.getByRole("group", { name: "Saved conversations" })).not.toBeNull();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Recover an existing conversation" }), {
+      target: { value: "saved" },
+    });
+    expect(screen.queryByRole("button", { name: "Other conversation" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Saved conversation" }));
+    await waitFor(() => expect(state.loadSession).toHaveBeenCalledWith(FIRST));
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.mounts).toHaveLength(0);
+  });
+
+  it("does not claim recovery when saved-conversation verification fails", async () => {
+    state.currentSession = null;
+    state.sessions = [{ id: FIRST, title: "Unavailable conversation" }];
+    state.loadSession.mockResolvedValue(false);
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Unavailable conversation" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("not verified"));
+    expect(screen.getByRole("group", { name: "Saved conversations" })).not.toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
+  });
+
   it("never creates a replacement when the pinned conversation cannot be verified", () => {
     state.strictInitialSession = true;
     state.error = "The requested conversation could not be verified.";
