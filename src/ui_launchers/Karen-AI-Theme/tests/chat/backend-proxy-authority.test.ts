@@ -30,6 +30,35 @@ afterEach(() => {
 });
 
 describe("single canonical backend proxy authority", () => {
+  it("logs only a sanitized backend scope and known error code, never the configured address", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const cause = Object.assign(
+      new Error("Unable to connect to https://secrets@backend-host.example"),
+      { code: "ENOTFOUND" },
+    );
+    const fetchSpy = vi.fn().mockRejectedValue(
+      Object.assign(new TypeError("fetch failed"), { cause }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const result = await proxyToBackend(request("GET"), "/ready", {
+      retryAttempts: 1,
+    });
+    expect(result.status).toBe(502);
+    expect(spy).toHaveBeenCalledWith(
+      "[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({
+        target_scope: expect.any(String),
+        configuration_source: expect.any(String),
+        cause_code: "ENOTFOUND",
+        error_type: "TypeError",
+      }),
+    );
+    const serialized = JSON.stringify(spy.mock.calls);
+    expect(serialized).not.toContain("backend-host.example");
+    expect(serialized).not.toContain("secrets");
+    expect((await result.text())).not.toContain("backend-host.example");
+  });
+
   it("never replays a mutating POST when the backend returns an HTTP 502", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response('{"detail":"unavailable"}', { status: 502 }),
