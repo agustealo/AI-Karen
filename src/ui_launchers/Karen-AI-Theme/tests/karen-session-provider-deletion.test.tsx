@@ -70,6 +70,19 @@ afterEach(() => {
 });
 
 describe("canonical SessionProvider deletion outcomes", () => {
+  it("reauthorizes a conversation after an account transition instead of serving module cache", async () => {
+    const firstRead = await fetchConversationBootstrap(FIRST);
+    expect(firstRead.id).toBe(FIRST);
+    const previousGetCount = backend.get.mock.calls.length;
+
+    // A second principal is not authorized for the first principal's thread.
+    backend.get.mockRejectedValue(new Error("Forbidden for current principal"));
+    await expect(fetchConversationBootstrap(FIRST)).rejects.toThrow(
+      "Forbidden for current principal",
+    );
+    expect(backend.get).toHaveBeenCalledTimes(previousGetCount + 1);
+  });
+
   it("bootstraps each new provider mount even when the same session was just mounted", async () => {
     const first = render(
       <SessionProvider initialSessionId={FIRST}>
