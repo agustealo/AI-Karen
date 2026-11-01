@@ -32,6 +32,53 @@ async function readAuthorizedSameOriginJson(
   }, apiPath);
 }
 
+/**
+ * Model text alone is insufficient release proof: backend-saved execution
+ * provenance must be bound to the precise persisted assistant turn. The
+ * thread gateway already verifies this snapshot before the SDK displays it.
+ * Do not infer a model from the configured preference or the chat UI.
+ */
+async function expectVerifiedExecutionReceipt(
+  page: Page, conversationId: string, persistedAnswer: string,
+): Promise<void> {
+  await expect.poll(async () => {
+    const { ok, body } = await readAuthorizedSameOriginJson(
+      page, `/api/copilotkit/threads/${conversationId}/messages`,
+    );
+    if (!ok || !body || typeof body !== "object") return false;
+    const response = body as Record<string, unknown>;
+    if (response.threadId !== conversationId ||
+        !Array.isArray(response.messages) || !Array.isArray(response.replayEvents)) return false;
+    const matching = response.messages.filter((item): item is Record<string, unknown> =>
+      item !== null && typeof item === "object" && !Array.isArray(item) &&
+      item.role === "assistant" && item.content === persistedAnswer &&
+      typeof item.id === "string" && item.id.length > 0);
+    if (matching.length !== 1) return false;
+
+    const receipts = response.replayEvents.filter((item): item is Record<string, unknown> =>
+      item !== null && typeof item === "object" && !Array.isArray(item) &&
+      item.type === "CUSTOM" && item.name === "karen.execution_receipt.v1" &&
+      item.messageId === matching[0].id);
+    if (receipts.length !== 1) return false;
+    const receipt = receipts[0].value;
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return false;
+    const metadata = receipt as Record<string, unknown>;
+    // Reject configured-only or unavailable executors. A legitimate runtime
+    // fallback may change provider/model, so do not hardcode provider names.
+    const required = ["actual_provider", "actual_model", "response_source"] as const;
+    if (required.some(key => typeof metadata[key] !== "string" ||
+        !(metadata[key] as string).trim() ||
+        ["unknown", "none", "unavailable"].includes((metadata[key] as string).trim().toLowerCase()))) {
+      return false;
+    }
+    return metadata.response_source !== "persisted_history";
+  }, {
+    timeout: 30_000,
+    intervals: [500, 1000, 2000],
+    message: "The exact saved assistant turn must have backend-verified model execution provenance",
+  }).toBe(true);
+}
+
 async function expectRealCopilotKitStyles(page: Page): Promise<void> {
   const selector = 'link[rel="stylesheet"][href="/vendor/copilotkit-v2.css"]';
   await expect(page.locator(selector)).toHaveCount(1);
@@ -203,6 +250,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       message: "A real user turn and subsequent assistant response must be persisted by the canonical backend",
     }).toBe(true);
     expect(persistedAnswer.trim().length).toBeGreaterThan(0);
+    await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
     // A saved backend answer alone is not a functioning consumer chat.
     // The active CopilotKit view must render the real assistant response
     // before any reload, not only during a later history replay.
@@ -222,6 +270,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       timeout: 30_000,
     });
     await expectRealCopilotKitStyles(page);
+    await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
+    await expect(restored.getByTestId("karen-copilot-rail-unverified")).toHaveCount(0, {
+      timeout: 30_000,
+    });
     await expect(restored.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(
       restored.getByTestId("karen-copilot-assistant-message").filter({ hasText: persistedAnswer }).last(),
