@@ -390,6 +390,7 @@ export async function proxyToBackend(
       } catch {
         // No credential-bearing request is sent to another origin or to a
         // rewritten backend path derived from an external redirect.
+        clearInitTimeout(init);
         return NextResponse.json(
           { detail: 'Backend redirect rejected.', error_code: 'BACKEND_REDIRECT_REJECTED' },
           { status: 502, headers: { 'cache-control': 'no-store' } },
