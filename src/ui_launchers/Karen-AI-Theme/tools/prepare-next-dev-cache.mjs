@@ -60,11 +60,18 @@ function prepareNextDevCache(root) {
 
   let current = null;
   try {
+    const markerStat = lstatSync(markerPath);
+    if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
+      throw new Error('Refusing to read a non-regular Next.js cache marker');
+    }
     current = readFileSync(markerPath, 'utf8').trim();
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
-  if (current === expected) return;
+
+  // A production `next build` writes BUILD_ID into this same directory. A
+  // matching dev marker does not authorize reuse of production compilation.
+  if (current === expected && !existsSync(path.join(cachePath, 'BUILD_ID'))) return;
 
   // Remove *contents*, not the cache root: Docker's named-volume mount at
   // /app/.next must remain intact. rmSync unlinks child symlinks, not targets.
