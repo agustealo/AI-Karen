@@ -158,15 +158,48 @@ export function KarenCopilotConsumerChat() {
           {navigationError || sessionError || "What would you like to work on?"}
         </p>
         {!strictInitialSession && (
-          <button
-            type="button"
-            disabled={navigationBusy || runBusy}
-            onClick={() => void performNavigation(createNewSession)}
-            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-          >
-            <Plus aria-hidden="true" className="h-4 w-4" />
-            New conversation
-          </button>
+          <>
+            <button
+              type="button"
+              disabled={navigationBusy || runBusy}
+              onClick={() => void performNavigation(createNewSession)}
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+            >
+              <Plus aria-hidden="true" className="h-4 w-4" />
+              New conversation
+            </button>
+            {sessions.length > 0 && (
+              <div className="w-full max-w-md space-y-2">
+                <label htmlFor="karen-recover-conversation" className="block text-sm font-medium">
+                  Recover an existing conversation
+                </label>
+                <input
+                  id="karen-recover-conversation"
+                  type="search"
+                  value={query}
+                  onChange={event => setQuery(event.target.value)}
+                  placeholder="Search saved conversation titles"
+                  className="h-11 w-full rounded-xl border border-input bg-background px-3 text-base focus-visible:outline-2 focus-visible:outline-ring"
+                />
+                <div role="group" aria-label="Saved conversations" className="max-h-48 overflow-y-auto">
+                  {matchingSessions.map(session => (
+                    <button
+                      type="button"
+                      key={session.id}
+                      disabled={navigationBusy || runBusy}
+                      onClick={() => void performNavigation(async () => loadSession(session.id))}
+                      className="block min-h-11 w-full truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+                    >
+                      {session.title || "Untitled conversation"}
+                    </button>
+                  ))}
+                  {matchingSessions.length === 0 && (
+                    <p className="py-3 text-sm text-muted-foreground">No matching conversations.</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </section>
     );
