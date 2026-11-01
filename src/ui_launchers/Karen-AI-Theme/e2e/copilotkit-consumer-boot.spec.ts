@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 
 /**
  * Release-only, real-browser boot proof for the canonical CopilotKit chat.
@@ -18,11 +19,13 @@ const enabled = process.env.KAREN_CHAT_BOOT_ACCEPTANCE === "1";
 const authState = process.env.KAREN_E2E_AUTH_STATE;
 const expectedRevision = process.env.KAREN_CHAT_BOOT_REVISION;
 const approvedUrl = process.env.KAREN_BASE_URL;
+const approvedEmail = process.env.KAREN_UX_EMAIL;
+const approvedPassword = process.env.KAREN_UX_PASSWORD;
 
-if (enabled && (!authState || !approvedUrl || !expectedRevision ||
+if (enabled && (!(authState || (approvedEmail && approvedPassword)) || !approvedUrl || !expectedRevision ||
   !/^[0-9a-f]{40}$/i.test(expectedRevision))) {
   throw new Error(
-    "Chat boot acceptance requires KAREN_BASE_URL, KAREN_E2E_AUTH_STATE and an exact 40-character KAREN_CHAT_BOOT_REVISION",
+    "Chat boot acceptance requires KAREN_BASE_URL, exact KAREN_CHAT_BOOT_REVISION and either KAREN_E2E_AUTH_STATE or approved login credentials",
   );
 }
 
@@ -68,6 +71,9 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const revision: unknown = await revisionResponse.json();
     expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
 
+    if (!authState) {
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
+    }
     await page.goto(new URL("/dashboard", target).toString());
     // Use the browser context's HTTP client for auth-scoped reads. Unlike the
     // standalone Playwright request fixture it shares refreshed session cookies
@@ -217,6 +223,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         failures.push("Disabled CopilotKit inspector requested a browser chunk");
       }
     });
+
+    if (!authState) {
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
+    }
 
     let initialConversationId: string | null = null;
     for (const coldLoad of [true, false]) {
