@@ -95,7 +95,21 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
     await expect(composer, "CopilotKit must present a usable composer").toBeVisible();
     await composer.fill(prompt);
-    // The persisted draft gate must finish before the user can send.
+    // Absence of "Saving draft…" alone is insufficient: it can be absent
+    // before the delayed CAS save starts. Require the backend's authorized
+    // draft endpoint to confirm this exact prompt before submitting.
+    const draftEndpoint = new URL(`/api/conversations/${id}/draft`, target).toString();
+    await expect.poll(async () => {
+      const response = await request.get(draftEndpoint, { failOnStatusCode: false });
+      if (!response.ok()) return false;
+      const draft: unknown = await response.json();
+      return Boolean(draft && typeof draft === "object" &&
+        (draft as { text?: unknown }).text === prompt);
+    }, {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+      message: "The canonical backend must confirm this exact saved draft before sending",
+    }).toBe(true);
     await expect(shell.getByText("Saving draft to your conversation…")).toHaveCount(0, {
       timeout: 30_000,
     });
