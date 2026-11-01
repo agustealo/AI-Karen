@@ -4,6 +4,7 @@ import { POST } from '../../src/app/api/chat/stream/route';
 
 vi.mock('../../src/app/api/_lib/backend-proxy', () => ({
   getBackendBaseUrl: () => 'http://api:8000',
+  getBackendTargetStatus: () => 'configured',
   sanitizeHeaders: () => new Headers({ 'content-type': 'application/json' }),
 }));
 
