@@ -226,6 +226,27 @@ describe("CopilotKit consumer session adapter", () => {
     await waitFor(() => expect(state.deleteSessionWithOutcome).toHaveBeenCalledWith(FIRST));
   });
 
+  it("cancels pending conversation management when the selected conversation changes", () => {
+    state.currentSession = { id: FIRST, title: "First conversation" };
+    state.sessions = [
+      { id: FIRST, title: "First conversation" },
+      { id: SECOND, title: "Second conversation" },
+    ];
+    const view = render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    expect(screen.getByRole("group", { name: "Confirm conversation deletion" })).not.toBeNull();
+
+    state.currentSession = { id: SECOND, title: "Second conversation" };
+    view.rerender(<KarenCopilotConsumerChat />);
+
+    expect(screen.queryByRole("group", { name: "Confirm conversation deletion" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Conversation title" })).toBeNull();
+    expect(state.deleteSessionWithOutcome).not.toHaveBeenCalled();
+    expect(state.updateSessionTitle).not.toHaveBeenCalled();
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(SECOND);
+  });
+
   it("keeps delete confirmation open when canonical deletion is rejected", async () => {
     state.currentSession = { id: FIRST, title: "Original" };
     state.sessions = [{ id: FIRST, title: "Original" }];
