@@ -22,7 +22,10 @@ export const GET = async (request: Request) => {
     );
 
     if (response.status === 200) {
-      return NextResponse.json({ status: 'ok', backend_ready: true });
+      return NextResponse.json(
+        { status: 'ok', backend_ready: true },
+        { headers: { 'cache-control': 'no-store' } },
+      );
     }
 
     return response;
@@ -34,7 +37,7 @@ export const GET = async (request: Request) => {
         backend_ready: false,
         message: 'Backend services are still initializing'
       },
-      { status: 503 }
+      { status: 503, headers: { 'cache-control': 'no-store' } }
     );
   }
 };
