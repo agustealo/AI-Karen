@@ -7,6 +7,31 @@ import type { Page } from "@playwright/test";
  * an unstyled SDK and still pass preview-only acceptance. Assert the real
  * browser loaded the *nonempty same-origin* pinned vendor stylesheet.
  */
+/**
+ * Read canonical JSON through the *actual signed-in browser*. Playwright's
+ * request context shares cookies, but cannot see Karen's localStorage Bearer
+ * access token. Keep that credential inside the browser: never echo it to the
+ * runner, attach it to redirects or send it to a different origin.
+ */
+async function readAuthorizedSameOriginJson(
+  page: Page, apiPath: string,
+): Promise<{ ok: boolean; body: unknown }> {
+  return page.evaluate(async (path) => {
+    const url = new URL(path, window.location.origin);
+    if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
+      throw new Error("Refusing authenticated read outside the application's API origin");
+    }
+    const accessToken = window.localStorage.getItem("access_token");
+    const response = await window.fetch(url.pathname + url.search, {
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    });
+    return { ok: response.ok, body: response.ok ? await response.json() : null };
+  }, apiPath);
+}
+
 async function expectRealCopilotKitStyles(page: Page): Promise<void> {
   const selector = 'link[rel="stylesheet"][href="/vendor/copilotkit-v2.css"]';
   await expect(page.locator(selector)).toHaveCount(1);
@@ -99,10 +124,6 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
     }
     await page.goto(new URL("/dashboard", target).toString());
-    // Use the browser context's HTTP client for auth-scoped reads. Unlike the
-    // standalone Playwright request fixture it shares refreshed session cookies
-    // with the page throughout this long-running real-model acceptance.
-    const authenticatedRequest = page.context().request;
     const shell = page.getByTestId("karen-copilot-consumer-chat");
     const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
     if (!(await shell.isVisible().catch(() => false)) &&
@@ -139,12 +160,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     // Absence of "Saving draft…" alone is insufficient: it can be absent
     // before the delayed CAS save starts. Require the backend's authorized
     // draft endpoint to confirm this exact prompt before submitting.
-    const draftEndpoint = new URL(`/api/conversations/${id}/draft`, target).toString();
+    const draftEndpoint = `/api/conversations/${id}/draft`;
     await expect.poll(async () => {
-      const response = await authenticatedRequest.get(draftEndpoint, { failOnStatusCode: false });
-      if (!response.ok()) return false;
-      const draft: unknown = await response.json();
-      return Boolean(draft && typeof draft === "object" &&
+      const { ok, body: draft } = await readAuthorizedSameOriginJson(page, draftEndpoint);
+      return Boolean(ok && draft && typeof draft === "object" &&
         (draft as { text?: unknown }).text === prompt);
     }, {
       timeout: 30_000,
@@ -156,13 +175,12 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     });
     await composer.press("Enter");
 
-    const endpoint = new URL(`/api/conversations/${id}`, target).toString();
+    const endpoint = `/api/conversations/${id}`;
     let persistedAnswer = "";
     await expect.poll(async () => {
-      const response = await authenticatedRequest.get(endpoint, { failOnStatusCode: false });
-      if (!response.ok()) return false;
-      const body: unknown = await response.json();
-      if (!body || typeof body !== "object" || !Array.isArray((body as Record<string, unknown>).messages)) {
+      const { ok, body } = await readAuthorizedSameOriginJson(page, endpoint);
+      if (!ok || !body || typeof body !== "object" ||
+          !Array.isArray((body as Record<string, unknown>).messages)) {
         return false;
       }
       const messages = (body as { messages: Array<{ role?: string; content?: string }> }).messages;
