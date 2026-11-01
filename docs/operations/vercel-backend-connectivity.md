@@ -35,6 +35,31 @@ PostgreSQL container or local model server. Do not disable authentication,
 publish a raw database connection, or create fake model responses to turn
 a connectivity failure into HTTP 200.
 
+## Existing API image and production deployment safety
+
+The repository already builds the canonical FastAPI image with the root
+`Dockerfile` (`--target app --build-arg PROFILE=runtime`). Its entrypoint is
+`python -m uvicorn ai_karen_engine.app:create_app --factory --host 0.0.0.0 --port 8000`.
+The existing `Production First-Boot Smoke` workflow builds that image and
+runs `scripts/ci/production-first-boot-smoke.sh` against isolated PostgreSQL
+and Redis containers. This is a **short-lived CI boot proof**, not a deployed
+public API endpoint or proof of a persistent model-serving backend.
+
+**Do not deploy the root `docker-compose.yml` as production configuration.**
+Its `api` service explicitly specifies development mode, debugging, local
+database addresses and development database credentials. Those settings can
+override values from `.env`. Likewise, the smoke harness contains
+test-only credentials and must never be used to provision real consumers.
+
+Deploy the existing API image on an operator-owned persistent host with
+production settings supplied through a protected secrets facility, an
+isolated PostgreSQL database with required migrations, Redis, durable state,
+TLS termination, and verified provider connectivity. Restrict inbound
+access to authenticated application traffic, and verify an actual
+`GET /ready` response **from the Vercel function network** before binding
+the hosted frontend. Do not copy any CI smoke passwords, local database URLs,
+development auth bypasses or test-only certificates into the real environment.
+
 ## November 1, 2026 incident: evidence and resolution gate
 
 - Exact-head Preview `35e948babe67e314a3280f47702c73e0db31a678`
