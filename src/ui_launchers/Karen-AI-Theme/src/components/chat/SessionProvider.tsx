@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, createContext, useContext } from "react";
 import type { ReactNode } from "react";
 import type { ChatMessage, ConversationResponse } from "@/lib/types";
 import type { SuggestedAction } from "@/lib/agent-ui/service";
@@ -105,9 +105,23 @@ interface SessionProviderProps {
   initialSessionId?: string;
   /** Fail closed instead of recovering to another conversation on an explicitly scoped acceptance URL. */
   strictInitialSession?: boolean;
+  /** Verified authentication identity, required to persist the active conversation pointer. */
+  storagePrincipal?: { tenant_id: string; user_id: string };
 }
 
-export function SessionProvider({ children, initialSessionId, strictInitialSession = false }: SessionProviderProps) {
+export function SessionProvider({
+  children, initialSessionId, strictInitialSession = false, storagePrincipal,
+}: SessionProviderProps) {
+  // Never use the old unscoped browser key as an authority. A background
+  // authentication update can change the principal without unmounting the
+  // browser document. Scope only the navigation pointer, not transcript data.
+  const scopedActiveSessionKey = useMemo(() => {
+    const tenantId = storagePrincipal?.tenant_id?.trim();
+    const userId = storagePrincipal?.user_id?.trim();
+    return tenantId && userId
+      ? ACTIVE_SESSION_STORAGE_KEY + "." + JSON.stringify([tenantId, userId])
+      : null;
+  }, [storagePrincipal?.tenant_id, storagePrincipal?.user_id]);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [workspaceRunId, setWorkspaceRunId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -122,17 +136,17 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   const confirmedDeletedSessionIdsRef = useRef<Set<string>>(new Set());
 
   const persistActiveSessionId = useCallback((sessionId: string | null) => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !scopedActiveSessionKey) return;
     try {
       if (sessionId) {
-        window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
+        window.localStorage.setItem(scopedActiveSessionKey, sessionId);
       } else {
-        window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+        window.localStorage.removeItem(scopedActiveSessionKey);
       }
     } catch {
-      // Ignore storage failures.
+      // Local storage is only a navigation hint; backend remains authoritative.
     }
-  }, []);
+  }, [scopedActiveSessionKey]);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
@@ -145,12 +159,16 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   const getPersistedActiveSessionId = useCallback((): string | null => {
     if (typeof window === 'undefined') return null;
     try {
-      const stored = window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+      // Legacy browser-wide pointers cannot prove an owner. Do not migrate
+      // them into any account, even if a previous session happened to work.
+      window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+      if (!scopedActiveSessionKey) return null;
+      const stored = window.localStorage.getItem(scopedActiveSessionKey);
       return stored && stored.trim() ? stored.trim() : null;
     } catch {
       return null;
     }
-  }, []);
+  }, [scopedActiveSessionKey]);
 
   const getRateLimitDelayMs = useCallback((err: unknown, fallbackMs: number = 1200): number => {
     if (!(err instanceof ApiError)) return fallbackMs;
@@ -641,7 +659,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   // Initialize sessions on mount
   useEffect(() => {
-    const bootstrapKey = `initialize:${strictInitialSession ? 'strict' : 'normal'}:${initialSessionId || '__new__'}`;
+    const bootstrapKey = JSON.stringify([strictInitialSession, initialSessionId ?? null, scopedActiveSessionKey]);
     if (lastInitializedBootstrapKeyRef.current === bootstrapKey) {
       return;
     }
@@ -682,7 +700,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     initializeSessions();
     // Only initialize once on mount or when initialSessionId explicitly changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialSessionId, getPersistedActiveSessionId, strictInitialSession]);
+  }, [initialSessionId, getPersistedActiveSessionId, strictInitialSession, scopedActiveSessionKey]);
 
   return (
     <SessionContext.Provider value={{
