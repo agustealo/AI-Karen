@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node tools/prepare-copilotkit-styles.mjs && next dev -p 3000",
+    "dev": "node tools/prepare-next-dev-cache.mjs && node tools/prepare-copilotkit-styles.mjs && next dev -p 3000",
     "build": "node tools/prepare-copilotkit-styles.mjs && next build",
     "start": "next start",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
