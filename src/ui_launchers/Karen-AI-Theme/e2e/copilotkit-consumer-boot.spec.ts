@@ -38,7 +38,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     video: "off",
   });
 
-  test("persists a real user message and a real assistant reply", async ({ page, request }) => {
+  test("persists a real user message and a real assistant reply", async ({ page }) => {
     test.setTimeout(180_000);
     const target = new URL(approvedUrl!);
     const browserErrors: string[] = [];
@@ -66,7 +66,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         browserErrors.push("Disabled CopilotKit inspector requested a browser chunk");
       }
     });
-    const revisionResponse = await request.get(new URL("/api/deployment-revision", target).toString());
+    const revisionResponse = await page.context().request.get(new URL("/api/deployment-revision", target).toString());
     expect(revisionResponse.ok(), "The deployed revision must be available").toBe(true);
     const revision: unknown = await revisionResponse.json();
     expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
@@ -185,10 +185,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
   });
 
-  test("boots, restores and loads assets without an inspector chunk failure", async ({ page, request }) => {
+  test("boots, restores and loads assets without an inspector chunk failure", async ({ page }) => {
     test.setTimeout(120_000);
     const target = new URL(approvedUrl!);
-    const revisionResponse = await request.get(new URL("/api/deployment-revision", target).toString());
+    const revisionResponse = await page.context().request.get(new URL("/api/deployment-revision", target).toString());
     expect(revisionResponse.ok(), "Exact deployed revision endpoint must be available").toBe(true);
     const revisionPayload: unknown = await revisionResponse.json();
     expect(revisionPayload, "Revision endpoint must return an object").toBeTruthy();
