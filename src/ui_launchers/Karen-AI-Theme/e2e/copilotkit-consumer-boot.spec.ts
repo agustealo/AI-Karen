@@ -58,6 +58,11 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         browserErrors.push(`Chunk request failed: ${failedRequest.url()}`);
       }
     });
+    page.on("request", assetRequest => {
+      if (/\/_next\/static\/chunks\/.*(?:copilotkit[_/-])?web-inspector/i.test(assetRequest.url())) {
+        browserErrors.push("Disabled CopilotKit inspector requested a browser chunk");
+      }
+    });
     const revisionResponse = await request.get(new URL("/api/deployment-revision", target).toString());
     expect(revisionResponse.ok(), "The deployed revision must be available").toBe(true);
     const revision: unknown = await revisionResponse.json();
@@ -205,6 +210,11 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     page.on("requestfailed", request => {
       if (/\/_next\/static\/chunks\//.test(request.url())) {
         failures.push(`Chunk request failed: ${request.url()} ${request.failure()?.errorText ?? ""}`);
+      }
+    });
+    page.on("request", assetRequest => {
+      if (/\/_next\/static\/chunks\/.*(?:copilotkit[_/-])?web-inspector/i.test(assetRequest.url())) {
+        failures.push("Disabled CopilotKit inspector requested a browser chunk");
       }
     });
 
