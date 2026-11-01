@@ -133,7 +133,11 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}" in live_step
     assert "secrets.KAREN_UX_EMAIL" in live_step
     assert "secrets.KAREN_UX_PASSWORD" in live_step
+    assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in live_step
     assert "KAREN_E2E_AUTH_STATE" not in live_step
+    assert 'from "./fixtures/verified-search-deployment"' in (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/copilotkit-consumer-boot.spec.ts"
+    ).read_text(encoding="utf-8")
     assert "persist-credentials: true" not in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED" not in job
 
