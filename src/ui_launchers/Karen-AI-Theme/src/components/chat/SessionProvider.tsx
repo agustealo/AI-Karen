@@ -81,6 +81,11 @@ type ConversationBootstrapCacheEntry = {
 const sessionConversationBootstrapCache = new Map<string, ConversationBootstrapCacheEntry>();
 const sessionConversationBootstrapRequests = new Map<string, Promise<ConversationResponse>>();
 
+const invalidateConversationBootstrap = (sessionId: string): void => {
+  sessionConversationBootstrapCache.delete(sessionId);
+  sessionConversationBootstrapRequests.delete(sessionId);
+};
+
 /*
  * React Strict Mode and session restore can request the same conversation twice.
  * This short-lived cache deduplicates bootstrap calls without replacing server
@@ -121,7 +126,9 @@ export const fetchConversationBootstrap = async (conversationId: string): Promis
 
   const request = apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`)
     .then((response) => {
-      cacheConversationBootstrap(conversationId, response);
+      if (sessionConversationBootstrapRequests.get(conversationId) === request) {
+        cacheConversationBootstrap(conversationId, response);
+      }
       return response;
     })
     .finally(() => {
@@ -542,7 +549,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
     // The server has acknowledged deletion. Later errors cannot reverse that fact.
     confirmedDeletedSessionIdsRef.current.add(sessionId);
-    sessionConversationBootstrapCache.delete(sessionId);
+    invalidateConversationBootstrap(sessionId);
     removeSessionState(sessionId);
     setSessions(prev => prev.filter(s => s.id !== sessionId));
     const wasActive = currentSessionRef.current?.id === sessionId;
@@ -626,7 +633,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       if (deletedIds.size > 0) {
         deletedIds.forEach((sessionId) => {
           confirmedDeletedSessionIdsRef.current.add(sessionId);
-          sessionConversationBootstrapCache.delete(sessionId);
+          invalidateConversationBootstrap(sessionId);
           removeSessionState(sessionId);
         });
         setSessions(prev => prev.filter(s => !deletedIds.has(s.id)));
