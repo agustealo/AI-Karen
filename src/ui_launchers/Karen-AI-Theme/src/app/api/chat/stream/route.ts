@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getBackendBaseUrl, sanitizeHeaders } from '../../_lib/backend-proxy';
+import { getBackendBaseUrl, getBackendTargetStatus, sanitizeHeaders } from '../../_lib/backend-proxy';
 import { observeChatSseBody } from '../../_lib/sse-stream-integrity';
 
 export const runtime = 'nodejs';
@@ -10,6 +10,19 @@ export async function POST(request: NextRequest) {
   // streaming. Never replay an execution POST to an alternative host after a
   // transport error or 404. The outcome of the first request may be unknown,
   // and forwarding authorization to a secondary host violates isolation.
+  const targetStatus = getBackendTargetStatus();
+  if (targetStatus !== 'configured') {
+    console.error('[StreamProxy] canonical_backend_configuration_invalid', {
+      target_status: targetStatus,
+    });
+    return NextResponse.json(
+      {
+        detail: 'Canonical backend connection is not configured for this deployment.',
+        error_code: 'BACKEND_TARGET_NOT_CONFIGURED',
+      },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    );
+  }
   const backendBaseUrl = getBackendBaseUrl();
 
   try {
