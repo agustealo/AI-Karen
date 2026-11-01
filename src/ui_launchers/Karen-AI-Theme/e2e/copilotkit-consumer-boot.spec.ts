@@ -38,6 +38,20 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
   test("persists a real user message and a real assistant reply", async ({ page, request }) => {
     test.setTimeout(180_000);
     const target = new URL(approvedUrl!);
+    const browserErrors: string[] = [];
+    page.on("pageerror", error => {
+      browserErrors.push(`Uncaught page error: ${error.message}`);
+    });
+    page.on("response", response => {
+      if (response.status() >= 400 && /\/_next\/static\/chunks\//.test(response.url())) {
+        browserErrors.push(`Chunk HTTP ${response.status()}: ${response.url()}`);
+      }
+    });
+    page.on("requestfailed", failedRequest => {
+      if (/\/_next\/static\/chunks\//.test(failedRequest.url())) {
+        browserErrors.push(`Chunk request failed: ${failedRequest.url()}`);
+      }
+    });
     const revisionResponse = await request.get(new URL("/api/deployment-revision", target).toString());
     expect(revisionResponse.ok(), "The deployed revision must be available").toBe(true);
     const revision: unknown = await revisionResponse.json();
@@ -103,6 +117,11 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       timeout: 30_000,
     });
     await expect(restored.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(
+      restored.getByText(persistedAnswer, { exact: false }).first(),
+      "The actual persisted assistant reply must be rendered after reload",
+    ).toBeVisible({ timeout: 30_000 });
+    expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
   });
 
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page, request }) => {
