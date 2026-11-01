@@ -135,7 +135,10 @@ describe("single canonical backend proxy authority", () => {
       retryAttempts: 5,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(response.status).toBe(307);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error_code: "BACKEND_REDIRECT_REJECTED",
+    });
     expect(response.headers.get("location")).toBeNull();
   });
 
