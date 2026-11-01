@@ -347,6 +347,13 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       }
 
       const conversationId = conversationResponse.id;
+      // A load started before server-confirmed deletion must never resurrect
+      // the conversation when its response resolves after deletion.
+      if (confirmedDeletedSessionIdsRef.current.has(sessionId) ||
+          confirmedDeletedSessionIdsRef.current.has(conversationId)) {
+        setError('This conversation was deleted. It cannot be reopened.');
+        return false;
+      }
       if (strictInitialSession && conversationId !== sessionId) {
         throw new Error('Strict conversation identity mismatch');
       }
