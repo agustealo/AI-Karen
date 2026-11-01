@@ -143,7 +143,10 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(canonicalSessions).toContain("Strict conversation requires an explicit verified session ID.");
     expect(canonicalSessions).toContain("currentSession?.id, strictInitialSession");
     expect(canonicalSessions).toContain("getPersistedActiveSessionId, strictInitialSession");
-    expect(canonicalSessions).toContain("strictInitialSession ? 'strict' : 'normal'");
+    expect(canonicalSessions).toContain("JSON.stringify([strictInitialSession, initialSessionId ?? null, scopedActiveSessionKey])");
+    expect(canonicalSessions).toContain('storagePrincipal?: { tenant_id: string; user_id: string }');
+    expect(canonicalSessions).toContain('window.localStorage.getItem(scopedActiveSessionKey)');
+    expect(canonicalSessions).not.toContain('window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId)');
     expect(canonicalSessions).toContain("    initialSessionId,");
     expect(canonicalSessions).toContain("if (strictInitialSession) {");
     expect(canonicalSessions).toContain("setCurrentSession(null)");
