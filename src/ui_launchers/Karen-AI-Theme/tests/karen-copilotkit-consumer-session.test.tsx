@@ -66,7 +66,7 @@ beforeEach(() => {
   state.onModelChange = null;
   state.onBusyChange = null;
   state.createNewSession.mockReset().mockResolvedValue(undefined);
-  state.loadSession.mockReset().mockResolvedValue(undefined);
+  state.loadSession.mockReset().mockResolvedValue(true);
   state.updateSessionTitle.mockReset().mockResolvedValue(true);
   state.deleteSession.mockReset().mockResolvedValue(true);
 });
@@ -147,6 +147,21 @@ describe("CopilotKit consumer session adapter", () => {
     await waitFor(() => expect(state.loadSession).toHaveBeenCalledWith(SECOND));
     expect(screen.queryByRole("searchbox")).toBeNull();
     // No optimistic local session switch: SessionProvider decides the identity.
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("keeps history open and reports an unverified session load", async () => {
+    state.currentSession = { id: FIRST, title: "Current conversation" };
+    state.sessions = [
+      { id: FIRST, title: "Current conversation" },
+      { id: SECOND, title: "Unavailable conversation" },
+    ];
+    state.loadSession.mockResolvedValue(false);
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Find conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unavailable conversation" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("not verified"));
+    expect(screen.getByRole("searchbox", { name: "Find a conversation" })).not.toBeNull();
     expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
   });
 
