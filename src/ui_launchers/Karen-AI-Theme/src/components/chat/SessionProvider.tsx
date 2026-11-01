@@ -297,6 +297,10 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     if (strictInitialSession && sessionId !== initialSessionId) {
       throw new Error('Strict conversation cannot load another session');
     }
+    if (confirmedDeletedSessionIdsRef.current.has(sessionId)) {
+      setError('This conversation was deleted. It cannot be reopened.');
+      return false;
+    }
     if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null);
     setIsLoadingSessions(true);
     setError(null);
@@ -531,6 +535,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
     // The server has acknowledged deletion. Later errors cannot reverse that fact.
     confirmedDeletedSessionIdsRef.current.add(sessionId);
+    sessionConversationBootstrapCache.delete(sessionId);
     removeSessionState(sessionId);
     setSessions(prev => prev.filter(s => s.id !== sessionId));
     const wasActive = currentSessionRef.current?.id === sessionId;
@@ -614,6 +619,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       if (deletedIds.size > 0) {
         deletedIds.forEach((sessionId) => {
           confirmedDeletedSessionIdsRef.current.add(sessionId);
+          sessionConversationBootstrapCache.delete(sessionId);
           removeSessionState(sessionId);
         });
         setSessions(prev => prev.filter(s => !deletedIds.has(s.id)));
