@@ -49,7 +49,10 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)).toHaveLength(1);
     expect(dashboard).not.toContain("<KarenAssistantChat");
     expect(dashboard).not.toContain("@/components/chat/assistant-ui/KarenAssistantChat");
-    expect(dashboard).toContain("<SessionProvider>");
+    expect(dashboard).toContain("<PrincipalScopedSessionProvider>");
+    expect(dashboard).toContain("<SessionProvider storagePrincipal={{");
+    expect(dashboard).toContain("tenant_id: user.tenant_id");
+    expect(dashboard).toContain("user_id: user.user_id");
     expect(dashboard).toContain('data-testid="persistent-karen-conversation"');
   });
 
