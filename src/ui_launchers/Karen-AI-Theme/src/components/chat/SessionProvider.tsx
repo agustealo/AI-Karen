@@ -293,6 +293,13 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       }
 
       const conversationId = conversationResponse.id;
+      // Canonical lookup may return only its requested conversation. The
+      // legacy session lookup may resolve a different canonical ID only when
+      // the returned session_id proves the requested alias relationship.
+      if (conversationId !== sessionId &&
+          conversationResponse.session_id !== sessionId) {
+        throw new Error('Conversation identity mismatch');
+      }
       // A load started before server-confirmed deletion must never resurrect
       // the conversation when its response resolves after deletion.
       if (confirmedDeletedSessionIdsRef.current.has(sessionId) ||
