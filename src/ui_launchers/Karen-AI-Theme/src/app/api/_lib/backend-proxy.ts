@@ -62,6 +62,45 @@ function getBackendBaseUrl(): string {
   return DEFAULT_BACKEND_URL.replace(/\/$/, '');
 }
 
+/**
+ * Diagnose connectivity without logging the operator-configured host, port,
+ * path, username, password, DNS result or secret. Vercel's sensitive env vars
+ * are intentionally unavailable to ordinary log readers.
+ */
+function backendTargetScope(baseUrl: string): string {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
+    if (/^(?:localhost|0\\.0\\.0\\.0|127(?:\\.\\d{1,3}){3}|::1)$/.test(host)) {
+      return 'loopback';
+    }
+    if (host === 'api' || host === 'host.docker.internal' || host.endsWith('.docker.internal')) {
+      return 'docker_only';
+    }
+    if (/^(?:10\\.|192\\.168\\.|172\\.(?:1[6-9]|2\\d|3[01])\\.)/.test(host)) {
+      return 'private_ip';
+    }
+    if (host.endsWith('.internal') || host.endsWith('.local') || !host.includes('.')) {
+      return 'private_dns';
+    }
+    return 'public_or_routed';
+  } catch {
+    return 'invalid';
+  }
+}
+
+function safeCauseCode(error: unknown): string {
+  if (!(error instanceof Error)) return 'UNKNOWN';
+  const cause = (error as Error & { cause?: unknown }).cause;
+  const code = cause && typeof cause === 'object' && 'code' in cause
+    ? (cause as { code?: unknown }).code : undefined;
+  const supported = new Set([
+    'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'CERT_HAS_EXPIRED',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+  ]);
+  return typeof code === 'string' && supported.has(code) ? code : 'UNKNOWN';
+}
+
 function normalizeForwardedProto(value: string | null): 'http' | 'https' | null {
   const candidate = (value || '').trim().toLowerCase();
   if (candidate === 'http' || candidate === 'https') {
@@ -312,6 +351,9 @@ export async function proxyToBackend(
       method: request.method,
       upstream_path: upstreamPath,
       error_type: error instanceof Error ? error.name : 'UnknownError',
+      cause_code: safeCauseCode(error),
+      target_scope: backendTargetScope(backendBaseUrl),
+      configuration_source: EXPLICIT_BACKEND_URL ? 'explicit' : 'default',
     });
 
     return NextResponse.json(
