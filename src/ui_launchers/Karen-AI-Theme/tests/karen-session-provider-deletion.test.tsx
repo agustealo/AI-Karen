@@ -25,6 +25,7 @@ vi.mock("@/lib/api", () => ({
 import {
   SessionProvider,
   useSession,
+  fetchConversationBootstrap,
   type SessionDeletionOutcome,
 } from "@/components/chat/SessionProvider";
 
@@ -226,6 +227,13 @@ describe("canonical SessionProvider deletion outcomes", () => {
     expect(provider?.currentSession?.id).toBe(FIRST);
     expect(provider?.sessions.some(session => session.id === other)).toBe(false);
     expect(provider?.error).toContain("deleted");
+    const previousGets = backend.get.mock.calls.filter(
+      ([path]) => path === `/api/conversations/${other}`,
+    ).length;
+    await fetchConversationBootstrap(other);
+    expect(backend.get.mock.calls.filter(
+      ([path]) => path === `/api/conversations/${other}`,
+    )).toHaveLength(previousGets + 1);
   });
 
   it("never claims successful deletion when the server rejects the delete", async () => {
