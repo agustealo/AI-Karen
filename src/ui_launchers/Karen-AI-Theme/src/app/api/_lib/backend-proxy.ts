@@ -36,18 +36,11 @@ const IS_DOCKER =
   process.env.HOSTNAME?.includes('web') ||
   runningInContainer;
 
-let DEFAULT_BACKEND_URL =
+// Explicit deployment configuration is authoritative. Never silently rewrite an
+// operator-selected backend hostname based on container heuristics (which may
+// also be true in hosted serverless environments).
+const DEFAULT_BACKEND_URL =
   EXPLICIT_BACKEND_URL || (IS_DOCKER ? 'http://api:8000' : 'http://localhost:8000');
-
-// Hardening: If we are in Docker and the backend URL is still pointing to localhost/127.0.0.1,
-// we must rewrite it to 'api' (the service name) so containers can communicate.
-if (IS_DOCKER) {
-  if (DEFAULT_BACKEND_URL.includes('localhost')) {
-    DEFAULT_BACKEND_URL = DEFAULT_BACKEND_URL.replace('localhost', 'api');
-  } else if (DEFAULT_BACKEND_URL.includes('127.0.0.1')) {
-    DEFAULT_BACKEND_URL = DEFAULT_BACKEND_URL.replace('127.0.0.1', 'api');
-  }
-}
 
 const DEFAULT_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_API_PROXY_TIMEOUT_MS || '30000',
@@ -97,6 +90,11 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
       // Forwarded scheme is normalized below. In production the canonical
       // server.mjs ingress overwrites it before Next handles the request.
       'x-forwarded-proto',
+      // Vercel's deployment-authorization tokens are for the frontend ingress
+      // only. They must never traverse Karen's authenticated API proxy.
+      'x-vercel-protection-bypass',
+      'x-vercel-trusted-oidc-idp-token',
+      'x-vercel-oidc-token',
     ];
 
     if (!skipHeaders.includes(k)) {
@@ -176,26 +174,6 @@ function isRetryableProxyError(error: unknown): boolean {
   return Boolean(code && RETRYABLE_PROXY_ERROR_CODES.has(code));
 }
 
-function formatProxyError(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
-  }
-  if (typeof error === 'string') {
-    return error;
-  }
-  if (typeof error === 'object' && error !== null) {
-    const maybeName = (error as { name?: unknown }).name;
-    const maybeMessage = (error as { message?: unknown }).message;
-    const name = typeof maybeName === 'string' ? maybeName : 'UnknownError';
-    const message =
-      typeof maybeMessage === 'string' && maybeMessage.trim()
-        ? maybeMessage
-        : 'No message';
-    return `${name}: ${message}`;
-  }
-  return String(error);
-}
-
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -215,10 +193,14 @@ export async function proxyToBackend(
 ): Promise<NextResponse> {
   const backendBaseUrl = getBackendBaseUrl();
   const timeoutMs = options?.longTimeout ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
-  const retryAttempts = Math.max(1, options?.retryAttempts ?? 2);
+  // Only safe read methods may be retried or followed through redirects.
+  // A transport failure/502 does not establish that a mutating POST failed
+  // before persistence or execution. A second attempt could duplicate work.
+  const safeRead = request.method === 'GET' || request.method === 'HEAD';
+  const retryAttempts = safeRead ? Math.max(1, options?.retryAttempts ?? 2) : 1;
   const retryDelayMs = Math.max(0, options?.retryDelayMs ?? 250);
   const retryOnStatusCodes = new Set(options?.retryOnStatusCodes ?? [502]);
-  const followRedirects = options?.followRedirects ?? true;
+  const followRedirects = safeRead && (options?.followRedirects ?? true);
   const upstreamUrl = `${backendBaseUrl}${upstreamPath}${request.nextUrl.search}`;
 
   // Read the body once to avoid "Body has already been read" error on retries/redirects.
@@ -324,23 +306,21 @@ export async function proxyToBackend(
   } catch (error) {
     clearInitTimeout(init);
 
-    const formattedError = formatProxyError(error);
-    console.error(
-      `[BackendProxy] Error proxying ${request.method} ${upstreamPath}: ${formattedError}`,
-    );
-    const detail =
-      error instanceof Error && error.name === 'AbortError'
-        ? `Upstream request timed out after ${timeoutMs}ms`
-        : error instanceof Error
-          ? error.message
-          : 'Unknown proxy error';
+    // Some fetch/TLS errors embed the full upstream URL, including secrets.
+    // Record structured error class only; never return or log raw causes.
+    console.error('[BackendProxy] canonical_upstream_unavailable', {
+      method: request.method,
+      upstream_path: upstreamPath,
+      error_type: error instanceof Error ? error.name : 'UnknownError',
+    });
 
     return NextResponse.json(
       {
-        detail: `Failed to proxy ${upstreamPath} to backend`,
-        error: detail,
+        detail: 'Canonical backend is unavailable.',
+        error: 'Backend connection failed',
+        error_code: 'BACKEND_UPSTREAM_UNAVAILABLE',
       },
-      { status: 502 },
+      { status: 502, headers: { 'cache-control': 'no-store' } },
     );
   }
 }
