@@ -254,6 +254,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     try {
       const MAX_ATTEMPTS = 3;
       let conversationResponse: ConversationResponse | null = null;
+      let usedLegacyLookup = false;
       let lastError: unknown = null;
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -264,6 +265,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
           if (err instanceof ApiError && err.status === 404) {
             try {
               conversationResponse = await fetchConversationByLegacySession(sessionId);
+              usedLegacyLookup = true;
               break;
             } catch (legacyErr) {
               if (!(legacyErr instanceof ApiError && legacyErr.status === 404)) {
@@ -297,7 +299,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       // legacy session lookup may resolve a different canonical ID only when
       // the returned session_id proves the requested alias relationship.
       if (conversationId !== sessionId &&
-          conversationResponse.session_id !== sessionId) {
+          (!usedLegacyLookup || conversationResponse.session_id !== sessionId)) {
         throw new Error('Conversation identity mismatch');
       }
       // A load started before server-confirmed deletion must never resurrect
