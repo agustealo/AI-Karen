@@ -23,8 +23,10 @@ For Vercel Preview and Production, configure the existing server-only
 network-reachable canonical FastAPI origin**. Use HTTPS for internet-routed
 backends, TLS verification and server-side authentication; a deliberately
 private, routed deployment must have its own verified private connectivity.
-Never substitute `NEXT_PUBLIC_*`, `API_BASE_URL`, or arbitrary Docker
-fallback URLs for this authority. Do not place usernames, tokens, credentials,
+Never substitute `NEXT_PUBLIC_*`, `API_BASE_URL`, `BACKEND_URL`, or arbitrary Docker
+fallback URLs for this authority. The `BACKEND_URL` alias is accepted only
+outside hosted Vercel environments for local compatibility. In Vercel,
+an absent `KAREN_BACKEND_URL` fails closed even if `BACKEND_URL` is set. Do not place usernames, tokens, credentials,
 path suffixes or query parameters inside the backend-origin setting.
 
 The backend requires its own deploy, networking, PostgreSQL and provider
