@@ -183,6 +183,51 @@ describe("canonical SessionProvider deletion outcomes", () => {
     expect(provider?.error).toContain("Conversation deleted");
   });
 
+  it("does not resurrect an in-flight conversation load after deletion", async () => {
+    const other = "39cf16e6-3488-4891-bcc0-1d1b80b497f0";
+    render(
+      <SessionProvider initialSessionId={FIRST}>
+        <Probe />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(provider?.currentSession?.id).toBe(FIRST));
+
+    let finishLoad!: (value: typeof firstConversation) => void;
+    let started!: () => void;
+    const requestStarted = new Promise<void>(resolve => { started = resolve; });
+    const pendingResponse = new Promise<typeof firstConversation>(resolve => { finishLoad = resolve; });
+    backend.get.mockImplementation(async (path: string) => {
+      if (path === `/api/conversations/${other}`) {
+        started();
+        return pendingResponse;
+      }
+      if (path === "/api/conversations") return staleList;
+      if (path === `/api/conversations/${FIRST}`) return firstConversation;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+
+    let loading!: Promise<boolean>;
+    act(() => {
+      loading = provider!.loadSession(other);
+    });
+    await requestStarted;
+    let deletion: SessionDeletionOutcome | undefined;
+    await act(async () => {
+      deletion = await provider!.deleteSessionWithOutcome(other);
+    });
+    expect(deletion?.deleted).toBe(true);
+
+    let accepted: boolean | undefined;
+    await act(async () => {
+      finishLoad({ ...firstConversation, id: other, session_id: other });
+      accepted = await loading;
+    });
+    expect(accepted).toBe(false);
+    expect(provider?.currentSession?.id).toBe(FIRST);
+    expect(provider?.sessions.some(session => session.id === other)).toBe(false);
+    expect(provider?.error).toContain("deleted");
+  });
+
   it("never claims successful deletion when the server rejects the delete", async () => {
     backend.delete.mockRejectedValue(new Error("Server rejected deletion"));
     render(
