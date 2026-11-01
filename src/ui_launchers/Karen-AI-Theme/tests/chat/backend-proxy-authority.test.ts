@@ -1,0 +1,144 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
+
+import {
+  getBackendBaseUrl,
+  proxyToBackend,
+  sanitizeHeaders,
+} from "@/app/api/_lib/backend-proxy";
+
+const nativeFetch = globalThis.fetch;
+
+function request(method: string, path = "/api/conversations") {
+  return new NextRequest("http://localhost:3000" + path, {
+    method,
+    ...(method === "GET" || method === "HEAD"
+      ? {}
+      : {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message: "execute once" }),
+        }),
+  });
+}
+
+afterEach(() => {
+  globalThis.fetch = nativeFetch;
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
+
+describe("single canonical backend proxy authority", () => {
+  it("never replays a mutating POST when the backend returns an HTTP 502", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response('{"detail":"unavailable"}', { status: 502 }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const response = await proxyToBackend(request("POST"), "/api/conversations", {
+      retryAttempts: 10,
+      retryOnStatusCodes: [502],
+    });
+    expect(response.status).toBe(502);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][1].method).toBe("POST");
+  });
+
+  it("does not replay a POST when transport outcome is unknown", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchSpy = vi.fn().mockRejectedValue(
+      new Error("Private backend endpoint https://secrets@internal-service.invalid"),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const response = await proxyToBackend(request("POST"), "/api/conversations", {
+      retryAttempts: 12,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(502);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = await response.text();
+    expect(body).toContain("BACKEND_UPSTREAM_UNAVAILABLE");
+    expect(body).not.toContain("secrets");
+    expect(body).not.toContain("internal-service");
+  });
+
+  it("never follows a mutating POST through a different backend", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 307,
+        headers: { location: "http://other-backend:8000/internal" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const response = await proxyToBackend(request("POST"), "/api/conversations", {
+      followRedirects: true,
+      retryAttempts: 5,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("never repeats DELETE or PATCH even when callers request retries", async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("connection reset"));
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    for (const method of ["DELETE", "PATCH", "PUT"]) {
+      const response = await proxyToBackend(request(method), "/api/conversations/test", {
+        retryAttempts: 4,
+      });
+      expect(response.status).toBe(502);
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains bounded safe GET retry behavior", async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(new Response("gateway", { status: 502 }))
+      .mockResolvedValueOnce(new Response('{"ready":true}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const response = await proxyToBackend(request("GET", "/api/health"), "/ready", {
+      retryDelayMs: 0,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ready: true });
+  });
+
+  it("never forwards frontend deployment-protection credentials into the canonical API", () => {
+    const headers = new Headers({
+      Authorization: "Bearer user-session",
+      Cookie: "kari_session=opaque",
+      "X-Vercel-Protection-Bypass": "frontend-secret",
+      "X-Vercel-Trusted-Oidc-Idp-Token": "frontend-oidc",
+      "X-Vercel-Oidc-Token": "frontend-runtime-oidc",
+      "X-Forwarded-Proto": "https",
+    });
+    const forwarded = sanitizeHeaders(headers, "https://backend.example");
+    expect(forwarded.get("authorization")).toBe("Bearer user-session");
+    expect(forwarded.get("cookie")).toBe("kari_session=opaque");
+    expect(forwarded.has("x-vercel-protection-bypass")).toBe(false);
+    expect(forwarded.has("x-vercel-trusted-oidc-idp-token")).toBe(false);
+    expect(forwarded.has("x-vercel-oidc-token")).toBe(false);
+    expect(forwarded.get("x-forwarded-proto")).toBe("https");
+  });
+
+  it("does not silently rewrite an explicitly configured backend in Docker", async () => {
+    vi.stubEnv("KAREN_DOCKER", "true");
+    vi.stubEnv("KAREN_BACKEND_URL", "http://127.0.0.1:9988");
+    vi.resetModules();
+    const { getBackendBaseUrl: configured } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    expect(configured()).toBe("http://127.0.0.1:9988");
+    expect(getBackendBaseUrl).toBeTypeOf("function");
+  });
+});
