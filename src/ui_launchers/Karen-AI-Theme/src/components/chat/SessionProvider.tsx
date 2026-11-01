@@ -675,11 +675,20 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       try {
         const preferredSessionId = initialSessionId || getPersistedActiveSessionId();
         if (preferredSessionId) {
-          await loadSession(preferredSessionId);
+          const verified = await loadSession(preferredSessionId);
+          await refreshSessions();
+          if (!verified) {
+            // Refreshing the title list must not erase an unverified conversation warning.
+            setError(
+              strictInitialSession
+                ? 'The requested conversation could not be verified. No replacement conversation was created.'
+                : 'The previous conversation could not be verified. Choose another conversation or create a new one.',
+            );
+          }
         } else {
           await createNewSession();
+          await refreshSessions();
         }
-        await refreshSessions();
       } catch (err) {
         console.warn('Session initialization could not establish a durable conversation:', err);
       } finally {
