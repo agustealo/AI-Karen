@@ -51,6 +51,12 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       failures.push(`Page exception: ${error.message}`);
     };
     page.on("pageerror", capturePageFailure);
+    page.on("console", message => {
+      if (message.type() === "error" &&
+          /ChunkLoadError|Loading chunk|web-inspector|Failed to fetch dynamically imported module/i.test(message.text())) {
+        failures.push(`Console chunk error: ${message.text()}`);
+      }
+    });
     page.on("response", response => {
       if (response.status() >= 400 &&
           /\/_next\/static\/chunks\//.test(response.url())) {
@@ -63,6 +69,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       }
     });
 
+    let initialConversationId: string | null = null;
     for (const coldLoad of [true, false]) {
       if (coldLoad) {
         await page.goto(new URL("/dashboard", target).toString(), { waitUntil: "domcontentloaded" });
@@ -79,6 +86,16 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible({ timeout: 30_000 });
       await expect(shell.getByRole("button", { name: "Find conversations" })).toBeVisible();
       await expect(shell.getByRole("button", { name: "Conversation options" })).toBeVisible();
+      const conversationId = await shell.getAttribute("data-conversation-id");
+      expect(conversationId, "Chat identity must be a canonical UUID").toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+      if (initialConversationId === null) {
+        initialConversationId = conversationId;
+      } else {
+        expect(conversationId, "Reload must restore the same conversation identity").toBe(initialConversationId);
+      }
+      await page.waitForTimeout(750);
       expect(failures, "No chunk fetch errors or uncaught page exceptions are permitted").toEqual([]);
     }
   });
