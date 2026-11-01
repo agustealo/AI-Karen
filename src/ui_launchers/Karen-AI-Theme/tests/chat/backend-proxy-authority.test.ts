@@ -145,19 +145,29 @@ describe("single canonical backend proxy authority", () => {
   it("never forwards frontend deployment-protection credentials into the canonical API", () => {
     const headers = new Headers({
       Authorization: "Bearer user-session",
-      Cookie: "kari_session=opaque",
+      Cookie: "_vercel_jwt=deployment-secret; kari_session=opaque; __vercel_protection_bypass=another-secret; theme=light",
       "X-Vercel-Protection-Bypass": "frontend-secret",
+      "X-Vercel-Set-Bypass-Cookie": "true",
       "X-Vercel-Trusted-Oidc-Idp-Token": "frontend-oidc",
       "X-Vercel-Oidc-Token": "frontend-runtime-oidc",
       "X-Forwarded-Proto": "https",
     });
     const forwarded = sanitizeHeaders(headers, "https://backend.example");
     expect(forwarded.get("authorization")).toBe("Bearer user-session");
-    expect(forwarded.get("cookie")).toBe("kari_session=opaque");
+    expect(forwarded.get("cookie")).toBe("kari_session=opaque; theme=light");
+    expect(forwarded.has("x-vercel-set-bypass-cookie")).toBe(false);
     expect(forwarded.has("x-vercel-protection-bypass")).toBe(false);
     expect(forwarded.has("x-vercel-trusted-oidc-idp-token")).toBe(false);
     expect(forwarded.has("x-vercel-oidc-token")).toBe(false);
     expect(forwarded.get("x-forwarded-proto")).toBe("https");
+  });
+
+  it("does not emit a cookie header when only deployment-protection tokens exist", () => {
+    const forwarded = sanitizeHeaders(
+      new Headers({ cookie: "_vercel_jwt=secret; __vercel_protection_bypass=token" }),
+      "https://backend.example",
+    );
+    expect(forwarded.has("cookie")).toBe(false);
   });
 
   it("does not silently rewrite an explicitly configured backend in Docker", async () => {
