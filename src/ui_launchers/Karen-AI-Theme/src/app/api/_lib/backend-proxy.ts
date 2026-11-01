@@ -377,17 +377,23 @@ export async function proxyToBackend(
       redirectCount += 1;
       const locationHeader = upstream.headers.get('location')!;
 
-      // Resolve the redirect URL. If it's absolute with the backend host,
-      // keep it as-is (we're server-side and can resolve Docker names).
-      // If it's relative, resolve against the current upstream URL.
+      // Never reinterpret an external Location as a path on Karen's API.
+      // Follow only redirects that resolve to the same canonical origin.
       let redirectUrl: string;
       try {
-        const parsed = new URL(locationHeader);
-        // Rewrite to use our known backend base to avoid stale Host headers
-        redirectUrl = `${backendBaseUrl}${parsed.pathname}${parsed.search}`;
+        const parsed = new URL(locationHeader, upstreamUrl);
+        if (parsed.origin !== new URL(backendBaseUrl).origin ||
+            parsed.username || parsed.password) {
+          throw new Error('Backend redirect crossed the canonical origin');
+        }
+        redirectUrl = parsed.toString();
       } catch {
-        // Relative URL – resolve against the backend base
-        redirectUrl = `${backendBaseUrl}${locationHeader}`;
+        // No credential-bearing request is sent to another origin or to a
+        // rewritten backend path derived from an external redirect.
+        return NextResponse.json(
+          { detail: 'Backend redirect rejected.', error_code: 'BACKEND_REDIRECT_REJECTED' },
+          { status: 502, headers: { 'cache-control': 'no-store' } },
+        );
       }
 
       const redirectInit = await buildInit(
