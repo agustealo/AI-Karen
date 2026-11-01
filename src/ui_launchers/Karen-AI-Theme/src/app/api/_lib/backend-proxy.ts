@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { existsSync, readFileSync } from 'node:fs';
 
-const EXPLICIT_BACKEND_URL =
-  process.env.KAREN_BACKEND_URL || process.env.BACKEND_URL || '';
+const HOSTED_ON_VERCEL =
+  process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+
+// Hosted deployments must use the single canonical backend authority.
+// BACKEND_URL remains a local compatibility alias, never a Vercel fallback.
+const EXPLICIT_BACKEND_URL = HOSTED_ON_VERCEL
+  ? (process.env.KAREN_BACKEND_URL || '')
+  : (process.env.KAREN_BACKEND_URL || process.env.BACKEND_URL || '');
 
 const runningInContainer = (() => {
   if (process.env.KAREN_DOCKER === 'true' || process.env.IS_DOCKER === 'true') {
@@ -70,8 +76,7 @@ export type BackendTargetStatus =
  * backend URL is a deployment configuration failure, not a local fallback.
  */
 function getBackendTargetStatus(): BackendTargetStatus {
-  const hostedOnVercel = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
-  if (!hostedOnVercel) return 'configured';
+  if (!HOSTED_ON_VERCEL) return 'configured';
   if (!EXPLICIT_BACKEND_URL.trim()) return 'missing';
   try {
     const target = new URL(EXPLICIT_BACKEND_URL);
