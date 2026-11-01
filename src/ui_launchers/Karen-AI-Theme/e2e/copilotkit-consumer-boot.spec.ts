@@ -75,6 +75,20 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       timeout: 30_000,
     });
 
+    // Never inject acceptance prompts into an arbitrary existing user thread.
+    // Create a separate durable conversation through the actual user UI.
+    const previousId = await shell.getAttribute("data-conversation-id");
+    const newConversation = shell.getByRole("button", { name: "New conversation" });
+    await expect(newConversation, "Acceptance must be able to start a dedicated conversation").toBeVisible();
+    await newConversation.click();
+    await expect.poll(async () => {
+      const nextId = await shell.getAttribute("data-conversation-id");
+      return nextId !== null && nextId !== previousId ? nextId : null;
+    }, { timeout: 30_000 }).not.toBeNull();
+    await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
+      timeout: 30_000,
+    });
+
     const id = await shell.getAttribute("data-conversation-id");
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     const prompt = `Karen live acceptance ${crypto.randomUUID()}: Please respond with a brief greeting.`;
