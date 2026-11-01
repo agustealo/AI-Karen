@@ -109,6 +109,18 @@ function normalizeForwardedProto(value: string | null): 'http' | 'https' | null 
   return null;
 }
 
+function sanitizeBackendCookies(rawCookies: string): string {
+  // Keep Karen's app session while stripping Vercel's *frontend ingress*
+  // authorization. A backend API never needs a deployment-bypass credential.
+  return rawCookies.split(';').map(cookie => cookie.trim()).filter(cookie => {
+    const eq = cookie.indexOf('=');
+    if (eq <= 0) return false;
+    const name = cookie.slice(0, eq).trim().toLowerCase();
+    return name !== '_vercel_jwt' &&
+      name !== '__vercel_protection_bypass';
+  }).join('; ');
+}
+
 function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   const nextHeaders = new Headers();
 
@@ -116,6 +128,7 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
     const k = key.toLowerCase();
     const skipHeaders = [
       'host',
+      'cookie',
       'content-length',
       'content-encoding',
       'connection',
@@ -132,6 +145,7 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
       // Vercel's deployment-authorization tokens are for the frontend ingress
       // only. They must never traverse Karen's authenticated API proxy.
       'x-vercel-protection-bypass',
+      'x-vercel-set-bypass-cookie',
       'x-vercel-trusted-oidc-idp-token',
       'x-vercel-oidc-token',
     ];
@@ -145,7 +159,10 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   if (auth) nextHeaders.set('Authorization', auth);
 
   const cookie = headers.get('cookie');
-  if (cookie) nextHeaders.set('Cookie', cookie);
+  if (cookie) {
+    const appCookies = sanitizeBackendCookies(cookie);
+    if (appCookies) nextHeaders.set('Cookie', appCookies);
+  }
 
   const backendHost = new URL(backendBaseUrl).host;
   nextHeaders.set('x-forwarded-host', headers.get('host') || backendHost);
