@@ -135,9 +135,14 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "secrets.KAREN_UX_PASSWORD" in live_step
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in live_step
     assert "KAREN_E2E_AUTH_STATE" not in live_step
-    assert 'from "./fixtures/verified-search-deployment"' in (
+    consumer_source = (
         ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/copilotkit-consumer-boot.spec.ts"
     ).read_text(encoding="utf-8")
+    assert 'from "./fixtures/verified-search-deployment"' in consumer_source
+    assert consumer_source.count(
+        'page.context().request.get(new URL("/api/deployment-revision", target).toString())'
+    ) == 2
+    assert "async ({ page, request })" not in consumer_source
     assert "persist-credentials: true" not in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED" not in job
 
