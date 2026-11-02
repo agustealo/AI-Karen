@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -116,6 +116,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
+  const cancellationInFlightRef = useRef(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runListRevision, setRunListRevision] = useState(0);
@@ -293,7 +294,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
 
   const cancelRun = useCallback(
     async (runId: string) => {
-      if (!isAdmin) return;
+      if (!isAdmin || cancellationInFlightRef.current) return;
+      cancellationInFlightRef.current = true;
 
       setCancellingRunId(runId);
       setActionMessage("");
@@ -313,6 +315,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             : `Failed to cancel Medusa run ${runId}.`,
         );
       } finally {
+        cancellationInFlightRef.current = false;
         setCancellingRunId(null);
       }
     },
