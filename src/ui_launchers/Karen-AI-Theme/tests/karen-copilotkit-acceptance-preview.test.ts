@@ -120,7 +120,7 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(consumerPreview).toContain("requireApprovedCopilotKitPreview(conversationId)");
     expect(consumerPreview).toContain("<AuthWrapper>");
     expect(consumerPreview).toContain("<SessionProvider initialSessionId={conversationId} strictInitialSession>");
-    expect(consumerPreview).toContain("<KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />");
+    expect(consumerPreview).toContain("<KarenCopilotConsumerChat />");
     expect(consumerPreview).not.toContain('href="/vendor/copilotkit-v2.css"');
     expect(consumerPreview).toContain('index: false, follow: false');
     expect(consumerPreview).not.toContain("process.env.NEXT_PUBLIC_");
@@ -236,7 +236,7 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
   });
 
   it("does not disturb the sole consumer chat mount", () => {
-    expect(dashboard).toContain("<KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />");
+    expect(dashboard).toContain('<KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />');
     expect(dashboard).not.toContain("<KarenCopilotChat");
     expect(dashboard.match(/<KarenCopilotConsumerChat onOpenAgents=\{\(\) => setActiveMainView\("agents"\)\} \/>/g)?.length).toBe(1);
     expect(dashboard).not.toContain("<KarenAssistantChat />");
