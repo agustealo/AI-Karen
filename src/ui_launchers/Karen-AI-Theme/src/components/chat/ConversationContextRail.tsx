@@ -1330,6 +1330,9 @@ function RailContent({
             </EmptyTruth>
           ) : (
             <>
+              {(usage.tools.length > 0 || usage.plugins.length > 0) && (
+                <p className="text-xs text-muted-foreground">Tool and plugin names are reported in agent-step metadata. Their presence does not confirm successful execution.</p>
+              )}
               {usage.tools.map((tool) => (
                 <div key={`tool:${tool}`} className="flex items-center gap-2 text-xs">
                   <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
