@@ -1,7 +1,10 @@
 # AI-Karen beta infrastructure blueprint. Apply deliberately from Render Dashboard.
-# Render can adopt existing resources by name, but review its Blueprint diff before sync.
-# Do not apply until both asyncpg connection URLs and the production CORS origin
-# are supplied; sync:false prompts only on INITIAL Blueprint creation.
+# IMPORTANT: Creating a NEW Blueprint can create suffixed duplicates even when
+# names match existing resources. Do not deploy this Blueprint directly against
+# the live ai-karen-beta-api unless its preview proves adoption, not creation.
+# Existing PostgreSQL and Key Value are intentionally referenced, NOT declared.
+# sync:false prompts only on initial Blueprint creation; live updates require
+# separately managed values in the service Environment settings.
 # Initial free-tier resources are NOT suitable for persistent consumer data.
 services:
   - type: web
@@ -93,17 +96,3 @@ services:
         generateValue: true
       - key: KARI_CORS_ORIGINS
         sync: false
-# These resources already exist in Zeus's Render workspace.
-# Declare here to retain a single auditable infrastructure contract.
-  - type: keyvalue
-    name: ai-karen-beta-redis
-    region: ohio
-    plan: free
-    maxmemoryPolicy: noeviction
-    ipAllowList: []
-databases:
-  - name: ai-karen-beta-postgres
-    region: ohio
-    plan: free
-    databaseName: ai_karen_beta_postgres
-    user: ai_karen_beta_postgres_user
