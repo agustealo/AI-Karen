@@ -206,6 +206,9 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
       setRunListRevision((revision) => revision + 1);
     } catch (error) {
       setRuns([]);
+      setSelectedRunId(null);
+      setVerifiedRun(null);
+      setContextMessage("");
       setRunsError(
         error instanceof Error
           ? error.message
