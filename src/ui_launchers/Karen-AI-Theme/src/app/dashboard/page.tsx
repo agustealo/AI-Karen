@@ -726,7 +726,7 @@ export default function DashboardPage() {
                       : "hidden"}
                     aria-hidden={backendStatus !== "ready" || (activeMainView !== "chat" && !karenPanelOpen)}
                   >
-                    <KarenCopilotConsumerChat />
+                    <KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />
                   </div>
                   <div
                     key={activeMainView}
