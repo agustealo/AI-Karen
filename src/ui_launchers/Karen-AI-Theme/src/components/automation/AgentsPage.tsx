@@ -403,7 +403,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                       {onAskKaren && <Button type="button" size="sm" variant="outline" onClick={onAskKaren}>Open Karen</Button>}
                     </div>
                     {contextMessage && <p role="status" className="mt-2 text-sm">{contextMessage}</p>}
-                    {selectedRun.cancellable && (
+                    {isAdmin && selectedRun.cancellable && (
                       <Button className="mt-4" variant="destructive" size="sm"
                         disabled={cancellingRunId === selectedRun.run_id}
                         onClick={() => void cancelRun(selectedRun.run_id)}>
