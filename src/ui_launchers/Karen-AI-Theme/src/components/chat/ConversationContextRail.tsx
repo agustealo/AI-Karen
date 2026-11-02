@@ -511,8 +511,9 @@ function RailContent({
           {turnIntelligence.recalled.length > 0 && (
             <div className="space-y-2">
               <p className="karen-panel-label text-[9px]">
-                Recalled context preview ({Math.min(turnIntelligence.recalled.length, 4)} shown{turnIntelligence.recallCount > 4 ? ` of ${turnIntelligence.recallCount} reported` : ""})
+                Retrieved memory preview ({Math.min(turnIntelligence.recalled.length, 4)} shown{turnIntelligence.recallCount > 4 ? ` of ${turnIntelligence.recallCount} reported` : ""})
               </p>
+              <p className="text-xs text-muted-foreground">Retrieved context is not evidence that an excerpt was used in the answer.</p>
               {turnIntelligence.recalled.slice(0, 4).map((item) => (
                 <div
                   key={item.id}
@@ -540,7 +541,7 @@ function RailContent({
             turnIntelligence.memoryCandidateCount > 0 ||
             turnIntelligence.memoryPersistedCount > 0) && (
             <div className="rounded-lg border border-border/70 bg-background/40 p-2.5">
-              <p className="karen-panel-label text-[9px]">Learning this turn</p>
+              <p className="karen-panel-label text-[9px]">Memory formation reported by runtime</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {turnIntelligence.memoryFormationStatus && (
                   <Badge variant="outline" className="text-[9px]">
@@ -554,7 +555,7 @@ function RailContent({
                   {turnIntelligence.memoryAdmittedCount} admitted
                 </Badge>
                 <Badge variant="outline" className="text-[9px]">
-                  {turnIntelligence.memoryPersistedCount} persisted
+                  {turnIntelligence.memoryPersistedCount} reported persisted
                 </Badge>
               </div>
             </div>
