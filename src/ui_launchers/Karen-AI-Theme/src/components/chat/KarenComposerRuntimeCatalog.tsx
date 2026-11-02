@@ -5,9 +5,10 @@ import type { RuntimeProviderCatalogResponse } from "@/lib/model-runtime-invento
 
 /** Catalog visibility is not authority to select a model or execute a run. */
 export type ComposerModelRequest = { provider: string; model: string } | null;
-export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
+export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOpenAgents }: {
   selection: ComposerModelRequest;
   onSelectionChange: (selection: ComposerModelRequest) => void;
+  onOpenAgents: () => void;
 }) {
   const [catalog, setCatalog] = useState<RuntimeProviderCatalogResponse | null>(null);
   const [error, setError] = useState(false);
@@ -90,6 +91,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange }: {
     <section aria-label="Registered agent discovery" className="border-t border-border/60 pt-3">
       <h4 className="text-sm font-medium">Registered agents</h4>
       <p className="text-xs text-muted-foreground">Discovery only. Catalog health does not grant execution access. CORTEX and RuntimePolicy decide eligibility per request.</p>
+      <button type="button" onClick={onOpenAgents} className="min-h-11 rounded-lg border border-input px-3 text-xs font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">Open Agents workspace</button>
       {agentCatalogError ? <p role="status" className="text-xs text-muted-foreground">Agent catalog unavailable.</p> :
         <ul className="mt-2 space-y-1 text-xs">{agents.map((agent) =>
           <li key={agent.agent_id} className="flex justify-between gap-2 rounded border border-border/50 px-2 py-1.5">
