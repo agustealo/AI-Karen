@@ -120,6 +120,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runListRevision, setRunListRevision] = useState(0);
+  const [hasActiveRunPolling, setHasActiveRunPolling] = useState(false);
+  const runListRequestInFlightRef = useRef(false);
   const [runDetailError, setRunDetailError] = useState("");
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
@@ -127,7 +129,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const activeRuns = useMemo(
     () =>
       runs.filter((run) =>
-        ["running", "cancelling"].includes(run.status.toLowerCase()),
+        ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
       ),
     [runs],
   );
@@ -191,12 +193,15 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   }, [isAuthenticated]);
 
   const loadRuns = useCallback(async () => {
+    if (runListRequestInFlightRef.current) return;
     if (!isAuthenticated) {
       setRuns([]);
+      setHasActiveRunPolling(false);
       setRunsError("");
       return;
     }
 
+    runListRequestInFlightRef.current = true;
     setIsLoadingRuns(true);
     setRunsError("");
     try {
@@ -204,6 +209,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
       );
       setRuns(response.runs || []);
+      setHasActiveRunPolling((response.runs || []).some((run) => ["queued", "running", "cancelling"].includes(run.status.toLowerCase())));
       setRunListRevision((revision) => revision + 1);
     } catch (error) {
       setRuns([]);
@@ -216,9 +222,18 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
           : "Failed to load tenant-scoped Medusa runs.",
       );
     } finally {
+      runListRequestInFlightRef.current = false;
       setIsLoadingRuns(false);
     }
   }, [isAuthenticated, isAdmin]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !hasActiveRunPolling) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadRuns();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated, hasActiveRunPolling, loadRuns]);
 
   const copyVerifiedRunContext = useCallback(async (runId: string) => {
     setContextMessage("");
@@ -372,6 +387,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         </div>
         {isAuthenticated ? (
           <>
+            {runsError && <p role="alert" className="rounded-lg border border-destructive/50 p-3 text-sm text-destructive">Run status refresh failed: {runsError}</p>}
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
               {(["all", "active", "completed", "failed"] as const).map((filter) => (
                 <Button key={filter} type="button" size="sm"
