@@ -16,7 +16,7 @@ import { KarenCopilotChat } from "./KarenCopilotChat";
 import { KarenComposerRuntimeCatalog } from "../KarenComposerRuntimeCatalog";
 import type { ComposerModelRequest } from "../KarenComposerRuntimeCatalog";
 
-export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents: () => void }) {
+export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents?: () => void }) {
   const {
     currentSession,
     strictInitialSession,
