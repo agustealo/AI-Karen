@@ -18,9 +18,13 @@ def test_transient_failure_keeps_polling_and_surfaces_error():
     assert "Run status refresh failed: {runsError}" in source
 
 
-def test_run_list_uses_single_flight_across_refresh_sources():
+def test_run_list_coalesces_polling_and_replays_priority_refresh():
     source = SOURCE.read_text(encoding="utf-8")
-    assert "const runListRequestInFlightRef = useRef(false);" in source
-    assert "if (runListRequestInFlightRef.current) return;" in source
-    assert "runListRequestInFlightRef.current = true;" in source
-    assert "runListRequestInFlightRef.current = false;" in source
+    assert "const runListRequestPromiseRef = useRef<Promise<void> | null>(null);" in source
+    assert "const runListRefreshQueuedRef = useRef(false);" in source
+    assert "if (runListRequestPromiseRef.current)" in source
+    assert "if (priority) runListRefreshQueuedRef.current = true;" in source
+    assert "while (runListRefreshQueuedRef.current)" in source
+    assert "runListRequestPromiseRef.current = task;" in source
+    assert "runListRequestPromiseRef.current = null;" in source
+    assert "loadRuns(true)" in source
