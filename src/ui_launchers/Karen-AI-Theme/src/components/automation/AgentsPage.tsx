@@ -109,6 +109,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
   const [approvalsError, setApprovalsError] = useState("");
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
+  const [pendingApprovalDecision, setPendingApprovalDecision] = useState<{ approvalId: string; decision: "approved" | "rejected" } | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [isLoadingRuns, setIsLoadingRuns] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -247,7 +248,15 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   }, [isAuthenticated]);
 
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
+    if (decidingApprovalId !== null) return;
+    const approval = approvals.find((item) => item.approval_id === approvalId);
+    if (!approval || Date.parse(approval.expires_at) <= Date.now()) {
+      setApprovalsError("This approval is unavailable or expired. Refresh the list before deciding.");
+      setPendingApprovalDecision(null);
+      return;
+    }
     setDecidingApprovalId(approvalId);
+    setPendingApprovalDecision(null);
     setApprovalsError("");
     try {
       const result = await apiClient.post<RuntimeApproval>(
@@ -265,7 +274,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     } finally {
       setDecidingApprovalId(null);
     }
-  }, [loadApprovals]);
+  }, [loadApprovals, approvals, decidingApprovalId]);
 
   const refresh = useCallback(async () => {
     setActionMessage("");
@@ -443,10 +452,25 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
               {approval.conversation_id && onOpenConversation && <Button size="sm" variant="outline" onClick={() => void onOpenConversation(approval.conversation_id!)}>Open original conversation</Button>}
               {onAskKaren && <Button size="sm" variant="outline" onClick={onAskKaren}>Open Karen chat</Button>}
               <Button size="sm" disabled={decidingApprovalId !== null}
-                onClick={() => void decideApproval(approval.approval_id, "approved")}>Approve</Button>
+                onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "approved" })}>Review approval</Button>
               <Button size="sm" variant="outline" disabled={decidingApprovalId !== null}
-                onClick={() => void decideApproval(approval.approval_id, "rejected")}>Reject</Button>
+                onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "rejected" })}>Review rejection</Button>
             </div>
+            {pendingApprovalDecision?.approvalId === approval.approval_id && (
+              <section aria-label="Confirm approval decision" className="rounded-lg border border-primary/50 bg-muted/40 p-3 space-y-2">
+                <p className="font-medium">Confirm {pendingApprovalDecision.decision === "approved" ? "approval" : "rejection"}</p>
+                <p className="text-sm">Request: {approval.intent}. Risk: {approval.risk_level}. Expires: {formatTimestamp(approval.expires_at)}.</p>
+                <p className="text-xs text-muted-foreground">This records your decision only. Karen must separately revalidate authorization and execution state.</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" disabled={decidingApprovalId !== null}
+                    onClick={() => void decideApproval(approval.approval_id, pendingApprovalDecision.decision)}>
+                    Confirm {pendingApprovalDecision.decision === "approved" ? "approval" : "rejection"}
+                  </Button>
+                  <Button type="button" variant="outline" disabled={decidingApprovalId !== null}
+                    onClick={() => setPendingApprovalDecision(null)}>Back</Button>
+                </div>
+              </section>
+            )}
           </div>
         ))}
       </section>
