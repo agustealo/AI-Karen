@@ -13,6 +13,14 @@ def test_composer_schema_check_is_read_only_and_enforces_owner_boundaries() -> N
     assert "relrowsecurity" in script and "relforcerowsecurity" in script
     assert "conversation_composer_draft_owner" in script
     assert "composer_draft_foreign_keys_missing" in script
+    assert "composer_draft_owner_predicates_invalid" in script
+    assert "policy_qual NOT LIKE" in script
+    assert "policy_check NOT LIKE" in script
+    assert "fk.convalidated" in script
+    assert "fk.confdeltype" in script
+    assert "public.conversations" in script
+    assert "public.tenants" in script
+    assert "public.auth_users" in script
     assert "composer_draft_revision_contract_missing" in script
     assert "ON_ERROR_STOP=1" in script
     assert "SELECT * FROM public.conversation_composer_drafts" not in script
