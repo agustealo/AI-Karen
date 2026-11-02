@@ -9,7 +9,8 @@ def test_only_transient_503_retries_automatically() -> None:
     source = HOOK.read_text(encoding="utf-8")
     assert 'status !== "unavailable" || failureStatus !== 503' in source
     assert 'document.visibilityState === "visible"' in source
-    assert 'window.clearTimeout(timer)' in source
+    assert 'window.clearInterval(timer)' in source
+    assert 'window.setInterval(' in source
     assert 'retry()' in source
 
 
