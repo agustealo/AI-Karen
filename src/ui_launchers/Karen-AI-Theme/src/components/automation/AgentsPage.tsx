@@ -121,6 +121,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runListRevision, setRunListRevision] = useState(0);
   const [hasActiveRunPolling, setHasActiveRunPolling] = useState(false);
+  const runListRequestInFlightRef = useRef(false);
   const [runDetailError, setRunDetailError] = useState("");
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
@@ -192,6 +193,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   }, [isAuthenticated]);
 
   const loadRuns = useCallback(async () => {
+    if (runListRequestInFlightRef.current) return;
     if (!isAuthenticated) {
       setRuns([]);
       setHasActiveRunPolling(false);
@@ -199,6 +201,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
       return;
     }
 
+    runListRequestInFlightRef.current = true;
     setIsLoadingRuns(true);
     setRunsError("");
     try {
@@ -219,6 +222,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
           : "Failed to load tenant-scoped Medusa runs.",
       );
     } finally {
+      runListRequestInFlightRef.current = false;
       setIsLoadingRuns(false);
     }
   }, [isAuthenticated, isAdmin]);
