@@ -28,3 +28,21 @@ def test_primary_task_navigation_uses_existing_view_state() -> None:
     assert 'const [activeMainView, setActiveMainView] = useState<ActiveView>("chat")' in source
     assert 'onClick={() => setActiveMainView(item.key)}' in source
     assert 'if (staticViewMap[activeMainView])' in source
+
+
+
+def test_automation_overview_actions_use_real_dashboard_views() -> None:
+    source = _source()
+    overview = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/src/components/automation/AgentsOverviewPage.tsx"
+    ).read_text(encoding="utf-8")
+    assert 'onManageTasks={() => setActiveMainView("tasks")}' in source
+    assert 'onManageSequences={() => setActiveMainView("jobs")}' in source
+    assert "onClick={onManageTasks}" in overview
+    assert "onClick={onManageSequences}" in overview
+    assert "window.location.hash" not in overview
+    jobs = (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/src/components/automation/JobsPage.tsx"
+    ).read_text(encoding="utf-8")
+    assert "formerly Sequences" in jobs
