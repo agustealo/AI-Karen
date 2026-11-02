@@ -292,6 +292,16 @@ export function useKarenPersistedDraft(conversationId: string) {
     void refresh(false);
   }, [refresh, status]);
 
+  // Only retry temporary service outages. Never auto-resolve authorization
+  // failures or CAS conflicts, and never replace unsaved local input.
+  useEffect(() => {
+    if (status !== "unavailable" || failureStatus !== 503) return;
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState === "visible") retry();
+    }, REFRESH_DELAY);
+    return () => window.clearTimeout(timer);
+  }, [status, failureStatus, retry, version]);
+
   // Conflict refresh explicitly replaces the local draft. Never do this
   // automatically while unsent edits may still be present.
   const discardAndReload = useCallback(() => {
