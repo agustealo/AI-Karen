@@ -305,7 +305,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
           `/api/admin/agents/runs/${encodeURIComponent(runId)}/cancel`,
         );
         setActionMessage(
-          `Cancellation requested for ${runId}. Runtime status: ${response.status}.`,
+          `Cancellation endpoint responded for ${runId}. Reported status: ${response.status}. Check the refreshed run details for current state.`,
         );
         await loadRuns();
       } catch (error) {
