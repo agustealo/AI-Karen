@@ -40,7 +40,7 @@ type StatsState = "loading" | "ready" | "unavailable";
  * @file AgentsOverviewPage.tsx
  * @description Live tenant-scoped overview of Agents & Workflows.
  */
-export default function AutomationOverviewPage() {
+export default function AutomationOverviewPage({ onManageTasks, onManageSequences }: { onManageTasks: () => void; onManageSequences: () => void }) {
   const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [stats, setStats] = useState<AutomationStats | null>(null);
   const [statsState, setStatsState] = useState<StatsState>("loading");
@@ -111,11 +111,11 @@ export default function AutomationOverviewPage() {
           </div>
         </div>
         <div className="flex space-x-2">
-          <Button variant="outline" onClick={() => (window.location.hash = "#sequences")}>
+          <Button variant="outline" onClick={onManageSequences}>
             <Workflow className="mr-2 h-4 w-4" />
             Manage Sequences
           </Button>
-          <Button variant="outline" onClick={() => (window.location.hash = "#tasks")}>
+          <Button variant="outline" onClick={onManageTasks}>
             <PlusCircle className="mr-2 h-4 w-4" />
             Manage Tasks
           </Button>
