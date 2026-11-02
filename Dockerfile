@@ -7,24 +7,40 @@ ARG KAREN_PYTHON_BASE_IMAGE=python:3.11-slim
 FROM ${KAREN_PYTHON_BASE_IMAGE} AS base
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    curl \
-    git \
-    build-essential \
-    cmake \
-    pkg-config \
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+# Debian mirrors can briefly serve an index and archive from different
+# publication generations. Retry a *fresh index + verified install* together;
+# never bypass apt size/hash checks or permit a partially installed image.
+RUN set -eu; \
+    for attempt in 1 2 3; do \
+      rm -rf /var/lib/apt/lists/*; \
+      if apt-get update -o Acquire::Retries=3 && \
+         DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y \
+           curl \
+           git \
+           build-essential \
+           cmake \
+           pkg-config \
+           libnss3 \
+           libatk1.0-0 \
+           libatk-bridge2.0-0 \
+           libcups2 \
+           libdrm2 \
+           libxkbcommon0 \
+           libxcomposite1 \
+           libxdamage1 \
+           libxrandr2 \
+           libgbm1 \
+           libasound2; then \
+        rm -rf /var/lib/apt/lists/*; \
+        break; \
+      fi; \
+      apt-get clean; \
+      if [ "$attempt" -eq 3 ]; then \
+        echo "Debian dependency installation failed after verified retries" >&2; \
+        exit 1; \
+      fi; \
+      sleep "$((attempt * 5))"; \
+    done
 
 # -----------------------------
 # Runtime stage (default: CPU-only, BLAS off)

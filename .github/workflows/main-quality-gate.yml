@@ -278,6 +278,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate production compose contract
+        env:
+          KARI_CORS_ORIGINS: https://consumer-ci.example.invalid
         shell: bash
         run: |
           set -euo pipefail

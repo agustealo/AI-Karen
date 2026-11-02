@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, createContext, useContext } from "react";
 import type { ReactNode } from "react";
 import type { ChatMessage, ConversationResponse } from "@/lib/types";
 import type { SuggestedAction } from "@/lib/agent-ui/service";
@@ -49,6 +49,10 @@ interface ConversationApiResponse {
   has_more: boolean;
 }
 
+export type SessionDeletionOutcome =
+  | { deleted: false; replacementCreated: null; historyRefreshed: null }
+  | { deleted: true; replacementCreated: boolean | null; historyRefreshed: boolean };
+
 interface SessionContextType {
   /** True for a server-approved, explicitly pinned conversation identity. */
   strictInitialSession: boolean;
@@ -59,93 +63,28 @@ interface SessionContextType {
   isLoadingSessions: boolean;
   error: string | null;
   createNewSession: () => Promise<void>;
-  loadSession: (sessionId: string) => Promise<void>;
-  refreshSessions: () => Promise<void>;
+  loadSession: (sessionId: string) => Promise<boolean>;
+  refreshSessions: () => Promise<boolean>;
   deleteSession: (sessionId: string) => Promise<boolean | void>;
+  deleteSessionWithOutcome: (sessionId: string) => Promise<SessionDeletionOutcome>;
   deleteSessions: (sessionIds: string[]) => Promise<boolean>;
   updateSessionTitle: (sessionId: string, newTitle: string) => Promise<boolean>;
 }
 
-const SESSION_BOOTSTRAP_SUPPRESSION_WINDOW_MS = 1500;
-
-type ConversationBootstrapCacheEntry = {
-  response: ConversationResponse;
-  expiresAt: number;
-};
-
-const sessionConversationBootstrapCache = new Map<string, ConversationBootstrapCacheEntry>();
-const sessionConversationBootstrapRequests = new Map<string, Promise<ConversationResponse>>();
-const recentSessionBootstrapRuns = new Map<string, number>();
-
-/*
- * React Strict Mode and session restore can request the same conversation twice.
- * This short-lived cache deduplicates bootstrap calls without replacing server
- * persistence as the source of truth.
+/**
+ * Always reauthorize conversation bootstrap through the canonical API.
+ * A process/module-level cache keyed only by a conversation ID could outlive
+ * logout and serve one principal's transcript to another principal.
+ * React Strict Mode replay is guarded within SessionProvider itself.
  */
-const cacheConversationBootstrap = (sessionId: string, response: ConversationResponse) => {
-  sessionConversationBootstrapCache.set(sessionId, {
-    response,
-    expiresAt: Date.now() + SESSION_BOOTSTRAP_SUPPRESSION_WINDOW_MS,
-  });
-};
-
-const takeConversationBootstrap = (sessionId: string): ConversationResponse | null => {
-  const cached = sessionConversationBootstrapCache.get(sessionId);
-  if (!cached) {
-    return null;
-  }
-
-  if (cached.expiresAt < Date.now()) {
-    sessionConversationBootstrapCache.delete(sessionId);
-    return null;
-  }
-
-  sessionConversationBootstrapCache.delete(sessionId);
-  return cached.response;
-};
-
-export const fetchConversationBootstrap = async (conversationId: string): Promise<ConversationResponse> => {
-  const cached = takeConversationBootstrap(conversationId);
-  if (cached) {
-    return cached;
-  }
-
-  const existingRequest = sessionConversationBootstrapRequests.get(conversationId);
-  if (existingRequest) {
-    return existingRequest;
-  }
-
-  const request = apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`)
-    .then((response) => {
-      cacheConversationBootstrap(conversationId, response);
-      return response;
-    })
-    .finally(() => {
-      if (sessionConversationBootstrapRequests.get(conversationId) === request) {
-        sessionConversationBootstrapRequests.delete(conversationId);
-      }
-    });
-
-  sessionConversationBootstrapRequests.set(conversationId, request);
-  return request;
-};
+export const fetchConversationBootstrap = (conversationId: string): Promise<ConversationResponse> =>
+  apiClient.get<ConversationResponse>(`/api/conversations/${conversationId}`);
 
 const ensureConversationSession = async (sessionId: string): Promise<ConversationResponse> =>
   apiClient.post<ConversationResponse>(`/api/conversations/ensure-session/${sessionId}`);
 
 const fetchConversationByLegacySession = async (sessionId: string): Promise<ConversationResponse> =>
   apiClient.get<ConversationResponse>(`/api/conversations/by-session/${sessionId}`);
-
-const shouldSuppressRecentBootstrap = (key: string): boolean => {
-  const now = Date.now();
-  const lastRunAt = recentSessionBootstrapRuns.get(key);
-  if (typeof lastRunAt === 'number' && now - lastRunAt < SESSION_BOOTSTRAP_SUPPRESSION_WINDOW_MS) {
-    return true;
-  }
-
-  recentSessionBootstrapRuns.set(key, now);
-  return false;
-};
 
 // Session Context
 const SessionContext = createContext<SessionContextType | undefined>(undefined);
@@ -166,9 +105,23 @@ interface SessionProviderProps {
   initialSessionId?: string;
   /** Fail closed instead of recovering to another conversation on an explicitly scoped acceptance URL. */
   strictInitialSession?: boolean;
+  /** Verified authentication identity, required to persist the active conversation pointer. */
+  storagePrincipal?: { tenant_id: string; user_id: string };
 }
 
-export function SessionProvider({ children, initialSessionId, strictInitialSession = false }: SessionProviderProps) {
+export function SessionProvider({
+  children, initialSessionId, strictInitialSession = false, storagePrincipal,
+}: SessionProviderProps) {
+  // Never use the old unscoped browser key as an authority. A background
+  // authentication update can change the principal without unmounting the
+  // browser document. Scope only the navigation pointer, not transcript data.
+  const scopedActiveSessionKey = useMemo(() => {
+    const tenantId = storagePrincipal?.tenant_id?.trim();
+    const userId = storagePrincipal?.user_id?.trim();
+    return tenantId && userId
+      ? ACTIVE_SESSION_STORAGE_KEY + "." + JSON.stringify([tenantId, userId])
+      : null;
+  }, [storagePrincipal?.tenant_id, storagePrincipal?.user_id]);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [workspaceRunId, setWorkspaceRunId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -177,19 +130,23 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   const currentSessionRef = useRef<Session | null>(currentSession);
   const sessionsRef = useRef<Session[]>(sessions);
   const sessionListRefreshInFlightRef = useRef<Promise<ConversationApiResponse> | null>(null);
+  // Strict Mode effect replays are instance-local; a fresh provider must bootstrap normally.
+  const lastInitializedBootstrapKeyRef = useRef<string | null>(null);
+  // Backend-confirmed deletions must not reappear in an eventually consistent history response.
+  const confirmedDeletedSessionIdsRef = useRef<Set<string>>(new Set());
 
   const persistActiveSessionId = useCallback((sessionId: string | null) => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !scopedActiveSessionKey) return;
     try {
       if (sessionId) {
-        window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
+        window.localStorage.setItem(scopedActiveSessionKey, sessionId);
       } else {
-        window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+        window.localStorage.removeItem(scopedActiveSessionKey);
       }
     } catch {
-      // Ignore storage failures.
+      // Local storage is only a navigation hint; backend remains authoritative.
     }
-  }, []);
+  }, [scopedActiveSessionKey]);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
@@ -202,12 +159,16 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   const getPersistedActiveSessionId = useCallback((): string | null => {
     if (typeof window === 'undefined') return null;
     try {
-      const stored = window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+      // Legacy browser-wide pointers cannot prove an owner. Do not migrate
+      // them into any account, even if a previous session happened to work.
+      window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+      if (!scopedActiveSessionKey) return null;
+      const stored = window.localStorage.getItem(scopedActiveSessionKey);
       return stored && stored.trim() ? stored.trim() : null;
     } catch {
       return null;
     }
-  }, []);
+  }, [scopedActiveSessionKey]);
 
   const getRateLimitDelayMs = useCallback((err: unknown, fallbackMs: number = 1200): number => {
     if (!(err instanceof ApiError)) return fallbackMs;
@@ -296,48 +257,22 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   }, [persistActiveSessionId, strictInitialSession]);
 
   // Load a specific session
-  const loadSession = useCallback(async (sessionId: string) => {
+  const loadSession = useCallback(async (sessionId: string): Promise<boolean> => {
     if (strictInitialSession && sessionId !== initialSessionId) {
       throw new Error('Strict conversation cannot load another session');
+    }
+    if (confirmedDeletedSessionIdsRef.current.has(sessionId)) {
+      setError('This conversation was deleted. It cannot be reopened.');
+      return false;
     }
     if (currentSessionRef.current?.id !== sessionId) setWorkspaceRunId(null);
     setIsLoadingSessions(true);
     setError(null);
 
-    const preserveRequestedSession = (message: string) => {
-      const existingSession =
-        currentSessionRef.current?.id === sessionId
-          ? currentSessionRef.current
-          : sessionsRef.current.find((session) => session.id === sessionId);
-
-      const preservedSession: Session = existingSession
-        ? { ...existingSession, isActive: true }
-        : {
-            id: sessionId,
-            title: 'Current Chat',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            messageCount: 0,
-            isActive: true,
-          };
-
-      setCurrentSession(preservedSession);
-      setSessions((prev) => {
-        const exists = prev.some((session) => session.id === sessionId);
-        return exists
-          ? prev.map((session) => ({
-              ...session,
-              isActive: session.id === sessionId,
-            }))
-          : [preservedSession, ...prev.map((session) => ({ ...session, isActive: false }))];
-      });
-      persistActiveSessionId(sessionId);
-      setError(message);
-    };
-
     try {
       const MAX_ATTEMPTS = 3;
       let conversationResponse: ConversationResponse | null = null;
+      let usedLegacyLookup = false;
       let lastError: unknown = null;
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -348,6 +283,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
           if (err instanceof ApiError && err.status === 404) {
             try {
               conversationResponse = await fetchConversationByLegacySession(sessionId);
+              usedLegacyLookup = true;
               break;
             } catch (legacyErr) {
               if (!(legacyErr instanceof ApiError && legacyErr.status === 404)) {
@@ -377,6 +313,20 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       }
 
       const conversationId = conversationResponse.id;
+      // Canonical lookup may return only its requested conversation. The
+      // legacy session lookup may resolve a different canonical ID only when
+      // the returned session_id proves the requested alias relationship.
+      if (conversationId !== sessionId &&
+          (!usedLegacyLookup || conversationResponse.session_id !== sessionId)) {
+        throw new Error('Conversation identity mismatch');
+      }
+      // A load started before server-confirmed deletion must never resurrect
+      // the conversation when its response resolves after deletion.
+      if (confirmedDeletedSessionIdsRef.current.has(sessionId) ||
+          confirmedDeletedSessionIdsRef.current.has(conversationId)) {
+        setError('This conversation was deleted. It cannot be reopened.');
+        return false;
+      }
       if (strictInitialSession && conversationId !== sessionId) {
         throw new Error('Strict conversation identity mismatch');
       }
@@ -403,43 +353,34 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
         ...s,
         isActive: s.id === conversationId
       })));
+      return true;
     } catch (err) {
       if (strictInitialSession) {
         // An acceptance URL must never create a different conversation or
         // project an unverified ID into a locally fabricated chat session.
         setCurrentSession(null);
         setError('The requested conversation could not be verified. No replacement conversation was created.');
-        return;
+        return false;
       }
       if (err instanceof ApiError && err.status === 429) {
-        preserveRequestedSession(
-          'Session service is temporarily rate limited. Keeping your current chat available.',
-        );
+        setError('Session service is temporarily rate limited. Your last verified conversation is unchanged.');
         console.warn('Session load was rate-limited; preserving the requested conversation.');
-        return;
+        return false;
       }
 
       if (err instanceof ApiError && err.status === 404) {
-        console.warn('Session was not found on server, starting fresh.');
-        setError('Saved session was not found. Starting a fresh chat.');
-        try {
-          await createNewSession();
-        } catch {
-          // createNewSession already exposes truthful failure state.
-        }
-        return;
+        console.warn('Requested conversation was not found on server; no replacement was created.');
+        setError('Saved conversation was not found. No replacement was created. Choose an existing conversation or start a new one.');
+        return false;
       }
 
-      console.warn('Session load failed transiently; preserving the requested conversation.', err);
-      preserveRequestedSession(
-        'Session service is temporarily unavailable. Keeping your current chat available.',
-      );
-      return;
+      console.warn('Session load failed transiently; retaining the last verified conversation.', err);
+      setError('Session service is temporarily unavailable. Your last verified conversation is unchanged.');
+      return false;
     } finally {
       setIsLoadingSessions(false);
     }
   }, [
-    createNewSession,
     getRateLimitDelayMs,
     persistActiveSessionId,
     strictInitialSession,
@@ -447,7 +388,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
   ]);
 
   // Refresh sessions list
-  const refreshSessions = useCallback(async () => {
+  const refreshSessions = useCallback(async (): Promise<boolean> => {
     setIsLoadingSessions(true);
     setError(null);
 
@@ -486,7 +427,9 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       }
 
       const response = await request;
-      const sessionsData: Session[] = response.conversations?.map((session) => ({
+      const sessionsData: Session[] = response.conversations?.filter(
+        session => !confirmedDeletedSessionIdsRef.current.has(session.id),
+      ).map((session) => ({
         id: session.id,
         title: session.title || 'Untitled Chat',
         createdAt: new Date(session.created_at),
@@ -500,6 +443,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       })) || [];
 
       setSessions(sessionsData);
+      return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
         if (!strictInitialSession) setError('Session list is temporarily rate limited. Your current chat remains available.');
@@ -508,6 +452,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
         console.error('Failed to load sessions:', err);
         if (!strictInitialSession) setError('Failed to load sessions list. Some features may be limited.');
       }
+      return false;
     } finally {
       sessionListRefreshInFlightRef.current = null;
       setIsLoadingSessions(false);
@@ -554,40 +499,54 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     };
   }, [currentSession?.runtimeSessionId]);
 
-  // Delete a session
-  const deleteSession = useCallback(async (sessionId: string) => {
+  // One canonical delete implementation; the legacy boolean action remains an adapter.
+  const deleteSessionWithOutcome = useCallback(async (sessionId: string): Promise<SessionDeletionOutcome> => {
     if (strictInitialSession) {
       throw new Error('Strict conversation cannot delete sessions');
     }
+
     try {
       await apiClient.delete(`/api/conversations/${sessionId}`);
-
-      // Remove stale browser recovery only after durable server deletion succeeds.
-      removeSessionState(sessionId);
-      setSessions(prev => prev.filter(s => s.id !== sessionId));
-
-      let replacementFailed = false;
-      if (currentSession?.id === sessionId) {
-        setCurrentSession(null);
-        persistActiveSessionId(null);
-        try {
-          await createNewSession();
-        } catch {
-          replacementFailed = true;
-        }
-      }
-
-      await refreshSessions();
-      if (replacementFailed) {
-        setError('Chat deleted, but a replacement chat could not be created yet.');
-      }
-      return true;
     } catch (err) {
       console.error('Failed to delete session:', err);
       setError('Failed to delete session. Please try again.');
-      return false;
+      return { deleted: false, replacementCreated: null, historyRefreshed: null };
     }
-  }, [currentSession?.id, createNewSession, persistActiveSessionId, refreshSessions, strictInitialSession]);
+
+    // The server has acknowledged deletion. Later errors cannot reverse that fact.
+    confirmedDeletedSessionIdsRef.current.add(sessionId);
+    removeSessionState(sessionId);
+    setSessions(prev => prev.filter(s => s.id !== sessionId));
+    const wasActive = currentSessionRef.current?.id === sessionId;
+    let replacementCreated: boolean | null = null;
+
+    if (wasActive) {
+      setCurrentSession(null);
+      persistActiveSessionId(null);
+      try {
+        await createNewSession();
+        replacementCreated = true;
+      } catch {
+        replacementCreated = false;
+      }
+    }
+
+    const historyRefreshed = await refreshSessions();
+    if (replacementCreated === false) {
+      setError('Conversation deleted, but a new conversation could not be created. Start a new conversation to continue.');
+    } else if (!historyRefreshed) {
+      setError('Conversation deleted, but conversation history could not be refreshed yet.');
+    }
+
+    return { deleted: true, replacementCreated, historyRefreshed };
+  }, [createNewSession, persistActiveSessionId, refreshSessions, strictInitialSession]);
+
+  // Compatibility action for existing consumers: true means server-side deletion,
+  // not that optional replacement and refresh operations succeeded.
+  const deleteSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    const result = await deleteSessionWithOutcome(sessionId);
+    return result.deleted;
+  }, [deleteSessionWithOutcome]);
 
   // Delete multiple sessions
   const deleteSessions = useCallback(async (sessionIds: string[]) => {
@@ -637,7 +596,10 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       }
 
       if (deletedIds.size > 0) {
-        deletedIds.forEach((sessionId) => removeSessionState(sessionId));
+        deletedIds.forEach((sessionId) => {
+          confirmedDeletedSessionIdsRef.current.add(sessionId);
+          removeSessionState(sessionId);
+        });
         setSessions(prev => prev.filter(s => !deletedIds.has(s.id)));
       }
 
@@ -697,10 +659,11 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
 
   // Initialize sessions on mount
   useEffect(() => {
-    const bootstrapKey = `initialize:${strictInitialSession ? 'strict' : 'normal'}:${initialSessionId || '__new__'}`;
-    if (shouldSuppressRecentBootstrap(bootstrapKey)) {
+    const bootstrapKey = JSON.stringify([strictInitialSession, initialSessionId ?? null, scopedActiveSessionKey]);
+    if (lastInitializedBootstrapKeyRef.current === bootstrapKey) {
       return;
     }
+    lastInitializedBootstrapKeyRef.current = bootstrapKey;
 
     const initializeSessions = async () => {
       setIsLoadingSessions(true);
@@ -713,11 +676,20 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       try {
         const preferredSessionId = initialSessionId || getPersistedActiveSessionId();
         if (preferredSessionId) {
-          await loadSession(preferredSessionId);
+          const verified = await loadSession(preferredSessionId);
+          await refreshSessions();
+          if (!verified) {
+            // Refreshing the title list must not erase an unverified conversation warning.
+            setError(
+              strictInitialSession
+                ? 'The requested conversation could not be verified. No replacement conversation was created.'
+                : 'The previous conversation could not be verified. Choose another conversation or create a new one.',
+            );
+          }
         } else {
           await createNewSession();
+          await refreshSessions();
         }
-        await refreshSessions();
       } catch (err) {
         console.warn('Session initialization could not establish a durable conversation:', err);
       } finally {
@@ -728,7 +700,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
     initializeSessions();
     // Only initialize once on mount or when initialSessionId explicitly changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialSessionId, getPersistedActiveSessionId, strictInitialSession]);
+  }, [initialSessionId, getPersistedActiveSessionId, strictInitialSession, scopedActiveSessionKey]);
 
   return (
     <SessionContext.Provider value={{
@@ -743,6 +715,7 @@ export function SessionProvider({ children, initialSessionId, strictInitialSessi
       loadSession,
       refreshSessions,
       deleteSession,
+      deleteSessionWithOutcome,
       deleteSessions,
       updateSessionTitle,
     }}>

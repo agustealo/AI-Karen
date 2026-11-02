@@ -30,6 +30,9 @@ services:
     environment:
       ENVIRONMENT: production
       DEBUG: "false"
+      AUTH_MODE: "production"
+      CORS_ALLOW_ORIGIN_REGEX: ""
+      KARI_CORS_ORIGINS: ${KARI_CORS_ORIGINS:?Production allowed origins must be configured}
       KAREN_DEPLOYED_COMMIT_SHA: ${KAREN_DEPLOYED_COMMIT_SHA:?Production source revision is required}
       AUTH_DEV_MODE: "false"
       AUTH_ALLOW_DEV_LOGIN: "false"

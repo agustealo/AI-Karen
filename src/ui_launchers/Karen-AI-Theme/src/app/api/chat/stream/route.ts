@@ -1,96 +1,82 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getBackendBaseUrl, sanitizeHeaders } from '../../_lib/backend-proxy';
+import { getBackendBaseUrl, getBackendTargetStatus, sanitizeHeaders } from '../../_lib/backend-proxy';
 import { observeChatSseBody } from '../../_lib/sse-stream-integrity';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function formatProxyError(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
-  }
-  if (typeof error === 'string') {
-    return error;
-  }
-  if (typeof error === 'object' && error !== null) {
-    const maybeName = (error as { name?: unknown }).name;
-    const maybeMessage = (error as { message?: unknown }).message;
-    const name = typeof maybeName === 'string' ? maybeName : 'UnknownError';
-    const message =
-      typeof maybeMessage === 'string' && maybeMessage.trim()
-        ? maybeMessage
-        : 'No message';
-    return `${name}: ${message}`;
-  }
-  return String(error);
-}
-
 export async function POST(request: NextRequest) {
+  // The canonical backend proxy configuration is the only authority for
+  // streaming. Never replay an execution POST to an alternative host after a
+  // transport error or 404. The outcome of the first request may be unknown,
+  // and forwarding authorization to a secondary host violates isolation.
+  const targetStatus = getBackendTargetStatus();
+  if (targetStatus !== 'configured') {
+    console.error('[StreamProxy] canonical_backend_configuration_invalid', {
+      target_status: targetStatus,
+    });
+    return NextResponse.json(
+      {
+        detail: 'Canonical backend connection is not configured for this deployment.',
+        error_code: 'BACKEND_TARGET_NOT_CONFIGURED',
+      },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    );
+  }
   const backendBaseUrl = getBackendBaseUrl();
-  const primaryUpstreamUrl = `${backendBaseUrl}/api/chat/stream`;
-  const fallbackUpstreamUrls = [
-    'http://api:8000/api/chat/stream',
-    'http://host.docker.internal:8000/api/chat/stream',
-  ].filter((url) => url !== primaryUpstreamUrl);
 
   try {
     const rawBody = await request.text();
     const headers = sanitizeHeaders(request.headers, backendBaseUrl);
+    const upstream = await fetch(`${backendBaseUrl}/api/chat/stream`, {
+      method: 'POST',
+      headers,
+      body: rawBody,
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: request.signal,
+      // @ts-expect-error Node/undici extension supported in Next runtime.
+      duplex: 'half',
+    });
 
-    const candidateUrls = [primaryUpstreamUrl, ...fallbackUpstreamUrls];
-    let upstream: Response | null = null;
-    let lastProxyError: unknown = null;
-    let attemptedUrl = primaryUpstreamUrl;
-
-    for (const [index, upstreamUrl] of candidateUrls.entries()) {
-      attemptedUrl = upstreamUrl;
-      try {
-        const candidateResponse = await fetch(upstreamUrl, {
-          method: 'POST',
-          headers,
-          body: rawBody,
-          cache: 'no-store',
-          redirect: 'manual',
-          signal: request.signal,
-          // @ts-expect-error Node/undici extension supported in Next runtime.
-          duplex: 'half',
-        });
-
-        const hasMoreCandidates = index < candidateUrls.length - 1;
-        if (candidateResponse.status === 404 && hasMoreCandidates) {
-          console.warn(
-            `[StreamProxy] Canonical stream route missing at ${upstreamUrl}; trying next backend target.`,
-          );
-          continue;
-        }
-
-        upstream = candidateResponse;
-        break;
-      } catch (proxyError) {
-        lastProxyError = proxyError;
-      }
-    }
-
-    if (!upstream) {
-      throw (
-        lastProxyError instanceof Error
-          ? new Error(
-              `All upstream targets failed. Last target: ${attemptedUrl}. Last error: ${lastProxyError.message}`,
-            )
-          : new Error(
-              `Canonical chat stream route was unavailable on every backend target. Last target: ${attemptedUrl}.`,
-            )
+    // An upstream redirect is never license to replay a chat execution POST.
+    // Never expose internal backend Location headers to the browser.
+    if (upstream.status >= 300 && upstream.status < 400) {
+      await upstream.body?.cancel().catch(() => undefined);
+      return NextResponse.json(
+        {
+          detail: 'The canonical chat backend redirected a streaming request.',
+          error_code: 'CHAT_STREAM_UPSTREAM_REDIRECT',
+        },
+        { status: 502, headers: { 'cache-control': 'no-store' } },
       );
     }
 
     if (!upstream.ok) {
-      const errorBody = await upstream.text().catch(() => 'Upstream error');
-      console.error(
-        `[StreamProxy] Upstream returned ${upstream.status}: ${errorBody.slice(0, 200)}`,
-      );
+      // Preserve canonical backend auth/validation status codes, but never
+      // forward an HTML proxy page or log user content, secrets or URLs.
+      const contentType = upstream.headers.get('content-type') || '';
+      const correlationId = upstream.headers.get('x-correlation-id') || '';
+      console.error('[StreamProxy] canonical_stream_rejected', {
+        status: upstream.status,
+        correlation_id: correlationId,
+      });
+      const isJson = /^application\/(?:[\w.+-]+\+)?json(?:\s*;|\s*$)/i.test(contentType);
+      if (!isJson) {
+        await upstream.body?.cancel().catch(() => undefined);
+        return NextResponse.json(
+          {
+            detail: 'The canonical backend rejected the chat stream request.',
+            error_code: 'CHAT_STREAM_UPSTREAM_REJECTED',
+            correlation_id: correlationId || undefined,
+          },
+          { status: upstream.status, headers: { 'cache-control': 'no-store' } },
+        );
+      }
+      const errorBody = await upstream.text();
       return new NextResponse(errorBody, {
         status: upstream.status,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       });
     }
 
@@ -153,20 +139,22 @@ export async function POST(request: NextRequest) {
       },
     );
   } catch (error) {
-    const formattedError = formatProxyError(error);
-    console.error(
-      `[StreamProxy] Failed to proxy stream request: ${formattedError}`,
-    );
-    const detail =
-      error instanceof Error && error.name === 'AbortError'
-        ? 'Stream request was cancelled'
-        : error instanceof Error
-          ? error.message
-          : 'Unknown proxy error';
-
+    // Do not log remote URLs, credentials, body text or raw fetch causes.
+    console.error('[StreamProxy] canonical_stream_unavailable', {
+      error_type: error instanceof Error ? error.name : 'UnknownError',
+    });
+    const wasAborted = request.signal.aborted ||
+      (error instanceof Error && error.name === 'AbortError');
     return NextResponse.json(
-      { detail: 'Failed to proxy stream to backend', error: detail },
-      { status: 502 },
+      {
+        detail: wasAborted
+          ? 'Chat stream request was cancelled.'
+          : 'Canonical chat backend is unavailable.',
+        error_code: wasAborted
+          ? 'CHAT_STREAM_CANCELLED'
+          : 'CHAT_STREAM_BACKEND_UNAVAILABLE',
+      },
+      { status: 502, headers: { 'cache-control': 'no-store' } },
     );
   }
 }

@@ -6,9 +6,13 @@ const source = readFileSync(resolve(process.cwd(), "src/app/dashboard/page.tsx")
 
 describe("persistent Karen workspace shell", () => {
   it("owns the session above workspace switching", () => {
-    expect(source).toContain("<AuthWrapper>\n      <SessionProvider>\n      <SidebarProvider>");
-    expect(source).toContain("</SidebarProvider>\n      </SessionProvider>");
+    expect(source).toContain("<AuthWrapper>\n      <PrincipalScopedSessionProvider>\n      <SidebarProvider>");
+    expect(source).toContain("<SessionProvider storagePrincipal={{");
+    expect(source).toContain("tenant_id: user.tenant_id");
+    expect(source).toContain("user_id: user.user_id");
+    expect(source).toContain("</SidebarProvider>\n      </PrincipalScopedSessionProvider>");
     expect(source).not.toContain("chat: (\n        <SessionProvider>");
+    expect(source).not.toContain("chat: (\n        <PrincipalScopedSessionProvider>");
   });
 
   it("keeps a single conversation mounted while navigating other workspaces", () => {

@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { existsSync, readFileSync } from 'node:fs';
 
-const EXPLICIT_BACKEND_URL =
-  process.env.KAREN_BACKEND_URL || process.env.BACKEND_URL || '';
+const HOSTED_ON_VERCEL =
+  process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+
+// Hosted deployments must use the single canonical backend authority.
+// BACKEND_URL remains a local compatibility alias, never a Vercel fallback.
+const EXPLICIT_BACKEND_URL = HOSTED_ON_VERCEL
+  ? (process.env.KAREN_BACKEND_URL || '')
+  : (process.env.KAREN_BACKEND_URL || process.env.BACKEND_URL || '');
 
 const runningInContainer = (() => {
   if (process.env.KAREN_DOCKER === 'true' || process.env.IS_DOCKER === 'true') {
@@ -36,18 +42,11 @@ const IS_DOCKER =
   process.env.HOSTNAME?.includes('web') ||
   runningInContainer;
 
-let DEFAULT_BACKEND_URL =
+// Explicit deployment configuration is authoritative. Never silently rewrite an
+// operator-selected backend hostname based on container heuristics (which may
+// also be true in hosted serverless environments).
+const DEFAULT_BACKEND_URL =
   EXPLICIT_BACKEND_URL || (IS_DOCKER ? 'http://api:8000' : 'http://localhost:8000');
-
-// Hardening: If we are in Docker and the backend URL is still pointing to localhost/127.0.0.1,
-// we must rewrite it to 'api' (the service name) so containers can communicate.
-if (IS_DOCKER) {
-  if (DEFAULT_BACKEND_URL.includes('localhost')) {
-    DEFAULT_BACKEND_URL = DEFAULT_BACKEND_URL.replace('localhost', 'api');
-  } else if (DEFAULT_BACKEND_URL.includes('127.0.0.1')) {
-    DEFAULT_BACKEND_URL = DEFAULT_BACKEND_URL.replace('127.0.0.1', 'api');
-  }
-}
 
 const DEFAULT_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_API_PROXY_TIMEOUT_MS || '30000',
@@ -65,8 +64,85 @@ const RETRYABLE_PROXY_ERROR_CODES = new Set([
   'UND_ERR_SOCKET',
 ]);
 
+export type BackendTargetStatus =
+  | 'configured'
+  | 'missing'
+  | 'invalid'
+  | 'local_only'
+  | 'insecure';
+
+/**
+ * Vercel is a distinct network from local Docker. An absent or Docker-only
+ * backend URL is a deployment configuration failure, not a local fallback.
+ */
+function getBackendTargetStatus(): BackendTargetStatus {
+  if (!HOSTED_ON_VERCEL) return 'configured';
+  if (!EXPLICIT_BACKEND_URL.trim()) return 'missing';
+  try {
+    const target = new URL(EXPLICIT_BACKEND_URL);
+    if (
+      !['http:', 'https:'].includes(target.protocol) ||
+      !target.hostname ||
+      target.username || target.password ||
+      (target.pathname !== '/' && target.pathname !== '') ||
+      target.search || target.hash
+    ) return 'invalid';
+    const scope = backendTargetScope(EXPLICIT_BACKEND_URL);
+    if (scope === 'loopback' || scope === 'docker_only') return 'local_only';
+    if (scope === 'invalid') return 'invalid';
+    if (scope === 'public_or_routed' && target.protocol !== 'https:') {
+      return 'insecure';
+    }
+    return 'configured';
+  } catch {
+    return 'invalid';
+  }
+}
+
 function getBackendBaseUrl(): string {
+  if (getBackendTargetStatus() !== 'configured') {
+    throw new Error('Canonical backend target is not configured for this deployment');
+  }
   return DEFAULT_BACKEND_URL.replace(/\/$/, '');
+}
+
+/**
+ * Diagnose connectivity without logging the operator-configured host, port,
+ * path, username, password, DNS result or secret. Vercel's sensitive env vars
+ * are intentionally unavailable to ordinary log readers.
+ */
+function backendTargetScope(baseUrl: string): string {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (/^(?:localhost|0\.0\.0\.0|127(?:\.\d{1,3}){3}|::1)$/.test(host)) {
+      return 'loopback';
+    }
+    if (host === 'api' || host === 'host.docker.internal' || host.endsWith('.docker.internal')) {
+      return 'docker_only';
+    }
+    if (/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host)) {
+      return 'private_ip';
+    }
+    if (host.endsWith('.internal') || host.endsWith('.local') || !host.includes('.')) {
+      return 'private_dns';
+    }
+    return 'public_or_routed';
+  } catch {
+    return 'invalid';
+  }
+}
+
+function safeCauseCode(error: unknown): string {
+  if (!(error instanceof Error)) return 'UNKNOWN';
+  const cause = (error as Error & { cause?: unknown }).cause;
+  const code = cause && typeof cause === 'object' && 'code' in cause
+    ? (cause as { code?: unknown }).code : undefined;
+  const supported = new Set([
+    'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'CERT_HAS_EXPIRED',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+  ]);
+  return typeof code === 'string' && supported.has(code) ? code : 'UNKNOWN';
 }
 
 function normalizeForwardedProto(value: string | null): 'http' | 'https' | null {
@@ -77,6 +153,18 @@ function normalizeForwardedProto(value: string | null): 'http' | 'https' | null 
   return null;
 }
 
+function sanitizeBackendCookies(rawCookies: string): string {
+  // Keep Karen's app session while stripping Vercel's *frontend ingress*
+  // authorization. A backend API never needs a deployment-bypass credential.
+  return rawCookies.split(';').map(cookie => cookie.trim()).filter(cookie => {
+    const eq = cookie.indexOf('=');
+    if (eq <= 0) return false;
+    const name = cookie.slice(0, eq).trim().toLowerCase();
+    return name !== '_vercel_jwt' &&
+      name !== '__vercel_protection_bypass';
+  }).join('; ');
+}
+
 function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   const nextHeaders = new Headers();
 
@@ -84,6 +172,7 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
     const k = key.toLowerCase();
     const skipHeaders = [
       'host',
+      'cookie',
       'content-length',
       'content-encoding',
       'connection',
@@ -97,6 +186,12 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
       // Forwarded scheme is normalized below. In production the canonical
       // server.mjs ingress overwrites it before Next handles the request.
       'x-forwarded-proto',
+      // Vercel's deployment-authorization tokens are for the frontend ingress
+      // only. They must never traverse Karen's authenticated API proxy.
+      'x-vercel-protection-bypass',
+      'x-vercel-set-bypass-cookie',
+      'x-vercel-trusted-oidc-idp-token',
+      'x-vercel-oidc-token',
     ];
 
     if (!skipHeaders.includes(k)) {
@@ -108,7 +203,10 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   if (auth) nextHeaders.set('Authorization', auth);
 
   const cookie = headers.get('cookie');
-  if (cookie) nextHeaders.set('Cookie', cookie);
+  if (cookie) {
+    const appCookies = sanitizeBackendCookies(cookie);
+    if (appCookies) nextHeaders.set('Cookie', appCookies);
+  }
 
   const backendHost = new URL(backendBaseUrl).host;
   nextHeaders.set('x-forwarded-host', headers.get('host') || backendHost);
@@ -121,7 +219,7 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   return nextHeaders;
 }
 
-export { getBackendBaseUrl, normalizeForwardedProto, sanitizeHeaders };
+export { getBackendBaseUrl, getBackendTargetStatus, normalizeForwardedProto, sanitizeHeaders };
 
 async function buildInit(
   request: NextRequest,
@@ -176,26 +274,6 @@ function isRetryableProxyError(error: unknown): boolean {
   return Boolean(code && RETRYABLE_PROXY_ERROR_CODES.has(code));
 }
 
-function formatProxyError(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
-  }
-  if (typeof error === 'string') {
-    return error;
-  }
-  if (typeof error === 'object' && error !== null) {
-    const maybeName = (error as { name?: unknown }).name;
-    const maybeMessage = (error as { message?: unknown }).message;
-    const name = typeof maybeName === 'string' ? maybeName : 'UnknownError';
-    const message =
-      typeof maybeMessage === 'string' && maybeMessage.trim()
-        ? maybeMessage
-        : 'No message';
-    return `${name}: ${message}`;
-  }
-  return String(error);
-}
-
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -213,12 +291,29 @@ export async function proxyToBackend(
     followRedirects?: boolean;
   },
 ): Promise<NextResponse> {
+  const targetStatus = getBackendTargetStatus();
+  if (targetStatus !== 'configured') {
+    console.error('[BackendProxy] canonical_backend_configuration_invalid', {
+      target_status: targetStatus,
+    });
+    return NextResponse.json(
+      {
+        detail: 'Canonical backend connection is not configured for this deployment.',
+        error_code: 'BACKEND_TARGET_NOT_CONFIGURED',
+      },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    );
+  }
   const backendBaseUrl = getBackendBaseUrl();
   const timeoutMs = options?.longTimeout ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
-  const retryAttempts = Math.max(1, options?.retryAttempts ?? 2);
+  // Only safe read methods may be retried or followed through redirects.
+  // A transport failure/502 does not establish that a mutating POST failed
+  // before persistence or execution. A second attempt could duplicate work.
+  const safeRead = request.method === 'GET' || request.method === 'HEAD';
+  const retryAttempts = safeRead ? Math.max(1, options?.retryAttempts ?? 2) : 1;
   const retryDelayMs = Math.max(0, options?.retryDelayMs ?? 250);
   const retryOnStatusCodes = new Set(options?.retryOnStatusCodes ?? [502]);
-  const followRedirects = options?.followRedirects ?? true;
+  const followRedirects = safeRead && (options?.followRedirects ?? true);
   const upstreamUrl = `${backendBaseUrl}${upstreamPath}${request.nextUrl.search}`;
 
   // Read the body once to avoid "Body has already been read" error on retries/redirects.
@@ -282,17 +377,24 @@ export async function proxyToBackend(
       redirectCount += 1;
       const locationHeader = upstream.headers.get('location')!;
 
-      // Resolve the redirect URL. If it's absolute with the backend host,
-      // keep it as-is (we're server-side and can resolve Docker names).
-      // If it's relative, resolve against the current upstream URL.
+      // Never reinterpret an external Location as a path on Karen's API.
+      // Follow only redirects that resolve to the same canonical origin.
       let redirectUrl: string;
       try {
-        const parsed = new URL(locationHeader);
-        // Rewrite to use our known backend base to avoid stale Host headers
-        redirectUrl = `${backendBaseUrl}${parsed.pathname}${parsed.search}`;
+        const parsed = new URL(locationHeader, upstreamUrl);
+        if (parsed.origin !== new URL(backendBaseUrl).origin ||
+            parsed.username || parsed.password) {
+          throw new Error('Backend redirect crossed the canonical origin');
+        }
+        redirectUrl = parsed.toString();
       } catch {
-        // Relative URL – resolve against the backend base
-        redirectUrl = `${backendBaseUrl}${locationHeader}`;
+        // No credential-bearing request is sent to another origin or to a
+        // rewritten backend path derived from an external redirect.
+        clearInitTimeout(init);
+        return NextResponse.json(
+          { detail: 'Backend redirect rejected.', error_code: 'BACKEND_REDIRECT_REJECTED' },
+          { status: 502, headers: { 'cache-control': 'no-store' } },
+        );
       }
 
       const redirectInit = await buildInit(
@@ -303,6 +405,16 @@ export async function proxyToBackend(
       );
       upstream = await fetch(redirectUrl, redirectInit);
       clearInitTimeout(redirectInit);
+    }
+
+    // A redirect without a safe, completed target is not an API result.
+    // Do not return a stripped 3xx that a caller might misinterpret as success.
+    if (upstream.status >= 300 && upstream.status < 400) {
+      clearInitTimeout(init);
+      return NextResponse.json(
+        { detail: 'Backend redirect rejected.', error_code: 'BACKEND_REDIRECT_REJECTED' },
+        { status: 502, headers: { 'cache-control': 'no-store' } },
+      );
     }
 
     const responseBody = await upstream.text();
@@ -324,23 +436,24 @@ export async function proxyToBackend(
   } catch (error) {
     clearInitTimeout(init);
 
-    const formattedError = formatProxyError(error);
-    console.error(
-      `[BackendProxy] Error proxying ${request.method} ${upstreamPath}: ${formattedError}`,
-    );
-    const detail =
-      error instanceof Error && error.name === 'AbortError'
-        ? `Upstream request timed out after ${timeoutMs}ms`
-        : error instanceof Error
-          ? error.message
-          : 'Unknown proxy error';
+    // Some fetch/TLS errors embed the full upstream URL, including secrets.
+    // Record structured error class only; never return or log raw causes.
+    console.error('[BackendProxy] canonical_upstream_unavailable', {
+      method: request.method,
+      upstream_path: upstreamPath,
+      error_type: error instanceof Error ? error.name : 'UnknownError',
+      cause_code: safeCauseCode(error),
+      target_scope: backendTargetScope(backendBaseUrl),
+      configuration_source: EXPLICIT_BACKEND_URL ? 'explicit' : 'default',
+    });
 
     return NextResponse.json(
       {
-        detail: `Failed to proxy ${upstreamPath} to backend`,
-        error: detail,
+        detail: 'Canonical backend is unavailable.',
+        error: 'Backend connection failed',
+        error_code: 'BACKEND_UPSTREAM_UNAVAILABLE',
       },
-      { status: 502 },
+      { status: 502, headers: { 'cache-control': 'no-store' } },
     );
   }
 }

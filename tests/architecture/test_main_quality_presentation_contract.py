@@ -30,12 +30,20 @@ def test_dedicated_and_aggregate_presentation_gates_share_one_authority() -> Non
     assert CANONICAL_VERIFIER_COMMAND in presentation
 
 
-def test_web_dashboard_health_proxy_uses_canonical_backend_monitoring_route() -> None:
+def test_web_dashboard_health_proxy_uses_canonical_backend_readiness_authority() -> None:
+    """Monitoring HTTP 200 cannot establish consumer readiness without PostgreSQL."""
     route = WEB_HEALTH_ROUTE.read_text(encoding="utf-8")
 
     assert "proxyToBackend(" in route
-    assert "'/api/health'" in route
-    assert "proxyToBackend(\n      nextRequest,\n      '/health'" not in route
+    assert "proxyToBackend(nextRequest, '/ready'" in route
+    assert "readiness.ready !== true" in route
+    assert "readiness.status !== 'ready'" in route
+    assert "configuration !== 'ready'" in route
+    assert "database !== 'ready'" in route
+    assert "'cache-control': 'no-store'" in route
+    assert "status: 503" in route
+    assert "followRedirects: false" in route
+    assert "proxyToBackend(nextRequest, '/api/health'" not in route
 
 
 def test_main_quality_backend_fetches_full_history_for_provenance() -> None:

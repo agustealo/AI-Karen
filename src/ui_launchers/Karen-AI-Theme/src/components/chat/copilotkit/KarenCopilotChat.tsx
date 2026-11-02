@@ -81,6 +81,10 @@ export function KarenCopilotChat({
       aria-label="Karen CopilotKit conversation"
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
     >
+      {/* The pinned SDK CSS must load in the real dashboard too, not only
+          the gated acceptance pages. The webpack shim suppresses the SDK's
+          incompatible Tailwind v4 import, so this is its sole CSS owner. */}
+      <link rel="stylesheet" href="/vendor/copilotkit-v2.css" />
       <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" enableInspector={false} properties={forwardedProperties}>
         <KarenCopilotHistoryGate conversationId={conversationId}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">

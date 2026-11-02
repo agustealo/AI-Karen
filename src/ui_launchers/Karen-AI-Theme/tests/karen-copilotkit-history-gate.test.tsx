@@ -29,6 +29,7 @@ import {
   karenScopedAgentId,
   toCopilotTextMessages,
 } from "@/components/chat/copilotkit/KarenCopilotHistoryGate";
+import { parseKarenVerifiedHistory } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
 
 const CONVERSATION_A = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 const CONVERSATION_B = "bd1d23c2-bbd7-4d31-987a-cf81025ebafd";
@@ -66,6 +67,50 @@ function SharedAgentConsumer() {
 }
 
 describe("CopilotKit canonical conversation hydration", () => {
+  it("restores healthy and degraded execution receipts without falsifying their boolean status", () => {
+    const messages = [{ id: "answer-1", role: "assistant" }];
+    const baseReceipt = {
+      actual_provider: "local",
+      actual_model: "verified-model",
+      response_source: "local_inference",
+      runtime_engine: "vllm",
+      fallback_level: 0,
+    };
+    const event = (value: Record<string, unknown>) => [{
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId: "answer-1",
+      value,
+    }];
+
+    for (const degraded_mode of [false, true]) {
+      const value = { ...baseReceipt, degraded_mode };
+      expect(parseKarenVerifiedHistory(event(value), messages).get("answer-1"))
+        .toEqual([{ type: "receipt", value }]);
+    }
+    const automatic = {
+      ...baseReceipt,
+      degraded_mode: false,
+      requested_provider: null,
+      requested_model: null,
+      runtime_engine: null,
+      degradation_reason: null,
+      fallback_level: null,
+    };
+    expect(parseKarenVerifiedHistory(event(automatic), messages).get("answer-1"))
+      .toEqual([{ type: "receipt", value: automatic }]);
+    expect(() => parseKarenVerifiedHistory(
+      event({ ...automatic, actual_model: null }), messages,
+    )).toThrow("Unsupported verified execution receipt");
+    expect(() => parseKarenVerifiedHistory(
+      event({ ...baseReceipt, degraded_mode: "false" }), messages,
+    )).toThrow("Unsupported verified execution receipt");
+    expect(() => parseKarenVerifiedHistory(
+      event({ ...baseReceipt, fallback_level: -1 }), messages,
+    )).toThrow("Unsupported verified execution receipt");
+  });
+
+
   it("registers one SDK agent when history hydration and the controlled view share the scope", async () => {
     backend.fetchConversation.mockResolvedValue({
       threadId: CONVERSATION_A,

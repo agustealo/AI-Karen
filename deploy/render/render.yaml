@@ -1,0 +1,98 @@
+# AI-Karen beta infrastructure blueprint. Apply deliberately from Render Dashboard.
+# IMPORTANT: Creating a NEW Blueprint can create suffixed duplicates even when
+# names match existing resources. Do not deploy this Blueprint directly against
+# the live ai-karen-beta-api unless its preview proves adoption, not creation.
+# Existing PostgreSQL and Key Value are intentionally referenced, NOT declared.
+# sync:false prompts only on initial Blueprint creation; live updates require
+# separately managed values in the service Environment settings.
+# Initial free-tier resources are NOT suitable for persistent consumer data.
+services:
+  - type: web
+    name: ai-karen-beta-api
+    runtime: docker
+    repo: https://github.com/agustealo/AI-Karen
+    branch: feat/chat-consumer-conversation-management-20261031
+    region: ohio
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: off
+    healthCheckPath: /health/live
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PORT
+        value: "8000"
+      - key: DEBUG
+        value: "false"
+      - key: AUTH_MODE
+        value: production
+      - key: AUTH_DEV_MODE
+        value: "false"
+      - key: AUTH_ALLOW_DEV_LOGIN
+        value: "false"
+      - key: KARI_AUTH_BYPASS
+        value: "false"
+      - key: AUTH_ENABLE_SESSION_VALIDATION
+        value: "true"
+      - key: KARI_FAST_STARTUP
+        value: "false"
+      - key: KARI_SKIP_STARTUP_CHECK
+        value: "false"
+      - key: KARI_SKIP_AUTO_INIT
+        value: "false"
+      - key: KARI_DEFER_ROUTER_WIRING
+        value: "false"
+      - key: EXTENSION_DEV_BYPASS_ENABLED
+        value: "false"
+      - key: EXTENSION_REQUIRE_HTTPS
+        value: "true"
+      - key: ALLOW_PUBLIC_COPILOT
+        value: "false"
+      - key: WARMUP_LLM
+        value: "false"
+      - key: TRANSFORMERS_OFFLINE
+        value: "true"
+      - key: SPACY_DOWNLOAD_MISSING
+        value: "false"
+      - key: KAREN_BUILTIN_VLLM_ENABLED
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-karen-beta-postgres
+          property: connectionString
+      # Async SQLAlchemy consumers require the postgresql+asyncpg URL scheme.
+      # Render's connectionString returns postgresql://; do not inject it unchanged.
+      # Set both URLs in Render Environment with the same Render internal host,
+      # credentials, and database as DATABASE_URL, changing ONLY the URL scheme.
+      - key: POSTGRES_URL
+        sync: false
+      - key: AUTH_DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          name: ai-karen-beta-redis
+          type: keyvalue
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: AUTH_SECRET_KEY
+        generateValue: true
+      - key: AUTH_JWT_SECRET_KEY
+        generateValue: true
+      - key: EXTENSION_SECRET_KEY
+        generateValue: true
+      - key: EXTENSION_API_KEY
+        generateValue: true
+      - key: KARI_DUCKDB_PASSWORD
+        generateValue: true
+      # The job encryption key is consumed as encoded key material; generic
+      # generated text cannot be assumed to satisfy its required format.
+      - key: KARI_JOB_ENC_KEY
+        sync: false
+      - key: KARI_JOB_SIGNING_KEY
+        generateValue: true
+      - key: KARI_MODEL_SIGNING_KEY
+        generateValue: true
+      - key: KARI_CORS_ORIGINS
+        sync: false

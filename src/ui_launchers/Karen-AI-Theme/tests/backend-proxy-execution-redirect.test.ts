@@ -31,7 +31,8 @@ describe("Canonical backend proxy execution redirects", () => {
       followRedirects: false,
     });
 
-    expect(result.status).toBe(307);
+    expect(result.status).toBe(502);
+    expect(await result.json()).toMatchObject({ error_code: "BACKEND_REDIRECT_REJECTED" });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [, init] = fetchSpy.mock.calls[0];
     expect(init?.method).toBe("POST");

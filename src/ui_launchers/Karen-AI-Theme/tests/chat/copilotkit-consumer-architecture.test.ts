@@ -15,6 +15,9 @@ const rail = read("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx")
 const session = read("src/components/chat/SessionProvider.tsx");
 const catalog = read("src/components/chat/KarenComposerRuntimeCatalog.tsx");
 const pkg = JSON.parse(read("package.json"));
+const liveBrowser = read("e2e/copilotkit-consumer-boot.spec.ts");
+const nativePreview = read("src/app/acceptance/copilotkit/[conversationId]/page.tsx");
+const consumerPreview = read("src/app/acceptance/copilotkit-consumer/[conversationId]/page.tsx");
 
 const draftHook = read("src/components/chat/copilotkit/useKarenPersistedDraft.ts");
 
@@ -49,8 +52,47 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(dashboard.match(/<KarenCopilotConsumerChat \/>/g)).toHaveLength(1);
     expect(dashboard).not.toContain("<KarenAssistantChat");
     expect(dashboard).not.toContain("@/components/chat/assistant-ui/KarenAssistantChat");
-    expect(dashboard).toContain("<SessionProvider>");
+    expect(dashboard).toContain("<PrincipalScopedSessionProvider>");
+    expect(dashboard).toContain("<SessionProvider storagePrincipal={{");
+    expect(dashboard).toContain("tenant_id: user.tenant_id");
+    expect(dashboard).toContain("user_id: user.user_id");
     expect(dashboard).toContain('data-testid="persistent-karen-conversation"');
+  });
+
+  it("loads CopilotKit CSS from the real shared chat shell, not from previews alone", () => {
+    expect(shell).toContain('<link rel="stylesheet" href="/vendor/copilotkit-v2.css" />');
+    expect(shell).toContain('enableInspector={false}');
+    expect(dashboard).toContain("<KarenCopilotConsumerChat />");
+    expect(nativePreview).not.toContain('href="/vendor/copilotkit-v2.css"');
+    expect(consumerPreview).not.toContain('href="/vendor/copilotkit-v2.css"');
+    expect(liveBrowser).toContain("await expectRealCopilotKitStyles(page)");
+    expect(liveBrowser).toContain('link.sheet.cssRules.length > 0');
+  });
+
+  it("verifies persisted messages through the real browser's bearer and cookie context", () => {
+    expect(liveBrowser).toContain("readAuthorizedSameOriginJson(page, draftEndpoint)");
+    expect(liveBrowser).toContain("readAuthorizedSameOriginJson(page, endpoint)");
+    expect(liveBrowser).toContain('window.localStorage.getItem("access_token")');
+    expect(liveBrowser).toContain('credentials: "same-origin"');
+    expect(liveBrowser).toContain('redirect: "error"');
+    expect(liveBrowser).toContain('url.origin !== window.location.origin');
+    expect(liveBrowser).not.toContain("authenticatedRequest.get");
+  });
+
+  it("requires a live non-cacheable backend before approved browser sign-in", () => {
+    const preflight = "await requireLiveCanonicalBackend(page, target);";
+    expect(liveBrowser.split(preflight)).toHaveLength(3);
+    const firstSignIn = liveBrowser.indexOf("await signInApprovedKaren(page, approvedEmail!, approvedPassword!)");
+    const secondSignIn = liveBrowser.lastIndexOf("await signInApprovedKaren(page, approvedEmail!, approvedPassword!)");
+    const firstCheck = liveBrowser.indexOf(preflight);
+    const secondCheck = liveBrowser.lastIndexOf(preflight);
+    expect(firstCheck).toBeLessThan(firstSignIn);
+    expect(secondCheck).toBeLessThan(secondSignIn);
+    expect(liveBrowser).toContain("backend_ready: true");
+    expect(liveBrowser).toContain('new URL("/api/health", target)');
+    expect(liveBrowser).toContain("maxRedirects: 0");
+    expect(liveBrowser).toContain('response.headers()["cache-control"] ?? ""');
+    expect(liveBrowser).toContain('expectVerifiedExecutionReceipt(page, id!, persistedAnswer)');
   });
 
   it("uses the governed runtime, canonical session and verified history", () => {

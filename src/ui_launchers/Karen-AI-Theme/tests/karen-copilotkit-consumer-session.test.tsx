@@ -11,6 +11,9 @@ const state = vi.hoisted(() => ({
   error: null as string | null,
   createNewSession: vi.fn(),
   loadSession: vi.fn(),
+  updateSessionTitle: vi.fn(),
+  deleteSession: vi.fn(),
+  deleteSessionWithOutcome: vi.fn(),
   mounts: [] as string[],
   modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null}>,
   onModelChange: null as null | ((value: {provider: string; model: string} | null) => void),
@@ -27,6 +30,9 @@ vi.mock("@/components/chat/SessionProvider", () => ({
     error: state.error,
     createNewSession: state.createNewSession,
     loadSession: state.loadSession,
+    updateSessionTitle: state.updateSessionTitle,
+    deleteSession: state.deleteSession,
+    deleteSessionWithOutcome: state.deleteSessionWithOutcome,
   }),
 }));
 
@@ -62,7 +68,10 @@ beforeEach(() => {
   state.onModelChange = null;
   state.onBusyChange = null;
   state.createNewSession.mockReset().mockResolvedValue(undefined);
-  state.loadSession.mockReset().mockResolvedValue(undefined);
+  state.loadSession.mockReset().mockResolvedValue(true);
+  state.updateSessionTitle.mockReset().mockResolvedValue(true);
+  state.deleteSession.mockReset().mockResolvedValue(true);
+  state.deleteSessionWithOutcome.mockReset().mockResolvedValue({ deleted: true, replacementCreated: true, historyRefreshed: true });
 });
 afterEach(() => {
   cleanup();
@@ -84,6 +93,36 @@ describe("CopilotKit consumer session adapter", () => {
     fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
     await waitFor(() => expect(state.createNewSession).toHaveBeenCalledTimes(1));
     expect(state.mounts).toHaveLength(0);
+  });
+
+  it("offers saved-conversation recovery when no active conversation is verified", async () => {
+    state.currentSession = null;
+    state.sessions = [
+      { id: FIRST, title: "Saved conversation" },
+      { id: SECOND, title: "Other conversation" },
+    ];
+    state.loadSession.mockResolvedValue(true);
+    render(<KarenCopilotConsumerChat />);
+    expect(screen.getByRole("group", { name: "Saved conversations" })).not.toBeNull();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Recover an existing conversation" }), {
+      target: { value: "saved" },
+    });
+    expect(screen.queryByRole("button", { name: "Other conversation" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Saved conversation" }));
+    await waitFor(() => expect(state.loadSession).toHaveBeenCalledWith(FIRST));
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    expect(state.mounts).toHaveLength(0);
+  });
+
+  it("does not claim recovery when saved-conversation verification fails", async () => {
+    state.currentSession = null;
+    state.sessions = [{ id: FIRST, title: "Unavailable conversation" }];
+    state.loadSession.mockResolvedValue(false);
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Unavailable conversation" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("not verified"));
+    expect(screen.getByRole("group", { name: "Saved conversations" })).not.toBeNull();
+    expect(state.createNewSession).not.toHaveBeenCalled();
   });
 
   it("never creates a replacement when the pinned conversation cannot be verified", () => {
@@ -142,6 +181,123 @@ describe("CopilotKit consumer session adapter", () => {
     expect(screen.queryByRole("searchbox")).toBeNull();
     // No optimistic local session switch: SessionProvider decides the identity.
     expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("keeps history open and reports an unverified session load", async () => {
+    state.currentSession = { id: FIRST, title: "Current conversation" };
+    state.sessions = [
+      { id: FIRST, title: "Current conversation" },
+      { id: SECOND, title: "Unavailable conversation" },
+    ];
+    state.loadSession.mockResolvedValue(false);
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Find conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unavailable conversation" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("not verified"));
+    expect(screen.getByRole("searchbox", { name: "Find a conversation" })).not.toBeNull();
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("renames through the existing session authority only after confirmed persistence", async () => {
+    state.currentSession = { id: FIRST, title: "Original title" };
+    state.sessions = [{ id: FIRST, title: "Original title" }];
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rename conversation" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Conversation title" }), {
+      target: { value: "  New title  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save title" }));
+    await waitFor(() => expect(state.updateSessionTitle).toHaveBeenCalledWith(FIRST, "New title"));
+    expect(state.deleteSessionWithOutcome).not.toHaveBeenCalled();
+  });
+
+  it("prevents accidental deletion and delegates only after explicit confirmation", async () => {
+    state.currentSession = { id: FIRST, title: "Protected" };
+    state.sessions = [{ id: FIRST, title: "Protected" }];
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    expect(state.deleteSessionWithOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Keep conversation" }));
+    expect(state.deleteSessionWithOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(state.deleteSessionWithOutcome).toHaveBeenCalledWith(FIRST));
+  });
+
+  it("cancels pending conversation management when the selected conversation changes", () => {
+    state.currentSession = { id: FIRST, title: "First conversation" };
+    state.sessions = [
+      { id: FIRST, title: "First conversation" },
+      { id: SECOND, title: "Second conversation" },
+    ];
+    const view = render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    expect(screen.getByRole("group", { name: "Confirm conversation deletion" })).not.toBeNull();
+
+    state.currentSession = { id: SECOND, title: "Second conversation" };
+    view.rerender(<KarenCopilotConsumerChat />);
+
+    expect(screen.queryByRole("group", { name: "Confirm conversation deletion" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Conversation title" })).toBeNull();
+    expect(state.deleteSessionWithOutcome).not.toHaveBeenCalled();
+    expect(state.updateSessionTitle).not.toHaveBeenCalled();
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(SECOND);
+  });
+
+  it("keeps delete confirmation open when canonical deletion is rejected", async () => {
+    state.currentSession = { id: FIRST, title: "Original" };
+    state.sessions = [{ id: FIRST, title: "Original" }];
+    state.deleteSessionWithOutcome.mockResolvedValue({ deleted: false, replacementCreated: null, historyRefreshed: null });
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not delete"));
+    expect(screen.getByRole("group", { name: "Confirm conversation deletion" })).not.toBeNull();
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("reports an acknowledged deletion when replacement creation fails", async () => {
+    state.currentSession = { id: FIRST, title: "Original" };
+    state.sessions = [{ id: FIRST, title: "Original" }];
+    state.deleteSessionWithOutcome.mockResolvedValue({
+      deleted: true, replacementCreated: false, historyRefreshed: true,
+    });
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not be created"));
+    expect(screen.queryByRole("group", { name: "Confirm conversation deletion" })).toBeNull();
+  });
+
+  it("reports history refresh failure without claiming deletion failed", async () => {
+    state.currentSession = { id: FIRST, title: "Original" };
+    state.sessions = [{ id: FIRST, title: "Original" }];
+    state.deleteSessionWithOutcome.mockResolvedValue({
+      deleted: true, replacementCreated: true, historyRefreshed: false,
+    });
+    render(<KarenCopilotConsumerChat />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("history list could not be refreshed"));
+    expect(screen.queryByRole("group", { name: "Confirm conversation deletion" })).toBeNull();
+  });
+
+  it("disables conversation management while a verified run is active", () => {
+    state.currentSession = { id: FIRST, title: "Running" };
+    state.sessions = [{ id: FIRST, title: "Running" }];
+    render(<KarenCopilotConsumerChat />);
+    const busy = state.onBusyChange;
+    if (!busy) throw new Error("Missing run callback");
+    act(() => busy(true));
+    expect(screen.getByRole("button", { name: "Conversation options" }).hasAttribute("disabled")).toBe(true);
+    expect(state.updateSessionTitle).not.toHaveBeenCalled();
+    expect(state.deleteSessionWithOutcome).not.toHaveBeenCalled();
   });
 
   it("uses the existing backend catalog to request a model without choosing runtime execution", () => {
