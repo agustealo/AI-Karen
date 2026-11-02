@@ -240,3 +240,41 @@ def test_trusted_presentation_capture_stamps_target_not_workflow_sha() -> None:
         assert 'test "$(git rev-parse HEAD)" = "$KAREN_SHOWCASE_TARGET_REVISION"' in build
         assert '--build-arg KAREN_DEPLOYED_COMMIT_SHA="$KAREN_SHOWCASE_TARGET_REVISION"' in build
         assert '--build-arg KAREN_DEPLOYED_COMMIT_SHA="$GITHUB_SHA"' not in build
+
+
+def test_render_beta_blueprint_references_existing_data_without_provisioning() -> None:
+    """The beta Blueprint cannot create duplicate managed data services."""
+    blueprint = REPO_ROOT / "deploy" / "render" / "render.yaml"
+    text = blueprint.read_text(encoding="utf-8")
+    assert "name: ai-karen-beta-api" in text
+    assert "name: ai-karen-beta-postgres" in text
+    assert "name: ai-karen-beta-redis" in text
+    assert "fromDatabase:" in text
+    assert "fromService:" in text
+    assert "\ndatabases:" not in text
+    assert "\n  - type: keyvalue" not in text
+
+
+def test_render_beta_blueprint_never_invents_production_credentials() -> None:
+    """Secrets and driver-specific connection URLs stay externally governed."""
+    blueprint = REPO_ROOT / "deploy" / "render" / "render.yaml"
+    text = blueprint.read_text(encoding="utf-8")
+    for key in (
+        "POSTGRES_URL",
+        "AUTH_DATABASE_URL",
+        "KARI_JOB_ENC_KEY",
+        "KARI_CORS_ORIGINS",
+    ):
+        assert f"      - key: {key}\n        sync: false" in text
+    for key in (
+        "SECRET_KEY",
+        "AUTH_SECRET_KEY",
+        "AUTH_JWT_SECRET_KEY",
+        "EXTENSION_SECRET_KEY",
+        "EXTENSION_API_KEY",
+        "KARI_JOB_SIGNING_KEY",
+        "KARI_MODEL_SIGNING_KEY",
+    ):
+        assert f"      - key: {key}\n        generateValue: true" in text
+    assert "autoDeployTrigger: off" in text
+    assert 'value: "true"\n      - key: KARI_AUTH_BYPASS' not in text
