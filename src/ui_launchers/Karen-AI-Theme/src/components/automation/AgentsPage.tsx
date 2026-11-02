@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -116,8 +116,10 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
+  const cancellationInFlightRef = useRef(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
+  const [runListRevision, setRunListRevision] = useState(0);
   const [runDetailError, setRunDetailError] = useState("");
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
@@ -152,7 +154,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
       });
     return () => { active = false; };
-  }, [selectedRunId, isAuthenticated, isAdmin]);
+  }, [selectedRunId, isAuthenticated, isAdmin, runListRevision]);
   const visibleRuns = runs.filter((run) => {
     if (workFilter === "all") return true;
     const status = run.status.toLowerCase();
@@ -202,8 +204,12 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
       );
       setRuns(response.runs || []);
+      setRunListRevision((revision) => revision + 1);
     } catch (error) {
       setRuns([]);
+      setSelectedRunId(null);
+      setVerifiedRun(null);
+      setContextMessage("");
       setRunsError(
         error instanceof Error
           ? error.message
@@ -288,7 +294,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
 
   const cancelRun = useCallback(
     async (runId: string) => {
-      if (!isAdmin) return;
+      if (!isAdmin || cancellationInFlightRef.current) return;
+      cancellationInFlightRef.current = true;
 
       setCancellingRunId(runId);
       setActionMessage("");
@@ -308,6 +315,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             : `Failed to cancel Medusa run ${runId}.`,
         );
       } finally {
+        cancellationInFlightRef.current = false;
         setCancellingRunId(null);
       }
     },
