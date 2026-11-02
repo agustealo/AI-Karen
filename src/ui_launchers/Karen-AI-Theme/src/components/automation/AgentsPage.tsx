@@ -220,6 +220,14 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     }
   }, [isAuthenticated, isAdmin]);
 
+  useEffect(() => {
+    if (!isAuthenticated || activeRuns.length === 0) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadRuns();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated, activeRuns.length, loadRuns]);
+
   const copyVerifiedRunContext = useCallback(async (runId: string) => {
     setContextMessage("");
     try {
