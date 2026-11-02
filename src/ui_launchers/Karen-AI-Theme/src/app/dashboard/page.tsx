@@ -395,7 +395,7 @@ export default function DashboardPage() {
         </section>
       ),
       pluginOverview: <PluginOverviewPage />,
-      agentsOverview: <AgentsOverviewPage />,
+      agentsOverview: <AgentsOverviewPage onManageTasks={() => setActiveMainView("tasks")} onManageSequences={() => setActiveMainView("jobs")} />,
       agents: <AgentWorkspaceView openChat={() => setActiveMainView("chat")} />,
       tasks: <TasksPage />,
       jobs: <JobsPage />,
