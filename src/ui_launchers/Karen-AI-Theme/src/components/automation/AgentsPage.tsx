@@ -118,6 +118,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
+  const [runListRevision, setRunListRevision] = useState(0);
   const [runDetailError, setRunDetailError] = useState("");
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
@@ -152,7 +153,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
       });
     return () => { active = false; };
-  }, [selectedRunId, isAuthenticated, isAdmin]);
+  }, [selectedRunId, isAuthenticated, isAdmin, runListRevision]);
   const visibleRuns = runs.filter((run) => {
     if (workFilter === "all") return true;
     const status = run.status.toLowerCase();
@@ -202,6 +203,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
       );
       setRuns(response.runs || []);
+      setRunListRevision((revision) => revision + 1);
     } catch (error) {
       setRuns([]);
       setRunsError(
