@@ -18,7 +18,7 @@ describe("persistent Karen workspace shell", () => {
   it("keeps a single conversation mounted while navigating other workspaces", () => {
     expect(source).toContain('data-testid="persistent-karen-conversation"');
     expect(source).toContain("activeMainView === \"chat\"");
-    expect(source).toContain("<KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />");
+    expect(source).toContain('<KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />');
     expect(source).toContain('aria-label="Return to your Karen conversation"');
     expect(source).toContain('activeMainView === "chat" ? null : currentViewContent');
   });
