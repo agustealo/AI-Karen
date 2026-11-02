@@ -628,19 +628,19 @@ function RailContent({
                 variant={runtime.degradedMode ? 'outline' : 'secondary'}
                 className="text-[9px]"
               >
-                {runtime.degradedMode ? 'degraded' : 'healthy'}
+                {runtime.degradedMode ? 'degraded' : 'not reported degraded'}
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5 pt-3">
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg border border-border/60 bg-background/40 p-2">
-                <p className="karen-panel-label text-[8px]">Provider</p>
+                <p className="karen-panel-label text-[8px]">Reported executor</p>
                 <p className="mt-1 truncate text-xs font-semibold">
                   {runtime.actualProvider || 'Unavailable'}
                 </p>
                 <p className="truncate text-[9px] text-muted-foreground">
-                  {runtime.actualModel || runtime.runtimeEngine || 'No model reported'}
+                  {runtime.actualModel || 'No model reported'}
                 </p>
               </div>
               <div className="rounded-lg border border-border/60 bg-background/40 p-2">
