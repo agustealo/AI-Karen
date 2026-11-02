@@ -322,7 +322,7 @@ describe("CopilotKit consumer session adapter", () => {
     const change = state.onModelChange;
     if (!busy || !change) throw new Error("Missing canonical callbacks");
     act(() => busy(true));
-    expect(screen.getByRole("status").textContent).toContain("Model changes are unavailable");
+    expect(screen.getByText(/Model changes are unavailable while Karen is processing this message/).textContent).toContain("Model changes are unavailable");
     act(() => change(null));
     expect(state.modelProps.at(-1)).toEqual({
       preferredProvider: "local", preferredModel: "selected-model", workspaceRunId: null,
