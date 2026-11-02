@@ -62,13 +62,19 @@ BEGIN
      WHERE fk.conrelid = drafts AND fk.contype = 'f' AND fk.convalidated
        AND (
          (fk.conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = drafts AND attname = 'conversation_id')]::smallint[]
-          AND fk.confrelid = 'public.conversations'::regclass AND fk.confdeltype = 'c')
+          AND fk.confrelid = 'public.conversations'::regclass
+          AND fk.confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.conversations'::regclass AND attname = 'conversation_id')]::smallint[]
+          AND fk.confdeltype = 'c')
          OR
          (fk.conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = drafts AND attname = 'tenant_id')]::smallint[]
-          AND fk.confrelid = 'public.tenants'::regclass AND fk.confdeltype = 'c')
+          AND fk.confrelid = 'public.tenants'::regclass
+          AND fk.confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.tenants'::regclass AND attname = 'id')]::smallint[]
+          AND fk.confdeltype = 'c')
          OR
          (fk.conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = drafts AND attname = 'user_id')]::smallint[]
-          AND fk.confrelid = 'public.auth_users'::regclass AND fk.confdeltype = 'c')
+          AND fk.confrelid = 'public.auth_users'::regclass
+          AND fk.confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.auth_users'::regclass AND attname = 'user_id')]::smallint[]
+          AND fk.confdeltype = 'c')
        );
     IF fk_count <> 3 THEN
         RAISE EXCEPTION 'composer_draft_foreign_keys_missing';
