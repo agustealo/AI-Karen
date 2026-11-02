@@ -309,7 +309,7 @@ export function KarenCopilotControlledChat({
   if (!isReady || draftStatus === "loading") {
     return <p role="status" className="text-sm text-muted-foreground">Loading verified conversation and saved draft...</p>;
   }
-  if (draftStatus === "conflict" || draftStatus === "unavailable") {
+  const recoveryPanel = draftStatus === "conflict" || draftStatus === "unavailable" ? (() => {
     const conflict = draftStatus === "conflict";
     const explanation = conflict
       ? "This draft changed in another window. We have not replaced your local text."
@@ -320,7 +320,7 @@ export function KarenCopilotControlledChat({
           : "Karen could not confirm that your draft was saved. No message was sent.";
     return (
       <section data-testid="karen-copilot-unsynced-draft"
-        aria-label="Draft recovery" className="flex min-h-0 min-w-0 flex-1 flex-col justify-end gap-3 p-3 sm:p-4">
+        aria-label="Draft recovery" className="shrink-0 space-y-2 border-b border-destructive/30 p-3">
         <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/5 p-3">
           <h3 className="text-sm font-semibold">{conflict ? "Draft conflict" : "Draft not saved"}</h3>
           <p className="mt-1 text-sm text-muted-foreground">{explanation}</p>
@@ -328,32 +328,18 @@ export function KarenCopilotControlledChat({
             Draft service is temporarily unavailable. Your message is not confirmed saved.
           </p>}
         </div>
-        <div className="rounded-2xl border border-border bg-background p-3">
-          <label htmlFor="karen-unsynced-draft" className="mb-2 block text-xs font-medium text-muted-foreground">
-            Unsent message (not yet saved)
-          </label>
-          <textarea id="karen-unsynced-draft" aria-label="Unsaved message"
-            value={draft} onChange={event => setDraftText(event.target.value)}
-            placeholder="Write your message here. Karen will not send until saving is verified."
-            className="min-h-24 max-h-[35dvh] w-full resize-y rounded-lg bg-muted/30 p-3 text-sm focus-visible:outline-2 focus-visible:outline-ring" />
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {!conflict && <button type="button" onClick={retry}
-              className="min-h-11 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground">
-              Reconnect and save
-            </button>}
-            <button type="button" disabled={!draft} onClick={() => {
-              if (!navigator.clipboard?.writeText) {
-                setDraftRecoveryFeedback("Clipboard is unavailable. Select the message above to copy it.");
-                return;
-              }
-              void navigator.clipboard.writeText(draft)
-                .then(() => setDraftRecoveryFeedback("Unsent message copied."))
-                .catch(() => setDraftRecoveryFeedback("Copy failed. Select the message above to copy it."));
-            }} className="min-h-11 rounded-lg border border-input px-4 text-sm disabled:opacity-50">
-              Copy unsent text
-            </button>
-            {draftRecoveryFeedback && <p role="status" className="text-xs text-muted-foreground">{draftRecoveryFeedback}</p>}
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {!conflict && <button type="button" onClick={retry} className="min-h-11 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground">Reconnect and save</button>}
+          <button type="button" disabled={!draft} onClick={() => {
+            if (!navigator.clipboard?.writeText) {
+              setDraftRecoveryFeedback("Clipboard unavailable. Select your unsent text in the composer to copy it.");
+              return;
+            }
+            void navigator.clipboard.writeText(draft)
+              .then(() => setDraftRecoveryFeedback("Unsent text copied."))
+              .catch(() => setDraftRecoveryFeedback("Copy failed. Select your unsent text in the composer."));
+          }} className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">Copy unsent text</button>
+          {draftRecoveryFeedback && <p role="status" className="text-xs text-muted-foreground">{draftRecoveryFeedback}</p>}
         </div>
         <details className="rounded-xl border border-border/60 p-3">
           <summary className="cursor-pointer text-sm font-medium">
@@ -369,11 +355,12 @@ export function KarenCopilotControlledChat({
         </details>
       </section>
     );
-  }
+  })() : null;
 
   return (
     <div data-testid="karen-copilot-controlled-chat"
       className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {recoveryPanel}
       {error && <p role="alert" className="border-b border-destructive/40 px-3 py-2 text-sm text-destructive">{error}</p>}
       {stopStatus && <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2">
         <p role="status" data-testid="karen-copilot-stop-status"

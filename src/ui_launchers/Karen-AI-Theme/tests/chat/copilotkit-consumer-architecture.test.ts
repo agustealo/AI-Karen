@@ -36,7 +36,9 @@ describe("canonical CopilotKit chat ownership", () => {
 
   it("preserves unsent text and keeps destructive draft recovery secondary", () => {
     expect(controller).toContain('aria-label="Draft recovery"');
-    expect(controller).toContain('value={draft} onChange={event => setDraftText(event.target.value)}');
+    expect(controller).toContain('input={{ value: draft, onChange: onDraftChange, onSubmitMessage, onStop }}');
+    expect(controller).toContain('{recoveryPanel}');
+    expect(controller).not.toContain('karen-unsynced-draft');
     expect(controller).toContain("Copy unsent text");
     expect(controller).toContain("Reconnect and save");
     expect(controller).toContain("<details");
