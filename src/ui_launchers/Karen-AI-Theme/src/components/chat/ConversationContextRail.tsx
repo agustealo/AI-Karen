@@ -511,7 +511,7 @@ function RailContent({
           {turnIntelligence.recalled.length > 0 && (
             <div className="space-y-2">
               <p className="karen-panel-label text-[9px]">
-                Context recalled ({turnIntelligence.recallCount})
+                Recalled context preview ({Math.min(turnIntelligence.recalled.length, 4)} shown{turnIntelligence.recallCount > 4 ? ` of ${turnIntelligence.recallCount} reported` : ""})
               </p>
               {turnIntelligence.recalled.slice(0, 4).map((item) => (
                 <div
