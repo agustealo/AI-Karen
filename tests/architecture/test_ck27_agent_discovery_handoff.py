@@ -23,3 +23,11 @@ def test_agent_discovery_remains_read_only() -> None:
     assert "Catalog health does not grant execution access" in catalog
     assert "apiClient.post(" not in catalog
     assert "window.location.hash" not in catalog
+
+
+
+def test_non_admin_run_cancellation_control_is_not_offered() -> None:
+    agents = (ROOT / "components/automation/AgentsPage.tsx").read_text()
+    assert "if (!isAdmin) return;" in agents
+    assert "{isAdmin && selectedRun.cancellable && (" in agents
+    assert "{selectedRun.cancellable && (" not in agents
