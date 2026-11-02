@@ -57,6 +57,7 @@ export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents?: () =
   }, [historyOpen]);
 
   useEffect(() => {
+    setModelRequest(null);
     setManageOpen(false);
     setEditingTitle(false);
     setDeleteConfirm(false);
@@ -337,6 +338,7 @@ export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents?: () =
           </div>
         </section>
       )}
+      {modelRequest && <p role="status" data-testid="karen-pending-model-preference" className="shrink-0 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">Requested for upcoming messages: {modelRequest.provider} / {modelRequest.model}. Karen determines and reports the actual executor.</p>}
       <details data-testid="karen-copilot-model-discovery" className="shrink-0 border-b border-border/60 px-4 py-2">
         <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
           Model preferences
