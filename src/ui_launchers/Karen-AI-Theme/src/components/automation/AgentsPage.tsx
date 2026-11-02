@@ -369,7 +369,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                 <Button key={filter} type="button" size="sm"
                   variant={workFilter === filter ? "default" : "outline"}
                   aria-pressed={workFilter === filter}
-                  onClick={() => setWorkFilter(filter)}>
+                  onClick={() => { setWorkFilter(filter); setSelectedRunId(null); setVerifiedRun(null); setContextMessage(""); }}>
                   {filter === "all" ? "All work" : filter === "active" ? "In progress" : filter === "completed" ? "Completed" : "Failed or cancelled"}
                 </Button>
               ))}
