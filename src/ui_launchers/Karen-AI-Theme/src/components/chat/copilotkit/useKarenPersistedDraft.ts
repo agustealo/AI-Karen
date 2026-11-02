@@ -296,10 +296,12 @@ export function useKarenPersistedDraft(conversationId: string) {
   // failures or CAS conflicts, and never replace unsaved local input.
   useEffect(() => {
     if (status !== "unavailable" || failureStatus !== 503) return;
-    const timer = window.setTimeout(() => {
+    // The same unavailable state can persist after a failed retry. An interval
+    // keeps recovery armed even when a retry fails or the document is hidden.
+    const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") retry();
     }, REFRESH_DELAY);
-    return () => window.clearTimeout(timer);
+    return () => window.clearInterval(timer);
   }, [status, failureStatus, retry, version]);
 
   // Conflict refresh explicitly replaces the local draft. Never do this
