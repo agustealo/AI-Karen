@@ -16,7 +16,7 @@ import { KarenCopilotChat } from "./KarenCopilotChat";
 import { KarenComposerRuntimeCatalog } from "../KarenComposerRuntimeCatalog";
 import type { ComposerModelRequest } from "../KarenComposerRuntimeCatalog";
 
-export function KarenCopilotConsumerChat() {
+export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents: () => void }) {
   const {
     currentSession,
     strictInitialSession,
@@ -342,7 +342,7 @@ export function KarenCopilotConsumerChat() {
           Model preferences
         </summary>
         <fieldset disabled={runBusy} className="max-w-2xl py-2 disabled:opacity-60">
-          <KarenComposerRuntimeCatalog selection={modelRequest} onSelectionChange={handleModelRequest} />
+          <KarenComposerRuntimeCatalog selection={modelRequest} onSelectionChange={handleModelRequest} onOpenAgents={onOpenAgents} />
         </fieldset>
         {runBusy && <p role="status" className="text-xs text-muted-foreground">
           Model changes are unavailable while Karen is processing this message.
