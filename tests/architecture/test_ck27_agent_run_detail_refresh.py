@@ -17,3 +17,11 @@ def test_failed_run_list_refresh_clears_stale_details() -> None:
     failure = source.split("const loadRuns = useCallback", 1)[1].split("const copyVerifiedRunContext =", 1)[0]
     assert 'setRuns([]);\n      setSelectedRunId(null);\n      setVerifiedRun(null);\n      setContextMessage("");' in failure
     assert "setRunsError(" in failure
+
+
+def test_cancellation_guard_blocks_duplicate_requests() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    assert "const cancellationInFlightRef = useRef(false);" in source
+    assert "if (!isAdmin || cancellationInFlightRef.current) return;" in source
+    assert "cancellationInFlightRef.current = true;" in source
+    assert "cancellationInFlightRef.current = false;" in source
