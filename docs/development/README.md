@@ -7,7 +7,8 @@ This directory contains the current developer-facing architecture and engineerin
 1. [`../../PROJECT_DEV_MANIFEST.md`](../../PROJECT_DEV_MANIFEST.md) — project-wide rules, stack, authority map, do/don't list, and proof expectations.
 2. [`ARCHITECTURE_AUTHORITY.md`](ARCHITECTURE_AUTHORITY.md) — detailed ownership/topology boundaries.
 3. [`STACK_APIS_FILE_STRUCTURE.md`](STACK_APIS_FILE_STRUCTURE.md) — languages, frameworks, APIs, external integration rules, and file placement.
-4. Read the subsystem document matching the code you will change.
+4. [`CONSUMER_EXPERIENCE_CONTRACT.md`](CONSUMER_EXPERIENCE_CONTRACT.md) — mandatory consumer journey, capability discovery, agent-navigation and end-to-end evidence contract for UI/UX and cross-surface work.
+5. Read the subsystem document matching the code you will change.
 
 ## Subsystem docs
 
