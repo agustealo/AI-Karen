@@ -273,10 +273,10 @@ const normalizeExecutionUsage = (
     const tool = asString(metadata.tool);
     const extension = asString(metadata.extension_id);
     const plugin = asString(metadata.plugin_id);
+    // Requested routing is not evidence of provider activity.
     const provider =
       asString(metadata.actual_provider) ||
-      asString(metadata.provider) ||
-      asString(metadata.requested_provider);
+      asString(metadata.provider);
 
     if (tool) tools.push(tool);
     if (extension) plugins.push(extension);
