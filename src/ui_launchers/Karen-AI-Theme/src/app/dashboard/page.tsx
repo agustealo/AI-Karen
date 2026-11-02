@@ -192,6 +192,7 @@ const PRIMARY_NAV: Array<{
     section: "Explore",
     items: [
       { key: "agentsOverview", label: "Automations", icon: BotIcon },
+      { key: "tasks", label: "My tasks", icon: ScrollText },
       { key: "pluginOverview", label: "Tools & plugins", icon: PlugZap },
     ],
   },
@@ -216,7 +217,6 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
     icon: Binary,
     items: [
       { key: "agents", label: "Agents", icon: BotIcon },
-      { key: "tasks", label: "Tasks", icon: ScrollText },
       { key: "jobs", label: "Jobs", icon: LayoutGrid },
       { key: "cronJobs", label: "Cron Jobs", icon: Binary },
     ],
@@ -395,7 +395,7 @@ export default function DashboardPage() {
         </section>
       ),
       pluginOverview: <PluginOverviewPage />,
-      agentsOverview: <AgentsOverviewPage />,
+      agentsOverview: <AgentsOverviewPage onManageTasks={() => setActiveMainView("tasks")} onManageSequences={() => setActiveMainView("jobs")} />,
       agents: <AgentWorkspaceView openChat={() => setActiveMainView("chat")} />,
       tasks: <TasksPage />,
       jobs: <JobsPage />,
