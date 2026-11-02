@@ -51,7 +51,7 @@ export function KarenCopilotVerifiedRail() {
         </div>
       </details>
       {receipt
-        ? <><ConversationContextRail metadata={receipt} agentSteps={agentSteps} />{agentSteps.length === 0 && <ActivityReplayNotice />}</>
+        ? <><ConversationContextRail metadata={receipt} agentSteps={agentSteps} />{agentSteps.length === 0 && <div className="hidden xl:block"><ActivityReplayNotice /></div>}</>
         : <RailUnavailable />}
     </>
   );
