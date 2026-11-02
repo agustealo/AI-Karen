@@ -35,4 +35,6 @@ cd "${REPO_ROOT}"
 supabase migration list --db-url "${DATABASE_URL}"
 supabase db push --db-url "${DATABASE_URL}" --include-all
 
+bash "${SCRIPT_DIR}/verify-composer-draft-schema.sh"
+
 echo "production migrations applied from supabase/migrations"
