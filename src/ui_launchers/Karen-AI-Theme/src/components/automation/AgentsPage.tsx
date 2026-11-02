@@ -127,7 +127,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const activeRuns = useMemo(
     () =>
       runs.filter((run) =>
-        ["running", "cancelling"].includes(run.status.toLowerCase()),
+        ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
       ),
     [runs],
   );
