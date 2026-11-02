@@ -628,7 +628,7 @@ function RailContent({
                 variant={runtime.degradedMode ? 'outline' : 'secondary'}
                 className="text-[9px]"
               >
-                {runtime.degradedMode ? 'degraded' : 'not reported degraded'}
+                {runtime.degradedMode ? 'degraded' : 'degradation not reported'}
               </Badge>
             </CardTitle>
           </CardHeader>
