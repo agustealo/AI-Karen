@@ -121,7 +121,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runListRevision, setRunListRevision] = useState(0);
   const [hasActiveRunPolling, setHasActiveRunPolling] = useState(false);
-  const runListRequestInFlightRef = useRef(false);
+  const runListRequestPromiseRef = useRef<Promise<void> | null>(null);
+  const runListRefreshQueuedRef = useRef(false);
   const [runDetailError, setRunDetailError] = useState("");
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
@@ -192,39 +193,51 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     }
   }, [isAuthenticated]);
 
-  const loadRuns = useCallback(async () => {
-    if (runListRequestInFlightRef.current) return;
+  const loadRuns = useCallback((priority = false): Promise<void> => {
+    if (runListRequestPromiseRef.current) {
+      if (priority) runListRefreshQueuedRef.current = true;
+      return runListRequestPromiseRef.current;
+    }
     if (!isAuthenticated) {
       setRuns([]);
       setHasActiveRunPolling(false);
       setRunsError("");
-      return;
+      return Promise.resolve();
     }
 
-    runListRequestInFlightRef.current = true;
-    setIsLoadingRuns(true);
-    setRunsError("");
-    try {
-      const response = await apiClient.get<AgentRunsResponse>(
-        isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
-      );
-      setRuns(response.runs || []);
-      setHasActiveRunPolling((response.runs || []).some((run) => ["queued", "running", "cancelling"].includes(run.status.toLowerCase())));
-      setRunListRevision((revision) => revision + 1);
-    } catch (error) {
-      setRuns([]);
-      setSelectedRunId(null);
-      setVerifiedRun(null);
-      setContextMessage("");
-      setRunsError(
-        error instanceof Error
-          ? error.message
-          : "Failed to load tenant-scoped Medusa runs.",
-      );
-    } finally {
-      runListRequestInFlightRef.current = false;
-      setIsLoadingRuns(false);
-    }
+    const task = (async () => {
+      setIsLoadingRuns(true);
+      try {
+        do {
+          runListRefreshQueuedRef.current = false;
+          setRunsError("");
+          try {
+            const response = await apiClient.get<AgentRunsResponse>(
+              isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
+            );
+            setRuns(response.runs || []);
+            setHasActiveRunPolling((response.runs || []).some((run) =>
+              ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
+            ));
+            setRunListRevision((revision) => revision + 1);
+          } catch (error) {
+            setRuns([]);
+            setSelectedRunId(null);
+            setVerifiedRun(null);
+            setContextMessage("");
+            setRunsError(
+              error instanceof Error ? error.message : "Failed to load tenant-scoped Medusa runs.",
+            );
+          }
+        } while (runListRefreshQueuedRef.current);
+      } finally {
+        setIsLoadingRuns(false);
+      }
+    })().finally(() => {
+      runListRequestPromiseRef.current = null;
+    });
+    runListRequestPromiseRef.current = task;
+    return task;
   }, [isAuthenticated, isAdmin]);
 
   useEffect(() => {
@@ -299,7 +312,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
 
   const refresh = useCallback(async () => {
     setActionMessage("");
-    await Promise.all([loadCatalog(), loadRuns(), loadApprovals()]);
+    await Promise.all([loadCatalog(), loadRuns(true), loadApprovals()]);
   }, [loadCatalog, loadRuns, loadApprovals]);
 
   useEffect(() => {
@@ -322,7 +335,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         setActionMessage(
           `Cancellation endpoint responded for ${runId}. Reported status: ${response.status}. Check the refreshed run details for current state.`,
         );
-        await loadRuns();
+        await loadRuns(true);
       } catch (error) {
         setRunsError(
           error instanceof Error
