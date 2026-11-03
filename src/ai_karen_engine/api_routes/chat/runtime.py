@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
@@ -933,10 +933,34 @@ async def get_ag_ui_owned_history(
     )
 
 
+# The AG-UI SDK can send a JSON body without a Content-Type header.
+# FastAPI then treats a model-typed body as raw bytes and Pydantic emits 422
+# model_attributes_type even for valid JSON. Keep decoding at the thin ingress
+# and leave all execution, ownership, and policy decisions unchanged.
+AG_UI_MAX_REQUEST_BYTES = 262144
+
+
+async def _parse_ag_ui_request(http_request: Request) -> AGUIRunRequest:
+    """Bound and decode the AG-UI transport independently of media-type hints."""
+    body = bytearray()
+    async for chunk in http_request.stream():
+        if len(body) + len(chunk) > AG_UI_MAX_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="AG-UI request exceeds size limit")
+        body.extend(chunk)
+    if not body:
+        raise HTTPException(status_code=422, detail="Invalid AG-UI request")
+    try:
+        return AGUIRunRequest.model_validate_json(bytes(body))
+    except ValidationError as exc:
+        # Pydantic exceptions can embed message contents and must not enter logs
+        # or the public HTTP response.
+        raise HTTPException(status_code=422, detail="Invalid AG-UI request") from None
+
+
 @router.post("/chat/ag-ui")
 async def stream_ag_ui_chat(
-    request: AGUIRunRequest,
     http_request: Request,
+    request: AGUIRunRequest = Depends(_parse_ag_ui_request),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     """AG-UI-compatible wire adapter; never a second chat execution path."""
