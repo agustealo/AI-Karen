@@ -10,7 +10,12 @@ import json
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+
+class NoRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
 
 
 def verify(base_url: str) -> None:
@@ -20,7 +25,7 @@ def verify(base_url: str) -> None:
     url = base_url.rstrip("/") + "/api/auth/session"
     request = Request(url, headers={"Accept": "application/json", "Cache-Control": "no-store"})
     try:
-        with urlopen(request, timeout=15) as response:
+        with build_opener(NoRedirects()).open(request, timeout=15) as response:
             code = response.status
             body = response.read(8192)
     except HTTPError as exc:
@@ -31,16 +36,16 @@ def verify(base_url: str) -> None:
     try:
         payload = json.loads(body)
     except (ValueError, UnicodeDecodeError):
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
-    error_code = payload.get("error_code")
+        payload = None
+    error_code = payload.get("error_code") if isinstance(payload, dict) else None
     if code == 503 and error_code == "BACKEND_TARGET_NOT_CONFIGURED":
         raise ValueError("Canonical backend target is missing or invalid in this deployment")
     if code in (502, 503):
         raise ValueError("Backend proxy is unavailable; deployed chat is not ready")
     if code not in (200, 401, 403):
         raise ValueError(f"Unexpected auth proxy response status: {code}")
+    if not isinstance(payload, dict):
+        raise ValueError("Auth proxy did not return a JSON response")
     if code == 200 and payload.get("authenticated") is True:
         raise ValueError("Unauthenticated preflight unexpectedly returned an authenticated session")
 
