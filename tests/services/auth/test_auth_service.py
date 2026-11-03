@@ -629,3 +629,24 @@ class TestCredentialAccountBoundary:
         assert hasattr(module, "Credential")
         assert hasattr(module, "ExternalAccount")
         assert hasattr(module, "CredentialBinding")
+
+
+def test_auth_token_keeps_roles_separate_from_permission_claims(monkeypatch):
+    """Roles belong in roles; RBAC resolves entitlements from trusted role mapping."""
+    service = AuthService()
+    captured = {}
+
+    def capture_token(user_id, claims):
+        captured.update(claims)
+        return "test-token"
+
+    monkeypatch.setattr(service, "_generate_access_token_by_id", capture_token)
+    user = MagicMock(
+        id="user-1", email="user@example.com", tenant_id="tenant-a",
+        roles=["admin", "user"],
+    )
+    assert service._generate_access_token(user) == "test-token"
+    assert captured["roles"] == ["admin", "user"]
+    assert captured["permissions"] == []
+    assert captured["tenant_id"] == "tenant-a"
+    assert captured["user_type"] == "admin"
