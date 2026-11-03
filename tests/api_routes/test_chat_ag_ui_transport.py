@@ -903,3 +903,88 @@ async def test_ck07b_worker_stop_projects_run_error_not_run_finished(monkeypatch
     assert events[-1]["code"] == "CHAT_STREAM_CANCELLED"
     assert not any(e["type"] == "RUN_FINISHED" for e in events)
     assert fake_runtime.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", [None, "text/plain", "application/json"])
+async def test_ag_ui_decodes_valid_copilotkit_json_independent_of_media_type(content_type):
+    from starlette.requests import Request
+
+    payload = {
+        "threadId": "4b6ecd10-26dc-554d-b20f-37222d9a978d",
+        "runId": "556fca56-b9cf-4343-ba53-129bce3400ff",
+        "protocolVersion": "1.0",
+        "state": {},
+        "messages": [{
+            "id": "0a182ec1-5ade-46ec-ab67-0e29b4c957dc",
+            "role": "user",
+            "content": "hi",
+        }],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+    encoded = json.dumps(payload).encode("utf-8")
+    headers = [] if content_type is None else [(b"content-type", content_type.encode())]
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": encoded, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/api/chat/ag-ui", "headers": headers},
+        receive=receive,
+    )
+    parsed = await chat_ingress._parse_ag_ui_request(request)
+    assert parsed.threadId == payload["threadId"]
+    assert parsed.latest_user_message() == "hi"
+    assert parsed.state == {}
+    assert parsed.tools == []
+    assert parsed.context == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_body", [
+    b"not-json",
+    b"[]",
+    b'{"threadId":"invalid","messages":[{"role":"user","content":"PRIVATE DRAFT"}]}',
+])
+async def test_ag_ui_rejects_invalid_json_without_exposing_content(bad_body):
+    from starlette.requests import Request
+
+    async def receive():
+        return {"type": "http.request", "body": bad_body, "more_body": False}
+
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/api/chat/ag-ui", "headers": []},
+        receive=receive,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await chat_ingress._parse_ag_ui_request(request)
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Invalid AG-UI request"
+    assert "PRIVATE DRAFT" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_ag_ui_rejects_excessive_body_before_pydantic_validation():
+    from starlette.requests import Request
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b"x" * (chat_ingress.AG_UI_MAX_REQUEST_BYTES + 1),
+            "more_body": False,
+        }
+
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/api/chat/ag-ui", "headers": []},
+        receive=receive,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await chat_ingress._parse_ag_ui_request(request)
+    assert exc.value.status_code == 413
