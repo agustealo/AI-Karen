@@ -338,7 +338,15 @@ class SecureAuthMiddleware:
         except Exception:
             return None
 
+    # Unauthenticated operational probes, matched exactly (never by prefix).
+    # ``/ready`` is the canonical readiness authority consumed by the web
+    # ``/api/health`` gate and deployment verification; it exposes only
+    # configuration/database readiness booleans, no tenant data.
+    PUBLIC_EXACT_PATHS = frozenset({"/ready", "/ping", "/api/ping"})
+
     def is_public_endpoint(self, path: str) -> bool:
+        if path in self.PUBLIC_EXACT_PATHS:
+            return True
         public_patterns = [
             "/health",
             "/api/health",
