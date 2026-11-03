@@ -295,7 +295,8 @@ async function handle(request: NextRequest): Promise<Response> {
     await import("@copilotkit/runtime/v2");
 
   const copilot = new CopilotRuntime({
-    agents: { default: agent },
+    // Cast bridges the canonical @ag-ui/client HttpAgent to CopilotRuntime v2 agent interface
+    agents: { default: agent as any },
     // The only credential-bearing headers are the current request's
     // server-verified headers above. Do not forward arbitrary x-* claims.
     forwardHeaders: { allow: ["content-type"] },
