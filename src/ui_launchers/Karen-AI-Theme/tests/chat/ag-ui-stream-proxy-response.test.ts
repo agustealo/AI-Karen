@@ -4,7 +4,7 @@ import { POST } from '../../src/app/api/chat/ag-ui/route';
 
 vi.mock('../../src/app/api/_lib/backend-proxy', () => ({
   getBackendBaseUrl: () => 'http://api:8000',
-  sanitizeHeaders: () => new Headers({ 'content-type': 'application/json' }),
+  sanitizeHeaders: () => new Headers(),
 }));
 
 const request = () => new Request('http://localhost:3000/api/chat/ag-ui', {
@@ -21,6 +21,35 @@ describe('AG-UI stream proxy', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('forwards a JSON media type when the SDK omitted it and preserves the request body', async () => {
+    const input = JSON.stringify({
+      threadId: '4b6ecd10-26dc-554d-b20f-37222d9a978d',
+      runId: 'fa2ba4ab-5c4d-4fb4-9c3d-fb4d80308984',
+      protocolVersion: '1.0',
+      state: {},
+      messages: [{ id: '611ae4b5-1a08-4c07-98b1-b8ddd478b749', role: 'user', content: 'hi' }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    });
+    const upstream = vi.fn().mockResolvedValue(new Response('data: {"type":"RUN_FINISHED"}\\n\\n', {
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    vi.stubGlobal('fetch', upstream);
+    const browserRequest = new Request('http://localhost:3000/api/chat/ag-ui', {
+      method: 'POST',
+      body: input,
+      headers: { 'content-type': 'text/plain' },
+    }) as NextRequest;
+    const response = await POST(browserRequest);
+    expect(response.status).toBe(200);
+    const forwarded = upstream.mock.calls[0][1] as RequestInit;
+    const headers = forwarded.headers as Headers;
+    expect(headers.get('content-type')).toBe('application/json');
+    expect(headers.get('accept')).toBe('text/event-stream');
+    expect(forwarded.body).toBe(input);
   });
 
   it('accepts a verified terminal event', async () => {

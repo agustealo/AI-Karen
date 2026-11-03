@@ -9,6 +9,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const backendBaseUrl = getBackendBaseUrl();
   const headers = sanitizeHeaders(request.headers, backendBaseUrl);
   headers.set('Accept', 'text/event-stream');
+  // The SDK may send a JSON body without declaring its media type. FastAPI
+  // otherwise hands Pydantic raw bytes instead of decoding the AG-UI object.
+  // This proxy owns the wire media type, not request validation or execution.
+  headers.set('Content-Type', 'application/json');
 
   try {
     const upstream = await fetch(`${backendBaseUrl}/api/chat/ag-ui`, {
