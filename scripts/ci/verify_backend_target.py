@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -23,7 +24,11 @@ def verify(base_url: str) -> None:
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
         raise ValueError("Expected an HTTPS deployment origin without credentials or path")
     url = base_url.rstrip("/") + "/api/auth/session"
-    request = Request(url, headers={"Accept": "application/json", "Cache-Control": "no-store"})
+    headers = {"Accept": "application/json", "Cache-Control": "no-store"}
+    bypass_secret = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "")
+    if bypass_secret and "\\r" not in bypass_secret and "\\n" not in bypass_secret:
+        headers["x-vercel-protection-bypass"] = bypass_secret
+    request = Request(url, headers=headers)
     try:
         with build_opener(NoRedirects()).open(request, timeout=15) as response:
             code = response.status
