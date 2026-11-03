@@ -26,7 +26,9 @@ def verify(base_url: str) -> None:
     url = base_url.rstrip("/") + "/api/auth/session"
     headers = {"Accept": "application/json", "Cache-Control": "no-store"}
     bypass_secret = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "")
-    if bypass_secret and "\\r" not in bypass_secret and "\\n" not in bypass_secret:
+    if bypass_secret:
+        if any(ord(char) < 32 or ord(char) == 127 for char in bypass_secret):
+            raise ValueError("Invalid deployment bypass credential configuration")
         headers["x-vercel-protection-bypass"] = bypass_secret
     request = Request(url, headers=headers)
     try:
@@ -36,7 +38,7 @@ def verify(base_url: str) -> None:
     except HTTPError as exc:
         code = exc.code
         body = exc.read(8192)
-    except (URLError, TimeoutError, OSError) as exc:
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
         raise ValueError("Deployment auth proxy is unreachable") from exc
     try:
         payload = json.loads(body)
