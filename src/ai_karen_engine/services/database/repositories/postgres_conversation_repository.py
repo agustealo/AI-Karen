@@ -31,6 +31,27 @@ from ai_karen_engine.services.database.repositories.observability import (
 logger = logging.getLogger(__name__)
 
 
+def _composer_draft_failure_class(exc: Exception) -> str:
+    """Return safe operational reason without SQL, identifiers or draft contents.
+
+    SQLAlchemy typically wraps driver failures in .orig; only the PostgreSQL
+    SQLSTATE is trusted here, never the exception's string representation.
+    """
+    original = getattr(exc, "orig", None)
+    state = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    if state == "42P01":
+        return "draft_schema_missing"
+    if state in ("42501", "28000"):
+        return "draft_permission_denied"
+    if state in ("42703", "42804", "42P07"):
+        return "draft_schema_incompatible"
+    if state in ("08000", "08001", "08003", "08006", "57P01"):
+        return "database_connection_unavailable"
+    if state in ("23503", "23514"):
+        return "draft_integrity_failure"
+    return "database_failure_unclassified"
+
+
 class PostgresConversationRepository(ConversationRepository):
     """PostgreSQL conversation repository.
 
@@ -450,6 +471,7 @@ class PostgresConversationRepository(ConversationRepository):
         except Exception as exc:
             logger.error("get_composer_draft failed", extra={
                 "error_type": type(exc).__name__,
+                "failure_class": _composer_draft_failure_class(exc),
             })
             return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
 
@@ -542,6 +564,7 @@ class PostgresConversationRepository(ConversationRepository):
         except Exception as exc:
             logger.error("put_composer_draft failed", extra={
                 "error_type": type(exc).__name__,
+                "failure_class": _composer_draft_failure_class(exc),
             })
             return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
 
