@@ -325,6 +325,14 @@ jobs:
           set -euo pipefail
           python ../../../scripts/ci/verify_deployment_revision.py
 
+      - name: Verify canonical backend connectivity before CopilotKit browser acceptance
+        shell: bash
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          python ../../../scripts/ci/verify_backend_target.py --base-url "$KAREN_BASE_URL"
+
       - name: Verify independent Vercel deployment provenance before browser acceptance
         shell: bash
         env:
