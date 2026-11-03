@@ -1168,7 +1168,9 @@ class AuthService(BaseService):
         extra_payload = {
             "email": user.email,
             "user_type": user_type,
-            "permissions": list(user.roles),
+            # Roles are resolved into effective capabilities by canonical RBAC.
+            # Never mirror role names into the authenticated permission claims.
+            "permissions": [],
             "roles": user.roles,
             "tenant_id": user.tenant_id,
         }
