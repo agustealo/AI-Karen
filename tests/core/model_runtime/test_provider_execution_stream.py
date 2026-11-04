@@ -142,7 +142,7 @@ async def test_selected_model_mismatch_does_not_emit_an_untrusted_delta(monkeypa
     body = (
         _chunk("Untrusted", model="other-model")
         + _chunk(None, model="other-model", finish="stop")
-        + "data: [DONE]\\n\\n"
+        + "data: [DONE]\n\n"
     )
     _transport_client(
         monkeypatch,
