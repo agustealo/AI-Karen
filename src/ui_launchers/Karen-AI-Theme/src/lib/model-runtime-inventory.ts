@@ -133,7 +133,7 @@ export function isRuntimeProviderOperational(
 ): boolean {
   return provider.health?.status === 'degraded' ||
     (provider.healthy === true &&
-      (provider.health === undefined || provider.health.status === 'healthy'));
+      (provider.health == null || provider.health.status === 'healthy'));
 }
 
 export interface RuntimeProviderCatalogResponse {
