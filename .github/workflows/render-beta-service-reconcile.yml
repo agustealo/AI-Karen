@@ -15,6 +15,7 @@ on:
         options:
           - inspect
           - apply
+          - inspect-env
 
 permissions:
   contents: read
@@ -35,6 +36,8 @@ jobs:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       RENDER_BETA_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID }}
       RENDER_BETA_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID }}
+      RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID }}
+      RENDER_BETA_KEY_VALUE_ID: ${{ vars.RENDER_BETA_KEY_VALUE_ID }}
 
     steps:
       - name: Check out reviewed main
@@ -62,6 +65,7 @@ jobs:
           python-version: "3.11"
 
       - name: Reconcile only existing Render service Git source
+        if: env.MODE != 'inspect-env'
         shell: bash
         run: |
           set -euo pipefail
@@ -70,6 +74,20 @@ jobs:
             --workspace-id "$RENDER_BETA_WORKSPACE_ID" \
             --manifest deploy/render/render.yaml \
             --mode "$MODE"
+
+      - name: Inspect the existing beta environment and private datastore links
+        if: env.MODE == 'inspect-env'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_BETA_POSTGRES_ID" || { echo "::error::Existing Postgres ID is missing"; exit 1; }
+          test -n "$RENDER_BETA_KEY_VALUE_ID" || { echo "::error::Existing Key Value ID is missing"; exit 1; }
+          python scripts/deploy/inspect_render_beta_environment.py \
+            --service-id "$RENDER_BETA_SERVICE_ID" \
+            --workspace-id "$RENDER_BETA_WORKSPACE_ID" \
+            --postgres-id "$RENDER_BETA_POSTGRES_ID" \
+            --key-value-id "$RENDER_BETA_KEY_VALUE_ID" \
+            --manifest deploy/render/render.yaml
 
       # This workflow deliberately never deploys or modifies a database,
       # Redis service, credentials, env vars, or frontend routing.
