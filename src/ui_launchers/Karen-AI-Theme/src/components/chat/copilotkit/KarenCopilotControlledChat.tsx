@@ -78,7 +78,7 @@ export function KarenCopilotControlledChat({
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const {
     draft, setText: setDraftText, readText: readDraftText,
-    status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, clearBeforeSubmit,
+    status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, prepareSubmission,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
   const onDraftChange = useCallback((value: string) => {
@@ -143,7 +143,7 @@ export function KarenCopilotControlledChat({
       return;
     }
     if (!isReady || draftStatus !== "ready" ||
-        !draftSynced || submitPending.current || agent.isRunning ||
+        submitPending.current || agent.isRunning ||
         !text || text.length > MAX_INPUT_CHARS ||
         agent.threadId !== conversationId) {
       setError("Unable to send this message in the verified conversation.");
@@ -156,10 +156,10 @@ export function KarenCopilotControlledChat({
     // separate canonical CAS write and must succeed before inference starts.
     void (async () => {
       try {
-        if (!await clearBeforeSubmit(text) || !mounted.current ||
+        if (!await prepareSubmission(text) || !mounted.current ||
             agent.threadId !== conversationId) {
           if (mounted.current) {
-            setError("Draft clearance was not confirmed. No message was sent.");
+            setError("The draft could not be safely saved and cleared. No message was sent.");
           }
           return;
         }
@@ -196,8 +196,8 @@ export function KarenCopilotControlledChat({
       }
     })();
   }, [
-    agent, conversationId, copilotkit, isReady, clearBeforeSubmit,
-    draftStatus, draftSynced, readDraftText, setDraftText, failedSubmission,
+    agent, conversationId, copilotkit, isReady, prepareSubmission,
+    draftStatus, readDraftText, setDraftText, failedSubmission,
     reportBusy,
   ]);
 
