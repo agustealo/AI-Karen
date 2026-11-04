@@ -97,3 +97,39 @@ def test_selected_timezone_is_used_only_with_authorized_provenance() -> None:
         resolved_context={"timezone": "America/Detroit"},
     )
     assert ignored["timezone"] == "America/Detroit"
+
+
+
+@pytest.mark.asyncio
+async def test_unselected_timezone_is_explicit_utc_not_container_local_time() -> None:
+    from datetime import timedelta
+    from ai_karen_engine.extensions.plugins.time_query.handlers.base import (
+        TimeHandlerBase,
+    )
+    from ai_karen_engine.extensions.plugins.time_query.handlers.current_time_handler import (
+        handle_current_time,
+    )
+
+    observed = TimeHandlerBase.get_system_now()
+    assert observed.tzinfo is not None
+    assert observed.utcoffset() == timedelta(0)
+    payload = await handle_current_time("time", {"context": {}})
+    assert payload["status"] == "success"
+    assert payload["timezone"] == "UTC"
+    assert payload["source_detail"]["timezone_source"] == "utc_fallback"
+    assert payload["value"] == payload["time"]
+
+
+@pytest.mark.asyncio
+async def test_selected_timezone_beats_utc_fallback() -> None:
+    from ai_karen_engine.extensions.plugins.time_query.handlers.current_time_handler import (
+        handle_current_time,
+    )
+
+    observed = await handle_current_time(
+        "time", {"timezone": "America/Detroit", "context": {}},
+    )
+    assert observed["status"] == "success"
+    assert observed["timezone"] in {"EST", "EDT"}
+    assert observed["source_detail"]["timezone_source"] == "zoneinfo"
+    assert observed["resolution_meta"]["resolvedTimezone"] == "America/Detroit"
