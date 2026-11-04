@@ -143,7 +143,8 @@ class ProviderPayload(BaseModel):
     runtime_source: Optional[Literal["host", "container"]] = None
     runtime_options: Optional[List[RuntimeOptionPayload]] = None
     is_configured: bool = False
-    healthy: bool = True
+    # Missing observed status is unverified, never healthy by default.
+    healthy: bool = False
     # Health state is distinct from whether execution is currently permitted.
     # Unknown means no completed provider probe, not an observed failure.
     health_status: str = "unknown"
