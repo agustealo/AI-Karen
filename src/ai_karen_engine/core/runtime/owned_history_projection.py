@@ -27,7 +27,7 @@ _MAX_TEXT = 65536
 _MAX_PRESENTATIONS = 6
 
 _UNSUPPORTED_RICH = frozenset({
-    "structured_content", "actions", "citations", "sources",
+    "actions", "citations", "sources",
     "attachments", "artifacts", "function_call", "function_response",
     "tool_activity", "tool_calls", "tool_results", "agent_steps",
     "execution_receipt", "presentation", "presentation_payload",
@@ -121,6 +121,24 @@ def project_owned_history(
             raise UnreplayableHistory("invalid_message_metadata")
         if any(_carries_value(metadata.get(key)) for key in _UNSUPPORTED_RICH):
             raise UnreplayableHistory("unsupported_rich_history")
+
+        # The direct-capability stream persists its *same* approved surface
+        # twice: under structured_content for existing consumers and under
+        # verified_presentations_v1 for the durable AG-UI replay projection.
+        # Reject arbitrary structured data, but never reject a proven first
+        # response simply because it has this duplicate canonical envelope.
+        # Runtime attestation and the digest check below still govern both.
+        structured = metadata.get("structured_content")
+        if _carries_value(structured):
+            captured = metadata.get("verified_presentations_v1")
+            if (
+                not isinstance(structured, Mapping)
+                or set(structured) != {"presentation"}
+                or not isinstance(captured, list)
+                or len(captured) != 1
+                or structured["presentation"] != captured[0]
+            ):
+                raise UnreplayableHistory("unsupported_rich_history")
         if metadata.get("presentation_replay_incomplete") is True:
             raise UnreplayableHistory("incomplete_presentation_capture")
 
