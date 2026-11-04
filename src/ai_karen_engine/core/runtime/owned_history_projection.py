@@ -33,6 +33,18 @@ _UNSUPPORTED_RICH = frozenset({
     "execution_receipt", "presentation", "presentation_payload",
     "karen.presentation.v1",
 })
+# DirectCapabilityResult.normalized_metadata writes observation/support fields
+# alongside the approved presentation. They are not independent UI parts.
+# Only this canonical, bounded key set can accompany an identical saved
+# presentation; arbitrary structured payloads remain unreplayable.
+_VERIFIED_PRESENTATION_CONTEXT_KEYS = frozenset({
+    "presentation", "query", "mode", "status", "value", "formatted",
+    "time", "date", "timezone", "resolved_timezone", "label",
+    "extractedData", "insights", "required_capability", "target",
+    "next_action", "provider", "search_providers", "crawl_provider",
+    "timer_receipt",
+})
+
 _RUNTIME_RECEIPT = frozenset({
     "actual_provider", "actual_model", "response_source",
     "requested_provider", "requested_model", "runtime_engine",
@@ -133,7 +145,7 @@ def project_owned_history(
             captured = metadata.get("verified_presentations_v1")
             if (
                 not isinstance(structured, Mapping)
-                or set(structured) != {"presentation"}
+                or not set(structured).issubset(_VERIFIED_PRESENTATION_CONTEXT_KEYS)
                 or not isinstance(captured, list)
                 or len(captured) != 1
                 or structured["presentation"] != captured[0]
