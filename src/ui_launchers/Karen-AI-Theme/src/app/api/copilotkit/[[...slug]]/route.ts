@@ -2,6 +2,7 @@ import { HttpAgent } from "@ag-ui/client";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getBackendBaseUrl } from "../../_lib/backend-proxy";
+import { sanitizeBackendCookies } from "../../_lib/backend-cookies";
 import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilotkit/_lib/owned-thread-history";
 import { connectKarenOwnedThread, readKarenConnectThreadId } from "../../copilotkit/_lib/owned-thread-reconnect";
 import { readKarenScopedStopRunId, stopKarenOwnedRun, readKarenOwnedRunStatus } from "../../copilotkit/_lib/owned-run-stop";
@@ -27,7 +28,7 @@ export async function verifyKarenCopilotSession(
   backendBaseUrl: string,
 ): Promise<{ principal: AuthenticatedPrincipal; headers: Record<string, string> } | NextResponse> {
   const authorization = request.headers.get("authorization");
-  const cookie = request.headers.get("cookie");
+  const cookie = sanitizeBackendCookies(request.headers.get("cookie") || "");
   if (!authorization && !cookie) {
     return NextResponse.json({ detail: "Authentication required" }, { status: 401 });
   }

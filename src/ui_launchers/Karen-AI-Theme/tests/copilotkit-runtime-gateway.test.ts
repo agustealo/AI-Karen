@@ -93,6 +93,65 @@ describe("CopilotKit v2 protected gateway", () => {
     expect((authInit.headers as Record<string, string>)["x-tenant-id"]).toBeUndefined();
   });
 
+  it("strips Vercel ingress credentials from auth, capability and SDK agent requests", async () => {
+    const upstream = vi.fn(availableBackend);
+    globalThis.fetch = upstream as typeof fetch;
+    const response = await GET(request({
+      cookie: "_vercel_jwt=deployment-secret; kari_session=owned; __vercel_protection_bypass=private-secret; theme=light",
+      "x-vercel-protection-bypass": "ingress-secret",
+      "x-user-id": "foreign-actor",
+      "x-tenant-id": "foreign-tenant",
+    }));
+
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect(sdk.agents).toHaveLength(1);
+    const expectedCookie = "kari_session=owned; theme=light";
+    for (const [, init] of upstream.mock.calls) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("cookie")).toBe(expectedCookie);
+      expect(headers.has("x-vercel-protection-bypass")).toBe(false);
+      expect(headers.has("x-user-id")).toBe(false);
+      expect(headers.has("x-tenant-id")).toBe(false);
+    }
+    expect(sdk.agents[0].headers).toEqual({ Cookie: expectedCookie });
+    const forwarded = JSON.stringify(sdk.agents[0].headers) +
+      JSON.stringify(upstream.mock.calls.map(([, init]) => new Headers(init?.headers).get("cookie")));
+    expect(forwarded).not.toContain("deployment-secret");
+    expect(forwarded).not.toContain("private-secret");
+    expect(forwarded).not.toContain("ingress-secret");
+  });
+
+  it("does not accept Vercel-only cookies as a Karen authentication credential", async () => {
+    const upstream = vi.fn(availableBackend);
+    globalThis.fetch = upstream as typeof fetch;
+    const response = await GET(request({
+      cookie: "_vercel_jwt=deployment-secret; __vercel_protection_bypass=private-secret",
+      "x-vercel-protection-bypass": "frontend-secret",
+    }));
+    expect(response.status).toBe(401);
+    expect(upstream).not.toHaveBeenCalled();
+    expect(sdk.agents).toHaveLength(0);
+    expect(sdk.handlers).toBe(0);
+  });
+
+  it("keeps bearer-only authentication when the browser also sends Vercel cookies", async () => {
+    const upstream = vi.fn(availableBackend);
+    globalThis.fetch = upstream as typeof fetch;
+    const response = await GET(request({
+      authorization: "Bearer user-token",
+      cookie: "_vercel_jwt=deployment-secret; __vercel_protection_bypass=private-secret",
+    }));
+    expect(response.status).toBe(200);
+    expect(sdk.agents).toHaveLength(1);
+    expect(sdk.agents[0].headers).toEqual({ Authorization: "Bearer user-token" });
+    for (const [, init] of upstream.mock.calls) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer user-token");
+      expect(headers.has("cookie")).toBe(false);
+    }
+  });
+
   it("never advertises SDK discovery when the canonical feature is disabled", async () => {
     const upstream = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
       String(input).endsWith("/api/auth/me")
