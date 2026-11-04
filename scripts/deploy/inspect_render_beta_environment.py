@@ -114,7 +114,9 @@ def _private_internal_url(raw: Any, *, kind: str) -> str:
     try:
         parsed = urlsplit(raw)
         hostname = parsed.hostname or ""
-        scheme = "postgresql" if kind == "postgres" else "redis"
+        # Normalize only the Postgres driver alias. Render Key Value may
+        # supply rediss://; never turn an authenticated TLS URL into redis://.
+        scheme = "postgresql" if kind == "postgres" else parsed.scheme
         schemes = {"postgresql", "postgres"} if kind == "postgres" else {"redis", "rediss"}
         prefix = "dpg-" if kind == "postgres" else "red-"
         if (parsed.scheme not in schemes or not hostname.startswith(prefix)
