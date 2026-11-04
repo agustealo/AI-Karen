@@ -144,6 +144,10 @@ class ProviderPayload(BaseModel):
     runtime_options: Optional[List[RuntimeOptionPayload]] = None
     is_configured: bool = False
     healthy: bool = True
+    # Health state is distinct from whether execution is currently permitted.
+    # Unknown means no completed provider probe, not an observed failure.
+    health_status: str = "unknown"
+    health_last_checked_at: Optional[datetime] = None
     user_selectable: bool = True
     enabled: bool = True
     policy_allowed: bool = True
@@ -815,14 +819,27 @@ async def build_model_settings_payload() -> Dict[str, Any]:
         health_statuses = runtime_manager.get_all_provider_health()
         
         is_configured = api_key_status in ["configured", "not_required"]
-        healthy = True
-        degraded_reason = None
-        
+        # An untested endpoint must not inherit healthy=True by default.
+        # Keep the canonical manager's health state rather than interpreting
+        # UNKNOWN as an observed failure. This catalog is discovery only.
         health_info = health_statuses.get(provider.name)
-        if health_info:
-            healthy = health_info.is_healthy
-            if not healthy:
-                degraded_reason = health_info.error_message
+        health_status = (
+            health_info.status.value if health_info is not None else "unknown"
+        )
+        health_last_checked_at = (
+            health_info.last_check
+            if health_info is not None and health_status != "unknown"
+            else None
+        )
+        healthy = bool(health_info is not None and health_info.is_healthy)
+        degraded_reason = (
+            health_info.error_message if health_info is not None and not healthy
+            else None
+        )
+        if not provider.enabled:
+            health_status = "unavailable"
+            healthy = False
+            degraded_reason = "Provider disabled"
             
         # Local providers like Ollama are only configured if they have available runtime options
         # or if a base_url has been manually set.
@@ -836,6 +853,7 @@ async def build_model_settings_payload() -> Dict[str, Any]:
                 is_configured = False
                 healthy = False
                 degraded_reason = "Selected Ollama runtime is unavailable"
+                health_status = "unavailable"
 
         # Required config fields
         required_fields = []
@@ -877,6 +895,8 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             runtime_source=override.get("runtime_source") if provider.name == "ollama" else None,
             is_configured=is_configured,
             healthy=healthy,
+            health_status=health_status,
+            health_last_checked_at=health_last_checked_at,
             user_selectable=bool(provider.priority > 0),
             enabled=bool(provider.enabled),
             policy_allowed=True,
