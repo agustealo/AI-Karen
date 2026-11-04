@@ -241,7 +241,11 @@ async def get_runtime_provider_catalog(
                 models=models,
                 health=ProviderHealthInfo(
                     status=(
-                        "degraded" if discovery_error is not None
+                        # A failed model inventory query must not erase a
+                        # previously observed unavailable/unhealthy provider.
+                        str(provider.get("health_status"))
+                        if provider.get("health_status") in {"unavailable", "unhealthy"}
+                        else "degraded" if discovery_error is not None
                         else str(provider.get("health_status") or "unknown")
                     ),
                     latency_ms=None,
