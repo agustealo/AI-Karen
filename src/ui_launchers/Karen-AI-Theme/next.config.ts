@@ -134,6 +134,11 @@ const nextConfig: NextConfig = {
         }
       },
     ));
+    config.plugins.push(new webpack.NormalModuleReplacementPlugin(
+      /^katex\/dist\/katex\.min\.css$/,
+      path.resolve(__dirname,
+        'src/components/chat/copilotkit/copilotkit-v2-style-import-shim.css'),
+    ));
 
     // 1. Set up plugin repo alias for dynamic loading
     if (!config.resolve) config.resolve = {};
