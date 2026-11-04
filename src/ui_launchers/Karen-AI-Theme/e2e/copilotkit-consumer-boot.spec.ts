@@ -226,23 +226,22 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const prompt = `Karen live acceptance ${crypto.randomUUID()}: Please respond with a brief greeting.`;
     const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
     await expect(composer, "CopilotKit must present a usable composer").toBeVisible();
-    await composer.fill(prompt);
-    // Absence of "Saving draft…" alone is insufficient: it can be absent
-    // before the delayed CAS save starts. Require the backend's authorized
-    // draft endpoint to confirm this exact prompt before submitting.
-    const draftEndpoint = `/api/conversations/${id}/draft`;
-    await expect.poll(async () => {
-      const { ok, body: draft } = await readAuthorizedSameOriginJson(page, draftEndpoint);
-      return Boolean(ok && draft && typeof draft === "object" &&
-        (draft as { text?: unknown }).text === prompt);
-    }, {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-      message: "The canonical backend must confirm this exact saved draft before sending",
-    }).toBe(true);
-    await expect(shell.getByText("Saving draft to your conversation…")).toHaveCount(0, {
-      timeout: 30_000,
+    // This must reproduce the original consumer defect: Enter immediately
+    // after typing while the debounced draft CAS may still be pending.
+    // Waiting for autosave here would make the acceptance test meaningless.
+    const observedRunRequests: string[] = [];
+    page.on("request", (request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (
+        pathname === "/api/copilotkit/agent/default/run" ||
+        pathname === "/api/chat/ag-ui" ||
+        pathname === "/api/chat/stream"
+      )) {
+        observedRunRequests.push(pathname);
+      }
     });
+    const draftEndpoint = `/api/conversations/${id}/draft`;
+    await composer.fill(prompt);
     await composer.press("Enter");
 
     const endpoint = `/api/conversations/${id}`;
@@ -273,6 +272,19 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       message: "A real user turn and subsequent assistant response must be persisted by the canonical backend",
     }).toBe(true);
     expect(persistedAnswer.trim().length).toBeGreaterThan(0);
+    expect(
+      observedRunRequests,
+      "One immediate Enter must send exactly one model execution request",
+    ).toHaveLength(1);
+    await expect.poll(async () => {
+      const { ok, body: draft } = await readAuthorizedSameOriginJson(page, draftEndpoint);
+      return Boolean(ok && draft && typeof draft === "object" &&
+        (draft as { text?: unknown }).text === "");
+    }, {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+      message: "Immediate Enter must consume the persisted draft without leaving stale text",
+    }).toBe(true);
     await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
     // A saved backend answer alone is not a functioning consumer chat.
     // The active CopilotKit view must render the real assistant response
