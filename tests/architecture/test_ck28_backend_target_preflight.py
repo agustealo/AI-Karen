@@ -18,7 +18,7 @@ def test_redirects_and_non_json_auth_responses_are_rejected() -> None:
     source = CHECK.read_text(encoding="utf-8")
     assert "class NoRedirects(HTTPRedirectHandler)" in source
     assert "build_opener(NoRedirects()).open" in source
-    assert 'Auth proxy did not return a JSON response' in source
+    assert 'proxy did not return a JSON response' in source
 
 
 def test_protected_copilotkit_acceptance_runs_backend_preflight_before_browser() -> None:
