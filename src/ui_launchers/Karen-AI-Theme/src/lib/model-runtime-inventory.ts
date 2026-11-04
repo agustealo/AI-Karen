@@ -99,6 +99,8 @@ export interface RuntimeProviderCatalogProvider {
   enabled?: boolean;
   configured?: boolean;
   healthy?: boolean;
+  /** Observed provider status. Unknown is not an unhealthy probe result. */
+  health?: { status: string; last_checked_at?: string | null };
   runtime_engine?: string;
   transport?: string;
   compatibility_profile?: string | null;
