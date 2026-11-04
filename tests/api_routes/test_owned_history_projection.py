@@ -196,3 +196,11 @@ def test_truncation_does_not_emit_partial_history():
     ]
     with pytest.raises(UnreplayableHistory, match="history_message_limit"):
         project_owned_history(saved(records), attestations={})
+
+
+
+def test_replay_failure_diagnostics_are_allowlisted_without_raw_exception_data():
+    assert UnreplayableHistory("unsupported_rich_history").safe_reason_code == "unsupported_rich_history"
+    assert UnreplayableHistory("history_byte_limit").safe_reason_code == "history_byte_limit"
+    assert UnreplayableHistory("access token or user content").safe_reason_code == "unknown"
+    assert UnreplayableHistory("supported", "extra").safe_reason_code == "unknown"
