@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
+import { isRuntimeProviderOperational } from "@/lib/model-runtime-inventory";
 import type { RuntimeProviderCatalogProvider, RuntimeProviderCatalogResponse } from "@/lib/model-runtime-inventory";
 
 /** Catalog visibility is not authority to select a model or execute a run. */
@@ -62,7 +63,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOp
         if (!event.target.value) { onSelectionChange(null); return; }
         const [provider, model] = JSON.parse(event.target.value) as [string, string];
         const item = providers.find((entry) => entry.id === provider);
-        if (!item || item.healthy !== true || item.configured !== true ||
+        if (!item || !isRuntimeProviderOperational(item) || item.configured !== true ||
           !item.models?.some((entry) => entry.id === model && entry.available === true)) {
           onSelectionChange(null);
           return;
@@ -71,7 +72,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOp
       }}
       className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm">
       <option value="">Automatic routing (Karen default)</option>
-      {providers.filter((provider) => provider.configured === true && provider.healthy === true).map((provider) =>
+      {providers.filter((provider) => provider.configured === true && isRuntimeProviderOperational(provider)).map((provider) =>
         (provider.models || []).filter((model) => model.available === true).map((model) =>
           <option key={provider.id + "/" + model.id} value={JSON.stringify([provider.id, model.id])}>
             {provider.label}: {model.label}
