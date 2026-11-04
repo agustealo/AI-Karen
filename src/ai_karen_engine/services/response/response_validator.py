@@ -103,6 +103,20 @@ class ResponseValidator:
         """
         if not evidence or intent not in {"search.weather", "time.current"}:
             return ValidationResult(valid=False, reason="missing_observation_evidence")
+        # Do not surface policy and memory-routing terminology as an answer,
+        # even when every factual number matches a verified observation.
+        # Keep this refusal in the single response-validation owner. The
+        # runtime falls back to the tool's actual observation without
+        # attributing the rejected output to a model.
+        if re.search(
+            r"\b(?:time\.current|search\.weather|continuity\s+(?:primary\s+)?candidate|"
+            r"recurring\s+behavioral\s+patterns|execution\s+policy\s+decision|"
+            r"authorized\s+execution\s+plan|hidden\s+system\s+prompt)\b",
+            text, re.IGNORECASE,
+        ):
+            return ValidationResult(
+                valid=False, reason="internal_observation_metadata",
+            )
         # Verified observations are not fetched pages and authorize no URL citations.
         if re.search(r"https?://[^\s)\]>]+", text, re.IGNORECASE):
             return ValidationResult(valid=False, reason="unverified_observation_url")
