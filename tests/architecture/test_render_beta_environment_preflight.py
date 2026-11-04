@@ -229,6 +229,39 @@ def test_rejects_duplicate_env_names_and_public_connection_urls(m):
             m._private_internal_url(url, kind=kind)
 
 
+def test_preserves_authoritative_rediss_tls_for_render_key_value(m):
+    """A secure Render URL cannot be normalized to a plaintext Redis URL."""
+    secure = "rediss://red-secure-private:6379"
+    assert m._private_internal_url(secure, kind="redis") == secure
+    assert m._private_internal_url(
+        "redis://red-secure-private:6379", kind="redis"
+    ) == "redis://red-secure-private:6379"
+
+
+def test_inspection_never_downgrades_or_accepts_wrong_redis_scheme(m):
+    secure = "rediss://red-private:6379"
+
+    class SecureKeyValue(FakeClient):
+        def _request_path(self, endpoint, *, method):
+            if endpoint == f"/v1/key-value/{KV}/connection-info":
+                self.calls.append((method, endpoint))
+                assert method == "GET"
+                return {"internalConnectionString": secure}
+            return super()._request_path(endpoint, method=method)
+
+    env = safe_env(m)
+    env["REDIS_URL"] = secure
+    verified = inspect(m, SecureKeyValue(env))
+    assert verified.ready
+    assert "mismatch:REDIS_URL" not in verified.failures
+
+    env["REDIS_URL"] = "redis://red-private:6379"
+    rejected = inspect(m, SecureKeyValue(env))
+    assert not rejected.ready
+    assert "mismatch:REDIS_URL" in rejected.failures
+    assert "red-private" not in repr(rejected)
+
+
 def test_source_workflow_is_protected_and_read_only():
     text = (ROOT / ".github/workflows/render-beta-service-reconcile.yml").read_text()
     assert "inspect-env" in text
