@@ -197,24 +197,22 @@ async def _collect_stream(
         "memory_recall_count": 0,
         "memory_persistence_status": "skipped",
     }
-    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
-        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
-            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
-                with patch.object(
-                    runtime,
-                    "_consume_resolved_memory",
-                    new_callable=AsyncMock,
-                    return_value=memory_meta,
-                ):
-                    with patch.object(runtime, "_run_simple_stream", side_effect=fake_stream):
-                        with patch.object(runtime, "_persist_memory", memory_persist):
-                            with patch.object(runtime, "_record_trajectory_completion"):
-                                with patch.object(runtime, "_record_execution_outcome"):
-                                    with patch.object(runtime._emitter, "emit"):
-                                        return [
-                                            chunk
-                                            async for chunk in runtime.execute_stream(request)
-                                        ]
+    with (
+        patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None),
+        patch.object(runtime, "_resolve_human_approval_gate", new_callable=AsyncMock, return_value=None),
+        patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision),
+        patch.object(runtime, "_build_authorized_plan", return_value=plan),
+        patch.object(runtime, "_consume_resolved_memory", new_callable=AsyncMock, return_value=memory_meta),
+        patch.object(runtime, "_run_simple_stream", side_effect=fake_stream),
+        patch.object(runtime, "_persist_memory", memory_persist),
+        patch.object(runtime, "_record_trajectory_completion"),
+        patch.object(runtime, "_record_execution_outcome"),
+        patch.object(runtime._emitter, "emit"),
+    ):
+        return [
+            chunk
+            async for chunk in runtime.execute_stream(request)
+        ]
 
 
 @pytest.mark.asyncio
@@ -230,10 +228,12 @@ async def test_execute_stream_assigns_canonical_sequence_and_ids():
 
     chunks = await _collect_stream(runtime, request, decision, plan, fake_stream)
 
-    assert len(chunks) == 3
-    assert chunks[0].sequence == 0
-    assert chunks[1].sequence == 1
-    assert chunks[2].sequence == 2
+    assert len(chunks) == 4
+    assert chunks[0].type == ChatStreamEventType.STATUS
+    assert chunks[1].type == ChatStreamEventType.CONTENT
+    assert chunks[2].type == ChatStreamEventType.CONTENT
+    assert chunks[3].type == ChatStreamEventType.COMPLETE
+    assert [chunk.sequence for chunk in chunks] == [0, 1, 2, 3]
 
     event_ids = [chunk.event_id for chunk in chunks]
     assert len(event_ids) == len(set(event_ids)), "event_id must be unique"
@@ -284,8 +284,9 @@ async def test_execute_stream_emits_complete_on_generation_failure():
 
     chunks = await _collect_stream(runtime, request, decision, plan, fake_stream)
 
-    assert chunks[0].type == ChatStreamEventType.ERROR
-    assert chunks[1].type == ChatStreamEventType.COMPLETE
+    assert chunks[0].type == ChatStreamEventType.STATUS
+    assert chunks[1].type == ChatStreamEventType.ERROR
+    assert chunks[2].type == ChatStreamEventType.COMPLETE
     assert len([chunk for chunk in chunks if chunk.type == ChatStreamEventType.COMPLETE]) == 1
     assert gateway.calls == []
     assert chunks[-1].metadata["transcript_persistence_status"] == "skipped"

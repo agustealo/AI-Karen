@@ -1056,6 +1056,7 @@ class ChatRuntime:
         presentation_replay_incomplete = False
         try:
             async for chunk in gen:
+                self._accumulate_chunk_metadata(chunk, provider_meta)
                 if chunk.type == ChatStreamEventType.PRESENTATION:
                     from ai_karen_engine.core.runtime.presentation_contract import (
                         validate_presentation,
