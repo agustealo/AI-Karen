@@ -207,15 +207,14 @@ async def test_unknown_health_stays_unverified_and_unselectable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Configured models must not become healthy from an untested manager state."""
-    from datetime import datetime, timezone
-
     from ai_karen_engine.api_routes.models import settings as model_settings
     from ai_karen_engine.config.llm_provider_config import ProviderType
-    from ai_karen_engine.config.runtime_provider_manager import (
-        ProviderHealthStatus,
-        ProviderStatus,
-    )
     from ai_karen_engine.config import runtime_provider_manager
+    from ai_karen_engine.core.model_runtime import provider_registry_service
+    from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+        HealthStatus,
+        ProviderHealthInfo,
+    )
 
     provider = SimpleNamespace(
         name="builtin_transformers",
@@ -230,10 +229,10 @@ async def test_unknown_health_stays_unverified_and_unselectable(
         endpoint=None,
         default_model="auto",
     )
-    health = ProviderHealthStatus(
-        provider_name="builtin_transformers",
-        status=ProviderStatus.UNKNOWN,
-        last_check=datetime.now(timezone.utc),
+    health = ProviderHealthInfo(
+        provider_id="builtin_transformers",
+        health_status=HealthStatus.UNKNOWN,
+        last_checked_at=None,
     )
     monkeypatch.setattr(
         model_settings, "get_settings_manager",
@@ -262,12 +261,22 @@ async def test_unknown_health_stays_unverified_and_unselectable(
     monkeypatch.setattr(
         model_settings, "get_provider_execution_spec", lambda name: {},
     )
+    observed = []
     monkeypatch.setattr(
-        runtime_provider_manager,
-        "get_runtime_provider_manager",
-        lambda: SimpleNamespace(get_all_provider_health=lambda: {
-            "builtin_transformers": health
-        }),
+        provider_registry_service,
+        "get_provider_registry_service",
+        lambda: SimpleNamespace(
+            canonicalize_provider_id=lambda provider_id: provider_id,
+            health_monitor=SimpleNamespace(
+                get_provider_health=lambda provider_id: (
+                    observed.append(provider_id) or health
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_provider_manager, "get_runtime_provider_manager",
+        lambda: pytest.fail("Legacy health manager must not be used by settings"),
     )
     payload = await model_settings.build_model_settings_payload()
     assert len(payload["providers"]) == 1
@@ -275,6 +284,7 @@ async def test_unknown_health_stays_unverified_and_unselectable(
     assert item.healthy is False
     assert item.health_status == "unknown"
     assert item.health_last_checked_at is None
+    assert observed == ["builtin_transformers"]
 
     async def payload_for_catalog() -> dict[str, object]:
         return payload
