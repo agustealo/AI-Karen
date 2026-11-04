@@ -86,6 +86,47 @@ class ExpressionGateway:
             **extra,
         }
 
+    @staticmethod
+    def _observe_verified_model_success(result: ExpressionResult) -> None:
+        """Report an actual executor's verified model result to the health owner.
+
+        The result is already validated for usable, model-sourced text by the
+        gateway. A configured preference, disabled engine, static fallback or
+        empty model identity is not execution evidence. Health observability
+        must never turn a successful model answer into an HTTP failure.
+        """
+        provider = result.provider
+        model = result.model
+        if (
+            not isinstance(provider, str)
+            or not provider.strip()
+            or not isinstance(model, str)
+            or not model.strip()
+            or result.response_source in {
+                "model_unavailable",
+                "emergency_static",
+                "deterministic_fallback",
+                "persisted_history",
+            }
+        ):
+            return
+
+        try:
+            from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+                record_provider_success,
+            )
+
+            latency_seconds = max(0.0, float(result.latency_ms) / 1000.0)
+            record_provider_success(provider.strip(), response_time=latency_seconds)
+        except (ImportError, RuntimeError, ValueError, TypeError, OverflowError) as exc:
+            logger.warning(
+                "expression.provider_health_observation_unavailable",
+                extra={
+                    "provider": provider,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
         active_engine = (
             "local" if self.settings.active_engine == "builtin" else self.settings.active_engine
@@ -260,6 +301,10 @@ class ExpressionGateway:
                         result.degraded = True
                         result.degradation_reason = "output_token_limit"
                     self.circuits.mark_success(f"expression.engine.{engine_id}")
+                    # Only observed, validated model execution may advance the
+                    # canonical health catalog. Do not mark the selected alias
+                    # healthy merely because an engine was configured.
+                    self._observe_verified_model_success(result)
                     result.metadata = {
                         **(result.metadata or {}),
                         "fallback_level": level,
