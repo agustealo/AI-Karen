@@ -29,7 +29,7 @@ import {
   karenScopedAgentId,
   toCopilotTextMessages,
 } from "@/components/chat/copilotkit/KarenCopilotHistoryGate";
-import { parseKarenVerifiedHistory } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
+import { KarenCopilotAssistantMessage, parseKarenVerifiedHistory } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
 
 const CONVERSATION_A = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 const CONVERSATION_B = "bd1d23c2-bbd7-4d31-987a-cf81025ebafd";
@@ -385,6 +385,50 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
     view.unmount();
     expect(backend.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the first verified presentation immediately after one completed prompt", async () => {
+    const firstMessage = "a-first";
+    const presentation = {
+      schema_version: 1, presentation_id: "first-prompt-clock",
+      component_type: "time.observation", evidence_ref: "request-first:clock",
+      data: { formatted: "2026-11-04 17:42", timezone: "America/Detroit" },
+    };
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [],
+      replayEvents: [],
+    }).mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [
+        { id: "u-first", role: "user", content: "time" },
+        { id: firstMessage, role: "assistant", content: "It is 5:42 PM." },
+      ],
+      replayEvents: [{
+        type: "CUSTOM", name: "karen.presentation.v1",
+        messageId: firstMessage, value: presentation,
+      }],
+    });
+    render(
+      <KarenCopilotHistoryGate conversationId={CONVERSATION_A}>
+        <KarenCopilotAssistantMessage message={{
+          id: firstMessage, role: "assistant", content: "It is 5:42 PM.",
+        } as never} />
+      </KarenCopilotHistoryGate>,
+    );
+    await waitFor(() => expect(backend.agent.subscribe).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("karen-time-presentation")).toBeNull();
+
+    // One actual SDK run finishes, then a single authenticated canonical
+    // read enables the saved UI without requiring another model prompt.
+    act(() => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(screen.getByTestId("karen-time-presentation")).toBeTruthy());
+    expect(screen.getByTestId("karen-time-presentation").textContent).toContain("5:42 PM");
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    expect(backend.agent.setMessages).toHaveBeenLastCalledWith([
+      { id: "u-first", role: "user", content: "time" },
+      { id: firstMessage, role: "assistant", content: "It is 5:42 PM." },
+    ]);
   });
 
   it("coalesces a second SDK completion during a pending canonical refresh", async () => {
