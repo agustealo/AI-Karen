@@ -7,6 +7,7 @@ and that registration is not itself an observed successful probe.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from ai_karen_engine.core.model_runtime import provider_registry_service
@@ -29,17 +30,39 @@ def test_unknown_provider_is_unchecked_not_healthy() -> None:
     assert monitor.get_all_provider_health()["local-test"].health_status is HealthStatus.UNKNOWN
 
 
-def test_first_failed_probe_is_degraded_not_healthy_and_success_recovers() -> None:
+def test_first_failed_probe_is_unhealthy_until_real_success_recovers() -> None:
     monitor = ProviderHealthMonitor()
     monitor.record_provider_interaction("local-test", success=False)
-    degraded = monitor.get_provider_health("local-test")
-    assert degraded.health_status is HealthStatus.DEGRADED
-    assert degraded.last_checked_at is not None
-    assert degraded.consecutive_failures == 1
+    failed = monitor.get_provider_health("local-test")
+    assert failed.health_status is HealthStatus.UNHEALTHY
+    assert failed.last_checked_at is not None
+    assert failed.last_success_at is None
+    assert failed.consecutive_failures == 1
     monitor.record_provider_interaction("local-test", success=True)
     healthy = monitor.get_provider_health("local-test")
     assert healthy.health_status is HealthStatus.HEALTHY
     assert healthy.consecutive_failures == 0
+
+
+def test_recent_success_can_be_degraded_after_failed_interaction() -> None:
+    monitor = ProviderHealthMonitor()
+    monitor.record_provider_interaction("local-test", success=True)
+    monitor.record_provider_interaction("local-test", success=False)
+    health = monitor.get_provider_health("local-test")
+    assert health.health_status is HealthStatus.DEGRADED
+    assert health.last_success_at is not None
+    assert health.consecutive_failures == 1
+
+
+def test_stale_success_does_not_make_failed_provider_degraded() -> None:
+    monitor = ProviderHealthMonitor(cache_ttl=30)
+    monitor.record_provider_interaction("local-test", success=True)
+    observed = monitor.get_provider_health("local-test")
+    observed.last_success_at = datetime.utcnow() - timedelta(seconds=31)
+    monitor.record_provider_interaction("local-test", success=False)
+    health = monitor.get_provider_health("local-test")
+    assert health.health_status is HealthStatus.UNHEALTHY
+    assert health.consecutive_failures == 1
 
 
 def test_repeated_observed_failure_becomes_unhealthy() -> None:
@@ -58,7 +81,7 @@ def test_global_monitor_accessor_reuses_registry_instance(monkeypatch) -> None:
     record_provider_failure("health-reuse")
     assert (
         registry.health_monitor.get_provider_health("health-reuse").health_status
-        is HealthStatus.DEGRADED
+        is HealthStatus.UNHEALTHY
     )
     record_provider_success("health-reuse")
     assert (
