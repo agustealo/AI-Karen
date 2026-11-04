@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
+from typing import Any, AsyncIterator
 
 from .circuit_breakers import ExpressionCircuitBreakers
-from .contracts import ExpressionResult, ExpressionTask
+from .contracts import ExpressionResult, ExpressionStreamEvent, ExpressionTask
 from .errors import EngineUnavailableError
 from .observability import emit_expression_event
 from .registry import get_engine
@@ -131,24 +131,13 @@ class ExpressionGateway:
                 },
             )
 
-    async def generate(self, task: ExpressionTask) -> ExpressionResult:
+    def _candidate_engine_sequence(
+        self, task: ExpressionTask
+    ) -> tuple[str, list[str]]:
+        """Single configured policy sequence for REST and native stream."""
         active_engine = (
             "local" if self.settings.active_engine == "builtin" else self.settings.active_engine
         )
-        emit_expression_event(
-            "expression.task.started",
-            self._event_payload(task, engine_id=active_engine),
-        )
-
-        _emit_routing_event(
-            RoutingEvents.REQUESTED,
-            correlation_id=task.correlation_id,
-            request_id=task.request_id,
-            preferred_provider=task.preferred_provider,
-            preferred_model=task.preferred_model,
-            response_mode=task.response_mode,
-        )
-
         sequence: list[str] = []
         preferred_id = str(task.preferred_provider or "").strip().lower()
         if preferred_id and preferred_id != "auto":
@@ -187,6 +176,25 @@ class ExpressionGateway:
                 sequence.append(engine_id)
 
         sequence = sequence[:5]
+
+        return active_engine, sequence
+
+    async def generate(self, task: ExpressionTask) -> ExpressionResult:
+        active_engine, sequence = self._candidate_engine_sequence(task)
+        emit_expression_event(
+            "expression.task.started",
+            self._event_payload(task, engine_id=active_engine),
+        )
+
+        _emit_routing_event(
+            RoutingEvents.REQUESTED,
+            correlation_id=task.correlation_id,
+            request_id=task.request_id,
+            preferred_provider=task.preferred_provider,
+            preferred_model=task.preferred_model,
+            response_mode=task.response_mode,
+        )
+
 
         _emit_routing_event(
             RoutingEvents.EVALUATED,
