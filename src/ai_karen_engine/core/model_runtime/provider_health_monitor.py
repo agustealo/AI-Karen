@@ -78,6 +78,17 @@ class ProviderHealthMonitor:
 
         self._prev_statuses: Dict[str, HealthStatus] = {}
 
+    def _provider_key(self, provider_id: str) -> str:
+        """Canonicalize aliases once at the sole observed-health owner."""
+        normalized = str(provider_id).strip().lower()
+        if self._registry is not None:
+            canonicalize = getattr(self._registry, "canonicalize_provider_id", None)
+            if callable(canonicalize):
+                canonical = canonicalize(normalized)
+                if canonical:
+                    return str(canonical).lower()
+        return normalized
+
     def _get_provider_ids(self) -> List[str]:
         """Return the current provider inventory from the registry."""
         if self._registry is None:
@@ -92,7 +103,7 @@ class ProviderHealthMonitor:
 
         Returns a ProviderHealthInfo with UNKNOWN status if not yet checked.
         """
-        provider_key = provider_id.lower()
+        provider_key = self._provider_key(provider_id)
         cached = self._health_cache.get(provider_key)
         if cached is not None:
             cache_age = (
@@ -104,7 +115,7 @@ class ProviderHealthMonitor:
             logger.debug("Health cache expired for %s", provider_id)
 
         return ProviderHealthInfo(
-            provider_id=provider_id,
+            provider_id=provider_key,
             health_status=HealthStatus.UNKNOWN,
             last_checked_at=None,
             metadata={"cache_miss": True},
@@ -120,7 +131,7 @@ class ProviderHealthMonitor:
         error_message: Optional[str] = None,
     ) -> None:
         """Update observed health state for a provider."""
-        provider_key = provider_id.lower()
+        provider_key = self._provider_key(provider_id)
         now = datetime.utcnow()
 
         existing = self._health_cache.get(provider_key)
@@ -128,7 +139,7 @@ class ProviderHealthMonitor:
             health_info = existing
         else:
             health_info = ProviderHealthInfo(
-                provider_id=provider_id,
+                provider_id=provider_key,
                 last_checked_at=now,
             )
 
