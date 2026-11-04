@@ -60,6 +60,41 @@ suffixed duplicate resources instead of adopting these existing ones.
 Use the actual `main` SHA as the deployment source receipt. A deployment
 from the obsolete feature branch cannot prove the current consumer.
 
+#### Existing-service branch reconciliation (protected workflow)
+
+The checked-in Render Blueprint is desired source configuration. Existing
+Render services have independent live settings. A reviewed main commit can now
+use [Render Beta Service Reconcile](../../.github/workflows/render-beta-service-reconcile.yml)
+to inspect or repair **only** the existing API's Git branch and manual-deploy
+policy. This route uses Render's official PATCH service endpoint:
+https://api-docs.render.com/reference/update-service .
+
+Configure the existing GitHub Actions protected `beta-release` environment
+with `RENDER_API_KEY` as a **secret** and the following **nonsecret variables**:
+`RENDER_BETA_SERVICE_ID=srv-dbjmh78u01pc73ftse40` and
+`RENDER_BETA_WORKSPACE_ID=tea-dbjm53o473hc73a8s5ng`.
+Use a least-privilege, authorized Render API key, and never commit, log,
+copy into issues or return its value.
+
+1. Choose the `main` branch in the workflow-dispatch UI.
+2. Supply the **exact current reviewed 40-character main SHA**.
+3. Run `inspect` first. A detected mismatch intentionally fails without mutation.
+4. After confirming the existing Render identity and reviewed revision, run
+   `apply` with the same current SHA. The workflow verifies GitHub main
+   has not moved, the Render service ID, owner, name, repo and type match
+   the checked-in Blueprint, and updates **only** `branch: main` and
+   `autoDeployTrigger: off`. It GET-verifies the result.
+5. Confirm service branch and manual deployment in the existing Render
+   Dashboard. The workflow **does not** deploy, create resources, set
+   secrets, edit environment groups, rotate keys, or change Vercel.
+
+Do not run a new API deploy until the required production environment is
+properly configured. The GitHub workflow deliberately refuses to treat a
+source update as a successful backend deployment. The script is reusable
+locally through Python's standard library for an authorized operator, and
+its safety contract is tested in
+`tests/architecture/test_render_beta_service_reconcile.py`.
+
 ### 2. Establish real Render production settings without copying secrets into git
 
 Configure the missing keys in the **existing** service's protected
