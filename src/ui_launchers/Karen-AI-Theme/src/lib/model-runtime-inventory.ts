@@ -27,6 +27,8 @@ export interface RuntimeProviderDetails {
   api_key_env_var?: string | null;
   is_configured?: boolean;
   healthy?: boolean;
+  /** Observed state is not interchangeable with an absent health probe. */
+  health?: { status: string; last_checked_at?: string | null };
   user_selectable?: boolean;
   enabled?: boolean;
   policy_allowed?: boolean;
@@ -119,6 +121,19 @@ export interface RuntimeProviderCatalogProvider {
   allowed_for_current_user?: boolean;
   requires_api_key?: boolean;
   requires_base_url?: boolean;
+}
+
+/**
+ * Display/selection eligibility only. RuntimePolicy remains the execution
+ * authority. Verified degraded providers may still have usable models;
+ * unknown or unobserved unhealthy providers may not.
+ */
+export function isRuntimeProviderOperational(
+  provider: Pick<RuntimeProviderCatalogProvider, 'healthy' | 'health'>,
+): boolean {
+  return provider.health?.status === 'degraded' ||
+    (provider.healthy === true &&
+      (provider.health === undefined || provider.health.status === 'healthy'));
 }
 
 export interface RuntimeProviderCatalogResponse {
@@ -454,7 +469,8 @@ export function normalizeRuntimeProviderCatalogResponse(
         api_key_env_var: provider.api_key_env_var || null,
         api_key_configured: provider.configured !== false,
         is_configured: provider.configured !== false,
-        healthy: provider.healthy !== false,
+        healthy: provider.healthy === true,
+        health: provider.health,
         user_selectable: provider.allowed_for_current_user !== false,
         enabled: provider.enabled !== false,
         policy_allowed: provider.allowed_for_current_user !== false,
@@ -495,7 +511,7 @@ export function normalizeRuntimeProviderCatalogResponse(
   // reports unknown, unavailable, degraded or unhealthy.
   const selectableProviders = providers.filter((provider) =>
     isProviderSelectable(provider) &&
-    provider.healthy === true &&
+    isRuntimeProviderOperational(provider) &&
     provider.models.length > 0
   );
   const builtInProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'builtIn');
