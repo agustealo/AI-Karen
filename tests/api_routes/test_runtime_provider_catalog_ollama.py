@@ -200,3 +200,133 @@ async def test_unconfigured_custom_provider_does_not_claim_saved_manual_model(
     provider = next(item for item in catalog.providers if item.id == "custom")
     assert provider.models == []
     assert provider.healthy is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_health_stays_unverified_and_unselectable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured models must not become healthy from an untested manager state."""
+    from datetime import datetime, timezone
+
+    from ai_karen_engine.api_routes.models import settings as model_settings
+    from ai_karen_engine.config.llm_provider_config import ProviderType
+    from ai_karen_engine.config.runtime_provider_manager import (
+        ProviderHealthStatus,
+        ProviderStatus,
+    )
+    from ai_karen_engine.config import runtime_provider_manager
+
+    provider = SimpleNamespace(
+        name="builtin_transformers",
+        display_name="Transformers",
+        description="Local encoder-backed provider",
+        provider_type=ProviderType.LOCAL,
+        enabled=True,
+        priority=1,
+        models=[],
+        capabilities={"chat"},
+        authentication=None,
+        endpoint=None,
+        default_model="auto",
+    )
+    health = ProviderHealthStatus(
+        provider_name="builtin_transformers",
+        status=ProviderStatus.UNKNOWN,
+        last_check=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        model_settings, "get_settings_manager",
+        lambda: SimpleNamespace(get_setting=lambda name, default=None: default),
+    )
+    monkeypatch.setattr(
+        model_settings, "get_provider_config_manager",
+        lambda: SimpleNamespace(list_providers=lambda: [provider]),
+    )
+
+    async def no_discovered_models(*, runtime: str) -> list[object]:
+        return []
+
+    monkeypatch.setattr(
+        model_settings, "get_model_discovery_service",
+        lambda: SimpleNamespace(get_models_async=no_discovered_models),
+    )
+    monkeypatch.setattr(model_settings, "_get_provider_override", lambda name: {})
+    monkeypatch.setattr(
+        model_settings, "_get_api_key_status",
+        lambda name, item: "not_required",
+    )
+    monkeypatch.setattr(
+        model_settings, "_supports_base_url_override", lambda item: False,
+    )
+    monkeypatch.setattr(
+        model_settings, "get_provider_execution_spec", lambda name: {},
+    )
+    monkeypatch.setattr(
+        runtime_provider_manager,
+        "get_runtime_provider_manager",
+        lambda: SimpleNamespace(get_all_provider_health=lambda: {
+            "builtin_transformers": health
+        }),
+    )
+    payload = await model_settings.build_model_settings_payload()
+    assert len(payload["providers"]) == 1
+    item = payload["providers"][0]
+    assert item.healthy is False
+    assert item.health_status == "unknown"
+    assert item.health_last_checked_at is None
+
+    async def payload_for_catalog() -> dict[str, object]:
+        return payload
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload_for_catalog)
+    catalog = await runtime_api.get_runtime_provider_catalog(
+        current_user={"roles": ["admin"]}
+    )
+    runtime = catalog.providers[0]
+    assert runtime.healthy is False
+    assert runtime.health.status == "unknown"
+    assert runtime.health.last_checked_at is None
+    assert runtime.models == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_catalog_distinguishes_real_failure_from_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def payload() -> dict[str, object]:
+        return {
+            "providers": [
+                {
+                    "id": "ollama",
+                    "display_name": "Ollama",
+                    "provider_type": "local",
+                    "enabled": True,
+                    "is_configured": True,
+                    "healthy": False,
+                    "health_status": "unavailable",
+                    "degraded_reason": "Selected Ollama runtime is unavailable",
+                    "models": [],
+                },
+                {
+                    "id": "openai",
+                    "display_name": "OpenAI",
+                    "provider_type": "remote",
+                    "enabled": True,
+                    "is_configured": True,
+                    "healthy": False,
+                    "health_status": "unhealthy",
+                    "models": [],
+                },
+            ],
+            "selected_provider": "ollama",
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    catalog = await runtime_api.get_runtime_provider_catalog(
+        current_user={"roles": ["admin"]}
+    )
+    assert {entry.id: entry.health.status for entry in catalog.providers} == {
+        "ollama": "unavailable", "openai": "unhealthy"
+    }
+    assert all(entry.healthy is False for entry in catalog.providers)

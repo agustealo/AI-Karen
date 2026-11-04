@@ -1,9 +1,23 @@
 "use client";
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
-import type { RuntimeProviderCatalogResponse } from "@/lib/model-runtime-inventory";
+import { isRuntimeProviderOperational } from "@/lib/model-runtime-inventory";
+import type { RuntimeProviderCatalogProvider, RuntimeProviderCatalogResponse } from "@/lib/model-runtime-inventory";
 
 /** Catalog visibility is not authority to select a model or execute a run. */
+export function getRuntimeProviderStatusLabel(provider: RuntimeProviderCatalogProvider): string {
+  if (provider.enabled === false) return "Disabled";
+  if (provider.configured === false) return "Not configured";
+  const status = provider.health?.status ?? "unknown";
+  if (status === "unknown") return "Not checked";
+  if (status === "degraded") return "Degraded";
+  if (status === "unavailable") return "Unavailable";
+  if (status === "unhealthy") return "Unhealthy";
+  if (status !== "healthy" || provider.healthy !== true) return "Unverified";
+  const available = (provider.models ?? []).filter((model) => model.available === true).length;
+  return `${available} available models`;
+}
+
 export type ComposerModelRequest = { provider: string; model: string } | null;
 export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOpenAgents }: {
   selection: ComposerModelRequest;
@@ -38,6 +52,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOp
   }, [showAdvanced]);
   if (error) return <p role="status" className="text-sm text-muted-foreground">Runtime catalog unavailable. No provider selection was changed.</p>;
   if (!catalog) return <p role="status" className="text-sm text-muted-foreground">Loading runtime providers…</p>;
+  if (catalog.catalog_version === "bootstrap") return <p role="status" className="text-sm text-muted-foreground">Runtime provider catalog unavailable. No provider selection was changed.</p>;
   const providers = catalog.providers.filter((provider) => provider.enabled === true && provider.allowed_for_current_user !== false);
   return <section aria-label="Runtime provider discovery" className="space-y-2">
     <h4 className="text-sm font-medium">Choose how Karen responds</h4>
@@ -48,7 +63,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOp
         if (!event.target.value) { onSelectionChange(null); return; }
         const [provider, model] = JSON.parse(event.target.value) as [string, string];
         const item = providers.find((entry) => entry.id === provider);
-        if (!item || item.healthy !== true || item.configured !== true ||
+        if (!item || !isRuntimeProviderOperational(item) || item.configured !== true ||
           !item.models?.some((entry) => entry.id === model && entry.available === true)) {
           onSelectionChange(null);
           return;
@@ -57,7 +72,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOp
       }}
       className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm">
       <option value="">Automatic routing (Karen default)</option>
-      {providers.filter((provider) => provider.configured === true && provider.healthy === true).map((provider) =>
+      {providers.filter((provider) => provider.configured === true && isRuntimeProviderOperational(provider)).map((provider) =>
         (provider.models || []).filter((model) => model.available === true).map((model) =>
           <option key={provider.id + "/" + model.id} value={JSON.stringify([provider.id, model.id])}>
             {provider.label}: {model.label}
@@ -75,7 +90,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOp
         {providers.map((provider) => <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
           <div className="flex items-center justify-between gap-2">
             <span className="min-w-0 truncate font-medium">{provider.label}</span>
-            <span className="shrink-0 text-xs text-muted-foreground">{provider.healthy === false ? "Unhealthy" : provider.configured === false ? "Not configured" : String((provider.models || []).filter((model) => model.available === true).length) + " available models"}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{getRuntimeProviderStatusLabel(provider)}</span>
           </div>
           {provider.models && provider.models.length > 0 && <details className="mt-1 text-xs">
             <summary className="cursor-pointer text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">View reported models</summary>

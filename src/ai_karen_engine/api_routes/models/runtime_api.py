@@ -222,7 +222,7 @@ async def get_runtime_provider_catalog(
                 category=category,
                 enabled=bool(provider.get("enabled", True)),
                 configured=bool(provider.get("is_configured", False)),
-                healthy=bool(provider.get("healthy", True)) and discovery_error is None,
+                healthy=bool(provider.get("healthy", False)) and discovery_error is None,
                 runtime_engine=runtime_engine,
                 transport=transport,
                 compatibility_profile=safe_metadata.get("compatibility_profile"),
@@ -240,9 +240,16 @@ async def get_runtime_provider_catalog(
                 safe_diagnostic_metadata=safe_metadata,
                 models=models,
                 health=ProviderHealthInfo(
-                    status="healthy" if provider.get("healthy", True) and discovery_error is None else "degraded",
+                    status=(
+                        # A failed model inventory query must not erase a
+                        # previously observed unavailable/unhealthy provider.
+                        str(provider.get("health_status"))
+                        if provider.get("health_status") in {"unavailable", "unhealthy"}
+                        else "degraded" if discovery_error is not None
+                        else str(provider.get("health_status") or "unknown")
+                    ),
                     latency_ms=None,
-                    last_checked_at=datetime.now(timezone.utc),
+                    last_checked_at=provider.get("health_last_checked_at"),
                 ),
                 degradation_reason=discovery_error or provider.get("degraded_reason"),
                 allowed_for_current_user=bool(provider.get("user_selectable", True) and provider.get("policy_allowed", True)),

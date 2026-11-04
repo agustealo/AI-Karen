@@ -27,6 +27,8 @@ export interface RuntimeProviderDetails {
   api_key_env_var?: string | null;
   is_configured?: boolean;
   healthy?: boolean;
+  /** Observed state is not interchangeable with an absent health probe. */
+  health?: { status?: string; last_checked_at?: string | null } | null;
   user_selectable?: boolean;
   enabled?: boolean;
   policy_allowed?: boolean;
@@ -99,6 +101,8 @@ export interface RuntimeProviderCatalogProvider {
   enabled?: boolean;
   configured?: boolean;
   healthy?: boolean;
+  /** Observed provider status. Unknown is not an unhealthy probe result. */
+  health?: { status: string; last_checked_at?: string | null };
   runtime_engine?: string;
   transport?: string;
   compatibility_profile?: string | null;
@@ -117,6 +121,19 @@ export interface RuntimeProviderCatalogProvider {
   allowed_for_current_user?: boolean;
   requires_api_key?: boolean;
   requires_base_url?: boolean;
+}
+
+/**
+ * Display/selection eligibility only. RuntimePolicy remains the execution
+ * authority. Verified degraded providers may still have usable models;
+ * unknown or unobserved unhealthy providers may not.
+ */
+export function isRuntimeProviderOperational(
+  provider: Pick<RuntimeProviderDetails, 'healthy' | 'health'>,
+): boolean {
+  return provider.health?.status === 'degraded' ||
+    (provider.healthy === true &&
+      (provider.health == null || provider.health.status === 'healthy'));
 }
 
 export interface RuntimeProviderCatalogResponse {
@@ -452,7 +469,8 @@ export function normalizeRuntimeProviderCatalogResponse(
         api_key_env_var: provider.api_key_env_var || null,
         api_key_configured: provider.configured !== false,
         is_configured: provider.configured !== false,
-        healthy: provider.healthy !== false,
+        healthy: provider.healthy === true,
+        health: provider.health,
         user_selectable: provider.allowed_for_current_user !== false,
         enabled: provider.enabled !== false,
         policy_allowed: provider.allowed_for_current_user !== false,
@@ -488,8 +506,13 @@ export function normalizeRuntimeProviderCatalogResponse(
       getRuntimeDisplayName(a.id, a.display_name).localeCompare(getRuntimeDisplayName(b.id, b.display_name))
     );
 
+  // Runtime discovery is not execution authority. In particular, configured
+  // model IDs must not become selectable while the canonical health monitor
+  // reports unknown, unavailable, degraded or unhealthy.
   const selectableProviders = providers.filter((provider) =>
-    isProviderSelectable(provider) && provider.models.length > 0
+    isProviderSelectable(provider) &&
+    isRuntimeProviderOperational(provider) &&
+    provider.models.length > 0
   );
   const builtInProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'builtIn');
   const localProviders = providers.filter((provider) => getRuntimeProviderBucket(provider) === 'local');
