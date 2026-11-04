@@ -67,6 +67,23 @@ def test_global_monitor_accessor_reuses_registry_instance(monkeypatch) -> None:
     )
 
 
+def test_legacy_provider_alias_and_canonical_id_share_one_health_record(
+    monkeypatch,
+) -> None:
+    registry = provider_registry_service.ProviderRegistryService()
+    monkeypatch.setattr(
+        provider_registry_service, "_provider_registry_service", registry
+    )
+    record_provider_success("ollama")
+    assert (
+        registry.health_monitor.get_provider_health("ollama-local").health_status
+        is HealthStatus.HEALTHY
+    )
+    assert registry.health_monitor.get_provider_health("ollama") is (
+        registry.health_monitor.get_provider_health("ollama-local")
+    )
+
+
 def test_endpoint_registration_does_not_fabricate_healthy_probe() -> None:
     registry = provider_registry_service.ProviderRegistryService()
     registry.register_configured_endpoint(
