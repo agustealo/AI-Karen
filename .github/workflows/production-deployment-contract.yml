@@ -7,6 +7,9 @@ on:
       - "docker-compose.yml"
       - "deploy/compose/docker-compose.prod.yml"
       - "deploy/render/render.yaml"
+      - ".github/workflows/render-beta-service-reconcile.yml"
+      - "scripts/deploy/reconcile_render_beta_service.py"
+      - "tests/architecture/test_render_beta_service_reconcile.py"
       - "tests/architecture/test_render_beta_blueprint_contract.py"
       - ".env.production.example"
       - "src/ai_karen_engine/api_routes/monitoring/probes.py"
@@ -34,6 +37,9 @@ on:
       - "docker-compose.yml"
       - "deploy/compose/docker-compose.prod.yml"
       - "deploy/render/render.yaml"
+      - ".github/workflows/render-beta-service-reconcile.yml"
+      - "scripts/deploy/reconcile_render_beta_service.py"
+      - "tests/architecture/test_render_beta_service_reconcile.py"
       - "tests/architecture/test_render_beta_blueprint_contract.py"
       - ".env.production.example"
       - "src/ai_karen_engine/api_routes/monitoring/probes.py"
@@ -81,6 +87,7 @@ jobs:
         run: |
           pytest tests/architecture/test_production_deployment_contract.py -q
           pytest tests/architecture/test_render_beta_blueprint_contract.py -q
+          pytest tests/architecture/test_render_beta_service_reconcile.py -q
           pytest tests/architecture/test_docker_release_attestation.py -q
           pytest tests/architecture/test_signed_docker_release_provenance.py -q
           pytest tests/architecture/test_docker_browser_acceptance_contract.py -q
