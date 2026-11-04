@@ -18,6 +18,6 @@ class BaseExpressionEngine:
         from ..contracts import ExpressionStreamEvent
 
         result = await self.generate(task)
-        if result.text:
-            yield ExpressionStreamEvent(kind="delta", text_delta=result.text)
+        # No user-facing delta until the gateway validates this complete
+        # non-native answer. This is not a fabricated token stream.
         yield ExpressionStreamEvent(kind="complete", result=result)
