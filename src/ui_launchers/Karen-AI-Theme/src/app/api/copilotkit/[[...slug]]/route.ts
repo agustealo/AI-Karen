@@ -89,7 +89,9 @@ const STOP_ROUTE =
   /^\/api\/copilotkit\/agent\/default\/stop\/([0-9a-f-]{36})$/i;
 const RUN_STATUS_ROUTE =
   /^\/api\/copilotkit\/agent\/default\/runs\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{1,100})\/status$/i;
-const MAX_RUN_BYTES = 524288;
+// Must equal the FastAPI AG_UI_MAX_REQUEST_BYTES ingress contract.
+// Reject an oversized SDK envelope locally, before forwarding any credentials.
+const MAX_RUN_BYTES = 262144;
 
 /** Refuse SDK endpoints without canonical thread authorization or durability. */
 export function validateCopilotRoute(request: NextRequest): NextResponse | null {
