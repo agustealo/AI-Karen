@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getRuntimeProviderStatusLabel } from '@/components/chat/KarenComposerRuntimeCatalog';
 
 import { normalizeRuntimeProviderCatalogResponse, resolveChatProviderModelSelection } from '@/lib/model-runtime-inventory';
 
@@ -307,5 +308,53 @@ describe('runtime provider model availability and recovery', () => {
     const inventory = catalog(true, false);
     expect(inventory.providers[0].healthy).toBe(false);
     expect(inventory.selectableProviders.map((provider) => provider.id)).toEqual(['ollama']);
+  });
+});
+
+
+
+describe('consumer provider health presentation', () => {
+  const base = {
+    id: 'local-model',
+    label: 'Local model',
+    enabled: true,
+    configured: true,
+    healthy: false,
+    models: [{ id: 'configured', label: 'Configured model', available: true }],
+  };
+
+  it('does not render an untested provider as unhealthy or selectable', () => {
+    const untested = { ...base, health: { status: 'unknown' } };
+    expect(getRuntimeProviderStatusLabel(untested)).toBe('Not checked');
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: untested.id,
+      default_model: 'configured',
+      providers: [untested],
+    });
+    expect(inventory.selectableProviders).toEqual([]);
+  });
+
+  it('preserves real unavailable, unhealthy and degraded states', () => {
+    expect(getRuntimeProviderStatusLabel({ ...base, health: { status: 'unavailable' } })).toBe('Unavailable');
+    expect(getRuntimeProviderStatusLabel({ ...base, health: { status: 'unhealthy' } })).toBe('Unhealthy');
+    expect(getRuntimeProviderStatusLabel({ ...base, health: { status: 'degraded' } })).toBe('Degraded');
+  });
+
+  it('distinguishes disabled and unconfigured providers from health probe failure', () => {
+    expect(getRuntimeProviderStatusLabel({ ...base, enabled: false })).toBe('Disabled');
+    expect(getRuntimeProviderStatusLabel({ ...base, configured: false })).toBe('Not configured');
+  });
+
+  it('reports confirmed inventory only for a healthy provider', () => {
+    expect(getRuntimeProviderStatusLabel({
+      ...base,
+      healthy: true,
+      health: { status: 'healthy' },
+    })).toBe('1 available models');
+    expect(getRuntimeProviderStatusLabel({
+      ...base,
+      healthy: false,
+      health: { status: 'healthy' },
+    })).toBe('Unverified');
   });
 });
