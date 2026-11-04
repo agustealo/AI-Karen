@@ -105,7 +105,7 @@ describe("canonical consumer ingress configuration and execution safety", () => 
   it("legacy Copilot streaming makes exactly one authorized request and strips frontend credentials", async () => {
     configured();
     const outbound = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response('data: {"type":"RUN_FINISHED"}\\n\\n', {
+      new Response('data: {"type":"RUN_FINISHED"}\n\n', {
         status: 200,
         headers: {
           "content-type": "text/event-stream",
