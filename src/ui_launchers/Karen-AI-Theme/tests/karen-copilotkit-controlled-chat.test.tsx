@@ -62,7 +62,7 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
       readText: () => text.current,
       status: "ready",
       synced: true,
-      clearBeforeSubmit: (...args: unknown[]) => sdk.clearDraft(...args),
+      prepareSubmission: (...args: unknown[]) => sdk.clearDraft(...args),
       retry: vi.fn(),
       discardAndReload: vi.fn(),
     };
@@ -600,7 +600,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
       input().onSubmitMessage("Do not send without saved-clear receipt");
     });
     await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("Draft clearance was not confirmed"));
+      .toContain("draft could not be safely saved and cleared"));
     expect(sdk.agent.addMessage).not.toHaveBeenCalled();
     expect(sdk.runAgent).not.toHaveBeenCalled();
   });
