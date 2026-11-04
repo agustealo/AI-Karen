@@ -120,7 +120,9 @@ describe("canonical CopilotKit chat ownership", () => {
   });
 
   it("requires explicit submission, backend stop receipts and durable draft clearance", () => {
-    expect(controller).toContain("clearBeforeSubmit(text)");
+    expect(controller).toContain("prepareSubmission(text)");
+    expect(draftHook).toContain("return clearBeforeSubmit(submittedText)");
+    expect(draftHook).toContain("await startSave()");
     expect(controller).toContain("copilotkit.runAgent({ agent })");
     expect(controller).toContain("validStopReceipt(receipt)");
     expect(controller).toContain("copilotkit.stopAgent({ agent })");

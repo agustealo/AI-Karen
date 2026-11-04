@@ -28,6 +28,9 @@ function Surface() {
     <button onClick={() => {
       void draft.clearBeforeSubmit(draft.draft).then(setClearConfirmed);
     }}>Confirm durable clear</button>
+    <button onClick={() => {
+      void draft.prepareSubmission(draft.draft).then(setClearConfirmed);
+    }}>Submit with pending changes</button>
     <span data-testid="draft-status">{draft.status}</span>
     <span data-testid="draft-synced">{String(draft.synced)}</span>
     <textarea aria-label="Saved draft" value={draft.draft}
@@ -67,6 +70,77 @@ describe("CK-07E6 authenticated composer draft hook", () => {
       .toBe("true"));
     expect(input.value).toBe("New in this window");
     expect(backend.get).toHaveBeenCalledWith(TARGET);
+  });
+
+  it("saves and clears a just-typed message on the first Enter without debounce wait", async () => {
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Send immediately without repeated Enter" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
+    expect(backend.put).toHaveBeenCalledTimes(2);
+    expect(backend.put.mock.calls[0][1]).toEqual({
+      text: "Send immediately without repeated Enter", expected_revision: 4,
+    });
+    expect(backend.put.mock.calls[1][1]).toEqual({
+      text: "", expected_revision: 5,
+    });
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("reuses an in-flight autosave instead of racing a duplicate CAS write", async () => {
+    let finishSave!: (receipt: { text: string; revision: number }) => void;
+    backend.put.mockImplementationOnce(
+      () => new Promise(resolve => { finishSave = resolve; }),
+    );
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "One pending save" },
+    });
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(1), { timeout: 4000 });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    expect(backend.put).toHaveBeenCalledTimes(1);
+    await act(async () => finishSave({ text: "One pending save", revision: 5 }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
+    expect(backend.put).toHaveBeenCalledTimes(2);
+    expect(backend.put.mock.calls[1][1]).toEqual({
+      text: "", expected_revision: 5,
+    });
+  });
+
+  it("does not clear or submit a just-typed message after a 409 CAS conflict", async () => {
+    backend.put.mockRejectedValueOnce(new ApiError(409, "stale"));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Keep this on conflict" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("false"));
+    expect(backend.put).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("draft-status").textContent).toBe("conflict");
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("Keep this on conflict");
+  });
+
+  it("refuses to clear old submitted text if a newer edit arrived during flush", async () => {
+    let finishSave!: (receipt: { text: string; revision: number }) => void;
+    backend.put.mockImplementationOnce(
+      () => new Promise(resolve => { finishSave = resolve; }),
+    );
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "Earlier prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    expect(backend.put).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { value: "Newer private text" } });
+    await act(async () => finishSave({ text: "Earlier prompt", revision: 5 }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("false"));
+    expect(input.value).toBe("Newer private text");
+    expect(backend.put.mock.calls.filter((call) => call[1].text === "")).toHaveLength(0);
   });
 
   it("preserves local text on a stale-tab conflict, never overwrites another window", async () => {
