@@ -469,11 +469,18 @@ class PostgresConversationRepository(ConversationRepository):
                         },
                     )
         except Exception as exc:
+            # Only a bounded SQLSTATE-derived class crosses this repository
+            # boundary. No SQL, draft text, endpoint, or exception string.
+            failure_class = _composer_draft_failure_class(exc)
             logger.error("get_composer_draft failed", extra={
                 "error_type": type(exc).__name__,
-                "failure_class": _composer_draft_failure_class(exc),
+                "failure_class": failure_class,
             })
-            return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
+            return RepositoryResult(
+                success=False,
+                error="composer_draft_storage_unavailable",
+                metadata={"failure_class": failure_class},
+            )
 
     @instrument_repository(
         operation="put_composer_draft", repository="PostgresConversationRepository"
@@ -562,11 +569,18 @@ class PostgresConversationRepository(ConversationRepository):
                         "revision": int(result["revision"]),
                     })
         except Exception as exc:
+            # Only a bounded SQLSTATE-derived class crosses this repository
+            # boundary. No SQL, draft text, endpoint, or exception string.
+            failure_class = _composer_draft_failure_class(exc)
             logger.error("put_composer_draft failed", extra={
                 "error_type": type(exc).__name__,
-                "failure_class": _composer_draft_failure_class(exc),
+                "failure_class": failure_class,
             })
-            return RepositoryResult(success=False, error="composer_draft_storage_unavailable")
+            return RepositoryResult(
+                success=False,
+                error="composer_draft_storage_unavailable",
+                metadata={"failure_class": failure_class},
+            )
 
     @instrument_repository(
         operation="add_message", repository="PostgresConversationRepository"

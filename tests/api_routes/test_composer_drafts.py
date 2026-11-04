@@ -225,3 +225,88 @@ async def test_read_backend_unavailable_never_invents_a_saved_draft():
             user_ctx={"user_id": USER, "tenant_id": TENANT},
         )
     assert failure.value.status_code == 503
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "failure_class", "expected_class"),
+    [
+        ("read", "draft_schema_missing", "draft_schema_missing"),
+        ("write", "draft_permission_denied", "draft_permission_denied"),
+        ("read", "leak:secret draft text", "database_failure_unclassified"),
+        ("write", None, "database_failure_unclassified"),
+    ],
+)
+async def test_draft_storage_failure_is_correlated_and_sanitized(
+    monkeypatch, operation, failure_class, expected_class,
+):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as module
+
+    events = []
+    monkeypatch.setattr(
+        module.logger, "warning",
+        lambda event, *, extra: events.append((event, extra)),
+    )
+    repo = OwnedDraftRepo()
+    async def reject(*args, **kwargs):
+        return RepositoryResult(
+            success=False,
+            error="composer_draft_storage_unavailable",
+            metadata={"failure_class": failure_class, "private": "never log this"},
+        )
+    if operation == "read":
+        repo.get_composer_draft = reject
+    else:
+        repo.put_composer_draft = reject
+    gateway = ConversationRuntimeGateway(repo)
+    ctx = context()
+    with pytest.raises(RuntimeError, match="composer_draft_storage_unavailable"):
+        if operation == "read":
+            await gateway.read_composer_draft(ctx)
+        else:
+            await gateway.write_composer_draft(
+                ctx, text="PRIVATE UNSENT DRAFT", expected_revision=0,
+            )
+    assert len(events) == 1
+    event_name, fields = events[0]
+    assert event_name == "conversation_draft_storage_failed"
+    assert fields["operation"] == operation
+    assert fields["failure_class"] == expected_class
+    assert fields["request_id"] == ctx.request_id
+    assert fields["correlation_id"] == ctx.correlation_id
+    assert fields["tenant_id"] == TENANT
+    assert fields["user_id"] == USER
+    assert fields["conversation_id"] == CONV
+    assert fields["status"] == "unavailable"
+    assert "text" not in fields
+    assert "PRIVATE UNSENT DRAFT" not in str(fields)
+    assert "never log this" not in str(fields)
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "reason"),
+    [
+        ("42P01", "draft_schema_missing"),
+        ("42501", "draft_permission_denied"),
+        ("42703", "draft_schema_incompatible"),
+        ("08006", "database_connection_unavailable"),
+        ("23514", "draft_integrity_failure"),
+        ("XXXXX", "database_failure_unclassified"),
+    ],
+)
+def test_postgres_draft_failure_classification_uses_only_sqlstate(
+    sqlstate, reason,
+):
+    from types import SimpleNamespace
+
+    from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+        _composer_draft_failure_class,
+    )
+
+    # Exception text is untrusted and can embed SQL, tokens and user content.
+    class SensitiveDatabaseError(Exception):
+        orig = SimpleNamespace(sqlstate=sqlstate)
+
+    error = SensitiveDatabaseError("PRIVATE DRAFT, SQL and connection tokens")
+    assert _composer_draft_failure_class(error) == reason

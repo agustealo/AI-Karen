@@ -87,6 +87,15 @@ BEGIN
     IF NOT revision_ok THEN
         RAISE EXCEPTION 'composer_draft_revision_contract_missing';
     END IF;
+    -- Run against the API's actual runtime database role. Schema/RLS
+    -- existence alone cannot prove that this role can read and CAS drafts.
+    -- Do not assume that a migrator/superuser connection is the API role.
+    IF NOT has_schema_privilege(current_user, 'public', 'USAGE')
+       OR NOT has_table_privilege(current_user, drafts, 'SELECT')
+       OR NOT has_table_privilege(current_user, drafts, 'INSERT')
+       OR NOT has_table_privilege(current_user, drafts, 'UPDATE') THEN
+        RAISE EXCEPTION 'composer_draft_runtime_grant_missing';
+    END IF;
     RAISE NOTICE 'composer_draft_schema_ready';
 END
 $$;
