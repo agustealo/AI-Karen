@@ -2932,15 +2932,18 @@ class ChatRuntime:
             # A short clock query needs a verified current reading, not a
             # second lengthy LLM generation. Richer observation questions
             # retain the grounded model path with a bounded output budget.
-            latest = next(
-                (str(message.get("content") or "") for message in reversed(request.messages)
-                 if message.get("role") == "user"), ""
-            ).strip().casefold().rstrip("?!.,")
-            simple_clock = (
-                decision.intent == "time.current"
-                and latest in {"time", "current time", "time now", "what time is it",
-                               "what's the time", "what is the time"}
-            )
+            simple_clock = False
+            if decision.intent == "time.current" and request is not None:
+                latest = next(
+                    (str(message.get("content") or "")
+                     for message in reversed(getattr(request, "messages", None) or [])
+                     if isinstance(message, dict) and message.get("role") == "user"),
+                    "",
+                ).strip().casefold().rstrip("?!.,")
+                simple_clock = latest in {
+                    "time", "current time", "time now", "what time is it",
+                    "what's the time", "what is the time",
+                }
             synthesized = (
                 None if simple_clock else
                 await self._synthesize_search_evidence(
