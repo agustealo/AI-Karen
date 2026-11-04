@@ -31,6 +31,7 @@ class HealthStatus(str, Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
+    UNAVAILABLE = "unavailable"
     UNKNOWN = "unknown"
 
 
@@ -77,6 +78,17 @@ class ProviderHealthMonitor:
 
         self._prev_statuses: Dict[str, HealthStatus] = {}
 
+    def _provider_key(self, provider_id: str) -> str:
+        """Canonicalize aliases once at the sole observed-health owner."""
+        normalized = str(provider_id).strip().lower()
+        if self._registry is not None:
+            canonicalize = getattr(self._registry, "canonicalize_provider_id", None)
+            if callable(canonicalize):
+                canonical = canonicalize(normalized)
+                if canonical:
+                    return str(canonical).lower()
+        return normalized
+
     def _get_provider_ids(self) -> List[str]:
         """Return the current provider inventory from the registry."""
         if self._registry is None:
@@ -91,18 +103,21 @@ class ProviderHealthMonitor:
 
         Returns a ProviderHealthInfo with UNKNOWN status if not yet checked.
         """
-        provider_key = provider_id.lower()
+        provider_key = self._provider_key(provider_id)
         cached = self._health_cache.get(provider_key)
         if cached is not None:
-            cache_age = (datetime.utcnow() - cached.last_checked_at).total_seconds()
+            cache_age = (
+                (datetime.utcnow() - cached.last_checked_at).total_seconds()
+                if cached.last_checked_at is not None else float("inf")
+            )
             if cache_age < self._cache_ttl:
                 return cached
             logger.debug("Health cache expired for %s", provider_id)
 
         return ProviderHealthInfo(
-            provider_id=provider_id,
+            provider_id=provider_key,
             health_status=HealthStatus.UNKNOWN,
-            last_checked_at=datetime.utcnow(),
+            last_checked_at=None,
             metadata={"cache_miss": True},
         )
 
@@ -116,7 +131,7 @@ class ProviderHealthMonitor:
         error_message: Optional[str] = None,
     ) -> None:
         """Update observed health state for a provider."""
-        provider_key = provider_id.lower()
+        provider_key = self._provider_key(provider_id)
         now = datetime.utcnow()
 
         existing = self._health_cache.get(provider_key)
@@ -124,7 +139,7 @@ class ProviderHealthMonitor:
             health_info = existing
         else:
             health_info = ProviderHealthInfo(
-                provider_id=provider_id,
+                provider_id=provider_key,
                 last_checked_at=now,
             )
 
@@ -146,7 +161,9 @@ class ProviderHealthMonitor:
             elif health_info.consecutive_failures >= 2:
                 health_info.health_status = HealthStatus.DEGRADED
             else:
-                health_info.health_status = HealthStatus.HEALTHY
+                # An observed failed probe cannot be reported healthy.
+                # A later verified success restores the healthy state.
+                health_info.health_status = HealthStatus.DEGRADED
 
         health_info.last_checked_at = now
         health_info.latency_ms = response_time * 1000.0 if response_time is not None else None
@@ -318,15 +335,18 @@ class ProviderHealthMonitor:
         return stats
 
 
-_health_monitor: Optional[ProviderHealthMonitor] = None
-
-
 def get_health_monitor() -> ProviderHealthMonitor:
-    """Get the global provider health monitor instance."""
-    global _health_monitor
-    if _health_monitor is None:
-        _health_monitor = ProviderHealthMonitor()
-    return _health_monitor
+    """Return the registry-owned canonical health monitor.
+
+    Startup, provider interaction receipts and the settings catalog must all
+    consult the same observed health cache. No shadow global monitor.
+    Import at call time to avoid the registry/health-module import cycle.
+    """
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        get_provider_registry_service,
+    )
+
+    return get_provider_registry_service().health_monitor
 
 
 def record_provider_success(provider_name: str, response_time: Optional[float] = None) -> None:

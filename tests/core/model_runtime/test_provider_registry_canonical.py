@@ -62,6 +62,7 @@ def _load_module(name: str, path: pathlib.Path):
             HEALTHY = "healthy"
             DEGRADED = "degraded"
             UNHEALTHY = "unhealthy"
+            UNAVAILABLE = "unavailable"
             UNKNOWN = "unknown"
 
         class ProviderHealthMonitor:
@@ -74,6 +75,11 @@ def _load_module(name: str, path: pathlib.Path):
 
             def get_all_provider_names(self):
                 return []
+
+            def get_provider_health(self, provider_id):
+                # Isolated test doubles must implement the canonical monitor
+                # interface rather than force the registry to fabricate health.
+                return types.SimpleNamespace(health_status=HealthStatus.UNKNOWN)
 
         phm_mod.HealthStatus = HealthStatus
         phm_mod.ProviderHealthMonitor = ProviderHealthMonitor
