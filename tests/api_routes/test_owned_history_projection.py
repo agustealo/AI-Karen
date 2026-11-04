@@ -116,7 +116,10 @@ def test_first_prompt_surface_from_runtime_structured_metadata_restores_without_
                 role="user", content="Time", metadata={}),
         assistant({
             **receipt(),
-            "structured_content": {"presentation": surface},
+            "structured_content": {
+                "formatted": "10:42 PM", "timezone": "America/Detroit",
+                "presentation": surface,
+            },
             "verified_presentations_v1": [surface],
         }),
     ])
