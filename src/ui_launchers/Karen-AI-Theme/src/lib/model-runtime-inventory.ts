@@ -28,7 +28,7 @@ export interface RuntimeProviderDetails {
   is_configured?: boolean;
   healthy?: boolean;
   /** Observed state is not interchangeable with an absent health probe. */
-  health?: { status: string; last_checked_at?: string | null };
+  health?: { status?: string; last_checked_at?: string | null } | null;
   user_selectable?: boolean;
   enabled?: boolean;
   policy_allowed?: boolean;
@@ -129,7 +129,7 @@ export interface RuntimeProviderCatalogProvider {
  * unknown or unobserved unhealthy providers may not.
  */
 export function isRuntimeProviderOperational(
-  provider: Pick<RuntimeProviderCatalogProvider, 'healthy' | 'health'>,
+  provider: Pick<RuntimeProviderDetails, 'healthy' | 'health'>,
 ): boolean {
   return provider.health?.status === 'degraded' ||
     (provider.healthy === true &&
