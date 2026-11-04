@@ -5,7 +5,7 @@ import datetime
 import hashlib
 import time
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -3302,6 +3302,8 @@ class ChatRuntime:
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
         memory_recall_meta: Optional[Dict[str, Any]] = None,
+        *,
+        token_sink: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Simple conversational path: CORTEX -> ExpressionGateway."""
         if not await meter.consume_model_call():
@@ -3339,6 +3341,7 @@ class ChatRuntime:
                 ),
                 "topology": plan.topology.value,
             },
+            token_sink=token_sink,
         )
 
         self._emitter.emit(
@@ -3424,27 +3427,102 @@ class ChatRuntime:
         memory_recall_meta: Optional[Dict[str, Any]] = None,
         _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
-        text, normalized = await self._run_simple(
-            request,
-            decision,
-            plan,
-            meter,
-            memory_recall_meta,
-        )
-        if _meta is not None:
-            _meta.update(normalized)
-        yield ChatStreamChunk(
-            type="content",
-            content=text,
-            correlation_id=request.context.correlation_id,
-            metadata={
-                "execution_mode": "direct",
-                "actual_provider": normalized.get("actual_provider"),
-                "actual_model": normalized.get("actual_model"),
-                "response_source": normalized.get("response_source"),
-                "topology": plan.topology.value,
-            },
-        )
+        """Emit real provider deltas without a second routing or prompt owner.
+
+        The producer uses the same _run_simple -> ExpressionGateway.generate
+        contract as non-streaming requests. A bounded queue backpressures the
+        wire reader. The consumer sees deltas immediately, but only the
+        completed gateway result can authorize persisted model attribution.
+        """
+        events: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=32)
+        started_at = time.perf_counter()
+        observed_deltas: list[str] = []
+        first_delta_latency_ms: float | None = None
+
+        async def send_token(delta: str) -> None:
+            if isinstance(delta, str) and delta:
+                await events.put(("delta", delta))
+
+        async def produce() -> None:
+            try:
+                result = await self._run_simple(
+                    request, decision, plan, meter, memory_recall_meta,
+                    token_sink=send_token,
+                )
+                await events.put(("complete", result))
+            except Exception as exc:
+                # Never log the exception text or issue a new model attempt
+                # here. ChatRuntime's outer stream owns error/fallback policy.
+                await events.put(("error", exc))
+
+        worker = asyncio.create_task(produce())
+        try:
+            while True:
+                kind, payload = await events.get()
+                if kind == "delta":
+                    observed_deltas.append(payload)
+                    if first_delta_latency_ms is None:
+                        first_delta_latency_ms = (
+                            time.perf_counter() - started_at
+                        ) * 1000.0
+                    yield ChatStreamChunk(
+                        type="content",
+                        content=payload,
+                        correlation_id=request.context.correlation_id,
+                        metadata={
+                            "execution_mode": "direct",
+                            "topology": plan.topology.value,
+                            "response_source": "provider_stream_pending_receipt",
+                            "actual_provider": None,
+                            "actual_model": None,
+                        },
+                    )
+                    continue
+
+                if kind == "error":
+                    raise payload
+
+                if kind != "complete":
+                    raise RuntimeError("unexpected_expression_stream_event")
+
+                text, normalized = payload
+                if observed_deltas and "".join(observed_deltas) != text:
+                    # A transport/engine that emits different content than
+                    # its terminal receipt must not be persisted as complete.
+                    raise RuntimeError("stream_terminal_text_mismatch")
+                if first_delta_latency_ms is not None:
+                    normalized["first_token_latency_ms"] = first_delta_latency_ms
+                    normalized.setdefault("execution_spans", []).append({
+                        "name": "time_to_first_content",
+                        "duration_ms": first_delta_latency_ms,
+                        "source": "runtime_observed",
+                    })
+                if _meta is not None:
+                    _meta.update(normalized)
+                if not observed_deltas:
+                    # The selected endpoint may lack native SSE. Preserve
+                    # the existing non-streaming behavior, without a fake
+                    # token or a second provider invocation.
+                    yield ChatStreamChunk(
+                        type="content",
+                        content=text,
+                        correlation_id=request.context.correlation_id,
+                        metadata={
+                            "execution_mode": "direct",
+                            "actual_provider": normalized.get("actual_provider"),
+                            "actual_model": normalized.get("actual_model"),
+                            "response_source": normalized.get("response_source"),
+                            "topology": plan.topology.value,
+                        },
+                    )
+                break
+        finally:
+            if not worker.done():
+                worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
 
     async def _run_graph(
         self,

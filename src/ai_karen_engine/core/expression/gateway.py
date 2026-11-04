@@ -204,6 +204,10 @@ class ExpressionGateway:
 
         last_error: str | None = None
         skipped_engines: list[dict[str, Any]] = []
+        # A provider may fail and allow another eligible engine only until
+        # the first delta has reached the consumer. After that, the response
+        # belongs to one model and must end as an explicit incomplete stream.
+        task.stream_started = False
 
         for level, engine_id in enumerate(sequence):
             cfg = self.settings.engines.get(engine_id)
@@ -329,6 +333,9 @@ class ExpressionGateway:
                     )
                     return result
 
+                if task.stream_started:
+                    raise EngineUnavailableError("partial_provider_stream_unverified")
+
                 if not has_text:
                     reason = result.degradation_reason or "empty_output"
                 elif not has_model_source:
@@ -356,7 +363,30 @@ class ExpressionGateway:
                 last_error = reason
             except Exception as exc:
                 self.circuits.mark_failure(f"expression.engine.{engine_id}")
-                last_error = str(exc)
+                if task.stream_started:
+                    # Never append a second model's output after visible text.
+                    # This is an unrecoverable turn failure, not a fallback
+                    # opportunity or a completed model execution receipt.
+                    emit_expression_event(
+                        "expression.stream.incomplete",
+                        self._event_payload(
+                            task, engine_id=engine_id, degraded=True,
+                            degradation_reason="partial_provider_stream_unverified",
+                        ),
+                    )
+                    raise EngineUnavailableError(
+                        "partial_provider_stream_unverified"
+                    ) from exc
+                # Log/emit bounded codes, never upstream HTTP exception text
+                # that might embed private URLs, headers, or provider content.
+                last_error = (
+                    str(exc)
+                    if isinstance(exc, EngineUnavailableError)
+                    and str(exc).isascii()
+                    and len(str(exc)) <= 100
+                    and all(c.isalnum() or c in "._:-" for c in str(exc))
+                    else type(exc).__name__
+                )
                 emit_expression_event(
                     "expression.engine.request.failed",
                     self._event_payload(
