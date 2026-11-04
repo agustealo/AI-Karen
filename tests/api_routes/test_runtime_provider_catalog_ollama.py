@@ -203,10 +203,25 @@ async def test_unconfigured_custom_provider_does_not_claim_saved_manual_model(
 
 
 @pytest.mark.asyncio
-async def test_unknown_health_stays_unverified_and_unselectable(
+@pytest.mark.parametrize(
+    ("observed_status", "credential_state", "expected_healthy"),
+    [
+        ("unknown", "not_required", False),
+        ("healthy", "not_required", True),
+        ("healthy", "missing", False),
+        ("degraded", "configured", False),
+        ("unhealthy", "configured", False),
+    ],
+)
+async def test_canonical_health_and_configuration_are_distinct(
     monkeypatch: pytest.MonkeyPatch,
+    observed_status: str,
+    credential_state: str,
+    expected_healthy: bool,
 ) -> None:
-    """Configured models must not become healthy from an untested manager state."""
+    """Unknown health and missing credentials cannot become executable claims."""
+    from datetime import datetime, timezone
+
     from ai_karen_engine.api_routes.models import settings as model_settings
     from ai_karen_engine.config.llm_provider_config import ProviderType
     from ai_karen_engine.config import runtime_provider_manager
@@ -231,8 +246,11 @@ async def test_unknown_health_stays_unverified_and_unselectable(
     )
     health = ProviderHealthInfo(
         provider_id="builtin_transformers",
-        health_status=HealthStatus.UNKNOWN,
-        last_checked_at=None,
+        health_status=HealthStatus(observed_status),
+        last_checked_at=(
+            None if observed_status == "unknown"
+            else datetime(2026, 11, 3, tzinfo=timezone.utc)
+        ),
     )
     monkeypatch.setattr(
         model_settings, "get_settings_manager",
@@ -253,7 +271,7 @@ async def test_unknown_health_stays_unverified_and_unselectable(
     monkeypatch.setattr(model_settings, "_get_provider_override", lambda name: {})
     monkeypatch.setattr(
         model_settings, "_get_api_key_status",
-        lambda name, item: "not_required",
+        lambda name, item: credential_state,
     )
     monkeypatch.setattr(
         model_settings, "_supports_base_url_override", lambda item: False,
@@ -281,9 +299,10 @@ async def test_unknown_health_stays_unverified_and_unselectable(
     payload = await model_settings.build_model_settings_payload()
     assert len(payload["providers"]) == 1
     item = payload["providers"][0]
-    assert item.healthy is False
-    assert item.health_status == "unknown"
-    assert item.health_last_checked_at is None
+    assert item.healthy is expected_healthy
+    assert item.health_status == observed_status
+    assert (item.health_last_checked_at is None) is (observed_status == "unknown")
+    assert item.is_configured is (credential_state in {"configured", "not_required"})
     assert observed == ["builtin_transformers"]
 
     async def payload_for_catalog() -> dict[str, object]:
@@ -294,9 +313,9 @@ async def test_unknown_health_stays_unverified_and_unselectable(
         current_user={"roles": ["admin"]}
     )
     runtime = catalog.providers[0]
-    assert runtime.healthy is False
-    assert runtime.health.status == "unknown"
-    assert runtime.health.last_checked_at is None
+    assert runtime.healthy is expected_healthy
+    assert runtime.health.status == observed_status
+    assert (runtime.health.last_checked_at is None) is (observed_status == "unknown")
     assert runtime.models == []
 
 
