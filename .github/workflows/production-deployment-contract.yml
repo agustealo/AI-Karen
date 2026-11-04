@@ -9,6 +9,9 @@ on:
       - "deploy/render/render.yaml"
       - ".github/workflows/render-beta-service-reconcile.yml"
       - "scripts/deploy/reconcile_render_beta_service.py"
+      - "scripts/deploy/inspect_render_beta_environment.py"
+      - "tests/architecture/test_render_beta_environment_preflight.py"
+      - "src/ai_karen_engine/server/config.py"
       - "tests/architecture/test_render_beta_service_reconcile.py"
       - "tests/architecture/test_render_beta_blueprint_contract.py"
       - ".env.production.example"
@@ -39,6 +42,9 @@ on:
       - "deploy/render/render.yaml"
       - ".github/workflows/render-beta-service-reconcile.yml"
       - "scripts/deploy/reconcile_render_beta_service.py"
+      - "scripts/deploy/inspect_render_beta_environment.py"
+      - "tests/architecture/test_render_beta_environment_preflight.py"
+      - "src/ai_karen_engine/server/config.py"
       - "tests/architecture/test_render_beta_service_reconcile.py"
       - "tests/architecture/test_render_beta_blueprint_contract.py"
       - ".env.production.example"
@@ -88,6 +94,7 @@ jobs:
           pytest tests/architecture/test_production_deployment_contract.py -q
           pytest tests/architecture/test_render_beta_blueprint_contract.py -q
           pytest tests/architecture/test_render_beta_service_reconcile.py -q
+          pytest tests/architecture/test_render_beta_environment_preflight.py -q
           pytest tests/architecture/test_docker_release_attestation.py -q
           pytest tests/architecture/test_signed_docker_release_provenance.py -q
           pytest tests/architecture/test_docker_browser_acceptance_contract.py -q
