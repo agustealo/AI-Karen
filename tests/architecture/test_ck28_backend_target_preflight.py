@@ -17,7 +17,8 @@ def test_preflight_checks_canonical_auth_proxy_without_secrets() -> None:
 def test_redirects_and_non_json_auth_responses_are_rejected() -> None:
     source = CHECK.read_text(encoding="utf-8")
     assert "class NoRedirects(HTTPRedirectHandler)" in source
-    assert "build_opener(NoRedirects()).open" in source
+    assert "opener = build_opener(NoRedirects())" in source
+    assert "with opener.open(request, timeout=15)" in source
     assert 'proxy did not return a JSON response' in source
 
 
@@ -41,7 +42,7 @@ def test_bad_bypass_credentials_fail_without_secret_leak(monkeypatch) -> None:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    for bad in ("private-secret\n", "private-secret\r", "private-secret\x00"):
+    for bad in ("private-secret\n", "private-secret\r", "private-secret\x7f"):
         monkeypatch.setenv("VERCEL_AUTOMATION_BYPASS_SECRET", bad)
         with pytest.raises(ValueError, match="Invalid deployment bypass credential configuration") as error:
             module.verify("https://example.com")
