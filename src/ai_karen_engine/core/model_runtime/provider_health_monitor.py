@@ -156,13 +156,21 @@ class ProviderHealthMonitor:
             health_info.last_failure_at = now
             health_info.error_code = error_code
             health_info.error_type = error_type
-            if health_info.consecutive_failures >= 5:
+            # "Degraded" is still an eligible operational state for some
+            # local models. Only grant it when a *recent successful execution*
+            # actually preceded the failure. A first-ever failed probe, or
+            # a stale success, cannot authorize a selectable provider.
+            successful_before_failure = (
+                health_info.last_success_at is not None
+                and 0 <= (now - health_info.last_success_at).total_seconds()
+                <= self._cache_ttl
+            )
+            if (
+                health_info.consecutive_failures >= 5
+                or not successful_before_failure
+            ):
                 health_info.health_status = HealthStatus.UNHEALTHY
-            elif health_info.consecutive_failures >= 2:
-                health_info.health_status = HealthStatus.DEGRADED
             else:
-                # An observed failed probe cannot be reported healthy.
-                # A later verified success restores the healthy state.
                 health_info.health_status = HealthStatus.DEGRADED
 
         health_info.last_checked_at = now
