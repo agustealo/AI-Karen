@@ -249,7 +249,11 @@ class DistilBertSemanticEncoder(SemanticEncoder):
                 used_fallback = True
                 model_id = "unavailable"
             else:
-                embedding = await self._generate_embedding(text)
+                # The encoder owns this vector contract. Never label raw
+                # pooled vectors as normalized, or emit invalid vectors.
+                embedding = self._normalize_embedding(
+                    await self._generate_embedding(text)
+                )
                 used_fallback = False
                 model_id = self.config.model_name
             latency = (time.time() - start) * 1000.0
@@ -258,7 +262,7 @@ class DistilBertSemanticEncoder(SemanticEncoder):
                 dimensions=len(embedding),
                 model_id=model_id,
                 model_version="current",
-                normalized=True,
+                normalized=not used_fallback,
                 fallback_used=used_fallback,
                 latency_ms=latency,
             )
@@ -307,11 +311,14 @@ class DistilBertSemanticEncoder(SemanticEncoder):
         return self.model(**inputs)
 
     def _normalize_embedding(self, embedding: list[float]) -> list[float]:
-        arr = np.array(embedding)
-        norm = np.linalg.norm(arr)
-        if norm > 0:
-            return (arr / norm).tolist()
-        return embedding
+        """Return a genuine unit vector or refuse invalid model output."""
+        arr = np.asarray(embedding, dtype=np.float64)
+        if arr.ndim != 1 or arr.size == 0 or not np.isfinite(arr).all():
+            raise ValueError("DistilBERT embedding is malformed or non-finite")
+        norm = float(np.linalg.norm(arr))
+        if not np.isfinite(norm) or norm <= 0:
+            raise ValueError("DistilBERT embedding cannot be normalized")
+        return (arr / norm).tolist()
 
     def _get_cache_key(self, text: str) -> str:
         config_hash = hashlib.md5(f"{self.config.model_name}_{self.config.pooling_strategy}_{self.config.max_length}".encode()).hexdigest()[:8]
