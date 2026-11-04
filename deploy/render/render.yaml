@@ -11,7 +11,9 @@ services:
     name: ai-karen-beta-api
     runtime: docker
     repo: https://github.com/agustealo/AI-Karen
-    branch: feat/chat-consumer-conversation-management-20261031
+    # Deploy only reviewed main releases. Live service settings must be updated
+    # explicitly; modifying this Blueprint does not mutate an existing service.
+    branch: main
     region: ohio
     plan: free
     dockerfilePath: ./Dockerfile
