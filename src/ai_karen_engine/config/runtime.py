@@ -82,6 +82,10 @@ class LLMSettings:
     max_tokens: int = 2048
     # Default completion budget for ordinary direct chat, not prompt context.
     chat_default_max_output_tokens: int = 1536
+    # A single verified live observation should not consume the ordinary
+    # long-form chat output budget or hold the first response for 30 seconds.
+    observation_synthesis_max_output_tokens: int = 96
+    observation_synthesis_timeout_ms: int = 6000
     timeout: int = 30
     max_retries: int = 3
 
@@ -317,6 +321,20 @@ class RuntimeSettings:
                 env_chat_output_tokens, self.llm.chat_default_max_output_tokens
             )
 
+        env_observation_tokens = env("KARI_OBSERVATION_SYNTHESIS_MAX_OUTPUT_TOKENS")
+        if env_observation_tokens:
+            self.llm.observation_synthesis_max_output_tokens = as_int(
+                env_observation_tokens,
+                self.llm.observation_synthesis_max_output_tokens,
+            )
+
+        env_observation_timeout = env("KARI_OBSERVATION_SYNTHESIS_TIMEOUT_MS")
+        if env_observation_timeout:
+            self.llm.observation_synthesis_timeout_ms = as_int(
+                env_observation_timeout,
+                self.llm.observation_synthesis_timeout_ms,
+            )
+
         env_timeout = env("KARI_LLM_TIMEOUT")
         if env_timeout:
             self.llm.timeout = as_int(env_timeout, self.llm.timeout)
@@ -503,6 +521,11 @@ class RuntimeSettings:
 
         if self.llm.chat_default_max_output_tokens <= 0:
             issues.append("LLM chat_default_max_output_tokens must be positive")
+
+        if not 16 <= self.llm.observation_synthesis_max_output_tokens <= 512:
+            issues.append("LLM observation_synthesis_max_output_tokens must be 16 to 512")
+        if not 500 <= self.llm.observation_synthesis_timeout_ms <= 30000:
+            issues.append("LLM observation_synthesis_timeout_ms must be 500 to 30000")
 
         if self.llm.timeout <= 0:
             issues.append("LLM timeout must be positive")
