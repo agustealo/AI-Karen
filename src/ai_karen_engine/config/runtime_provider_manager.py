@@ -54,7 +54,7 @@ class ProviderHealthStatus:
     """Provider health status information"""
     provider_name: str
     status: ProviderStatus
-    last_check: datetime
+    last_check: Optional[datetime] = None
     response_time: Optional[float] = None
     error_message: Optional[str] = None
     consecutive_failures: int = 0
@@ -374,23 +374,33 @@ class RuntimeProviderManager:
                         error_message="Model store not available"
                     )
             
-            elif canonical_name == "builtin_transformers":
-                # Transformers is assumed healthy if library is available
-                # It can auto-download models if needed
+            elif canonical_name == "ollama":
+                # Probe Ollama /api/tags endpoint to verify connectivity
+                import requests
+                base_url = config.endpoint.base_url if config.endpoint else "http://host.docker.internal:11434/v1"
+                tags_url = base_url.rstrip("/").removesuffix("/v1") + "/api/tags"
                 try:
-                    import transformers
-                    return ProviderHealthStatus(
-                        provider_name=config.name,
-                        status=ProviderStatus.HEALTHY,
-                        last_check=datetime.now(),
-                        capabilities_verified=config.capabilities
-                    )
-                except ImportError:
+                    resp = requests.get(tags_url, timeout=3.0)
+                    if resp.status_code == 200:
+                        return ProviderHealthStatus(
+                            provider_name=config.name,
+                            status=ProviderStatus.HEALTHY,
+                            last_check=datetime.now(),
+                            capabilities_verified=config.capabilities,
+                        )
+                    else:
+                        return ProviderHealthStatus(
+                            provider_name=config.name,
+                            status=ProviderStatus.DEGRADED,
+                            last_check=datetime.now(),
+                            error_message=f"Ollama returned HTTP {resp.status_code}",
+                        )
+                except Exception as ex:
                     return ProviderHealthStatus(
                         provider_name=config.name,
                         status=ProviderStatus.UNAVAILABLE,
                         last_check=datetime.now(),
-                        error_message="Transformers library not installed"
+                        error_message=f"Ollama connection failed: {ex}",
                     )
             
             else:
@@ -794,7 +804,7 @@ class RuntimeProviderManager:
                 self._provider_health[provider_name] = ProviderHealthStatus(
                     provider_name=provider_name,
                     status=ProviderStatus.UNKNOWN,
-                    last_check=datetime.now()
+                    last_check=None
                 )
     
     def _register_config_change_listener(self) -> None:
@@ -829,7 +839,7 @@ class RuntimeProviderManager:
             "provider_health": {
                 name: {
                     "status": health.status.value,
-                    "last_check": health.last_check.isoformat(),
+                    "last_check": health.last_check.isoformat() if health.last_check else None,
                     "response_time": health.response_time,
                     "consecutive_failures": health.consecutive_failures
                 }

@@ -152,6 +152,8 @@ class ProviderPayload(BaseModel):
     supports_streaming: bool = True
     supports_tools: bool = False
     degraded_reason: Optional[str] = None
+    health_status: Optional[str] = None
+    last_health_check: Optional[datetime] = None
     required_config_fields: List[str] = Field(default_factory=list)
     safe_diagnostic_metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -755,6 +757,12 @@ async def build_model_settings_payload() -> Dict[str, Any]:
     settings = get_settings_manager()
     provider_manager = get_provider_config_manager()
     discovery_service = get_model_discovery_service()
+    from ai_karen_engine.config.runtime_provider_manager import (
+        ProviderStatus,
+        get_runtime_provider_manager,
+    )
+    runtime_manager = get_runtime_provider_manager()
+    health_statuses = runtime_manager.get_all_provider_health()
 
     all_providers = provider_manager.list_providers()
     active_provider_id = _normalize_provider_id(settings.get_setting("provider"))
@@ -810,19 +818,39 @@ async def build_model_settings_payload() -> Dict[str, Any]:
         api_key_status = _get_api_key_status(provider.name, provider)
         
         # Determine if provider is configured and healthy
-        from ai_karen_engine.config.runtime_provider_manager import get_runtime_provider_manager
-        runtime_manager = get_runtime_provider_manager()
-        health_statuses = runtime_manager.get_all_provider_health()
-        
         is_configured = api_key_status in ["configured", "not_required"]
-        healthy = True
-        degraded_reason = None
-        
         health_info = health_statuses.get(provider.name)
-        if health_info:
+        last_health_check = health_info.last_check if health_info else None
+        
+        if not is_configured:
+            healthy = False
+            degraded_reason = "API key not configured"
+            health_status_val = "not_configured"
+        elif health_info is None or health_info.status == ProviderStatus.UNKNOWN:
+            if health_info and health_info.last_check is not None:
+                healthy = health_info.is_healthy
+                degraded_reason = health_info.error_message if not healthy else None
+                health_status_val = health_info.status.value
+            else:
+                healthy = False
+                degraded_reason = "Health check not yet performed"
+                health_status_val = "unknown"
+        elif health_info.status == ProviderStatus.HEALTHY:
+            healthy = True
+            degraded_reason = None
+            health_status_val = "healthy"
+        elif health_info.status == ProviderStatus.DEGRADED:
+            healthy = False
+            degraded_reason = health_info.error_message or "Provider degraded"
+            health_status_val = "degraded"
+        elif health_info.status == ProviderStatus.UNAVAILABLE:
+            healthy = False
+            degraded_reason = health_info.error_message or "Provider unavailable"
+            health_status_val = "unavailable"
+        else:
             healthy = health_info.is_healthy
-            if not healthy:
-                degraded_reason = health_info.error_message
+            degraded_reason = health_info.error_message
+            health_status_val = health_info.status.value
             
         # Local providers like Ollama are only configured if they have available runtime options
         # or if a base_url has been manually set.
@@ -836,6 +864,13 @@ async def build_model_settings_payload() -> Dict[str, Any]:
                 is_configured = False
                 healthy = False
                 degraded_reason = "Selected Ollama runtime is unavailable"
+                health_status_val = "unavailable"
+            else:
+                is_configured = True
+                healthy = True
+                degraded_reason = None
+                health_status_val = "healthy"
+                last_health_check = datetime.now(timezone.utc)
 
         # Required config fields
         required_fields = []
@@ -885,6 +920,8 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             supports_streaming=bool(provider.capabilities and "streaming" in provider.capabilities),
             supports_tools=bool(provider.capabilities and "tool_use" in provider.capabilities),
             degraded_reason=degraded_reason,
+            health_status=health_status_val,
+            last_health_check=last_health_check,
             required_config_fields=required_fields,
             safe_diagnostic_metadata={
                 "connection_target": override.get("base_url") or (provider.endpoint.base_url if provider.endpoint else "internal"),

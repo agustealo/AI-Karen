@@ -114,6 +114,11 @@ export interface RuntimeProviderCatalogProvider {
   selected_model?: string | null;
   models?: RuntimeProviderCatalogModel[];
   degradation_reason?: string | null;
+  health?: {
+    status: string;
+    latency_ms?: number | null;
+    last_checked_at?: string | null;
+  };
   allowed_for_current_user?: boolean;
   requires_api_key?: boolean;
   requires_base_url?: boolean;

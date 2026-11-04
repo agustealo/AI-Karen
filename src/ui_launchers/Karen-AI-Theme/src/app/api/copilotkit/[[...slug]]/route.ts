@@ -296,6 +296,7 @@ async function handle(request: NextRequest): Promise<Response> {
 
   const copilot = new CopilotRuntime({
     // Cast bridges the canonical @ag-ui/client HttpAgent to CopilotRuntime v2 agent interface
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     agents: { default: agent as any },
     // The only credential-bearing headers are the current request's
     // server-verified headers above. Do not forward arbitrary x-* claims.

@@ -75,7 +75,7 @@ export function KarenComposerRuntimeCatalog({ selection, onSelectionChange, onOp
         {providers.map((provider) => <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
           <div className="flex items-center justify-between gap-2">
             <span className="min-w-0 truncate font-medium">{provider.label}</span>
-            <span className="shrink-0 text-xs text-muted-foreground">{provider.healthy === false ? "Unhealthy" : provider.configured === false ? "Not configured" : String((provider.models || []).filter((model) => model.available === true).length) + " available models"}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{provider.configured === false ? "Not configured" : provider.health?.status === "unknown" ? "Not checked" : provider.healthy === false ? "Unhealthy" : String((provider.models || []).filter((model) => model.available === true).length) + " available models"}</span>
           </div>
           {provider.models && provider.models.length > 0 && <details className="mt-1 text-xs">
             <summary className="cursor-pointer text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">View reported models</summary>

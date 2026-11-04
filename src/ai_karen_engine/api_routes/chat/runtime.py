@@ -910,6 +910,11 @@ async def get_ag_ui_owned_history(
             observed_activity=observed_activity,
         )
     except UnreplayableHistory as exc:
+        logger.warning(
+            "Governed history replay rejected: %s",
+            str(exc),
+            extra={"conversation_id": thread, "reason": str(exc)},
+        )
         # A truncated/oversized history is an incomplete backend projection,
         # while unknown rich content is intentionally not yet replayable.
         # Neither is ever framed as a successful SSE snapshot.

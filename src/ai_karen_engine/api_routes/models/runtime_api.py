@@ -240,9 +240,16 @@ async def get_runtime_provider_catalog(
                 safe_diagnostic_metadata=safe_metadata,
                 models=models,
                 health=ProviderHealthInfo(
-                    status="healthy" if provider.get("healthy", True) and discovery_error is None else "degraded",
+                    status="degraded" if discovery_error is not None else str(
+                        provider.get("health_status")
+                        or (
+                            "healthy"
+                            if provider.get("healthy", True)
+                            else ("not_configured" if not provider.get("is_configured") else "degraded")
+                        )
+                    ),
                     latency_ms=None,
-                    last_checked_at=datetime.now(timezone.utc),
+                    last_checked_at=provider.get("last_health_check"),
                 ),
                 degradation_reason=discovery_error or provider.get("degraded_reason"),
                 allowed_for_current_user=bool(provider.get("user_selectable", True) and provider.get("policy_allowed", True)),

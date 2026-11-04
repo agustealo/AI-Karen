@@ -155,13 +155,17 @@ def project_owned_history(
                     for event in projector.project(ChatStreamChunk(
                         type="presentation",
                         content="",
+                        correlation_id=str(metadata.get("request_id") or identifier),
                         metadata={"presentation_verified": True, "presentation": valid},
                     )):
                         if event.get("type") != "CUSTOM" or event.get("name") != "karen.presentation.v1":
                             raise UnreplayableHistory("invalid_presentation_projection")
                         events.append({**event, "messageId": identifier})
             for event in projector.project(ChatStreamChunk(
-                type="complete", content="", metadata=dict(metadata),
+                type="complete",
+                content="",
+                correlation_id=str(metadata.get("request_id") or identifier),
+                metadata=dict(metadata),
             )):
                 if event.get("type") == "CUSTOM":
                     if event.get("name") not in {
