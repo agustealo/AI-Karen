@@ -41,8 +41,36 @@ _RUNTIME_RECEIPT = frozenset({
 })
 
 
+# Stable, non-sensitive failure classes. Message data, metadata values,
+# account identifiers and SQL errors must never become diagnostic reason codes.
+_REPLAY_REASON_CODES = frozenset({
+    "history_message_limit",
+    "orphaned_observed_activity",
+    "invalid_canonical_message",
+    "invalid_message_metadata",
+    "unsupported_rich_history",
+    "incomplete_presentation_capture",
+    "unattested_runtime_metadata",
+    "unserializable_attested_message",
+    "modified_attested_message",
+    "unattested_observed_activity",
+    "invalid_attested_agent_activity",
+    "invalid_persisted_presentation",
+    "invalid_presentation_projection",
+    "unexpected_replay_event",
+    "unserializable_history",
+    "history_byte_limit",
+})
+
+
 class UnreplayableHistory(ValueError):
     """Canonical history cannot be restored accurately under this contract."""
+
+    @property
+    def safe_reason_code(self) -> str:
+        """Diagnostic classification only; never forward exception text."""
+        reason = self.args[0] if len(self.args) == 1 else None
+        return reason if isinstance(reason, str) and reason in _REPLAY_REASON_CODES else "unknown"
 
 
 def _carries_value(value: Any) -> bool:
