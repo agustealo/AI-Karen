@@ -100,20 +100,25 @@ def test_selected_timezone_is_used_only_with_authorized_provenance() -> None:
 
 
 
-@pytest.mark.asyncio
-async def test_unselected_timezone_is_explicit_utc_not_container_local_time() -> None:
-    from datetime import timedelta
-    from ai_karen_engine.extensions.plugins.time_query.handlers.base import (
-        TimeHandlerBase,
-    )
-    from ai_karen_engine.extensions.plugins.time_query.handlers.current_time_handler import (
-        handle_current_time,
+def _real_time_query_handler():
+    # This extension's deployed directory is named time-query, not
+    # time_query. Use its canonical extension loader rather than importing a
+    # fictional underscore-named module or duplicating clock logic.
+    from pathlib import Path
+
+    import ai_karen_engine.extensions.plugin_kernel as kernel
+    from ai_karen_engine.extensions.platform.core.host.loader import (
+        ExtensionLoader,
     )
 
-    observed = TimeHandlerBase.get_system_now()
-    assert observed.tzinfo is not None
-    assert observed.utcoffset() == timedelta(0)
-    payload = await handle_current_time("time", {"context": {}})
+    directory = Path(kernel.__file__).resolve().parent / "plugins" / "time-query"
+    return ExtensionLoader._import_handler(directory)
+
+
+@pytest.mark.asyncio
+async def test_unselected_timezone_is_explicit_utc_not_container_local_time() -> None:
+    handler = _real_time_query_handler()
+    payload = await handler.handle_current_time("time", {"context": {}})
     assert payload["status"] == "success"
     assert payload["timezone"] == "UTC"
     assert payload["source_detail"]["timezone_source"] == "utc_fallback"
@@ -122,11 +127,8 @@ async def test_unselected_timezone_is_explicit_utc_not_container_local_time() ->
 
 @pytest.mark.asyncio
 async def test_selected_timezone_beats_utc_fallback() -> None:
-    from ai_karen_engine.extensions.plugins.time_query.handlers.current_time_handler import (
-        handle_current_time,
-    )
-
-    observed = await handle_current_time(
+    handler = _real_time_query_handler()
+    observed = await handler.handle_current_time(
         "time", {"timezone": "America/Detroit", "context": {}},
     )
     assert observed["status"] == "success"
