@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
@@ -23,6 +24,8 @@ from ai_karen_engine.services.tooling.tool_service import (
     get_tool_service,
 )
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class DirectCapabilityResult:
@@ -396,32 +399,54 @@ class DirectCapabilityExecutor:
                 )
 
             tool_started = time.perf_counter()
-            tool_result = await get_tool_service().execute_tool(
-                ToolInput(
-                    tool_name=tool_name,
-                    parameters=self._tool_parameters(query, mode),
-                    user_context={
-                        "request_id": (
+            try:
+                tool_result = await get_tool_service().execute_tool(
+                    ToolInput(
+                        tool_name=tool_name,
+                        parameters=self._tool_parameters(query, mode),
+                        user_context={
+                            "request_id": (
+                                request.context.request_id
+                                or request.context.correlation_id
+                            ),
+                            "user_id": request.context.user_id,
+                            "tenant_id": request.context.tenant_id,
+                            "session_id": request.context.session_id,
+                            "conversation_id": request.context.conversation_id,
+                            "correlation_id": request.context.correlation_id,
+                            "allowed_capabilities": list(plan.allowed_capabilities),
+                            "authorized_plan": plan,
+                            "policy_decision_id": plan.policy_decision_id,
+                        },
+                        user_id=request.context.user_id,
+                        session_id=request.context.session_id,
+                        request_id=(
                             request.context.request_id
                             or request.context.correlation_id
                         ),
-                        "user_id": request.context.user_id,
-                        "tenant_id": request.context.tenant_id,
-                        "session_id": request.context.session_id,
-                        "conversation_id": request.context.conversation_id,
-                        "correlation_id": request.context.correlation_id,
-                        "allowed_capabilities": list(plan.allowed_capabilities),
-                        "authorized_plan": plan,
-                        "policy_decision_id": plan.policy_decision_id,
-                    },
-                    user_id=request.context.user_id,
-                    session_id=request.context.session_id,
-                    request_id=(
-                        request.context.request_id
-                        or request.context.correlation_id
-                    ),
+                    )
                 )
-            )
+            except Exception as exc:
+                # Runtime execution failure, not a policy grant or model answer.
+                # Preserve cancellation (BaseException), never expose exception
+                # text, and allow only the independently authorized fallback.
+                logger.warning(
+                    "direct_capability_tool_execution_failed",
+                    extra={
+                        "correlation_id": request.context.correlation_id,
+                        "intent": decision.intent,
+                        "capability_id": tool_name,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                attempts.append({
+                    "type": "tool",
+                    "id": tool_name,
+                    "status": "failed",
+                    "error": "tool_execution_failed",
+                    "latency_ms": (time.perf_counter() - tool_started) * 1000.0,
+                })
+                return None
             payload = self._normalize_payload(tool_result.result)
             tool_ok = bool(
                 tool_result.success
@@ -480,27 +505,49 @@ class DirectCapabilityExecutor:
                 )
 
             plugin_started = time.perf_counter()
-            plugin_result = await get_plugin_service().execute_plugin(
-                preferred_plugin,
-                parameters=self._plugin_parameters(
-                    decision.intent,
-                    query,
-                    request,
-                    mode,
-                    resolved_context,
-                ),
-                user_id=request.context.user_id,
-                tenant_id=request.context.tenant_id,
-                session_id=request.context.session_id,
-                conversation_id=request.context.conversation_id,
-                correlation_id=request.context.correlation_id,
-                roles=list(request.context.roles or []),
-                permissions=list(request.context.permissions or []),
-                policy_decision_id=plan.policy_decision_id,
-                authorized_plan=plan,
-                allowed_capabilities=list(plan.allowed_capabilities),
-                forbidden_capabilities=list(decision.forbidden_capabilities),
-            )
+            try:
+                plugin_result = await get_plugin_service().execute_plugin(
+                    preferred_plugin,
+                    parameters=self._plugin_parameters(
+                        decision.intent,
+                        query,
+                        request,
+                        mode,
+                        resolved_context,
+                    ),
+                    user_id=request.context.user_id,
+                    tenant_id=request.context.tenant_id,
+                    session_id=request.context.session_id,
+                    conversation_id=request.context.conversation_id,
+                    correlation_id=request.context.correlation_id,
+                    roles=list(request.context.roles or []),
+                    permissions=list(request.context.permissions or []),
+                    policy_decision_id=plan.policy_decision_id,
+                    authorized_plan=plan,
+                    allowed_capabilities=list(plan.allowed_capabilities),
+                    forbidden_capabilities=list(decision.forbidden_capabilities),
+                )
+            except Exception as exc:
+                # Runtime execution failure, not a policy grant or model answer.
+                # Preserve cancellation (BaseException), never expose exception
+                # text, and allow only the independently authorized fallback.
+                logger.warning(
+                    "direct_capability_plugin_execution_failed",
+                    extra={
+                        "correlation_id": request.context.correlation_id,
+                        "intent": decision.intent,
+                        "capability_id": preferred_plugin,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                attempts.append({
+                    "type": "plugin",
+                    "id": preferred_plugin,
+                    "status": "failed",
+                    "error": "plugin_execution_failed",
+                    "latency_ms": (time.perf_counter() - plugin_started) * 1000.0,
+                })
+                return None
             payload = self._normalize_payload(plugin_result.result)
             plugin_ok = (
                 plugin_result.status is ExecutionStatus.COMPLETED
