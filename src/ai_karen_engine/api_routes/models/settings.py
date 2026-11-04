@@ -760,6 +760,15 @@ async def build_model_settings_payload() -> Dict[str, Any]:
     provider_manager = get_provider_config_manager()
     discovery_service = get_model_discovery_service()
 
+    # Health has one runtime owner. Never instantiate the retired config-side
+    # health manager just to build a consumer settings payload.
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        get_provider_registry_service,
+    )
+
+    canonical_registry = get_provider_registry_service()
+    health_monitor = canonical_registry.health_monitor
+
     all_providers = provider_manager.list_providers()
     active_provider_id = _normalize_provider_id(settings.get_setting("provider"))
     active_model = settings.get_setting("model")
@@ -813,28 +822,24 @@ async def build_model_settings_payload() -> Dict[str, Any]:
 
         api_key_status = _get_api_key_status(provider.name, provider)
         
-        # Determine if provider is configured and healthy
-        from ai_karen_engine.config.runtime_provider_manager import get_runtime_provider_manager
-        runtime_manager = get_runtime_provider_manager()
-        health_statuses = runtime_manager.get_all_provider_health()
-        
-        is_configured = api_key_status in ["configured", "not_required"]
-        # An untested endpoint must not inherit healthy=True by default.
-        # Keep the canonical manager's health state rather than interpreting
-        # UNKNOWN as an observed failure. This catalog is discovery only.
-        health_info = health_statuses.get(provider.name)
-        health_status = (
-            health_info.status.value if health_info is not None else "unknown"
+        # Read the registry-owned observed health record by canonical ID.
+        # Registration and configured keys never stand in for a successful
+        # provider probe. This projection cannot grant RuntimePolicy access.
+        canonical_provider_id = (
+            canonical_registry.canonicalize_provider_id(provider.name)
+            or provider.name
         )
+        health_info = health_monitor.get_provider_health(canonical_provider_id)
+        health_status = health_info.health_status.value
         health_last_checked_at = (
-            health_info.last_check
-            if health_info is not None and health_status != "unknown"
-            else None
+            health_info.last_checked_at
+            if health_status != "unknown" else None
         )
-        healthy = bool(health_info is not None and health_info.is_healthy)
+        healthy = health_status == "healthy"
+        is_configured = api_key_status in ["configured", "not_required"]
         degraded_reason = (
-            health_info.error_message if health_info is not None and not healthy
-            else None
+            health_info.error_code
+            if not healthy else None
         )
         if not provider.enabled:
             health_status = "unavailable"
