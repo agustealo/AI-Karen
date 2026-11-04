@@ -90,10 +90,19 @@ class RenderClient:
         self._token = token
         self._opener = opener if opener is not None else build_opener(NoRedirects())
 
-    def _request(self, service_id: str, *, method: str, body: dict | None = None) -> dict:
-        if not SERVICE_ID_PATTERN.fullmatch(service_id):
-            raise ReconcileError("Render service ID is invalid")
-        url = f"{API_ORIGIN}/v1/services/{service_id}"
+    def _request_path(
+        self, path: str, *, method: str, body: dict | None = None,
+    ) -> Any:
+        """Render's single bounded HTTP transport, including read-only inventory."""
+        if (
+            not path.startswith("/v1/")
+            or ".." in path
+            or any(ord(char) < 33 or ord(char) == 127 for char in path)
+            or method not in {"GET", "PATCH"}
+            or (method == "GET" and body is not None)
+        ):
+            raise ReconcileError("Unsafe Render API operation")
+        url = f"{API_ORIGIN}{path}"
         headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
         payload = None
         if body is not None:
@@ -112,12 +121,54 @@ class RenderClient:
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ReconcileError("Render API response exceeds safe size limit")
         try:
-            response_data = json.loads(raw)
+            return json.loads(raw)
         except (ValueError, UnicodeDecodeError):
-            raise ReconcileError("Render API service response is not valid JSON") from None
-        if not isinstance(response_data, dict):
+            raise ReconcileError("Render API response is not valid JSON") from None
+
+    def _request(self, service_id: str, *, method: str, body: dict | None = None) -> dict:
+        if not SERVICE_ID_PATTERN.fullmatch(service_id):
+            raise ReconcileError("Render service ID is invalid")
+        result = self._request_path(
+            f"/v1/services/{service_id}", method=method, body=body,
+        )
+        if not isinstance(result, dict):
             raise ReconcileError("Render API service response has invalid shape")
-        return response_data
+        return result
+
+    def inspect_resource(self, kind: str, resource_id: str) -> dict:
+        """Read approved existing service datastore metadata, never a creation API."""
+        allowed = {
+            "postgres": r"dpg-[a-z0-9-]+",
+            "key-value": r"red-[a-z0-9-]+",
+        }
+        if kind not in allowed or not re.fullmatch(allowed[kind], resource_id):
+            raise ReconcileError("Invalid existing Render resource identity")
+        result = self._request_path(f"/v1/{kind}/{resource_id}", method="GET")
+        if not isinstance(result, dict):
+            raise ReconcileError("Invalid Render resource metadata")
+        return result
+
+    def inspect_env_vars(self, service_id: str) -> list:
+        if not SERVICE_ID_PATTERN.fullmatch(service_id):
+            raise ReconcileError("Invalid existing Render service ID")
+        # A full page might conceal additional keys. Rather than infer
+        # completeness and potentially miss conflicting secrets, fail closed.
+        result = self._request_path(
+            f"/v1/services/{service_id}/env-vars?limit=100", method="GET",
+        )
+        if not isinstance(result, list) or len(result) >= 100:
+            raise ReconcileError("Render service environment inventory is not complete")
+        return result
+
+    def inspect_env_groups(self, workspace_id: str) -> list:
+        if not WORKSPACE_ID_PATTERN.fullmatch(workspace_id):
+            raise ReconcileError("Invalid existing Render workspace ID")
+        result = self._request_path(
+            f"/v1/env-groups?ownerId={workspace_id}&limit=100", method="GET",
+        )
+        if not isinstance(result, list) or len(result) >= 100:
+            raise ReconcileError("Render environment group inventory is not complete")
+        return result
 
     def get(self, service_id: str) -> dict:
         return self._request(service_id, method="GET")

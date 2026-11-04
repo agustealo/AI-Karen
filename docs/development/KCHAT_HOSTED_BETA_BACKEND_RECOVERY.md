@@ -123,6 +123,46 @@ Blueprint must remain disabled, and production configuration validation
 must remain fail-closed. Never make startup green by changing
 `ENVIRONMENT` to development or inserting the development defaults.
 
+#### Protected read-only environment preflight
+
+The existing [Render Beta Service Reconcile](../../.github/workflows/render-beta-service-reconcile.yml)
+workflow supports the explicitly selected `inspect-env` mode. Keep the same
+protected `beta-release` environment and `RENDER_API_KEY` secret, and add
+these nonsecret protected variables for the **existing** resources:
+
+- `RENDER_BETA_POSTGRES_ID=dpg-dbjme1tg1s2s7385svhg-a`
+- `RENDER_BETA_KEY_VALUE_ID=red-dbjme2ijnfac738ehstg`
+
+Dispatch on the reviewed `main` branch with its exact 40-character SHA
+and `mode=inspect-env`. The mode **only reads** service, PostgreSQL, Key
+Value, direct environment variables, environment-group inventory and
+internal datastore connection metadata using Render's official API.
+
+It verifies workspace/owner, existing resource IDs, names, region,
+availability and private connection schemes; reads the actual mandatory
+variable names from the source-of-truth `required_env_vars` declaration
+in `src/ai_karen_engine/server/config.py`; and checks Fernet key format,
+secure production flags, CORS origins, branch and health-check settings.
+
+The output contains **only variable names and sanitized reason codes**,
+not keys, values, connection strings, passwords, hostnames or raw provider
+responses. Ambiguous service inventories and linked environment groups
+cause a closed failure rather than a fabricated green report.
+
+The preflight never creates or modifies resources or env variables,
+never deploys, and does not need external datastore network access.
+Free-plan datastore lifetime and capacity are flagged as advisories,
+not silently treated as durable consumer persistence.
+
+A red inspection against an unconfigured service is a diagnostic, not
+a reason to weaken production startup checks. Correct the protected
+service environment under an authorized operator's control, then run
+inspection before deploying. Never paste credentials into workflow logs.
+
+Render documents the [service environment inventory](https://api-docs.render.com/reference/get-env-vars-for-service),
+[Postgres internal connection info](https://api-docs.render.com/reference/retrieve-postgres-connection-info),
+and [Key Value internal connection info](https://api-docs.render.com/reference/retrieve-key-value-connection-info).
+
 ### 3. Prove the API itself before changing frontend routing
 
 After a reviewed, exact-head API deployment, prove that the existing Render
