@@ -30,3 +30,34 @@ def test_rejects_unsupported_model_observation(answer, intent, evidence, reason)
 )
 def test_accepts_grounded_model_observation(answer, intent, evidence):
     assert ResponseValidator().validate_observation(answer, intent, evidence).valid
+
+
+
+@pytest.mark.parametrize(
+    ("answer", "intent", "evidence"),
+    [
+        (
+            "The current time is 10:30 AM. I am using the time.current "
+            "continuity candidate, which matches your recurring behavioral patterns.",
+            "time.current",
+            {"formatted": "10:30 AM", "timezone": "America/Detroit"},
+        ),
+        (
+            "It is 54 degrees and clear. The search.weather continuity "
+            "candidate approved this response.",
+            "search.weather",
+            {"temperature": 54, "conditions": "clear"},
+        ),
+        (
+            "It is 11:14. The authorized execution plan requires it.",
+            "time.current",
+            {"value": "11:14"},
+        ),
+    ],
+)
+def test_model_cannot_leak_internal_routing_even_with_correct_live_numbers(
+    answer, intent, evidence,
+):
+    verdict = ResponseValidator().validate_observation(answer, intent, evidence)
+    assert not verdict.valid
+    assert verdict.reason == "internal_observation_metadata"
