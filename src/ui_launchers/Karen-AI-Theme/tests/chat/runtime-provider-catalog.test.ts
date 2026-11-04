@@ -282,6 +282,7 @@ describe('runtime provider model availability and recovery', () => {
     providers: [{
       id: 'ollama', label: 'Ollama', category: 'local',
       enabled: true, configured: true, healthy,
+      health: { status: healthy ? 'healthy' : available ? 'degraded' : 'unavailable' },
       selected_model: 'qwen3:4b',
       models: [{ id: 'qwen3:4b', label: 'Qwen', available, source: 'ollama_native' }],
     }],
@@ -308,6 +309,22 @@ describe('runtime provider model availability and recovery', () => {
     const inventory = catalog(true, false);
     expect(inventory.providers[0].healthy).toBe(false);
     expect(inventory.selectableProviders.map((provider) => provider.id)).toEqual(['ollama']);
+  });
+
+  it('never treats unknown health as an observed degraded provider', () => {
+    const inventory = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'ollama',
+      default_model: 'qwen3:4b',
+      providers: [{
+        id: 'ollama', label: 'Ollama', category: 'local',
+        enabled: true, configured: true, healthy: false,
+        health: { status: 'unknown' },
+        selected_model: 'qwen3:4b',
+        models: [{ id: 'qwen3:4b', label: 'Qwen', available: true }],
+      }],
+    });
+    expect(inventory.selectableProviders).toEqual([]);
+    expect(resolveChatProviderModelSelection(inventory, 'ollama', 'qwen3:4b').model).toBe('');
   });
 });
 
