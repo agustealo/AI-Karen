@@ -836,11 +836,16 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             health_info.last_checked_at
             if health_status != "unknown" else None
         )
-        healthy = health_status == "healthy"
         is_configured = api_key_status in ["configured", "not_required"]
+        # Observed endpoint health does not override credential/configuration
+        # eligibility. Keep these independent facts visible to the consumer.
+        healthy = health_status == "healthy" and is_configured
         degraded_reason = (
-            health_info.error_code
-            if not healthy else None
+            "provider_not_configured" if not is_configured
+            else "provider_health_unverified" if health_status == "unknown"
+            else "provider_health_degraded" if health_status == "degraded"
+            else "provider_health_unavailable" if health_status in {"unhealthy", "unavailable"}
+            else None
         )
         if not provider.enabled:
             health_status = "unavailable"
