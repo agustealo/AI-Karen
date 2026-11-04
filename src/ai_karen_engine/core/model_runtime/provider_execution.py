@@ -377,6 +377,10 @@ def _decode_stream_event(
     if reported is not None:
         if not isinstance(reported, str) or not reported.strip():
             raise ProviderExecutionError("provider_stream_invalid_model")
+        # An explicitly selected model is part of the execution contract.
+        # Do not silently elevate a different reported executor to its receipt.
+        if expected_model is not None and reported != expected_model:
+            raise ProviderExecutionError("provider_stream_requested_model_mismatch")
         if observed_model is not None and reported != observed_model:
             raise ProviderExecutionError("provider_stream_model_switched")
         observed_model = reported
