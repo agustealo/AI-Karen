@@ -45,3 +45,12 @@ class EngineHealth:
     latency_ms: float | None = None
     reason: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExpressionStreamEvent:
+    """One native text delta or one verified final model execution receipt."""
+
+    kind: Literal["delta", "complete"]
+    text_delta: str = ""
+    result: ExpressionResult | None = None
