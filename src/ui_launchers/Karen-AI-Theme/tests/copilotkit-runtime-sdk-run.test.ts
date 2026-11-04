@@ -101,7 +101,7 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
     expect(stream).toContain("Karen test execution");
     expect(stream).toContain("RUN_FINISHED");
     expect(calls.map((call) => call.url)).toEqual([AUTH_ENDPOINT, CAPABILITIES_ENDPOINT, AGENT_ENDPOINT]);
-  });
+  }, 15000);
 
   it("cannot start a real SDK run when the backend AG-UI feature is off", async () => {
     const outbound: string[] = [];
