@@ -137,6 +137,34 @@ async def test_provider_model_switch_fails_closed(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_selected_model_mismatch_does_not_emit_an_untrusted_delta(monkeypatch):
+    # One explicit model request cannot silently be attributed to another.
+    body = (
+        _chunk("Untrusted", model="other-model")
+        + _chunk(None, model="other-model", finish="stop")
+        + "data: [DONE]\n\n"
+    )
+    _transport_client(
+        monkeypatch,
+        lambda _: httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"},
+        ),
+    )
+    visible = []
+    with pytest.raises(
+        ProviderExecutionError, match="provider_stream_requested_model_mismatch"
+    ):
+        async for event in stream_provider_endpoint(
+            _endpoint(),
+            messages=[{"role": "user", "content": "Hello"}],
+            model="smollm2:135m", max_tokens=20,
+            temperature=0, timeout_ms=5000,
+        ):
+            visible.append(event)
+    assert visible == []
+
+
+@pytest.mark.asyncio
 async def test_missing_model_receipt_cannot_stream_unverified_text(monkeypatch):
     body = _chunk("Unverified", model=None) + _chunk(None, model=None, finish="stop") + "data: [DONE]\n\n"
     _transport_client(
