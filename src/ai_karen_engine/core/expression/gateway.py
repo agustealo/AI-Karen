@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from .circuit_breakers import ExpressionCircuitBreakers
@@ -116,9 +117,12 @@ class ExpressionGateway:
                 record_provider_success,
             )
 
-            latency_seconds = max(0.0, float(result.latency_ms) / 1000.0)
+            seconds = float(result.latency_ms) / 1000.0
+            latency_seconds = seconds if math.isfinite(seconds) and seconds >= 0 else None
             record_provider_success(provider.strip(), response_time=latency_seconds)
-        except (ImportError, RuntimeError, ValueError, TypeError, OverflowError) as exc:
+        except Exception as exc:
+            # Health reporting is observability, not an inference dependency.
+            # Never turn a verified completed answer into a transport error.
             logger.warning(
                 "expression.provider_health_observation_unavailable",
                 extra={
