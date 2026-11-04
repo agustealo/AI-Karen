@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -83,6 +84,21 @@ class SpacyAnalyzer:
         self._last_error: str | None = None
         self._initialize()
 
+    @staticmethod
+    def _pipeline_compatible(metadata: Any) -> bool:
+        """Require the installed spaCy runtime to satisfy the pipeline contract."""
+        if not isinstance(metadata, dict):
+            return False
+        constraint = metadata.get("spacy_version")
+        if not isinstance(constraint, str) or not constraint.strip():
+            return False
+        try:
+            return spacy.util.is_compatible_version(
+                spacy.__version__, constraint.strip()
+            ) is True
+        except (AttributeError, TypeError, ValueError):
+            return False
+
     def _initialize(self) -> None:
         if not SPACY_AVAILABLE:
             logger.warning("spaCy not available, using fallback mode")
@@ -92,21 +108,44 @@ class SpacyAnalyzer:
         local_model_root = Path(getattr(self.config, "local_model_root", "models/spacy"))
         local_model_path = local_model_root / self.config.model_name
 
-        def _try_load_local(path: Path) -> bool:
-            if path.exists():
-                try:
-                    self.nlp = spacy.load(path, disable=self.config.disabled_components)
-                    logger.info("Loaded spaCy model from local path: %s", path)
-                    return True
-                except (OSError, ValueError, OverflowError) as exc:
-                    self._last_error = f"{type(exc).__name__}: {exc}"
-                    self._error_count += 1
-                    logger.warning("Failed to load local spaCy model from %s: %s", path, type(exc).__name__)
-            return False
-
-        if not _try_load_local(local_model_path):
+        # Model directories may come from a host bind mount and outlive an
+        # upgraded image. Reject incompatible metadata before deserializing
+        # the old pipeline; loading it first triggers spaCy W095 and may
+        # silently select a tokenizer built against an older runtime.
+        if local_model_path.is_dir():
             try:
-                self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
+                meta_file = local_model_path / "meta.json"
+                if meta_file.stat().st_size > 65536:
+                    raise ValueError("spaCy model metadata exceeds limit")
+                metadata = json.loads(meta_file.read_text(encoding="utf-8"))
+                if self._pipeline_compatible(metadata):
+                    candidate = spacy.load(
+                        local_model_path, disable=self.config.disabled_components
+                    )
+                    if self._pipeline_compatible(candidate.meta):
+                        self.nlp = candidate
+                        logger.info("Loaded compatible local spaCy model")
+                    else:
+                        logger.warning(
+                            "Skipping local spaCy pipeline with incompatible loaded metadata"
+                        )
+                else:
+                    logger.warning(
+                        "Skipping local spaCy pipeline incompatible with installed runtime"
+                    )
+            except (OSError, ValueError, OverflowError, TypeError) as exc:
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._error_count += 1
+                logger.warning(
+                    "Failed to validate or load local spaCy model: %s",
+                    type(exc).__name__,
+                )
+
+        if self.nlp is None:
+            try:
+                self.nlp = spacy.load(
+                    self.config.model_name, disable=self.config.disabled_components
+                )
             except (OSError, ValueError, OverflowError) as exc:
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 self._error_count += 1
@@ -114,18 +153,40 @@ class SpacyAnalyzer:
                 if isinstance(exc, OSError) and self.config.download_missing:
                     try:
                         from spacy.cli import download
+
                         download(self.config.model_name)
-                        self.nlp = spacy.load(self.config.model_name, disable=self.config.disabled_components)
-                    except Exception as exc:
-                        logger.warning("Unable to provision spaCy model %s: %s", self.config.model_name, exc)
+                        self.nlp = spacy.load(
+                            self.config.model_name,
+                            disable=self.config.disabled_components,
+                        )
+                    except Exception as download_exc:
+                        logger.warning(
+                            "Unable to provision spaCy model %s: %s",
+                            self.config.model_name,
+                            type(download_exc).__name__,
+                        )
                         self.nlp = None
-            if self.nlp is not None and local_model_root:
+
+            if self.nlp is not None and not self._pipeline_compatible(self.nlp.meta):
+                logger.warning(
+                    "Rejecting packaged spaCy pipeline incompatible with installed runtime"
+                )
+                self._last_error = "incompatible_spacy_pipeline"
+                self._error_count += 1
+                self.nlp = None
+
+            # Preserve existing model assets. A stale bind-mounted directory
+            # must never be overwritten by startup repair.
+            if self.nlp is not None and not local_model_path.exists():
                 try:
                     local_model_root.mkdir(parents=True, exist_ok=True)
                     self.nlp.to_disk(local_model_path)
-                    logger.info("Saved spaCy model to local path: %s", local_model_path)
+                    logger.info("Cached compatible spaCy model locally")
                 except OSError as exc:
-                    logger.warning("Failed to save spaCy model to %s: %s", local_model_path, exc)
+                    logger.warning(
+                        "Unable to cache compatible spaCy pipeline: %s",
+                        type(exc).__name__,
+                    )
 
         if self.nlp is None:
             self.fallback_mode = True

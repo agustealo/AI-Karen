@@ -206,6 +206,32 @@ describe("CopilotKit v2 protected gateway", () => {
     expect(sdk.handlers).toBe(0);
   });
 
+  it("rejects UTF-8 AG-UI bodies over the Python ingress limit before authentication", async () => {
+    const upstream = vi.fn();
+    globalThis.fetch = upstream as typeof fetch;
+    const path = "http://localhost:3000/api/copilotkit/agent/default/run";
+    const body = JSON.stringify({
+      threadId: "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0",
+      runId: "run-1",
+      // UTF-16 string length understates the actual UTF-8 wire bytes.
+      messages: [{ role: "user", content: "🚀".repeat(66_000) }],
+    });
+    expect(body.length).toBeLessThan(262_144);
+    expect(new TextEncoder().encode(body).length).toBeGreaterThan(262_144);
+    const response = await POST(new NextRequest(path, {
+      method: "POST",
+      headers: {
+        cookie: "kari_session=valid",
+        "content-type": "application/json",
+      },
+      body,
+    }));
+    expect(response.status).toBe(413);
+    expect(upstream).not.toHaveBeenCalled();
+    expect(sdk.agents).toHaveLength(0);
+    expect(sdk.handlers).toBe(0);
+  });
+
   it("exposes session validation without trusting browser-provided identity", async () => {
     globalThis.fetch = vi.fn(async () => authenticatedReply()) as typeof fetch;
     const validated = await verifyKarenCopilotSession(

@@ -24,7 +24,8 @@ describe("CopilotKit model request transport", () => {
     const catalog = read("KarenComposerRuntimeCatalog.tsx");
     expect(catalog).toContain("Automatic routing (Karen default)");
     expect(catalog).toContain("model.available === true");
-    expect(catalog).toContain("provider.healthy === true");
+    expect(catalog).toContain("isRuntimeProviderOperational(provider)");
+    expect(catalog).toContain('import { isRuntimeProviderOperational } from "@/lib/model-runtime-inventory";');
     expect(catalog).toContain("provider.configured === true");
     expect(catalog).toContain("provider.allowed_for_current_user !== false");
     expect(catalog).toContain("onSelectionChange(null)");

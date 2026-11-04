@@ -910,16 +910,22 @@ async def get_ag_ui_owned_history(
             observed_activity=observed_activity,
         )
     except UnreplayableHistory as exc:
+        # Keep the public response fail-closed and generic. An internal,
+        # allow-listed reason code makes the reported 409 diagnosable without
+        # logging conversation content, metadata, or database exceptions.
+        reason_code = exc.safe_reason_code
         logger.warning(
-            "Governed history replay rejected: %s",
-            str(exc),
-            extra={"conversation_id": thread, "reason": str(exc)},
+            "governed_history_replay_rejected",
+            extra={
+                "correlation_id": correlation_id,
+                "reason_code": reason_code,
+                "failure_class": "governed_history_replay",
+            },
         )
-        # A truncated/oversized history is an incomplete backend projection,
-        # while unknown rich content is intentionally not yet replayable.
-        # Neither is ever framed as a successful SSE snapshot.
+        # A truncated/oversized history is an incomplete backend projection;
+        # an unsupported/unauthenticated projection is intentionally 409.
         status = (
-            502 if str(exc) in {"history_message_limit", "history_byte_limit"}
+            502 if reason_code in {"history_message_limit", "history_byte_limit"}
             else 409
         )
         raise HTTPException(

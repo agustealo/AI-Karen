@@ -128,7 +128,7 @@ async def test_governed_history_refuses_foreign_conversation_and_skips_attestati
 
 @pytest.mark.asyncio
 async def test_unknown_or_unattested_rich_history_refuses_entire_snapshot(
-    monkeypatch, replay_on,
+    monkeypatch, replay_on, caplog,
 ):
     class Owned:
         async def get_owned_snapshot(self, ctx, *, message_limit):
@@ -149,6 +149,55 @@ async def test_unknown_or_unattested_rich_history_refuses_entire_snapshot(
             thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
         )
     assert error.value.status_code == 409
+    assert error.value.detail == "Complete governed replay is unavailable"
+    rejected = [
+        record for record in caplog.records
+        if record.message == "governed_history_replay_rejected"
+    ]
+    assert len(rejected) == 1
+    assert rejected[0].reason_code == "unattested_runtime_metadata"
+    assert rejected[0].failure_class == "governed_history_replay"
+    assert rejected[0].correlation_id
+    assert "secret_debug_field" not in caplog.text
+    assert "canonical answer" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_governed_history_allows_brand_new_empty_owned_conversation(
+    monkeypatch, replay_on,
+):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway
+
+    class Owned:
+        async def get_owned_snapshot(self, ctx, *, message_limit):
+            assert message_limit == 501
+            return ConversationSnapshot(
+                conversation=Conversation(
+                    id=THREAD, user_id=USER, tenant_id=TENANT,
+                ),
+                messages=(),
+            )
+
+    class NoRuns:
+        async def completed_replay_attestations(self, **kwargs):
+            return {}
+
+    monkeypatch.setattr(
+        conversation_runtime_gateway,
+        "get_conversation_runtime_gateway",
+        lambda: Owned(),
+    )
+    monkeypatch.setattr(route, "SqlChatRunRepository", NoRuns)
+    response = await route.get_ag_ui_owned_history(
+        thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
+    )
+    assert response.status_code == 200
+    import json
+
+    body = json.loads(response.body)
+    assert body["messages"] == []
+    assert body["replayEvents"] == []
+    assert body["replay_only"] is True
 
 
 @pytest.mark.asyncio
