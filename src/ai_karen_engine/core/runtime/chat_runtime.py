@@ -2905,14 +2905,25 @@ class ChatRuntime:
             },
         )
 
-        if presentation is not None:
+        # The composition step may have selected an authorized layout
+        # after the original capability surface was collected. Stream the
+        # same validated envelope that transcript persistence records,
+        # otherwise first-turn UI and governed replay disagree on identity.
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+        structured = normalized.get("structured_content")
+        completed_surface = (
+            validate_presentation(structured.get("presentation"))
+            if isinstance(structured, dict) else None
+        )
+        if presentation is not None and completed_surface is not None:
             yield ChatStreamChunk(
                 type="presentation",
                 content="",
                 correlation_id=request.context.correlation_id,
                 metadata={
                     "presentation_verified": True,
-                    "presentation": presentation,
+                    "presentation": completed_surface,
                 },
             )
 
