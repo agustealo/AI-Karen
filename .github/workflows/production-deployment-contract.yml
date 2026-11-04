@@ -21,6 +21,8 @@ on:
       - "tests/architecture/test_signed_docker_release_provenance.py"
       - "tests/architecture/test_deployment_revision_acceptance.py"
       - "scripts/ci/verify_deployment_revision.py"
+      - "scripts/ci/verify_backend_target.py"
+      - "tests/architecture/test_ck28_backend_target_preflight.py"
       - ".github/workflows/karen-consumer-image-provenance.yml"
       - "deploy/compose/docker-compose.signed-release.yml"
       - "scripts/ci/verify_docker_release.py"
@@ -46,6 +48,8 @@ on:
       - "tests/architecture/test_signed_docker_release_provenance.py"
       - "tests/architecture/test_deployment_revision_acceptance.py"
       - "scripts/ci/verify_deployment_revision.py"
+      - "scripts/ci/verify_backend_target.py"
+      - "tests/architecture/test_ck28_backend_target_preflight.py"
       - ".github/workflows/karen-consumer-image-provenance.yml"
       - "deploy/compose/docker-compose.signed-release.yml"
       - "scripts/ci/verify_docker_release.py"
@@ -82,6 +86,7 @@ jobs:
           pytest tests/architecture/test_docker_browser_acceptance_contract.py -q
           bash -n scripts/ci/verify_docker_browser_host.sh
           pytest tests/architecture/test_deployment_revision_acceptance.py -q
+          pytest tests/architecture/test_ck28_backend_target_preflight.py -q
           pytest tests/architecture/test_operational_health_authority.py -q
 
       - name: Prove production compose renders
