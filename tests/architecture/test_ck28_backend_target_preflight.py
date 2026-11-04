@@ -41,7 +41,7 @@ def test_bad_bypass_credentials_fail_without_secret_leak(monkeypatch) -> None:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    for bad in ("private-secret\\n", "private-secret\\r", "private-secret\\x00"):
+    for bad in ("private-secret\n", "private-secret\r", "private-secret\x00"):
         monkeypatch.setenv("VERCEL_AUTOMATION_BYPASS_SECRET", bad)
         with pytest.raises(ValueError, match="Invalid deployment bypass credential configuration") as error:
             module.verify("https://example.com")
