@@ -521,7 +521,13 @@ class ProviderRegistryService:
         if endpoint.api_key_env:
             has_api_key = bool((os.getenv(endpoint.api_key_env) or "").strip())
 
-        health_status = HealthStatus.HEALTHY if endpoint.enabled else HealthStatus.UNAVAILABLE
+        # Registration/configuration is not an observed health probe.
+        # UNKNOWN remains eligible for a first verified runtime attempt; the
+        # settings catalog must not present that state as "healthy".
+        health_status = (
+            self.health_monitor.get_provider_health(endpoint.provider_id).health_status
+            if endpoint.enabled else HealthStatus.UNAVAILABLE
+        )
         is_available = endpoint.enabled and has_api_key and health_status in [
             HealthStatus.HEALTHY,
             HealthStatus.DEGRADED,
@@ -582,12 +588,13 @@ class ProviderRegistryService:
             has_api_key = self._check_api_key_availability(name)
 
         # Get health status from canonical health monitor
-        health_status = HealthStatus.HEALTHY
+        health_status = HealthStatus.UNKNOWN
         try:
             info = self.health_monitor.get_provider_health(name)
             health_status = info.health_status
         except Exception:
-            pass
+            # Probe information unavailable is not verified health.
+            logger.warning("Provider health snapshot unavailable for %s", name)
 
         # Determine availability - consider UNKNOWN as potentially available
         is_available = has_api_key and (
