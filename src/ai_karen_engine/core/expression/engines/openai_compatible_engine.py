@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, AsyncIterator
 
 from .base import BaseExpressionEngine
-from ..contracts import ExpressionResult, ExpressionTask
-from ...model_runtime.provider_execution import execute_provider_endpoint
+from ..contracts import ExpressionResult, ExpressionStreamEvent, ExpressionTask
+from ...model_runtime.provider_execution import (ProviderExecutionResult, execute_provider_endpoint, stream_provider_endpoint)
 from ...model_runtime.provider_policy import evaluate_provider_policy
 from ...model_runtime.runtime_engine import EndpointKind
 
@@ -64,11 +64,6 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 max_tokens=task.max_tokens,
                 temperature=task.temperature,
             )
-            text = execution.text
-            actual_provider = execution.provider_id
-            actual_model = execution.model
-            runtime_engine = execution.runtime_engine or "openai_compatible"
-            provider_usage = dict(execution.usage or {})
         except Exception as exc:
             logger.error(
                 "OpenAICompatibleEngine (%s) failed for %s: %s",
@@ -93,6 +88,200 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 ],
             )
 
+        return self._build_expression_result(
+            task=task,
+            started=started,
+            attempt_started=attempt_started,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            selected_model=model,
+            execution=execution,
+            registry=registry,
+        )
+
+    def _build_expression_result(
+        self,
+        *,
+        task: ExpressionTask,
+        started: float,
+        attempt_started: float,
+        requested_provider: str,
+        requested_model: str | None,
+        selected_model: str | None,
+        execution: ProviderExecutionResult,
+        registry: Any,
+    ) -> ExpressionResult:
+        """Shared canonical receipt for REST completions and SSE streams."""
+        text = execution.text
+        actual_provider = execution.provider_id
+        actual_model = execution.model
+        runtime_engine = execution.runtime_engine or "openai_compatible"
+        provider_usage = dict(execution.usage or {})
+        model = selected_model
+        has_text = bool(text and text.strip())
+        explicit_request = requested_provider.lower() not in {"", "auto"}
+        fallback_level = (
+            1
+            if explicit_request
+            and not self._provider_ids_equivalent(
+                requested_provider,
+                actual_provider,
+                registry,
+            )
+            else 0
+        )
+        degraded = not has_text or fallback_level > 0
+        response_source = (
+            "provider_runtime"
+            if has_text and fallback_level == 0
+            else "fallback_provider_runtime"
+            if has_text
+            else "model_unavailable"
+        )
+        degradation_reason = (
+            "empty_response"
+            if not has_text
+            else (
+                f"Requested provider {requested_provider} was unavailable; "
+                f"{actual_provider} generated the response."
+                if fallback_level > 0
+                else None
+            )
+        )
+        attempts = [
+            {
+                "provider": actual_provider,
+                "model": actual_model or model or requested_model,
+                "status": "success" if has_text else "empty",
+                "latency_ms": (time.perf_counter() - attempt_started) * 1000,
+            }
+        ]
+        metadata = {
+            "requested_provider": requested_provider,
+            "requested_model": requested_model,
+            "actual_provider": actual_provider,
+            "actual_model": actual_model,
+            "runtime_engine": runtime_engine,
+            "response_source": response_source,
+            "fallback_level": fallback_level,
+            "degraded_mode": degraded,
+            "degradation_type": (
+                "provider_fallback"
+                if fallback_level > 0
+                else "empty_response"
+                if not has_text
+                else None
+            ),
+            "degradation_reason": degradation_reason,
+            "provider_attempts": attempts,
+            "usage": provider_usage,
+            "finish_reason": execution.finish_reason,
+            "output_truncated": execution.finish_reason == "length",
+        }
+
+        return ExpressionResult(
+            task_id=task.task_id,
+            text=text,
+            provider=actual_provider,
+            model=actual_model,
+            engine_id=self.engine_id,
+            engine_mode="openai_compatible",
+            runtime_engine=runtime_engine,
+            response_source=response_source,
+            attempts=attempts,
+            skipped=[],
+            latency_ms=(time.perf_counter() - started) * 1000,
+            degraded=degraded,
+            degradation_reason=degradation_reason,
+            metadata=metadata,
+        )
+    async def generate_stream(
+        self, task: ExpressionTask
+    ) -> AsyncIterator[ExpressionStreamEvent]:
+        """Stream the same registered provider/model as ordinary generation.
+
+        The endpoint owns wire deltas, the gateway owns eligibility/fallback
+        and runtime owns response persistence. If streaming is unsupported,
+        one completed non-streaming result is returned honestly, not split
+        into fabricated tokens.
+        """
+        started = time.perf_counter()
+        from ai_karen_engine.core.model_runtime.provider_registry_service import (
+            get_provider_registry_service,
+        )
+
+        registry = get_provider_registry_service()
+        requested_provider = str(task.preferred_provider or "auto").strip() or "auto"
+        requested_model = task.preferred_model
+        provider_id = self._resolve_provider(
+            task, self.engine_id == "cloud", registry,
+        )
+        endpoint = registry.get_provider_endpoint(provider_id) if provider_id else None
+        if endpoint is None:
+            result = self._failure_result(
+                task, started, "no_suitable_provider_found",
+                requested_provider=requested_provider,
+            )
+            yield ExpressionStreamEvent(kind="complete", result=result)
+            return
+
+        if not endpoint.supports_streaming:
+            result = await self.generate(task)
+            if result.text:
+                yield ExpressionStreamEvent(kind="delta", text_delta=result.text)
+            yield ExpressionStreamEvent(kind="complete", result=result)
+            return
+
+        model = task.preferred_model
+        if model == "auto":
+            model = None
+        attempt_started = time.perf_counter()
+        completed = False
+        async for event in stream_provider_endpoint(
+            endpoint,
+            messages=task.messages,
+            model=model,
+            max_tokens=task.max_tokens,
+            temperature=task.temperature,
+            timeout_ms=task.timeout_ms,
+        ):
+            if event.kind == "delta":
+                yield ExpressionStreamEvent(kind="delta", text_delta=event.delta)
+            elif event.kind == "complete" and event.result is not None:
+                completed = True
+                result = self._build_expression_result(
+                    task=task,
+                    started=started,
+                    attempt_started=attempt_started,
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
+                    selected_model=model,
+                    execution=event.result,
+                    registry=registry,
+                )
+                yield ExpressionStreamEvent(kind="complete", result=result)
+        if not completed:
+            raise RuntimeError("provider_stream_missing_terminal_receipt")
+
+    def _build_expression_result(
+        self,
+        *,
+        task: ExpressionTask,
+        started: float,
+        attempt_started: float,
+        requested_provider: str,
+        requested_model: str | None,
+        selected_model: str | None,
+        execution: ProviderExecutionResult,
+        registry: Any,
+    ) -> ExpressionResult:
+        """Shared canonical receipt for REST completions and SSE streams."""
+        text = execution.text
+        actual_provider = execution.provider_id
+        actual_model = execution.model
+        runtime_engine = execution.runtime_engine or "openai_compatible"
+        provider_usage = dict(execution.usage or {})
+        model = selected_model
         has_text = bool(text and text.strip())
         explicit_request = requested_provider.lower() not in {"", "auto"}
         fallback_level = (
