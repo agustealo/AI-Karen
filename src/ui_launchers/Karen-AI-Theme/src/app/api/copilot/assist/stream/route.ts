@@ -4,117 +4,106 @@ import { getBackendBaseUrl, sanitizeHeaders } from '../../../_lib/backend-proxy'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function formatProxyError(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
+/**
+ * Legacy streaming ingress remains a compatibility transport only.
+ * Authentication, tenant authorization, model selection and persistence
+ * belong to the canonical backend. An execution POST must be attempted once
+ * against one configured target. A network exception cannot establish whether
+ * the first attempt executed, so fail closed instead of replaying it.
+ */
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  let backendBaseUrl: string;
+  try {
+    backendBaseUrl = getBackendBaseUrl();
+  } catch {
+    return NextResponse.json(
+      {
+        detail: 'Canonical backend connection is not configured for this deployment.',
+        error_code: 'BACKEND_TARGET_NOT_CONFIGURED',
+      },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    );
   }
-  if (typeof error === 'string') {
-    return error;
-  }
-  if (typeof error === 'object' && error !== null) {
-    const maybeName = (error as { name?: unknown }).name;
-    const maybeMessage = (error as { message?: unknown }).message;
-    const name = typeof maybeName === 'string' ? maybeName : 'UnknownError';
-    const message =
-      typeof maybeMessage === 'string' && maybeMessage.trim()
-        ? maybeMessage
-        : 'No message';
-    return `${name}: ${message}`;
-  }
-  return String(error);
-}
-
-export async function POST(request: NextRequest) {
-  const backendBaseUrl = getBackendBaseUrl();
-  const primaryUpstreamUrl = `${backendBaseUrl}/api/copilot/assist/stream`;
-  const fallbackUpstreamUrls = [
-    'http://api:8000/api/copilot/assist/stream',
-    'http://host.docker.internal:8000/api/copilot/assist/stream',
-  ].filter((url) => url !== primaryUpstreamUrl);
 
   try {
-    const rawBody = await request.text();
     const headers = sanitizeHeaders(request.headers, backendBaseUrl);
+    headers.set('Accept', 'text/event-stream');
+    const upstream = await fetch(`${backendBaseUrl}/api/copilot/assist/stream`, {
+      method: 'POST',
+      headers,
+      body: await request.text(),
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: request.signal,
+      // @ts-expect-error Node/undici accepts streamed request bodies.
+      duplex: 'half',
+    });
 
-    const candidateUrls = [primaryUpstreamUrl, ...fallbackUpstreamUrls];
-    let upstream: Response | null = null;
-    let lastProxyError: unknown = null;
-    let attemptedUrl = primaryUpstreamUrl;
-
-    for (const upstreamUrl of candidateUrls) {
-      attemptedUrl = upstreamUrl;
-      try {
-        upstream = await fetch(upstreamUrl, {
-          method: 'POST',
-          headers,
-          body: rawBody,
-          cache: 'no-store',
-          redirect: 'manual',
-          signal: request.signal,
-          // @ts-expect-error Node/undici extension supported in Next runtime.
-          duplex: 'half',
-        });
-        break;
-      } catch (proxyError) {
-        lastProxyError = proxyError;
-      }
-    }
-
-    if (!upstream) {
-      throw (
-        lastProxyError instanceof Error
-          ? new Error(
-              `All upstream targets failed. Last target: ${attemptedUrl}. Last error: ${lastProxyError.message}`,
-            )
-          : new Error(`All upstream targets failed. Last target: ${attemptedUrl}.`)
+    // Never replay a POST after 3xx or forward an internal Location.
+    if (upstream.status >= 300 && upstream.status < 400) {
+      await upstream.body?.cancel().catch(() => undefined);
+      return NextResponse.json(
+        {
+          detail: 'The canonical backend redirected a streaming request.',
+          error_code: 'COPILOT_STREAM_UPSTREAM_REDIRECT',
+        },
+        { status: 502, headers: { 'cache-control': 'no-store' } },
       );
     }
 
     if (!upstream.ok) {
-      const errorBody = await upstream.text().catch(() => 'Upstream error');
-      console.error(
-        `[StreamProxy] Upstream returned ${upstream.status}: ${errorBody.slice(0, 200)}`,
+      await upstream.body?.cancel().catch(() => undefined);
+      // The upstream error body may contain tokens, URLs or private messages.
+      // Preserve the status but never log or reflect its untrusted body.
+      return NextResponse.json(
+        {
+          detail: 'The canonical backend rejected the stream request.',
+          error_code: 'COPILOT_STREAM_UPSTREAM_REJECTED',
+        },
+        { status: upstream.status, headers: { 'cache-control': 'no-store' } },
       );
-      return new NextResponse(errorBody, {
-        status: upstream.status,
-        headers: { 'Content-Type': 'application/json' },
-      });
     }
 
-    if (!upstream.body) {
-      return new NextResponse('No response body from upstream', { status: 502 });
+    if (!upstream.body ||
+        !/^text\/event-stream(?:\s*;|\s*$)/i.test(
+          upstream.headers.get('content-type') || '',
+        )) {
+      await upstream.body?.cancel().catch(() => undefined);
+      return NextResponse.json(
+        {
+          detail: 'Canonical backend did not return an event stream.',
+          error_code: 'COPILOT_STREAM_INVALID_CONTENT_TYPE',
+        },
+        { status: 502, headers: { 'cache-control': 'no-store' } },
+      );
     }
 
-    const responseHeaders = new Headers();
-    responseHeaders.set('Content-Type', 'text/event-stream');
-    responseHeaders.set('Cache-Control', 'no-cache');
-    responseHeaders.set('Connection', 'keep-alive');
-    responseHeaders.set('X-Accel-Buffering', 'no');
-
+    const responseHeaders = new Headers({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    });
     const correlationId = upstream.headers.get('x-correlation-id');
     if (correlationId) {
       responseHeaders.set('X-Correlation-Id', correlationId);
     }
 
+    // Do not synthesize a model response, terminal event or persistence claim.
+    // The canonical backend owns stream termination and runtime receipts.
     return new NextResponse(upstream.body, {
       status: upstream.status,
       headers: responseHeaders,
     });
   } catch (error) {
-    const formattedError = formatProxyError(error);
-    console.error(
-      `[StreamProxy] Failed to proxy stream request: ${formattedError}`,
-    );
-    const detail =
-      error instanceof Error && error.name === 'AbortError'
-        ? 'Stream request was cancelled'
-        : error instanceof Error
-          ? error.message
-          : 'Unknown proxy error';
-
+    console.error('[CopilotStreamProxy] canonical_stream_unavailable', {
+      error_type: error instanceof Error ? error.name : 'UnknownError',
+    });
     return NextResponse.json(
-      { detail: 'Failed to proxy stream to backend', error: detail },
-      { status: 502 },
+      {
+        detail: 'Canonical stream unavailable.',
+        error_code: 'COPILOT_STREAM_UNAVAILABLE',
+      },
+      { status: 502, headers: { 'cache-control': 'no-store' } },
     );
   }
 }
