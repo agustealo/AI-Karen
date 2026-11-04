@@ -223,7 +223,20 @@ async function handle(request: NextRequest): Promise<Response> {
   if (unavailable) return unavailable;
   const rejected = await validateRunEnvelope(request);
   if (rejected) return rejected;
-  const backendBaseUrl = getBackendBaseUrl();
+  // A missing or ineligible Vercel backend must be reported before attempting
+  // session verification or spawning a CopilotKit SDK agent.
+  let backendBaseUrl: string;
+  try {
+    backendBaseUrl = getBackendBaseUrl();
+  } catch {
+    return NextResponse.json(
+      {
+        detail: "Canonical backend connection is not configured for this deployment.",
+        error_code: "BACKEND_TARGET_NOT_CONFIGURED",
+      },
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
   const auth = await verifyKarenCopilotSession(request, backendBaseUrl);
   if (auth instanceof NextResponse) return auth;
   const capabilities = await readKarenAgUiCapabilities(request, backendBaseUrl, auth.headers);
