@@ -144,6 +144,9 @@ jobs:
           pytest tests/architecture/test_render_beta_service_reconcile.py -q
           pytest tests/architecture/test_render_beta_environment_preflight.py -q
           pytest tests/architecture/test_render_beta_blueprint_contract.py -q
+          # Production /ready must actively check canonical Redis connectivity,
+          # accept only secured targets, and match the frontend health contract.
+          pytest tests/architecture/test_operational_health_authority.py -q
           pytest tests/architecture/test_vercel_deployment_attestation.py -q
           pytest tests/architecture/test_http_transport_authority.py -q
           pytest tests/architecture/test_rate_limit_identity_authority.py -q
