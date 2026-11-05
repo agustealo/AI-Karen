@@ -2713,6 +2713,7 @@ class ChatRuntime:
             part = (
                 ChatRuntime._verified_planner_presentation(decision, plan, result)
                 or ChatRuntime._verified_weather_presentation(request, decision, plan, result)
+                or ChatRuntime._verified_search_presentation(request, decision, plan, result)
             )
             part = validate_presentation(part)
             if not part or part.get("component_type") == "surface.composition":
@@ -2751,43 +2752,99 @@ class ChatRuntime:
         return validate_presentation(candidate) if candidate is not None else None
 
     @staticmethod
+    def _verified_direct_source_receipt(plan, result):
+        """Verify an executed, allowed tool/plugin source before UI projection."""
+        if not result.success or result.degraded or result.source not in ("tool", "plugin"):
+            return False
+        source_id = result.source_id
+        if not isinstance(source_id, str) or not source_id:
+            return False
+        allowed = (
+            getattr(plan, "allowed_tools", ())
+            if result.source == "tool"
+            else getattr(plan, "allowed_plugins", ())
+        )
+        if source_id not in set(allowed or ()):
+            return False
+        return any(
+            isinstance(attempt, dict)
+            and attempt.get("type") == result.source
+            and attempt.get("id") == source_id
+            and attempt.get("status") == "success"
+            for attempt in (result.attempts if isinstance(result.attempts, list) else [])
+        )
+
+    @staticmethod
+    def _verified_search_presentation(request, decision, plan, result):
+        """Project source-reported search records, never model-written claims."""
+        if (
+            decision.intent != "search.general"
+            or not ChatRuntime._verified_direct_source_receipt(plan, result)
+        ):
+            return None
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+        evidence_id = f"{request.context.request_id}:{result.source_id}"
+        seen_urls: set[str] = set()
+        rows = []
+        sources = result.sources if isinstance(result.sources, list) else []
+        # Bound work even when an external search source returns excessive rows.
+        for source in sources[:40]:
+            if not isinstance(source, dict):
+                continue
+            url = source.get("url")
+            if not isinstance(url, str) or url in seen_urls:
+                continue
+            snippet = source.get("snippet") or source.get("content")
+            row = {"url": url, "snippet": snippet}
+            if source.get("title") is not None:
+                row["title"] = source["title"]
+            if source.get("published_at") is not None:
+                row["published_at"] = source["published_at"]
+            candidate = {
+                "schema_version": 1,
+                "presentation_id": f"search-{request.context.request_id}",
+                "component_type": "search.results",
+                "data": {"results": [row]},
+                "evidence_ref": evidence_id,
+                "correlation_id": request.context.correlation_id,
+            }
+            checked = validate_presentation(candidate)
+            if checked is None:
+                # A missing/invalid timestamp must not discard otherwise
+                # genuine source text. Do not invent or normalize a date.
+                row.pop("published_at", None)
+                candidate["data"]["results"] = [row]
+                checked = validate_presentation(candidate)
+            if checked is None:
+                continue
+            rows.append(checked["data"]["results"][0])
+            seen_urls.add(url)
+            if len(rows) == 5:
+                break
+        if not rows:
+            return None
+        return validate_presentation({
+            "schema_version": 1,
+            "presentation_id": f"search-{request.context.request_id}",
+            "component_type": "search.results",
+            "data": {"results": rows},
+            "evidence_ref": evidence_id,
+            "correlation_id": request.context.correlation_id,
+        })
+
+    @staticmethod
     def _verified_weather_presentation(request, decision, plan, result):
         """Reuse one evidence contract for streaming and standard chat."""
         # Projection is permitted only for a successful authorized tool receipt.
         # This is not a model-authored layout or a substitute for evidence RBAC.
         presentation = None
-        attempts = result.attempts if isinstance(result.attempts, list) else []
-        # The canonical web_search capability accepts meteorological readings
-        # from extractedData, weather, current, or observation. The presentation
-        # path must recognize the same source shapes, not silently drop a
-        # successful first-prompt weather observation.
         observed_payload = result.payload if isinstance(result.payload, dict) else {}
-        verified_tool = (
-            result.success and not result.degraded
-            and result.source == "tool"
-            and isinstance(result.source_id, str)
-            and result.source_id in plan.allowed_tools
-            and any(
-                isinstance(attempt, dict)
-                and attempt.get("type") == "tool"
-                and attempt.get("id") == result.source_id
-                and attempt.get("status") == "success"
-                for attempt in attempts
-            )
-        )
+        authorized = ChatRuntime._verified_direct_source_receipt(plan, result)
+        verified_tool = authorized and result.source == "tool"
         verified_weather_plugin = (
             decision.intent == "search.weather"
-            and result.success and not result.degraded
-            and result.source == "plugin"
-            and isinstance(result.source_id, str)
-            and result.source_id in set(getattr(plan, "allowed_plugins", ()))
-            and any(
-                isinstance(attempt, dict)
-                and attempt.get("type") == "plugin"
-                and attempt.get("id") == result.source_id
-                and attempt.get("status") == "success"
-                for attempt in attempts
-            )
+            and authorized and result.source == "plugin"
         )
         if decision.intent == "search.weather" and (
             verified_tool or verified_weather_plugin
@@ -2815,17 +2872,7 @@ class ChatRuntime:
 
         verified_time_plugin = (
             decision.intent == "time.current"
-            and result.success and not result.degraded
-            and result.source == "plugin"
-            and isinstance(result.source_id, str)
-            and result.source_id in plan.allowed_plugins
-            and any(
-                isinstance(attempt, dict)
-                and attempt.get("type") == "plugin"
-                and attempt.get("id") == result.source_id
-                and attempt.get("status") == "success"
-                for attempt in attempts
-            )
+            and authorized and result.source == "plugin"
         )
         if decision.intent == "time.current" and (verified_tool or verified_time_plugin) and isinstance(result.payload, dict):
             payload = result.payload
