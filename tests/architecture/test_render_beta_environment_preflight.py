@@ -130,7 +130,7 @@ def test_reads_canonical_config_contract_without_production_import(m):
     assert m.reference_name(
         blueprint, key="REDIS_URL", ref_kind="fromService",
     ) == "ai-karen-beta-redis"
-    assert m.health_path(blueprint) == "/health/live"
+    assert m.Manifest.read(m.BLUEPRINT).health_check_path == "/health/live"
 
 
 def test_valid_existing_resources_and_env_are_read_only_and_secret_free(m):
