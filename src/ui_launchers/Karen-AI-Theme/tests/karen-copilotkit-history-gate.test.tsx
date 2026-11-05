@@ -224,17 +224,59 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
   });
 
-  it("warns about unsupported rich replay without showing a partial transcript", async () => {
-    backend.fetchConversation.mockRejectedValueOnce(
-      Object.assign(new Error("unsupported presentation"), { status: 409 }),
-    );
+  it("recovers the complete authorized text view from an unsupported rich replay without mounting SDK chat", async () => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unsupported presentation"), { status: 409 }),
+      )
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        omitted_entries: 1,
+        messages: [
+          { id: "u1", role: "user", content: "What time is it?" },
+          { id: "a1", role: "assistant", content: "<script>Saved text only</script>" },
+        ],
+      });
     render(guardedHistory());
-    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("karen-read-only-transcript")).toBeTruthy());
     expect(screen.getByRole("alert").textContent).toContain("cannot faithfully restore");
     expect(screen.getByRole("alert").textContent).toContain("No partial conversation was opened");
-    expect(screen.getByRole("alert").textContent).not.toContain("existing conversation view");
+    expect(screen.getByRole("region", { name: "Recovered read-only text transcript" })).toBeTruthy();
+    expect(screen.getByText("What time is it?")).toBeTruthy();
+    expect(screen.getByText("<script>Saved text only</script>")).toBeTruthy();
+    expect(screen.queryByText("private tool output")).toBeNull();
+    expect(document.querySelector("script")).toBeNull();
+    expect(screen.getByText(/1 non-chat entries were withheld/)).toBeTruthy();
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.subscribe).not.toHaveBeenCalled();
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      2, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=transcript",
+    );
+  });
+
+  it("never displays a transcript unless the independent recovery read attests owner, mode and message shape", async () => {
+    for (const forged of [
+      { threadId: CONVERSATION_B, read_only: true, text_only: true, omitted_entries: 0,
+        messages: [{ id: "a1", role: "assistant", content: "Foreign private answer" }] },
+      { threadId: CONVERSATION_A, read_only: false, text_only: true, omitted_entries: 0,
+        messages: [{ id: "a1", role: "assistant", content: "Wrong mode" }] },
+      { threadId: CONVERSATION_A, read_only: true, text_only: true, omitted_entries: 0,
+        messages: [{ id: "a1", role: "assistant", content: "One" },
+          { id: "a1", role: "assistant", content: "Two" }] },
+    ]) {
+      backend.fetchConversation
+        .mockRejectedValueOnce(Object.assign(new Error("rich incompatible"), { status: 409 }))
+        .mockResolvedValueOnce(forged);
+      const view = render(guardedHistory());
+      await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+      await waitFor(() => expect(backend.fetchConversation).toHaveBeenCalledTimes(2));
+      expect(screen.queryByTestId("agent-chat")).toBeNull();
+      expect(screen.queryByTestId("karen-read-only-transcript")).toBeNull();
+      expect(backend.agent.setMessages).not.toHaveBeenCalled();
+      view.unmount();
+      backend.fetchConversation.mockReset();
+    }
   });
 
   it("recovers from a transient history outage only after a new authenticated read", async () => {
@@ -272,6 +314,7 @@ describe("CopilotKit canonical conversation hydration", () => {
         replayEvents: [{ type: "CUSTOM", name: "unknown.evidence",
           messageId: "m1", value: {} }],
       })
+      .mockRejectedValueOnce(new Error("canonical recovery temporarily unavailable"))
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A,
         messages: [{ id: "m2", role: "user", content: "Valid canonical history" }],
@@ -517,7 +560,13 @@ describe("CopilotKit canonical conversation hydration", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
-    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    // Rich replay failure may attempt an independent owner-verified text
+    // recovery, but never mutate the SDK or fabricate a completed reply.
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(3);
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      3, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=transcript",
+    );
+    expect(screen.queryByTestId("karen-read-only-transcript")).toBeNull();
   });
 
   it("ignores an obsolete conversation snapshot after switching threads", async () => {

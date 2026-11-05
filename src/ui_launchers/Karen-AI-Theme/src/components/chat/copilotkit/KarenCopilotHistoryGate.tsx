@@ -20,9 +20,21 @@ import {
 type KarenOwnedThreadResponse = {
   threadId: string;
   messages: KarenOwnedHistoryMessage[];
-  // Backend-verified CUSTOM events exist, but this v2 manual hydrator only
-  // supports text. Never silently discard presentation/receipt provenance.
   replayEvents?: unknown;
+};
+
+type KarenRecoveredTranscript = {
+  conversationId: string;
+  messages: KarenCopilotTextMessage[];
+  omittedEntries: number;
+};
+
+type KarenOwnedTranscriptResponse = {
+  threadId: string;
+  messages: KarenOwnedHistoryMessage[];
+  read_only: true;
+  text_only: true;
+  omitted_entries: number;
 };
 
 // The history gate owns the sole SDK agent registration for this conversation.
@@ -108,6 +120,7 @@ export function KarenCopilotHistoryGate({
   const [error, setError] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [verifiedParts, setVerifiedParts] = useState<VerifiedHistoryParts>(new Map());
+  const [transcript, setTranscript] = useState<KarenRecoveredTranscript | null>(null);
 
   useEffect(() => {
     if (!isReady) return;
@@ -115,6 +128,7 @@ export function KarenCopilotHistoryGate({
     setLoaded(null);
     setError(null);
     setVerifiedParts(new Map());
+    setTranscript(null);
 
     // Run events merely trigger another authenticated read; they do not
     // authorize a client CUSTOM event as a saved execution receipt.
@@ -154,15 +168,48 @@ export function KarenCopilotHistoryGate({
             if (restoreQueued) continue;
             agent.setMessages(messages);
             setVerifiedParts(parts);
+            setTranscript(null);
             setError(null);
             setLoaded(conversationId);
             restored = true;
           } catch (error: unknown) {
+            if (cancelled || restoreQueued) continue;
+            const status = error && typeof error === "object" && "status" in error
+              ? (error as { status?: unknown }).status : undefined;
+            const replayUnsupported = status === 409 || (
+              error instanceof Error && /^Unsupported verified /.test(error.message)
+            );
+            if (replayUnsupported) {
+              // A fresh authenticated request to the canonical owned snapshot
+              // is the only authority for text recovery. Never reuse an
+              // unverified snapshot, invent messages, or mutate the SDK agent.
+              try {
+                const recovery = await apiClient.get<KarenOwnedTranscriptResponse>(
+                  "/api/copilotkit/threads/" + conversationId + "/messages?view=transcript",
+                );
+                if (cancelled || restoreQueued) continue;
+                if (recovery.threadId !== conversationId ||
+                    recovery.read_only !== true || recovery.text_only !== true ||
+                    !Number.isInteger(recovery.omitted_entries) ||
+                    recovery.omitted_entries < 0 ||
+                    recovery.omitted_entries > 500) {
+                  throw new Error("Recovery transcript identity or mode mismatch");
+                }
+                setTranscript({
+                  conversationId,
+                  messages: toCopilotTextMessages(recovery.messages),
+                  omittedEntries: recovery.omitted_entries,
+                });
+              } catch {
+                if (cancelled || restoreQueued) continue;
+                setTranscript(null);
+              }
+            } else {
+              setTranscript(null);
+            }
             if (!cancelled && !restoreQueued) {
-              const status = error && typeof error === "object" && "status" in error
-                ? (error as { status?: unknown }).status : undefined;
-              setError(status === 409
-                ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Retry after the required presentation support is available."
+              setError(replayUnsupported
+                ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available."
                 : "Karen could not verify or restore this conversation.");
               restored = false;
             }
@@ -202,9 +249,34 @@ export function KarenCopilotHistoryGate({
     return <p role="status" className="text-sm text-muted-foreground">Restoring conversation...</p>;
   }
   if (error) {
+    const recovered = transcript?.conversationId === conversationId ? transcript : null;
     return (
-      <div className="flex flex-col items-start gap-2 p-3">
+      <div className="flex w-full min-w-0 flex-col items-start gap-3 p-3">
         <p role="alert" className="text-sm text-destructive">{error}</p>
+        {recovered && (
+          <section aria-label="Recovered read-only text transcript"
+            data-testid="karen-read-only-transcript" className="w-full min-w-0 rounded-md border p-3">
+            <h3 className="text-sm font-semibold">Saved conversation text</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              This is a read-only, owner-verified text projection, not a restored
+              chat. Rich cards, attachments, citations, and tool activity are
+              not shown. Messages cannot be sent from this view.
+              {recovered.omittedEntries > 0 &&
+                ` ${recovered.omittedEntries} non-chat entries were withheld.`}
+            </p>
+            <ol className="mt-3 max-h-[65vh] space-y-3 overflow-y-auto"
+              aria-label="Saved user and assistant messages">
+              {recovered.messages.map(message => (
+                <li key={message.id} className="min-w-0 rounded-md border p-2">
+                  <p className="mb-1 text-xs font-semibold">
+                    {message.role === "user" ? "You" : "Karen"}
+                  </p>
+                  <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
         <button type="button" className="rounded-md border border-input px-3 py-2 text-sm"
           onClick={() => setRetryAttempt(attempt => attempt + 1)}>
           Retry verified conversation
