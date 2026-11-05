@@ -42,15 +42,15 @@ export function displayClockObservation(formatted: string): { time: string; date
  */
 function isPublicSourceUrl(value: unknown): value is string {
   if (typeof value !== "string" || value.length < 1 || value.length > 1200 ||
-      /[\\s\\u0000-\\u001f]/.test(value)) return false;
+      /[\s\u0000-\u001f]/.test(value)) return false;
   try {
     const parsed = new URL(value);
     const host = parsed.hostname.toLowerCase();
     if (!["http:", "https:"].includes(parsed.protocol) || !host ||
         parsed.username || parsed.password ||
-        host === "localhost" || /\\.(localhost|local|internal)$/.test(host)) return false;
+        host === "localhost" || /\.(localhost|local|internal)$/.test(host)) return false;
     // Do not surface loopback, private, link-local or unspecified IPv4 URLs.
-    const ipv4 = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(host);
+    const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
     if (ipv4) {
       const [a, b, d, e] = ipv4.slice(1).map(Number);
       if ([a, b, d, e].some((part) => part > 255) ||
@@ -59,7 +59,7 @@ function isPublicSourceUrl(value: unknown): value is string {
           (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) ||
           (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19))) return false;
     }
-    if (host.includes(":") && (host.includes("::1") || /^\\[?(?:fc|fd|fe80|::)/.test(host))) return false;
+    if (host.includes(":") && (host.includes("::1") || /^\[?(?:fc|fd|fe80|::)/.test(host))) return false;
     return true;
   } catch {
     return false;
