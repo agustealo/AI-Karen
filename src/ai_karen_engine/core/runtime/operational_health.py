@@ -47,6 +47,13 @@ class OperationalHealthResult:
             "status": self.status,
             "ready": self.ready,
             "checks": self.checks,
+            # Server-owned projection consumed by the canonical Next.js
+            # /api/health proxy. Never let the frontend infer readiness from a
+            # 200 status or create its own degraded-mode fallbacks.
+            "components": {
+                name: "ready" if result.get("ready") is True else "not_ready"
+                for name, result in self.checks.items()
+            },
             "timestamp": self.timestamp,
         }
 
