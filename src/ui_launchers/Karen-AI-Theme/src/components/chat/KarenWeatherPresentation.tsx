@@ -19,6 +19,7 @@ export type WeatherObservation = {
   windMph: number | null;
   precipitationProbability: number | null;
   weatherCode: number | null;
+  reportedCondition: string | null;
   provider: string | null;
   sourceUrl: string | null;
 };
@@ -123,6 +124,12 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
   };
   const wind = numberFrom(data, "mph", "wind_speed_mph", "windMph");
   const weatherCode = numberFrom(data, "plain", "weather_code", "weatherCode");
+  const reportedConditions = [optionalString(data.conditions), optionalString(data.condition)];
+  if (reportedConditions.some(value => value !== null && value.length > 120) ||
+      (reportedConditions[0] && reportedConditions[1] &&
+       reportedConditions[0].toLocaleLowerCase() !== reportedConditions[1].toLocaleLowerCase())) {
+    return null;
+  }
   const observedAt = optionalString(data.observed_at);
   if (observedAt && (observedAt.length > 64 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?$/.test(observedAt) || Number.isNaN(Date.parse(observedAt)))) return null;
   const source = optionalString(data.source_url);
@@ -144,6 +151,7 @@ export function normalizeWeatherObservation(value: unknown): WeatherObservation 
     windMph: wind !== null && wind >= 0 && wind <= 300 ? wind : null,
     precipitationProbability: percentage("precipitation_probability"),
     weatherCode: weatherCode !== null && Number.isInteger(weatherCode) ? weatherCode : null,
+    reportedCondition: reportedConditions[0] ?? reportedConditions[1],
     provider: optionalString(data.provider),
     sourceUrl,
   };
@@ -180,9 +188,9 @@ export function KarenWeatherPresentation({ data, density = "comfortable" }: { da
           <h3 className="text-base font-semibold">{weather.location}</h3>
           {formatObserved(weather) && <p className="text-xs text-muted-foreground">Observed {formatObserved(weather)}</p>}
         </div>
-        {condition && <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        {(condition || weather.reportedCondition) && <div className="flex items-center gap-2 text-sm text-muted-foreground">
           {ConditionIcon && <ConditionIcon className="h-6 w-6" aria-hidden="true"/>}
-          <span>{condition.label}</span>
+          <span>{condition?.label ?? weather.reportedCondition}</span>
         </div>}
       </div>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
