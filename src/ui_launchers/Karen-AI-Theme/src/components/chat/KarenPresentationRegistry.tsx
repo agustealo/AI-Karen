@@ -41,26 +41,23 @@ export function displayClockObservation(formatted: string): { time: string; date
  * backend's canonical evidence validator.
  */
 function isPublicSourceUrl(value: unknown): value is string {
-  if (typeof value !== "string" || value.length < 1 || value.length > 1200 ||
-      /[\s\u0000-\u001f]/.test(value)) return false;
+  if (typeof value !== "string" || !value || value.length > 1200 ||
+      /[\s\u0000-\u001f\\]/.test(value)) return false;
   try {
     const parsed = new URL(value);
     const host = parsed.hostname.toLowerCase();
-    if (!["http:", "https:"].includes(parsed.protocol) || !host ||
-        parsed.username || parsed.password ||
-        host === "localhost" || /\.(localhost|local|internal)$/.test(host)) return false;
-    // Do not surface loopback, private, link-local or unspecified IPv4 URLs.
-    const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-    if (ipv4) {
-      const [a, b, d, e] = ipv4.slice(1).map(Number);
-      if ([a, b, d, e].some((part) => part > 255) ||
-          a === 0 || a === 10 || a === 127 || a >= 224 ||
-          (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-          (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) ||
-          (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19))) return false;
-    }
-    if (host.includes(":") && (host.includes("::1") || /^\[?(?:fc|fd|fe80|::)/.test(host))) return false;
-    return true;
+    if (!["http:", "https:"].includes(parsed.protocol) ||
+        parsed.username || parsed.password || parsed.port === "0" ||
+        !/^[a-z0-9.-]+$/.test(host)) return false;
+    // Mirror the backend's DNS-only rule. Reject numeric hosts and URL
+    // parser aliases for loopback/private network IP addresses.
+    const labels = host.split(".");
+    return labels.length >= 2 && labels.every((label) =>
+      label.length > 0 && label.length <= 63 &&
+      !label.startsWith("-") && !label.endsWith("-") &&
+      /^[a-z0-9-]+$/.test(label)) &&
+      /[a-z]/.test(labels[labels.length - 1]) &&
+      host !== "localhost" && !/\.(localhost|local|internal)$/.test(host);
   } catch {
     return false;
   }
