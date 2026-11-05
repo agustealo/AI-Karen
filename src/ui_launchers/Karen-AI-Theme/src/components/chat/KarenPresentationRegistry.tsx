@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.source_list"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -68,6 +68,36 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
           !parseKarenPresentation(child)) return null;
     }
     if (Array.isArray(manifest) && new Set(data.items.map((item: Record<string, unknown>) => item.evidence_ref)).size !== manifest.length) return null;
+  } else if (result.data.component_type === "search.source_list") {
+    const data = result.data.data;
+    if (!data || typeof data !== "object" || Array.isArray(data) ||
+        Object.keys(data).length !== 1 || !("items" in data)) return null;
+    const items = (data as { items?: unknown }).items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > 6) return null;
+    const urls = new Set<string>();
+    for (const value of items) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const item = value as Record<string, unknown>;
+      if (Object.keys(item).some(key => !["url", "title", "snippet", "published_at"].includes(key)) ||
+          typeof item.url !== "string" || item.url.length > 1200 ||
+          /[\u0000-\u001F\u007F]/.test(item.url) ||
+          typeof item.snippet !== "string" || !item.snippet.trim() ||
+          item.snippet.length > 500 || urls.has(item.url)) return null;
+      try {
+        const url = new URL(item.url);
+        if (url.protocol !== "https:" || url.username || url.password || url.port ||
+            !url.hostname.includes(".") || /^\d+(?:\.\d+){3}$/.test(url.hostname) ||
+            url.hostname.startsWith("[") ||
+            /\.(?:localhost|local|internal|test)$/.test(url.hostname)) return null;
+      } catch { return null; }
+      if (item.title !== undefined && (typeof item.title !== "string" ||
+          !item.title.trim() || item.title.length > 180)) return null;
+      if (item.published_at !== undefined && (
+          typeof item.published_at !== "string" || item.published_at.length > 45 ||
+          !/(?:Z|[+-]\d{2}:\d{2})$/.test(item.published_at) ||
+          Number.isNaN(Date.parse(item.published_at)))) return null;
+      urls.add(item.url);
+    }
   } else if (result.data.component_type === "date.observation") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -124,6 +154,37 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
         {composite.items.map((item) =>
           <KarenPresentationRegistry key={item.presentation_id} data={item} />)}
       </section>;
+    }
+    case "search.source_list": {
+      const items = (envelope.data as {
+        items: Array<{ url: string; title?: string; snippet: string; published_at?: string }>;
+      }).items;
+      return (
+        <section aria-label="Search source results" data-testid="karen-search-sources-presentation"
+          className="my-3 min-w-0 rounded-xl border border-border/70 p-4">
+          <h3 className="text-sm font-semibold">Sources from this search</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Provider-reported excerpts, not independently verified article content or release dates.
+          </p>
+          <ul className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {items.map(item => (
+              <li key={item.url} className="min-w-0 rounded-lg border border-border/60 p-3">
+                <a href={item.url} target="_blank" rel="noopener noreferrer"
+                  className="block break-words text-sm font-semibold text-primary underline-offset-2 hover:underline">
+                  {item.title || new URL(item.url).hostname}
+                </a>
+                <p className="mt-1 text-xs text-muted-foreground">{new URL(item.url).hostname}</p>
+                {item.published_at && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Published (provider-reported): {item.published_at}
+                  </p>
+                )}
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm">{item.snippet}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      );
     }
     case "date.observation": {
       const observed = envelope.data as { formatted: string; timezone?: string };
