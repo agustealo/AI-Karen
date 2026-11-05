@@ -238,4 +238,5 @@ def test_server_and_web_consumer_health_projection_share_a_contract() -> None:
     assert 'readiness.status !== \'ready\'' in web
     assert "const components = readiness.components" in web
     assert "components" in operational
-    assert '"configuration"' in web and '"database"' in web
+    assert ".configuration !== 'ready'" in web
+    assert ".database !== 'ready'" in web
