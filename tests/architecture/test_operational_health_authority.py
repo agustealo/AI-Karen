@@ -236,7 +236,6 @@ def test_server_and_web_consumer_health_projection_share_a_contract() -> None:
 
     assert "result.as_dict()" in server
     assert 'readiness.status !== \'ready\'' in web
-    assert "readiness.components" not in web  # Components are read as a property.
     assert "const components = readiness.components" in web
     assert "components" in operational
     assert '"configuration"' in web and '"database"' in web
