@@ -146,8 +146,9 @@ export async function readKarenOwnedThreadMessages(
   principal: KarenVerifiedPrincipal,
   threadId: string,
   governedHistory = false,
+  readOnlyTranscript = false,
 ): Promise<Response> {
-  if (governedHistory) {
+  if (governedHistory && !readOnlyTranscript) {
     return readKarenGovernedHistory(request, baseUrl, headers, principal, threadId);
   }
   let response: Response;
@@ -194,11 +195,22 @@ export async function readKarenOwnedThreadMessages(
   }
 
   const messages: Array<{ id: string; role: "user" | "assistant"; content: string }> = [];
+  const seenIds = new Set<string>();
+  let omittedEntries = 0;
   for (const item of data.messages) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return failure("Invalid canonical conversation message", 502);
     }
     const message = item as Record<string, unknown>;
+    // Recover only the authenticated text transcript. Tool/system messages
+    // never cross this view's response boundary. Count omissions so the UI
+    // cannot mistake the read-only transcript for a full rich replay.
+    if (readOnlyTranscript && ["tool", "system", "developer", "function"].includes(
+      String(message.role),
+    )) {
+      omittedEntries += 1;
+      continue;
+    }
     // Never silently discard privileged activity, attachments, or validated
     // presentation receipts. CopilotKit's text-only adapter cannot replay them
     // faithfully yet, so an incomplete transcript must not look restored.
@@ -220,26 +232,35 @@ export async function readKarenOwnedThreadMessages(
       value !== undefined && value !== null && value !== "" &&
       (!Array.isArray(value) || value.length > 0) &&
       (typeof value !== "object" || Object.keys(value).length > 0);
-    if (
-      (message.role !== "user" && message.role !== "assistant") ||
+    if (message.role !== "user" && message.role !== "assistant") {
+      return failure("Invalid canonical conversation message", 502);
+    }
+    if (!readOnlyTranscript && (
       richKeys.some((key) =>
         carriesRichValue(message[key]) || carriesRichValue(metadataMap[key]),
       ) ||
       carriesRichValue(message.function_call) ||
       carriesRichValue(message.function_response)
-    ) {
+    )) {
       return failure("Complete conversation replay is not yet supported", 409);
     }
     if (typeof message.id !== "string" || !message.id.trim() || message.id.length > 200 ||
+        seenIds.has(message.id) ||
         typeof message.content !== "string" || message.content.length > 65536) {
       return failure("Invalid canonical conversation message", 502);
     }
+    seenIds.add(message.id);
     messages.push({
       id: message.id, role: message.role, content: message.content,
     });
   }
   return NextResponse.json(
-    { threadId, messages },
+    readOnlyTranscript
+      ? {
+        threadId, messages, read_only: true, text_only: true,
+        omitted_entries: omittedEntries,
+      }
+      : { threadId, messages },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }
