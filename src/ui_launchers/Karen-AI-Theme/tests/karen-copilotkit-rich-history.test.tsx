@@ -70,6 +70,24 @@ describe("CK-07E3 CopilotKit v2 rich restoration in native message slot", () => 
     expect(screen.getAllByTestId("karen-copilot-verified-part")).toHaveLength(3);
   });
 
+  it("replays a saved source-result card beside its canonical answer", () => {
+    const search = {
+      schema_version: 1, presentation_id: "search-observed",
+      component_type: "search.source_list", evidence_ref: "req-1:web_search",
+      data: { items: [{
+        url: "https://example.org/film", title: "A source-reported premiere",
+        snippet: "The publisher reports a new movie release.",
+        published_at: "2026-11-05T12:30:00Z",
+      }] },
+    };
+    renderAssistant([{ type: "CUSTOM", name: "karen.presentation.v1",
+      messageId: "assistant-1", value: search }]);
+    expect(screen.getByTestId("sdk-default-assistant")).toBeTruthy();
+    expect(screen.getByTestId("karen-search-sources-presentation").textContent)
+      .toContain("source-reported premiere");
+    expect(screen.getAllByTestId("karen-copilot-verified-part")).toHaveLength(1);
+  });
+
   it("does not attach another assistant message's canonical parts", () => {
     renderAssistant([timeEvent, receiptEvent], "unrelated-assistant");
     expect(screen.getByTestId("sdk-default-assistant")).toBeTruthy();
