@@ -317,6 +317,185 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
   });
 
+  for (const scenario of [
+    {
+      label: "time", prompt: "What time is it?",
+      component: "time.observation", testId: "karen-time-presentation",
+    },
+    {
+      label: "weather", prompt: "What's the weather in Detroit, Michigan right now?",
+      component: "weather.observation", testId: "karen-weather-presentation",
+    },
+  ] as const) {
+  test(`one first ${scenario.label} prompt renders backend-attested UI immediately and after reload`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const target = new URL(approvedUrl!);
+    const revisionResponse = await page.context().request.get(
+      new URL("/api/deployment-revision", target).toString(),
+    );
+    expect(revisionResponse.ok(), "First-prompt acceptance requires a deployed revision").toBe(true);
+    const revision: unknown = await revisionResponse.json();
+    expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
+    await requireLiveCanonicalBackend(page, target);
+
+    if (!authState) {
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
+    }
+    await page.goto(new URL("/dashboard", target).toString());
+
+    const shell = page.getByTestId("karen-copilot-consumer-chat");
+    const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await shell.isVisible().catch(() => false)) &&
+        await launch.isVisible().catch(() => false)) {
+      await launch.click();
+    }
+    await expect(shell).toBeVisible({ timeout: 30_000 });
+
+    // Never touch a real user's existing conversation during release proof.
+    const previousId = await shell.getAttribute("data-conversation-id");
+    const newConversation = shell.getByRole("button", { name: "New conversation" });
+    await expect(newConversation).toBeVisible();
+    await newConversation.click();
+    await expect.poll(async () => {
+      const selected = await shell.getAttribute("data-conversation-id");
+      return selected && selected !== previousId ? selected : null;
+    }, { timeout: 30_000 }).not.toBeNull();
+    await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+    await expectRealCopilotKitStyles(page);
+
+    const conversationId = await shell.getAttribute("data-conversation-id");
+    expect(conversationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    const prompt = scenario.prompt;
+    const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+    await expect(composer).toBeVisible();
+
+    // Observe the actual SDK send. A retry, second Enter, or hidden duplicate
+    // execution must not be needed to produce the first generated surface.
+    const observedRunRequests: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (
+        path === "/api/copilotkit/agent/default/run" ||
+        path === "/api/chat/ag-ui" ||
+        path === "/api/chat/stream"
+      )) {
+        observedRunRequests.push(path);
+      }
+    });
+    const browserErrors: string[] = [];
+    page.on("pageerror", error => { browserErrors.push(error.message); });
+    page.on("console", message => {
+      if (message.type() === "error" &&
+          /ChunkLoadError|web-inspector|Failed to fetch dynamically imported module/i.test(message.text())) {
+        browserErrors.push(message.text());
+      }
+    });
+
+    await composer.fill(prompt);
+    await composer.press("Enter");
+
+    // Read the authoritative completed history: the presentation must be a
+    // verified CUSTOM event bound to the immediate assistant reply, not a
+    // free-floating client widget, inferred intent, or unsaved stream fragment.
+    let savedAnswer = "";
+    let savedPresentationId = "";
+    await expect.poll(async () => {
+      const { ok, body } = await readAuthorizedSameOriginJson(
+        page, `/api/copilotkit/threads/${conversationId}/messages`,
+      );
+      if (!ok || !body || typeof body !== "object") return false;
+      const snapshot = body as Record<string, unknown>;
+      if (snapshot.threadId !== conversationId ||
+          !Array.isArray(snapshot.messages) ||
+          !Array.isArray(snapshot.replayEvents)) return false;
+      const messages = snapshot.messages as Record<string, unknown>[];
+      const promptPositions = messages.flatMap((message, index) =>
+        message?.role === "user" && message.content === prompt ? [index] : []);
+      if (promptPositions.length !== 1) return false;
+      const reply = messages[promptPositions[0] + 1];
+      if (reply?.role !== "assistant" || typeof reply.id !== "string" ||
+          !reply.id || typeof reply.content !== "string" || !reply.content.trim()) return false;
+      const timeEvents = (snapshot.replayEvents as Record<string, unknown>[]).filter(event => {
+        if (!event || event.type !== "CUSTOM" ||
+            event.name !== "karen.presentation.v1" ||
+            event.messageId !== reply.id ||
+            !event.value || typeof event.value !== "object" ||
+            Array.isArray(event.value)) return false;
+        const value = event.value as Record<string, unknown>;
+        if (value.component_type === scenario.component) return true;
+        if (value.component_type !== "surface.composition" ||
+            !value.data || typeof value.data !== "object" ||
+            Array.isArray(value.data)) return false;
+        const items = (value.data as Record<string, unknown>).items;
+        return Array.isArray(items) && items.some(item =>
+          item && typeof item === "object" && !Array.isArray(item) &&
+          item.component_type === scenario.component);
+      });
+      if (timeEvents.length !== 1) return false;
+      const presentation = timeEvents[0].value as Record<string, unknown>;
+      if (typeof presentation.presentation_id !== "string" ||
+          !presentation.presentation_id) return false;
+      savedAnswer = reply.content;
+      savedPresentationId = presentation.presentation_id;
+      return true;
+    }, {
+      timeout: 120_000,
+      intervals: [500, 1000, 2000],
+      message: "First prompt must persist one backend-attested rich surface attached to its assistant reply",
+    }).toBe(true);
+
+    await expectVerifiedExecutionReceipt(page, conversationId!, savedAnswer);
+    const visibleCard = shell.getByTestId(scenario.testId);
+    await expect(visibleCard, "The actual first prompt must render generated UI without a second send")
+      .toHaveCount(1, { timeout: 30_000 });
+    await expect(visibleCard).toBeVisible();
+    const firstCardText = (await visibleCard.innerText()).trim();
+    if (scenario.label === "time") {
+      expect(firstCardText).toContain("Reported time");
+    } else {
+      expect(firstCardText).toContain("Source:");
+    }
+    expect(observedRunRequests, "One first prompt must cause exactly one execution")
+      .toHaveLength(1);
+
+    await page.reload();
+    const restored = page.getByTestId("karen-copilot-consumer-chat");
+    const restoredLaunch = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await restored.isVisible().catch(() => false)) &&
+        await restoredLaunch.isVisible().catch(() => false)) {
+      await restoredLaunch.click();
+    }
+    await expect(restored).toHaveAttribute("data-conversation-id", conversationId!);
+    await expect(restored.getByTestId("karen-copilot-controlled-chat"))
+      .toBeVisible({ timeout: 30_000 });
+    await expectRealCopilotKitStyles(page);
+    await expect(restored.getByTestId("karen-copilot-rail-unverified"))
+      .toHaveCount(0, { timeout: 30_000 });
+    await expect(restored.getByText(prompt, { exact: true })).toBeVisible();
+    await expectVerifiedExecutionReceipt(page, conversationId!, savedAnswer);
+
+    const restoredCard = restored.getByTestId(scenario.testId);
+    await expect(restoredCard, "Reload must restore the actual verified UI surface")
+      .toHaveCount(1, { timeout: 30_000 });
+    expect((await restoredCard.innerText()).trim()).toBe(firstCardText);
+    const { ok, body } = await readAuthorizedSameOriginJson(
+      page, `/api/copilotkit/threads/${conversationId}/messages`,
+    );
+    expect(ok).toBe(true);
+    const savedEvents = (body as { replayEvents: Array<{
+      type: string; name: string; value: { presentation_id?: string };
+    }> }).replayEvents;
+    expect(savedEvents.some(event =>
+      event.type === "CUSTOM" &&
+      event.name === "karen.presentation.v1" &&
+      event.value?.presentation_id === savedPresentationId)).toBe(true);
+    expect(observedRunRequests).toHaveLength(1);
+    expect(browserErrors).toEqual([]);
+  });
+  }
+
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page }) => {
     test.setTimeout(120_000);
     const target = new URL(approvedUrl!);
