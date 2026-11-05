@@ -85,7 +85,11 @@ def test_existing_database_and_redis_are_reused_without_duplicate_instances() ->
 
 def test_format_sensitive_keys_require_explicit_secure_configuration() -> None:
     blocks = _env_blocks()
-    for key in ("POSTGRES_URL", "AUTH_DATABASE_URL", "KARI_JOB_ENC_KEY", "KARI_CORS_ORIGINS"):
+    for key in (
+        "POSTGRES_URL", "AUTH_DATABASE_URL", "KARI_JOB_ENC_KEY",
+        "KARI_CORS_ORIGINS", "KARI_ENABLE_AG_UI_BRIDGE",
+        "KARI_ENABLE_AG_UI_DURABLE_RUNS", "KARI_ENABLE_AG_UI_EVENT_JOURNAL",
+    ):
         assert re.search(r"^        sync: false$", blocks[key], flags=re.MULTILINE), key
         assert "generateValue:" not in blocks[key], key
 

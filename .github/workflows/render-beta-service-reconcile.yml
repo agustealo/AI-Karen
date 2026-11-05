@@ -16,6 +16,7 @@ on:
           - inspect
           - apply
           - inspect-env
+          - inspect-consumer
 
 permissions:
   contents: read
@@ -65,7 +66,7 @@ jobs:
           python-version: "3.11"
 
       - name: Reconcile only existing Render service Git source
-        if: env.MODE != 'inspect-env'
+        if: env.MODE != 'inspect-env' && env.MODE != 'inspect-consumer'
         shell: bash
         run: |
           set -euo pipefail
@@ -76,18 +77,22 @@ jobs:
             --mode "$MODE"
 
       - name: Inspect the existing beta environment and private datastore links
-        if: env.MODE == 'inspect-env'
+        if: env.MODE == 'inspect-env' || env.MODE == 'inspect-consumer'
         shell: bash
         run: |
           set -euo pipefail
           test -n "$RENDER_BETA_POSTGRES_ID" || { echo "::error::Existing Postgres ID is missing"; exit 1; }
           test -n "$RENDER_BETA_KEY_VALUE_ID" || { echo "::error::Existing Key Value ID is missing"; exit 1; }
+          extra_args=()
+          if [[ "$MODE" == "inspect-consumer" ]]; then
+            extra_args+=(--require-governed-history)
+          fi
           python scripts/deploy/inspect_render_beta_environment.py \
             --service-id "$RENDER_BETA_SERVICE_ID" \
             --workspace-id "$RENDER_BETA_WORKSPACE_ID" \
             --postgres-id "$RENDER_BETA_POSTGRES_ID" \
             --key-value-id "$RENDER_BETA_KEY_VALUE_ID" \
-            --manifest deploy/render/render.yaml
+            --manifest deploy/render/render.yaml "${extra_args[@]}"
 
       # This workflow deliberately never deploys or modifies a database,
       # Redis service, credentials, env vars, or frontend routing.

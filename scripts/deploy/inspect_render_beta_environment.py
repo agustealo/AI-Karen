@@ -52,6 +52,11 @@ SAFE_FLAGS = frozenset({
     "EXTENSION_DEV_BYPASS_ENABLED",
 })
 ADDITIONAL_REQUIRED = frozenset({"AUTH_JWT_SECRET_KEY", "KARI_CORS_ORIGINS"})
+GOVERNED_HISTORY_REQUIRED = frozenset({
+    "KARI_ENABLE_AG_UI_BRIDGE",
+    "KARI_ENABLE_AG_UI_DURABLE_RUNS",
+})
+AG_UI_EVENT_JOURNAL = "KARI_ENABLE_AG_UI_EVENT_JOURNAL"
 MAX_REPORT_ITEMS = 100
 
 
@@ -203,6 +208,7 @@ def inspect(
     manifest: Manifest,
     blueprint: str,
     required_defaults: dict[str, str],
+    require_governed_history: bool = False,
 ) -> Report:
     if (not SERVICE_ID_PATTERN.fullmatch(service_id)
             or not WORKSPACE_ID_PATTERN.fullmatch(workspace_id)
@@ -265,6 +271,22 @@ def inspect(
     if env.get("KARI_CORS_ORIGINS") and not _origins_secure(env["KARI_CORS_ORIGINS"]):
         failures.add("insecure:KARI_CORS_ORIGINS")
 
+    # Initial application boot and consumer-history acceptance are different
+    # gates. Never enable experimental AG-UI automatically: release operators
+    # must first prove migration 43 and the durable-run storage contract.
+    # This opt-in check only validates the configured feature switches.
+    history_enabled = all(
+        env.get(key, "").strip().lower() == "true"
+        for key in GOVERNED_HISTORY_REQUIRED
+    )
+    if require_governed_history and not history_enabled:
+        for key in GOVERNED_HISTORY_REQUIRED:
+            if env.get(key, "").strip().lower() != "true":
+                failures.add(f"disabled:{key}")
+    if (env.get(AG_UI_EVENT_JOURNAL, "").strip().lower() == "true"
+            and not history_enabled):
+        failures.add(f"invalid:{AG_UI_EVENT_JOURNAL}")
+
     # A read-only Render API fetch receives the connection info as confidential
     # in-memory data, then checks only canonical internal URL equality.
     # Never emit raw credentials, hostnames or the upstream JSON.
@@ -305,6 +327,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--postgres-id", required=True)
     parser.add_argument("--key-value-id", required=True)
     parser.add_argument("--manifest", type=Path, default=BLUEPRINT)
+    parser.add_argument(
+        "--require-governed-history", action="store_true",
+        help="Also require explicit AG-UI bridge and durable-run settings; "
+             "does not attest migrations or browser behavior",
+    )
     args = parser.parse_args(argv)
     try:
         from os import environ
@@ -319,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest=Manifest.read(args.manifest),
             blueprint=blueprint,
             required_defaults=required_environment_defaults(SERVER_CONFIG),
+            require_governed_history=args.require_governed_history,
         )
     except (ReconcileError, OSError, ValueError) as exc:
         if isinstance(exc, OSError):
@@ -329,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"FAILED: {exc}", file=sys.stderr)
         return 1
     print("Render beta environment audit (read-only, secrets excluded)")
+    if args.require_governed_history:
+        print("Governed-history switches checked; migrations and live browser proof remain separate")
     for line in report.failures:
         print(f"FAIL: {line}")
     for line in report.advisories:
