@@ -654,3 +654,43 @@ def test_complete_without_verified_execution_identity_does_not_invent_receipt():
     ))
     assert [e["type"] for e in events] == ["RUN_FINISHED"]
     assert "karen.execution_receipt.v1" not in str(events)
+
+
+def test_time_capability_projects_attested_card_without_inventing_model_receipt():
+    """An observed clock is a real capability execution, not a model run."""
+    from ai_karen_engine.core.runtime.direct_capability_executor import (
+        DirectCapabilityResult,
+    )
+
+    observed = DirectCapabilityResult(
+        handled=True, success=True, source="plugin", source_id="time-query",
+        text="It's 10:42 PM.", payload={
+            "formatted": "10:42 PM", "timezone": "America/Detroit",
+        },
+    )
+    metadata = observed.normalized_metadata()
+    assert metadata["runtime_engine"] == "direct_capability"
+    assert metadata["actual_provider"] is None
+    assert metadata["actual_model"] is None
+
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "time-req-1",
+        "component_type": "time.observation",
+        "evidence_ref": "req-1:time-query",
+        "correlation_id": "corr-1",
+        "data": {"formatted": "10:42 PM", "timezone": "America/Detroit"},
+    }
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    events = projection.project(chunk(
+        "presentation", presentation_verified=True, presentation=envelope,
+    ))
+    assert events == [{
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": envelope,
+    }]
+    completed = projection.project(chunk("complete", **metadata))
+    assert completed == [{"type": "RUN_FINISHED", "threadId": "thread", "runId": "run"}]
+    assert "karen.execution_receipt.v1" not in str(events + completed)
