@@ -147,6 +147,8 @@ jobs:
           # Production /ready must actively check canonical Redis connectivity,
           # accept only secured targets, and match the frontend health contract.
           pytest tests/architecture/test_operational_health_authority.py -q
+          # Full-runtime probe: uninitialized/stale Redis must not pass /ready.
+          pytest tests/platform/memory/test_redis_connection_health.py -q
           pytest tests/architecture/test_vercel_deployment_attestation.py -q
           pytest tests/architecture/test_http_transport_authority.py -q
           pytest tests/architecture/test_rate_limit_identity_authority.py -q
