@@ -138,6 +138,12 @@ jobs:
           pytest tests/architecture/test_copilotkit_migration_wiring.py -q
           pytest tests/architecture/test_browser_acceptance_dispatch_security.py -q
           pytest tests/architecture/test_deployment_revision_acceptance.py -q
+          # Existing Render beta API is reconciled without provisioning or
+          # implicit deployment; keep this exact owner and its secret-free
+          # environment preflight in the required release architecture gate.
+          pytest tests/architecture/test_render_beta_service_reconcile.py -q
+          pytest tests/architecture/test_render_beta_environment_preflight.py -q
+          pytest tests/architecture/test_render_beta_blueprint_contract.py -q
           pytest tests/architecture/test_vercel_deployment_attestation.py -q
           pytest tests/architecture/test_http_transport_authority.py -q
           pytest tests/architecture/test_rate_limit_identity_authority.py -q
