@@ -526,6 +526,13 @@ class RedisConnectionManager:
         """Check if Redis is in degraded mode."""
         return self._degraded_mode
 
+    async def is_healthy(self) -> bool:
+        """Actively verify Redis without returning connection URLs or secrets."""
+        if not self.health():
+            return False
+        result = await self._health_check()
+        return result.get("healthy") is True
+
     def get_connection_info(self) -> Dict[str, Any]:
         """Get connection information and statistics."""
         info = {
