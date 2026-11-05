@@ -226,10 +226,13 @@ def reconcile(
         raise ReconcileError("Unknown reconciliation mode")
     current = client.get(service_id)
     verify_identity(current, service_id=service_id, workspace_id=workspace_id, manifest=manifest)
+    # Validate the existing HTTP service shape before deciding on source drift.
+    # A branch mismatch must never short-circuit a malformed health configuration.
+    existing_health_path = _health_check_path(current)
     drift = (
         current.get("branch") != manifest.branch
         or _trigger(current) != manifest.auto_deploy_trigger
-        or _health_check_path(current) != manifest.health_check_path
+        or existing_health_path != manifest.health_check_path
     )
     if not drift:
         return "Existing Render beta API already matches reviewed Git source, HTTP liveness and manual deployment policy. No deployment triggered."
