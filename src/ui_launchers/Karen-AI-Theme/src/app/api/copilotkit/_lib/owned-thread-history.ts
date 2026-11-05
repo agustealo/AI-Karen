@@ -233,7 +233,9 @@ export async function readKarenOwnedThreadMessages(
       (!Array.isArray(value) || value.length > 0) &&
       (typeof value !== "object" || Object.keys(value).length > 0);
     if (message.role !== "user" && message.role !== "assistant") {
-      return failure("Invalid canonical conversation message", 502);
+      return readOnlyTranscript
+        ? failure("Invalid canonical conversation message", 502)
+        : failure("Complete conversation replay is not yet supported", 409);
     }
     if (!readOnlyTranscript && (
       richKeys.some((key) =>
