@@ -435,8 +435,34 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       });
       if (timeEvents.length !== 1) return false;
       const presentation = timeEvents[0].value as Record<string, unknown>;
-      if (typeof presentation.presentation_id !== "string" ||
-          !presentation.presentation_id) return false;
+      // A direct observation has evidence but no model invocation. Validate
+      // the server-attested evidence binding rather than fabricating a model
+      // execution receipt for a source-only time/weather answer.
+      if (presentation.schema_version !== 1 ||
+          typeof presentation.presentation_id !== "string" ||
+          !presentation.presentation_id ||
+          typeof presentation.evidence_ref !== "string" ||
+          !presentation.evidence_ref.trim() ||
+          typeof presentation.correlation_id !== "string" ||
+          !presentation.correlation_id.trim()) return false;
+
+      const receipts = (snapshot.replayEvents as Record<string, unknown>[]).filter(event =>
+        event && event.type === "CUSTOM" &&
+        event.name === "karen.execution_receipt.v1" &&
+        event.messageId === reply.id);
+      if (receipts.length > 1) return false;
+      // When grounded synthesis truly ran an LLM, its receipt must identify
+      // the actual executor. A pure tool observation correctly has none.
+      if (receipts.length === 1) {
+        const receipt = receipts[0].value;
+        if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return false;
+        const model = receipt as Record<string, unknown>;
+        if (["actual_provider", "actual_model", "response_source"].some(key =>
+          typeof model[key] !== "string" || !(model[key] as string).trim() ||
+          ["unknown", "none", "unavailable"].includes(
+            (model[key] as string).trim().toLowerCase()
+          ))) return false;
+      }
       savedAnswer = reply.content;
       savedPresentationId = presentation.presentation_id;
       return true;
@@ -446,7 +472,6 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       message: "First prompt must persist one backend-attested rich surface attached to its assistant reply",
     }).toBe(true);
 
-    await expectVerifiedExecutionReceipt(page, conversationId!, savedAnswer);
     const visibleCard = shell.getByTestId(scenario.testId);
     await expect(visibleCard, "The actual first prompt must render generated UI without a second send")
       .toHaveCount(1, { timeout: 30_000 });
@@ -474,7 +499,6 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(restored.getByTestId("karen-copilot-rail-unverified"))
       .toHaveCount(0, { timeout: 30_000 });
     await expect(restored.getByText(prompt, { exact: true })).toBeVisible();
-    await expectVerifiedExecutionReceipt(page, conversationId!, savedAnswer);
 
     const restoredCard = restored.getByTestId(scenario.testId);
     await expect(restoredCard, "Reload must restore the actual verified UI surface")

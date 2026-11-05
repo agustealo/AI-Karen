@@ -170,6 +170,10 @@ jobs:
           pytest src/ai_karen_engine/api_routes/chat/tests/test_execution_identity_principal.py -q
           pytest tests/core/runtime/test_authorized_semantic_context_handoff.py -q
           pytest tests/core/runtime/test_direct_live_capabilities.py -q
+          # Source observations need an attested surface but must not invent
+          # an LLM receipt. This invariant is part of release quality.
+          pytest tests/core/runtime/test_direct_capability_provenance.py -q
+          pytest tests/core/runtime/test_ag_ui_event_projection.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
           pytest tests/core/intelligence/test_reward_progress.py -q
           pytest tests/services/test_reward_progress.py -q
