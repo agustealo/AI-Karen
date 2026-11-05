@@ -7,10 +7,10 @@ import pytest
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 
 
-def _run(*, success=True, degraded=False, source="tool", allowed=("weather_tool",), attempts=None, payload=None):
+def _run(*, success=True, degraded=False, source="tool", allowed=("weather_tool",), allowed_plugins=(), attempts=None, payload=None):
     request = SimpleNamespace(context=SimpleNamespace(request_id="req-1", correlation_id="corr-1"))
     decision = SimpleNamespace(intent="search.weather")
-    plan = SimpleNamespace(allowed_tools=allowed)
+    plan = SimpleNamespace(allowed_tools=allowed, allowed_plugins=allowed_plugins)
     result = SimpleNamespace(
         success=success,
         degraded=degraded,
@@ -82,6 +82,32 @@ def test_weather_source_must_have_an_authorized_successful_tool_receipt_even_if_
     assert _run(payload=measured, attempts=[
         {"type": "tool", "id": "weather_tool", "status": "failed"},
     ]) is None
+
+
+def test_authorized_weather_plugin_fallback_emits_same_attested_ui():
+    measured = {"observation": {"location": "Detroit", "temperature": "61°F"}}
+    projected = _run(
+        payload=measured, source="plugin",
+        allowed_plugins=("weather_tool",),
+        attempts=[{"type": "plugin", "id": "weather_tool", "status": "success"}],
+    )
+    assert projected is not None
+    assert projected["component_type"] == "weather.observation"
+    assert projected["data"]["temperature"] == "61°F"
+    assert projected["evidence_ref"] == "req-1:weather_tool"
+
+    assert _run(
+        payload=measured, source="plugin", allowed_plugins=(),
+        attempts=[{"type": "plugin", "id": "weather_tool", "status": "success"}],
+    ) is None
+    assert _run(
+        payload=measured, source="plugin", allowed_plugins=("weather_tool",),
+        attempts=[{"type": "plugin", "id": "weather_tool", "status": "failed"}],
+    ) is None
+    assert _run(
+        payload=measured, source="plugin", allowed_plugins=("weather_tool",),
+        attempts=[{"type": "tool", "id": "weather_tool", "status": "success"}],
+    ) is None
 
 
 def test_denied_failed_or_degraded_tool_never_generates_presentation():
