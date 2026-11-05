@@ -46,7 +46,7 @@ def test_all_canonical_weather_evidence_shapes_render_first_prompt(key):
     assert projected["component_type"] == "weather.observation"
     assert projected["data"]["location"] == "Detroit"
     assert projected["data"]["temperature"] == "61°F"
-    assert projected["data"].get("conditions") is None
+    assert projected["data"]["conditions"] == "light rain"
     assert "private_debug_token" not in str(projected)
     assert projected["evidence_ref"] == "req-1:weather_tool"
     assert projected["correlation_id"] == "corr-1"
