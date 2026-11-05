@@ -72,6 +72,8 @@ describe("governed first-prompt search results", () => {
     "http://localhost:8010",
     "http://127.0.0.1/private",
     "http://192.168.0.1",
+    "http://0x7f000001/",
+    "https://example.org\\\\@127.0.0.1/",
     "https://person:password@example.org/data",
     "https://example.org/bad path",
   ])("rejects untrusted source URL %s", (url) => {
