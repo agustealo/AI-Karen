@@ -560,7 +560,13 @@ describe("CopilotKit canonical conversation hydration", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(screen.queryByTestId("agent-chat")).toBeNull();
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
-    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    // Rich replay failure may attempt an independent owner-verified text
+    // recovery, but never mutate the SDK or fabricate a completed reply.
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(3);
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      3, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=transcript",
+    );
+    expect(screen.queryByTestId("karen-read-only-transcript")).toBeNull();
   });
 
   it("ignores an obsolete conversation snapshot after switching threads", async () => {
