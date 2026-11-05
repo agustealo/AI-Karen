@@ -2775,7 +2775,23 @@ class ChatRuntime:
                 for attempt in attempts
             )
         )
-        if decision.intent == "search.weather" and verified_tool:
+        verified_weather_plugin = (
+            decision.intent == "search.weather"
+            and result.success and not result.degraded
+            and result.source == "plugin"
+            and isinstance(result.source_id, str)
+            and result.source_id in set(getattr(plan, "allowed_plugins", ()))
+            and any(
+                isinstance(attempt, dict)
+                and attempt.get("type") == "plugin"
+                and attempt.get("id") == result.source_id
+                and attempt.get("status") == "success"
+                for attempt in attempts
+            )
+        )
+        if decision.intent == "search.weather" and (
+            verified_tool or verified_weather_plugin
+        ):
             from ai_karen_engine.core.runtime.presentation_contract import (
                 validate_presentation,
             )
