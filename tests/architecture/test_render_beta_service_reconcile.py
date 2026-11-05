@@ -1,4 +1,4 @@
-"""Fail-closed contracts for the existing Render beta API source reconciliation."""
+"""Fail-closed contracts for existing Render source and HTTP probe reconciliation."""
 from __future__ import annotations
 
 import importlib.util
@@ -52,9 +52,21 @@ class FakeRender:
         self.calls.append(request)
         if request.method == "PATCH":
             payload = json.loads(request.data)
-            assert payload == {"branch": "main", "autoDeployTrigger": "off"}
+            assert payload == {
+                "branch": "main",
+                "autoDeployTrigger": "off",
+                "serviceDetails": {"healthCheckPath": "/health/live"},
+            }
             if not self.tamper:
-                self.service = {**self.service, **payload}
+                self.service = {
+                    **self.service,
+                    "branch": payload["branch"],
+                    "autoDeployTrigger": payload["autoDeployTrigger"],
+                    "serviceDetails": {
+                        **self.service["serviceDetails"],
+                        **payload["serviceDetails"],
+                    },
+                }
         return FakeResponse(self.service)
 
 
@@ -67,6 +79,9 @@ def current_service(**changes):
         "repo": REPO,
         "branch": "feat/chat-consumer-conversation-management-20261031",
         "autoDeployTrigger": "off",
+        "serviceDetails": {
+            "region": "ohio", "healthCheckPath": "", "plan": "free",
+        },
         **changes,
     }
 
@@ -86,6 +101,7 @@ def test_checked_in_blueprint_is_the_only_desired_source(manifest):
     assert manifest.repo == REPO
     assert manifest.branch == "main"
     assert manifest.auto_deploy_trigger == "off"
+    assert manifest.health_check_path == "/health/live"
 
 
 def test_inspect_is_read_only_and_fails_on_legacy_branch(module, manifest):
@@ -109,10 +125,46 @@ def test_apply_updates_existing_service_and_rechecks_without_deploy(module, mani
     assert all(r.get_header("Authorization") == "Bearer test-token" for r in fake.calls)
     assert fake.service["branch"] == "main"
     assert fake.service["autoDeployTrigger"] == "off"
+    assert fake.service["serviceDetails"]["healthCheckPath"] == "/health/live"
+
+
+def test_already_on_main_but_missing_http_probe_still_requires_reconciliation(module, manifest):
+    fake = FakeRender(current_service(branch="main"))
+    with pytest.raises(module.ReconcileError, match="differs"):
+        module.reconcile(
+            client=module.RenderClient("test-token", opener=fake),
+            service_id=SERVICE, workspace_id=WORKSPACE,
+            manifest=manifest, mode="inspect",
+        )
+    assert [r.method for r in fake.calls] == ["GET"]
+
+    fake.calls.clear()
+    outcome = module.reconcile(
+        client=module.RenderClient("test-token", opener=fake),
+        service_id=SERVICE, workspace_id=WORKSPACE,
+        manifest=manifest, mode="apply",
+    )
+    assert "No deployment triggered" in outcome
+    assert fake.service["serviceDetails"]["healthCheckPath"] == "/health/live"
+    assert [r.method for r in fake.calls] == ["GET", "PATCH", "GET"]
+
+
+@pytest.mark.parametrize("details", (None, "bad", {"healthCheckPath": 123}))
+def test_invalid_existing_health_metadata_fails_closed(module, manifest, details):
+    fake = FakeRender(current_service(serviceDetails=details))
+    with pytest.raises(module.ReconcileError, match="details|malformed"):
+        module.reconcile(
+            client=module.RenderClient("test-token", opener=fake),
+            service_id=SERVICE, workspace_id=WORKSPACE,
+            manifest=manifest, mode="apply",
+        )
+    assert [r.method for r in fake.calls] == ["GET"]
 
 
 def test_already_aligned_never_writes(module, manifest):
-    fake = FakeRender(current_service(branch="main"))
+    fake = FakeRender(current_service(
+        branch="main", serviceDetails={"healthCheckPath": "/health/live"},
+    ))
     result = module.reconcile(client=module.RenderClient("test-token", opener=fake),
                               service_id=SERVICE, workspace_id=WORKSPACE,
                               manifest=manifest, mode="apply")
@@ -146,7 +198,10 @@ def test_apply_requires_verified_post_patch_result(module, manifest):
 
 
 def test_inspect_understands_legacy_off_without_unwanted_patch(module, manifest):
-    service = current_service(branch="main", autoDeployTrigger=None, autoDeploy="no")
+    service = current_service(
+        branch="main", autoDeployTrigger=None, autoDeploy="no",
+        serviceDetails={"healthCheckPath": "/health/live"},
+    )
     fake = FakeRender(service)
     result = module.reconcile(client=module.RenderClient("test-token", opener=fake),
                               service_id=SERVICE, workspace_id=WORKSPACE,
@@ -186,6 +241,7 @@ def test_unsafe_manifest_is_never_accepted(module, tmp_path):
     for unsafe in (
         source.replace("    branch: main", "    branch: experimental"),
         source.replace("    autoDeployTrigger: off", "    autoDeployTrigger: commit"),
+        source.replace("    healthCheckPath: /health/live", "    healthCheckPath: /admin"),
         source.replace(REPO, "https://attacker.invalid/project"),
     ):
         path = tmp_path / "unsafe.yaml"
