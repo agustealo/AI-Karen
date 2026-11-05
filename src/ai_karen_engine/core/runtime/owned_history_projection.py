@@ -148,6 +148,7 @@ def project_owned_history(
                 or not set(structured).issubset(_VERIFIED_PRESENTATION_CONTEXT_KEYS)
                 or not isinstance(captured, list)
                 or len(captured) != 1
+                or "presentation" not in structured
                 or structured["presentation"] != captured[0]
             ):
                 raise UnreplayableHistory("unsupported_rich_history")
