@@ -273,6 +273,16 @@ def project_owned_history(
                     ))
                 except InvalidAgentActivity as exc:
                     raise UnreplayableHistory("invalid_attested_agent_activity") from exc
+            # ChatStreamChunk requires correlation_id. Rebuild a replay-only
+            # projection from the attested request identity, not a newly
+            # generated or client-authored correlation.
+            recorded_correlation = metadata.get("correlation_id")
+            replay_correlation = (
+                recorded_correlation
+                if isinstance(recorded_correlation, str)
+                and 1 <= len(recorded_correlation) <= 160
+                else attestation[0]
+            )
             projector = AGUIEventProjection(
                 thread_id=thread_id,
                 run_id="restored_" + identifier.replace("-", "_"),
@@ -291,6 +301,7 @@ def project_owned_history(
                         raise UnreplayableHistory("invalid_persisted_presentation")
                     for event in projector.project(ChatStreamChunk(
                         type="presentation",
+                        correlation_id=replay_correlation,
                         content="",
                         metadata={"presentation_verified": True, "presentation": valid},
                     )):
@@ -298,7 +309,8 @@ def project_owned_history(
                             raise UnreplayableHistory("invalid_presentation_projection")
                         events.append({**event, "messageId": identifier})
             for event in projector.project(ChatStreamChunk(
-                type="complete", content="", metadata=dict(metadata),
+                type="complete", content="", correlation_id=replay_correlation,
+                metadata=dict(metadata),
             )):
                 if event.get("type") == "CUSTOM":
                     if event.get("name") not in {
