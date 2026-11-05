@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -128,6 +128,68 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         safe["data"] = {"formatted": value.strip()}
         if timezone:
             safe["data"]["timezone"] = timezone
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "search.results":
+        # Search results are extracted only from authorized source receipts by
+        # ChatRuntime. Do not accept model-authored HTML, URLs, or claims here.
+        from ipaddress import ip_address
+        from urllib.parse import urlsplit
+
+        if not isinstance(data, dict) or set(data) != {"results"}:
+            return None
+        entries = data["results"]
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 5:
+            return None
+        clean = []
+        seen_urls: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, Mapping) or set(entry) - {
+                "url", "title", "snippet", "published_at"
+            }:
+                return None
+            url, snippet = entry.get("url"), entry.get("snippet")
+            if (
+                not isinstance(url, str) or not 1 <= len(url) <= 1200
+                or any(ch.isspace() or ord(ch) < 32 for ch in url)
+                or not isinstance(snippet, str)
+                or not 1 <= len(snippet.strip()) <= 600
+            ):
+                return None
+            try:
+                parsed = urlsplit(url)
+                host = parsed.hostname
+                if (
+                    parsed.scheme not in ("http", "https")
+                    or not host or not parsed.netloc or parsed.username is not None
+                    or parsed.password is not None or parsed.port == 0
+                    or host.lower() == "localhost"
+                    or host.lower().endswith((".localhost", ".local", ".internal"))
+                ):
+                    return None
+                try:
+                    if not ip_address(host).is_global:
+                        return None
+                except ValueError:
+                    pass
+            except ValueError:
+                return None
+            if url in seen_urls:
+                return None
+            seen_urls.add(url)
+            item = {"url": url, "snippet": snippet.strip()}
+            for field, maximum in (("title", 200), ("published_at", 80)):
+                if field in entry:
+                    value = entry[field]
+                    if not isinstance(value, str) or not 1 <= len(value.strip()) <= maximum:
+                        return None
+                    item[field] = value.strip()
+            clean.append(item)
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe["data"] = {"results": clean}
         try:
             encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
         except (TypeError, ValueError, OverflowError):
