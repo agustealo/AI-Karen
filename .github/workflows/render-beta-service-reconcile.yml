@@ -8,7 +8,7 @@ on:
         type: string
         required: true
       mode:
-        description: Inspect only, or apply Git branch and manual deploy policy to the existing service
+        description: Inspect only, or apply reviewed Git branch, manual deploy policy and HTTP liveness path to the existing service
         type: choice
         required: true
         default: inspect

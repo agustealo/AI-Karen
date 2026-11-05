@@ -106,13 +106,6 @@ def reference_name(blueprint: str, *, key: str, ref_kind: str) -> str:
     return matches[0]
 
 
-def health_path(blueprint: str) -> str:
-    candidates = re.findall(r"^    healthCheckPath: (/[a-z0-9/-]+)$", blueprint, re.MULTILINE)
-    if len(candidates) != 1 or candidates[0] != "/health/live":
-        raise ReconcileError("Reviewed Blueprint has no canonical process-liveness probe")
-    return candidates[0]
-
-
 def _private_internal_url(raw: Any, *, kind: str) -> str:
     if not isinstance(raw, str) or not raw or any(ord(c) <= 32 for c in raw):
         raise ReconcileError("Existing Render private connection URL is unavailable")
@@ -251,7 +244,7 @@ def inspect(
         failures.add("drift:branch")
     if service.get("autoDeployTrigger") != "off" and service.get("autoDeploy") != "no":
         failures.add("drift:auto_deploy")
-    if details.get("healthCheckPath") != health_path(blueprint):
+    if details.get("healthCheckPath") != manifest.health_check_path:
         failures.add("drift:health_check")
 
     for key in SAFE_FLAGS:
