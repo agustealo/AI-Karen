@@ -41,6 +41,9 @@ export function useKarenPersistedDraft(conversationId: string) {
   // older reads after each new read or confirmed write.
   const readSequenceRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  // Reuse the existing CAS write when Submit races with the debounce timer.
+  // Do not create a second draft store or submit before an authenticated ack.
+  const pendingSaveRef = useRef<Promise<void> | null>(null);
 
   const endpoint = "/api/conversations/" + encodeURIComponent(conversationId) + "/draft";
 
@@ -174,11 +177,21 @@ export function useKarenPersistedDraft(conversationId: string) {
     }
   }, [endpoint]);
 
+  const startSave = useCallback((): Promise<void> => {
+    if (pendingSaveRef.current) return pendingSaveRef.current;
+    const pending = save();
+    pendingSaveRef.current = pending;
+    void pending.finally(() => {
+      if (pendingSaveRef.current === pending) pendingSaveRef.current = null;
+    });
+    return pending;
+  }, [save]);
+
   useEffect(() => {
     if (status !== "ready" || !dirtyRef.current) return;
-    const timeout = window.setTimeout(() => void save(), SAVE_DELAY);
+    const timeout = window.setTimeout(() => void startSave(), SAVE_DELAY);
     return () => window.clearTimeout(timeout);
-  }, [draft, version, save, status]);
+  }, [draft, version, startSave, status]);
 
   const clearBeforeSubmit = useCallback(async (submittedText: string): Promise<boolean> => {
     if (!activeRef.current || busyRef.current || dirtyRef.current ||
@@ -232,6 +245,27 @@ export function useKarenPersistedDraft(conversationId: string) {
       busyRef.current = false;
     }
   }, [endpoint]);
+
+  const prepareSubmission = useCallback(async (submittedText: string): Promise<boolean> => {
+    // Enter is a real user gesture, not permission to skip persistence.
+    // Flush an edited draft immediately and await a verified CAS receipt
+    // before the existing revision-fenced clear and one SDK model run.
+    if (!activeRef.current || revisionRef.current === null ||
+        !submittedText.trim() || textRef.current.trim() !== submittedText.trim()) {
+      return false;
+    }
+    const pending = pendingSaveRef.current;
+    if (pending) await pending;
+    if (!activeRef.current || textRef.current.trim() !== submittedText.trim()) {
+      return false;
+    }
+    if (dirtyRef.current) await startSave();
+    if (!activeRef.current || dirtyRef.current || busyRef.current ||
+        textRef.current.trim() !== submittedText.trim()) {
+      return false;
+    }
+    return clearBeforeSubmit(submittedText);
+  }, [startSave, clearBeforeSubmit]);
 
   const retry = useCallback(() => {
     if (!activeRef.current || status !== "unavailable" || busyRef.current) return;
@@ -315,6 +349,6 @@ export function useKarenPersistedDraft(conversationId: string) {
 
   return {
     draft, setText, readText, status, synced, failureStatus,
-    clearBeforeSubmit, retry, discardAndReload,
+    clearBeforeSubmit, prepareSubmission, retry, discardAndReload,
   };
 }

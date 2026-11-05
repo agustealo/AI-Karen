@@ -230,7 +230,7 @@ async def handle_current_time(mode: str, params: Dict[str, Any]) -> Dict[str, An
         },
         source_detail={
             "clock": "local_os_clock",
-            "timezone_source": "system" if not timezone_name else "zoneinfo",
+            "timezone_source": "utc_fallback" if not timezone_name else "zoneinfo",
             "external_sync_checked": False,
             "storage": "stateless",
         },

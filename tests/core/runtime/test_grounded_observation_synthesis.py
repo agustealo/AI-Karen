@@ -218,3 +218,110 @@ async def test_stream_transport_uses_shared_composer_and_honest_attribution(
     assert streamed_meta.get("actual_model") == original_meta.get("actual_model")
     assert streamed_meta.get("response_source") == original_meta.get("response_source")
     assert executor.execute.await_count == 1
+
+
+
+@pytest.mark.asyncio
+async def test_one_word_time_uses_verified_clock_without_second_model_call():
+    runtime, gateway, request, decision, plan, meter, observation = _fixture(
+        "time.current", "Unneeded model output."
+    )
+    request.messages = [{"role": "user", "content": "time"}]
+    observation.text = "The current time in America/Detroit is 11:26 AM."
+    runtime._plan_verified_surface = AsyncMock(return_value=None)
+
+    answer, metadata = await runtime._compose_direct_capability_answer(
+        request, decision, plan, meter,
+        observation, observation.normalized_metadata(),
+    )
+    assert answer == observation.text
+    assert metadata["actual_provider"] is None
+    assert metadata["actual_model"] is None
+    assert metadata["answer_composition_status"] == "source_observation"
+    gateway.generate.assert_not_awaited()
+    meter.consume_model_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent", ["time.current", "search.weather"])
+async def test_observation_prompt_and_generation_are_bounded_by_canonical_config(
+    intent,
+):
+    from ai_karen_engine.config.runtime import get_runtime_settings
+
+    runtime, gateway, request, decision, plan, meter, observation = _fixture(
+        intent,
+        "It's 54.3 degrees in NYC, humidity 47%." if intent == "search.weather"
+        else "The current time is 10:30 AM.",
+    )
+    settings = get_runtime_settings()
+    with patch.object(ChatRuntime, "_resolve_chat_generation_max_tokens", return_value=1536):
+        result = await runtime._synthesize_search_evidence(
+            request, decision, plan, meter, observation,
+        )
+
+    assert result is not None
+    task = gateway.generate.call_args.args[0]
+    assert task.max_tokens == min(
+        1536, settings.llm.observation_synthesis_max_output_tokens,
+    )
+    assert task.timeout_ms == min(
+        decision.time_budget_ms, settings.llm.observation_synthesis_timeout_ms,
+    )
+    assert task.max_tokens < 1536
+    assert task.metadata["execution_mode"] == "grounded_search"
+    assert task.messages[0]["role"] == "system"
+    assert "under " in task.messages[0]["content"]
+    assert "Do not use markdown" in task.messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_internal_time_continuity_leak_falls_back_to_verified_observation():
+    runtime, gateway, request, decision, plan, meter, observation = _fixture(
+        "time.current",
+        "The current time is 10:30 AM. I am using the time.current "
+        "continuity candidate, which matches your recurring behavioral patterns.",
+    )
+    observation.text = "The current time in America/New_York is 10:30 AM."
+    runtime._plan_verified_surface = AsyncMock(return_value=None)
+    with patch.object(ChatRuntime, "_resolve_chat_generation_max_tokens", return_value=160):
+        text, meta = await runtime._compose_direct_capability_answer(
+            request, decision, plan, meter,
+            observation, observation.normalized_metadata(),
+        )
+    assert text == observation.text
+    assert "continuity candidate" not in text
+    assert meta["actual_provider"] is None
+    assert meta["actual_model"] is None
+    assert meta["answer_composition_status"] == "source_observation"
+    gateway.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_slow_weather_synthesis_times_out_without_inventing_weather():
+    import asyncio
+    from ai_karen_engine.config.runtime import get_runtime_settings
+
+    runtime, gateway, request, decision, plan, meter, observation = _fixture(
+        "search.weather", "Never finish"
+    )
+    config = get_runtime_settings()
+    original_timeout = config.llm.observation_synthesis_timeout_ms
+
+    async def stalled(_task):
+        await asyncio.sleep(3)
+        raise AssertionError("Model should have been cancelled")
+
+    gateway.generate = AsyncMock(side_effect=stalled)
+    try:
+        config.llm.observation_synthesis_timeout_ms = 500
+        with patch.object(ChatRuntime, "_resolve_chat_generation_max_tokens", return_value=160):
+            synthesized = await runtime._synthesize_search_evidence(
+                request, decision, plan, meter, observation,
+            )
+        assert synthesized is None
+        assert observation.success is True
+        assert observation.text == "Verified observation"
+        assert gateway.generate.await_count == 1
+    finally:
+        config.llm.observation_synthesis_timeout_ms = original_timeout

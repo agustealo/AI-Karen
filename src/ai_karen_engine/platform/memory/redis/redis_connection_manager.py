@@ -103,8 +103,8 @@ class RedisConnectionManager:
             await self._enable_degraded_mode("Initial connection test failed")
             return False
         except Exception as e:
-            logger.error("Failed to initialize Redis connection: %s", e)
-            await self._enable_degraded_mode(str(e))
+            logger.error("Failed to initialize Redis connection: %s", type(e).__name__)
+            await self._enable_degraded_mode(type(e).__name__)
             return False
 
     async def _create_connection_pool(self) -> None:
@@ -123,7 +123,7 @@ class RedisConnectionManager:
             )
             logger.debug("Redis connection pool created")
         except Exception as e:
-            logger.error("Failed to create Redis connection pool: %s", e)
+            logger.error("Failed to create Redis connection pool: %s", type(e).__name__)
             raise
 
     async def _create_client(self) -> None:
@@ -135,7 +135,7 @@ class RedisConnectionManager:
             self._client = Redis(connection_pool=self._pool)
             logger.debug("Redis client created")
         except Exception as e:
-            logger.error("Failed to create Redis client: %s", e)
+            logger.error("Failed to create Redis client: %s", type(e).__name__)
             raise
 
     async def _test_connection(self) -> bool:
@@ -147,7 +147,7 @@ class RedisConnectionManager:
             await self._client.ping()
             return True
         except Exception as e:
-            logger.warning("Redis connection test failed: %s", e)
+            logger.warning("Redis connection test failed: %s", type(e).__name__)
             return False
 
     async def health_check(self) -> Dict[str, Any]:
@@ -193,7 +193,7 @@ class RedisConnectionManager:
             self._connection_failures += 1
             return {
                 "healthy": False,
-                "error": str(e),
+                "error_type": type(e).__name__,
                 "degraded_mode": self._degraded_mode,
                 "connection_failures": self._connection_failures,
             }
@@ -201,7 +201,7 @@ class RedisConnectionManager:
     async def _enable_degraded_mode(self, reason: str) -> None:
         """Enable degraded mode operation."""
         self._degraded_mode = True
-        logger.warning("Redis degraded mode enabled: %s", reason)
+        logger.warning("Redis degraded mode enabled")
         self._memory_cache.clear()
         self._cache_ttl.clear()
 
@@ -526,10 +526,19 @@ class RedisConnectionManager:
         """Check if Redis is in degraded mode."""
         return self._degraded_mode
 
+    async def is_healthy(self) -> bool:
+        """Actively verify Redis without returning connection URLs or secrets."""
+        if not self.health():
+            return False
+        result = await self._health_check()
+        return result.get("healthy") is True
+
     def get_connection_info(self) -> Dict[str, Any]:
         """Get connection information and statistics."""
         info = {
-            "redis_url": self.redis_url,
+            # Diagnostics may be logged or serialized by admin health views.
+            # Never disclose credentials or private routing from the URL.
+            "redis_url": "[REDACTED]",
             "degraded_mode": self._degraded_mode,
             "connection_failures": self._connection_failures,
             "last_connection_attempt": (

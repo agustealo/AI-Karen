@@ -471,6 +471,35 @@ class ConversationRuntimeGateway:
             "conversation_id": context.conversation_id,
         }
 
+    @classmethod
+    def _log_composer_draft_storage_failure(
+        cls,
+        context: ChatExecutionContext,
+        *,
+        operation: str,
+        metadata: Dict[str, Any] | None,
+    ) -> None:
+        """Correlate HTTP 503 with safe repository reason, never user input."""
+        allowed_classes = frozenset({
+            "draft_schema_missing",
+            "draft_permission_denied",
+            "draft_schema_incompatible",
+            "database_connection_unavailable",
+            "draft_integrity_failure",
+            "database_failure_unclassified",
+        })
+        candidate = metadata.get("failure_class") if isinstance(metadata, dict) else None
+        failure_class = (
+            candidate if isinstance(candidate, str) and candidate in allowed_classes
+            else "database_failure_unclassified"
+        )
+        logger.warning("conversation_draft_storage_failed", extra={
+            **cls._composer_draft_log_fields(context),
+            "operation": operation,
+            "failure_class": failure_class,
+            "status": "unavailable",
+        })
+
     async def read_composer_draft(
         self, context: ChatExecutionContext,
     ) -> Dict[str, Any]:
@@ -482,6 +511,9 @@ class ConversationRuntimeGateway:
         if not result.success:
             if result.error == "conversation_not_found":
                 raise RuntimeError("conversation_not_found")
+            self._log_composer_draft_storage_failure(
+                context, operation="read", metadata=result.metadata,
+            )
             raise RuntimeError(result.error or "composer_draft_read_failed")
         if not isinstance(result.data, dict):
             raise RuntimeError("composer_draft_invalid_storage_response")
@@ -521,6 +553,9 @@ class ConversationRuntimeGateway:
                 raise RuntimeError("conversation_not_found")
             if result.error == "composer_draft_invalid":
                 raise ValueError("composer_draft_invalid")
+            self._log_composer_draft_storage_failure(
+                context, operation="write", metadata=result.metadata,
+            )
             raise RuntimeError(result.error or "composer_draft_write_failed")
         if not isinstance(result.data, dict):
             raise RuntimeError("composer_draft_invalid_storage_response")

@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 
 
@@ -81,3 +83,109 @@ def test_time_plugin_presentation_requires_authorized_success_receipt():
     result.attempts = [{"type": "plugin", "id": plugin, "status": "success"}]
     result.source = "model"
     assert ChatRuntime._verified_weather_presentation(request, decision, plan, result) is None
+
+@pytest.mark.asyncio
+async def test_first_streamed_presentation_matches_final_runtime_captured_envelope(monkeypatch):
+    """A finalized surface is never stale after the authorized composition stage."""
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    original = {
+        "schema_version": 1,
+        "presentation_id": "clock-observed",
+        "component_type": "time.observation",
+        "evidence_ref": "req-1:time-query",
+        "data": {"formatted": "10:42 PM", "timezone": "America/Detroit"},
+    }
+    final = {**original, "display": {"density": "compact"}}
+    result = SimpleNamespace(
+        success=True, degraded=False, normalized_metadata=lambda: {},
+    )
+    executor = SimpleNamespace(execute=AsyncMock(return_value=result))
+    monkeypatch.setattr(chat_runtime, "get_direct_capability_executor", lambda: executor)
+    monkeypatch.setattr(
+        chat_runtime.RuntimeEvidenceResolver,
+        "authorized_semantic_value",
+        lambda *args, **kwargs: None,
+    )
+
+    class RuntimeStub:
+        def _pending_clarification_from_result(self, request, result):
+            return None
+
+        def _collect_authorized_surface_parts(self, request, executions):
+            return [original]
+
+        async def _compose_direct_capability_answer(
+            self, request, decision, plan, meter, result, normalized,
+        ):
+            return "Observed current time", {
+                **normalized, "structured_content": {"presentation": final},
+                "response_source": "grounded_observation_model",
+            }
+
+    context = SimpleNamespace(
+        request_id="req-1", correlation_id="corr-1",
+        user_id="user-1", tenant_id="tenant-1",
+    )
+    request = SimpleNamespace(context=context)
+    decision = SimpleNamespace(intent="time.current", cognitive_context=None)
+    metadata = {}
+    chunks = [
+        chunk async for chunk in ChatRuntime._run_direct_capability_stream(
+            RuntimeStub(), request, decision, SimpleNamespace(),
+            SimpleNamespace(), _meta=metadata,
+        )
+    ]
+    assert [str(getattr(chunk.type, "value", chunk.type)) for chunk in chunks] == [
+        "content", "presentation",
+    ]
+    assert chunks[1].metadata["presentation_verified"] is True
+    assert chunks[1].metadata["presentation"] == final
+    assert metadata["structured_content"]["presentation"] == final
+    assert chunks[1].metadata["presentation"] != original
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_invalid_final_presentation_even_with_original_capability_evidence(monkeypatch):
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    original = {
+        "schema_version": 1, "presentation_id": "clock-observed",
+        "component_type": "time.observation", "evidence_ref": "req-1:clock",
+        "data": {"formatted": "10:42 PM"},
+    }
+    fake_result = SimpleNamespace(normalized_metadata=lambda: {})
+    monkeypatch.setattr(chat_runtime, "get_direct_capability_executor",
+                        lambda: SimpleNamespace(execute=AsyncMock(return_value=fake_result)))
+    monkeypatch.setattr(chat_runtime.RuntimeEvidenceResolver,
+                        "authorized_semantic_value", lambda *args, **kw: None)
+
+    class RuntimeStub:
+        def _pending_clarification_from_result(self, request, result):
+            return None
+
+        def _collect_authorized_surface_parts(self, request, executions):
+            return [original]
+
+        async def _compose_direct_capability_answer(self, *args):
+            return "Verified observation", {
+                "structured_content": {"presentation": {
+                    **original, "data": {"formatted": "10:42 PM", "private": "unverified"},
+                    "component_type": "untrusted.code",
+                }},
+            }
+
+    request = SimpleNamespace(context=SimpleNamespace(
+        request_id="req-1", correlation_id="corr-1",
+        user_id="user-1", tenant_id="tenant-1",
+    ))
+    decision = SimpleNamespace(intent="time.current", cognitive_context=None)
+    chunks = [
+        c async for c in ChatRuntime._run_direct_capability_stream(
+            RuntimeStub(), request, decision, SimpleNamespace(), SimpleNamespace(),
+        )
+    ]
+    assert len(chunks) == 1
+    assert str(getattr(chunks[0].type, "value", chunks[0].type)) == "content"

@@ -108,6 +108,60 @@ def test_attested_saved_presentation_and_execution_receipt_replay_without_raw_me
     assert "do-not-export" not in str(result)
 
 
+def test_first_prompt_surface_from_runtime_structured_metadata_restores_without_409():
+    """ChatRuntime saves structured_content alongside its verified replay capture."""
+    surface = presentation()
+    transcript = saved([
+        Message(id="user-first", conversation_id=THREAD, tenant_id=TENANT,
+                role="user", content="Time", metadata={}),
+        assistant({
+            **receipt(),
+            "structured_content": {
+                "formatted": "10:42 PM", "timezone": "America/Detroit",
+                "presentation": surface,
+            },
+            "verified_presentations_v1": [surface],
+        }),
+    ])
+    result = project_owned_history(transcript, attestations=attested(transcript))
+    assert [event["name"] for event in result["replayEvents"]] == [
+        "karen.presentation.v1", "karen.execution_receipt.v1",
+    ]
+    assert result["replayEvents"][0]["messageId"] == ASSISTANT_ID
+    assert result["replayEvents"][0]["value"] == surface
+    assert "structured_content" not in str(result)
+
+
+@pytest.mark.parametrize("rich", [
+    {"structured_content": {"formatted": "10:42 PM"},
+     "verified_presentations_v1": [presentation()]},
+    {"structured_content": {"presentation": presentation()}},
+    {"structured_content": {"presentation": presentation(), "private": "secret"},
+     "verified_presentations_v1": [presentation()]},
+    {"structured_content": {"presentation": {**presentation(), "evidence_ref": "foreign"}},
+     "verified_presentations_v1": [presentation()]},
+    {"structured_content": {"presentation": presentation()},
+     "verified_presentations_v1": [{**presentation(), "data": {"formatted": "forged"}}]},
+    {"structured_content": {"presentation": presentation()},
+     "verified_presentations_v1": [presentation(), presentation()]},
+])
+def test_unmatched_or_unattested_first_turn_surface_still_refuses_whole_replay(rich):
+    transcript = saved([assistant({**receipt(), **rich})])
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_owned_history(transcript, attestations=attested(transcript))
+
+
+def test_identical_presentation_does_not_bypass_completed_run_attestation():
+    surface = presentation()
+    transcript = saved([assistant({
+        **receipt(),
+        "structured_content": {"presentation": surface},
+        "verified_presentations_v1": [surface],
+    })])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(transcript, attestations={})
+
+
 @pytest.mark.parametrize("proof", [
     {}, {"wrong": (REQUEST_ID, "0" * 64)},
     {ASSISTANT_ID: ("different-request", "0" * 64)},

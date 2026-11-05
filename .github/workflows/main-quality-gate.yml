@@ -138,6 +138,20 @@ jobs:
           pytest tests/architecture/test_copilotkit_migration_wiring.py -q
           pytest tests/architecture/test_browser_acceptance_dispatch_security.py -q
           pytest tests/architecture/test_deployment_revision_acceptance.py -q
+          # Existing Render beta API is reconciled without provisioning or
+          # implicit deployment; keep this exact owner and its secret-free
+          # environment preflight in the required release architecture gate.
+          pytest tests/architecture/test_render_beta_service_reconcile.py -q
+          pytest tests/architecture/test_render_beta_environment_preflight.py -q
+          pytest tests/architecture/test_render_beta_blueprint_contract.py -q
+          # Production /ready must actively check canonical Redis connectivity,
+          # accept only secured targets, and match the frontend health contract.
+          pytest tests/architecture/test_operational_health_authority.py -q
+          # Canonical ASGI lifespan owns Redis start/stop and must not claim
+          # a healthy memory backend before connecting or after failed startup.
+          pytest tests/architecture/test_application_redis_lifecycle.py -q
+          # Full-runtime probe: uninitialized/stale Redis must not pass /ready.
+          pytest tests/platform/memory/test_redis_connection_health.py -q
           pytest tests/architecture/test_vercel_deployment_attestation.py -q
           pytest tests/architecture/test_http_transport_authority.py -q
           pytest tests/architecture/test_rate_limit_identity_authority.py -q
@@ -170,6 +184,10 @@ jobs:
           pytest src/ai_karen_engine/api_routes/chat/tests/test_execution_identity_principal.py -q
           pytest tests/core/runtime/test_authorized_semantic_context_handoff.py -q
           pytest tests/core/runtime/test_direct_live_capabilities.py -q
+          # Source observations need an attested surface but must not invent
+          # an LLM receipt. This invariant is part of release quality.
+          pytest tests/core/runtime/test_direct_capability_provenance.py -q
+          pytest tests/core/runtime/test_ag_ui_event_projection.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
           pytest tests/core/intelligence/test_reward_progress.py -q
           pytest tests/services/test_reward_progress.py -q

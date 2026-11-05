@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { existsSync, readFileSync } from 'node:fs';
+import { sanitizeBackendCookies } from './backend-cookies';
 
 const HOSTED_ON_VERCEL =
   process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
@@ -153,17 +154,6 @@ function normalizeForwardedProto(value: string | null): 'http' | 'https' | null 
   return null;
 }
 
-function sanitizeBackendCookies(rawCookies: string): string {
-  // Keep Karen's app session while stripping Vercel's *frontend ingress*
-  // authorization. A backend API never needs a deployment-bypass credential.
-  return rawCookies.split(';').map(cookie => cookie.trim()).filter(cookie => {
-    const eq = cookie.indexOf('=');
-    if (eq <= 0) return false;
-    const name = cookie.slice(0, eq).trim().toLowerCase();
-    return name !== '_vercel_jwt' &&
-      name !== '__vercel_protection_bypass';
-  }).join('; ');
-}
 
 function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
   const nextHeaders = new Headers();

@@ -12,6 +12,7 @@ const sdk = vi.hoisted(() => ({
     subscribe: vi.fn(),
   },
   isReady: true,
+  draftSynced: true,
   runAgent: vi.fn(),
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
@@ -61,8 +62,8 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
       },
       readText: () => text.current,
       status: "ready",
-      synced: true,
-      clearBeforeSubmit: (...args: unknown[]) => sdk.clearDraft(...args),
+      synced: sdk.draftSynced,
+      prepareSubmission: (...args: unknown[]) => sdk.clearDraft(...args),
       retry: vi.fn(),
       discardAndReload: vi.fn(),
     };
@@ -87,6 +88,7 @@ beforeEach(() => {
   sdk.views.length = 0;
   sdk.useAgentOptions.length = 0;
   sdk.isReady = true;
+  sdk.draftSynced = true;
   sdk.agent.isRunning = false;
   sdk.agent.threadId = THREAD;
   sdk.agent.messages = [
@@ -181,6 +183,18 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     });
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
     expect(sdk.runAgent).toHaveBeenCalledWith({ agent: sdk.agent });
+  });
+
+  it("allows one first-Enter submission while the draft is still pending sync", async () => {
+    sdk.draftSynced = false;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("A just-typed message");
+      input().onSubmitMessage("A just-typed message");
+    });
+    await waitFor(() => expect(sdk.clearDraft).toHaveBeenCalledWith("A just-typed message"));
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
   });
 
   it("rejects rapid duplicate submits until the previous SDK run settles", async () => {
@@ -600,7 +614,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
       input().onSubmitMessage("Do not send without saved-clear receipt");
     });
     await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("Draft clearance was not confirmed"));
+      .toContain("draft could not be safely saved and cleared"));
     expect(sdk.agent.addMessage).not.toHaveBeenCalled();
     expect(sdk.runAgent).not.toHaveBeenCalled();
   });

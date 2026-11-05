@@ -8,10 +8,13 @@ invariants are satisfied. Optional model/provider availability is not a
 readiness requirement unless a deployment explicitly promotes it to one.
 """
 
+import asyncio
+import ipaddress
 import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
@@ -44,6 +47,13 @@ class OperationalHealthResult:
             "status": self.status,
             "ready": self.ready,
             "checks": self.checks,
+            # Server-owned projection consumed by the canonical Next.js
+            # /api/health proxy. Never let the frontend infer readiness from a
+            # 200 status or create its own degraded-mode fallbacks.
+            "components": {
+                name: "ready" if result.get("ready") is True else "not_ready"
+                for name, result in self.checks.items()
+            },
             "timestamp": self.timestamp,
         }
 
@@ -66,7 +76,6 @@ class OperationalHealthService:
         "AUTH_SECRET_KEY",
         "EXTENSION_SECRET_KEY",
         "EXTENSION_API_KEY",
-        "REDIS_PASSWORD",
     )
 
     @staticmethod
@@ -87,8 +96,7 @@ class OperationalHealthService:
         checks["configuration"] = self._configuration_check(production=production)
         checks["database"] = await self._database_check()
 
-        memory_required = self._env_bool("KARI_ENABLE_MEMORY_SERVICE", default=True)
-        checks["redis"] = self._redis_check(required=memory_required)
+        checks["redis"] = await self._redis_check(required=self.redis_required())
 
         ready = all(bool(check.get("ready")) for check in checks.values())
         return OperationalHealthResult(
@@ -115,6 +123,13 @@ class OperationalHealthService:
             if self._is_insecure_secret(value):
                 violations.append(f"{name}=missing_or_insecure")
 
+        # Redis is configured by its canonical connection URL, not by an
+        # unrelated REDIS_PASSWORD that RedisConnectionManager never consumes.
+        # Passwordless transport is permitted ONLY on a single-label private
+        # service hostname. Public targets require authenticated TLS.
+        if not self._redis_target_secure(os.getenv("REDIS_URL")):
+            violations.append("REDIS_URL=missing_or_insecure")
+
         return {
             "ready": not violations,
             "environment": "production",
@@ -140,18 +155,22 @@ class OperationalHealthService:
             }
 
     @staticmethod
-    def _redis_check(*, required: bool) -> Dict[str, Any]:
+    async def _redis_check(*, required: bool) -> Dict[str, Any]:
         if not required:
             return {"ready": True, "status": "not_required"}
 
         try:
-            from ai_karen_engine.core.memory.redis_connection_manager import get_redis_manager
+            from ai_karen_engine.platform.memory.redis import get_redis_manager
 
-            redis_manager = get_redis_manager()
-            degraded = bool(redis_manager.is_degraded())
+            # Do not infer readiness from the manager's initial degraded flag:
+            # it starts False before any connection has been established.
+            # The canonical manager actively checks the existing connection.
+            healthy = await asyncio.wait_for(
+                get_redis_manager().is_healthy(), timeout=3.0,
+            )
             return {
-                "ready": not degraded,
-                "status": "degraded" if degraded else "healthy",
+                "ready": bool(healthy),
+                "status": "healthy" if healthy else "degraded",
             }
         except Exception as exc:
             return {
@@ -159,6 +178,51 @@ class OperationalHealthService:
                 "status": "unavailable",
                 "error_type": type(exc).__name__,
             }
+
+    @classmethod
+    def _redis_target_secure(cls, value: str | None) -> bool:
+        """Enforce private-network Redis or authenticated TLS, without a URL leak."""
+        if not value or value != value.strip() or any(ord(c) <= 32 for c in value):
+            return False
+        try:
+            target = urlsplit(value)
+            host = target.hostname
+            port = target.port
+            if (
+                target.scheme not in {"redis", "rediss"}
+                or not host or port not in (None, 6379)
+                or target.fragment or target.query
+                or target.path not in {"", "/"} | {f"/{n}" for n in range(16)}
+            ):
+                return False
+            if target.username and not target.password:
+                return False
+            password = target.password
+            if password and cls._is_insecure_secret(password):
+                return False
+            try:
+                ipaddress.ip_address(host)
+                private_name = False
+            except ValueError:
+                private_name = (
+                    "." not in host and host.lower() not in {
+                        "localhost", "localdomain", "host.docker.internal",
+                    }
+                    and host.replace("-", "").replace("_", "").isalnum()
+                )
+            # A single-label private service name resolves only within the
+            # container/private network. Other destinations need TLS and
+            # a strong credential embedded in the actual consumed URL.
+            if private_name:
+                return True
+            return target.scheme == "rediss" and bool(password)
+        except (ValueError, TypeError):
+            return False
+
+    @classmethod
+    def redis_required(cls) -> bool:
+        """Single runtime authority for Redis-backed STM dependency policy."""
+        return cls._env_bool("KARI_ENABLE_MEMORY_SERVICE", default=True)
 
     @staticmethod
     def _env_bool(name: str, *, default: bool) -> bool:

@@ -6,7 +6,11 @@ from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
-from ...model_runtime.provider_execution import execute_provider_endpoint
+from ...model_runtime.provider_execution import (
+    execute_provider_endpoint,
+    stream_provider_endpoint,
+    ProviderExecutionError,
+)
 from ...model_runtime.provider_policy import evaluate_provider_policy
 from ...model_runtime.runtime_engine import EndpointKind
 
@@ -57,29 +61,64 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
 
         attempt_started = time.perf_counter()
         try:
-            execution = await execute_provider_endpoint(
-                endpoint,
-                messages=task.messages,
-                model=model,
-                max_tokens=task.max_tokens,
-                temperature=task.temperature,
-            )
+            if task.token_sink is not None and endpoint.supports_streaming:
+                # The same registered/authorized provider is used for both
+                # transports. Forward only verified model SSE deltas, and
+                # accept a final result only after its terminal wire receipt.
+                execution = None
+                async for part in stream_provider_endpoint(
+                    endpoint,
+                    messages=task.messages,
+                    model=model,
+                    max_tokens=task.max_tokens,
+                    temperature=task.temperature,
+                    timeout_ms=task.timeout_ms,
+                ):
+                    if part.kind == "delta" and part.delta:
+                        task.stream_started = True
+                        await task.token_sink(part.delta)
+                    elif part.kind == "complete":
+                        execution = part.result
+                if execution is None:
+                    raise ProviderExecutionError("provider_stream_missing_terminal")
+            else:
+                execution = await execute_provider_endpoint(
+                    endpoint,
+                    messages=task.messages,
+                    model=model,
+                    max_tokens=task.max_tokens,
+                    temperature=task.temperature,
+                )
             text = execution.text
             actual_provider = execution.provider_id
             actual_model = execution.model
             runtime_engine = execution.runtime_engine or "openai_compatible"
             provider_usage = dict(execution.usage or {})
         except Exception as exc:
-            logger.error(
-                "OpenAICompatibleEngine (%s) failed for %s: %s",
-                self.engine_id,
-                provider_id,
-                exc,
+            # An upstream exception can contain an authenticated URL,
+            # credentials, or response body. Keep only its class and a
+            # bounded internal error code in the runtime's public receipt.
+            safe_reason = (
+                str(exc)
+                if isinstance(exc, ProviderExecutionError)
+                and str(exc).isascii()
+                and len(str(exc)) <= 100
+                and all(ch.isalnum() or ch in "._:-" for ch in str(exc))
+                else "provider_execution_failed"
+            )
+            logger.warning(
+                "expression_provider_execution_failed",
+                extra={
+                    "engine_id": self.engine_id,
+                    "provider_id": provider_id,
+                    "error_type": type(exc).__name__,
+                    "reason": safe_reason,
+                },
             )
             return self._failure_result(
                 task,
                 started,
-                str(exc),
+                safe_reason,
                 provider=provider_id,
                 requested_provider=requested_provider,
                 attempts=[

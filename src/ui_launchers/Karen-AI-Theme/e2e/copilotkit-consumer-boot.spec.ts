@@ -226,23 +226,22 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const prompt = `Karen live acceptance ${crypto.randomUUID()}: Please respond with a brief greeting.`;
     const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
     await expect(composer, "CopilotKit must present a usable composer").toBeVisible();
-    await composer.fill(prompt);
-    // Absence of "Saving draft…" alone is insufficient: it can be absent
-    // before the delayed CAS save starts. Require the backend's authorized
-    // draft endpoint to confirm this exact prompt before submitting.
-    const draftEndpoint = `/api/conversations/${id}/draft`;
-    await expect.poll(async () => {
-      const { ok, body: draft } = await readAuthorizedSameOriginJson(page, draftEndpoint);
-      return Boolean(ok && draft && typeof draft === "object" &&
-        (draft as { text?: unknown }).text === prompt);
-    }, {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-      message: "The canonical backend must confirm this exact saved draft before sending",
-    }).toBe(true);
-    await expect(shell.getByText("Saving draft to your conversation…")).toHaveCount(0, {
-      timeout: 30_000,
+    // This must reproduce the original consumer defect: Enter immediately
+    // after typing while the debounced draft CAS may still be pending.
+    // Waiting for autosave here would make the acceptance test meaningless.
+    const observedRunRequests: string[] = [];
+    page.on("request", (request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (
+        pathname === "/api/copilotkit/agent/default/run" ||
+        pathname === "/api/chat/ag-ui" ||
+        pathname === "/api/chat/stream"
+      )) {
+        observedRunRequests.push(pathname);
+      }
     });
+    const draftEndpoint = `/api/conversations/${id}/draft`;
+    await composer.fill(prompt);
     await composer.press("Enter");
 
     const endpoint = `/api/conversations/${id}`;
@@ -273,6 +272,19 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       message: "A real user turn and subsequent assistant response must be persisted by the canonical backend",
     }).toBe(true);
     expect(persistedAnswer.trim().length).toBeGreaterThan(0);
+    expect(
+      observedRunRequests,
+      "One immediate Enter must send exactly one model execution request",
+    ).toHaveLength(1);
+    await expect.poll(async () => {
+      const { ok, body: draft } = await readAuthorizedSameOriginJson(page, draftEndpoint);
+      return Boolean(ok && draft && typeof draft === "object" &&
+        (draft as { text?: unknown }).text === "");
+    }, {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+      message: "Immediate Enter must consume the persisted draft without leaving stale text",
+    }).toBe(true);
     await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
     // A saved backend answer alone is not a functioning consumer chat.
     // The active CopilotKit view must render the real assistant response
@@ -304,6 +316,209 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     ).toBeVisible({ timeout: 30_000 });
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
   });
+
+  for (const scenario of [
+    {
+      label: "time", prompt: "What time is it?",
+      component: "time.observation", testId: "karen-time-presentation",
+    },
+    {
+      label: "weather", prompt: "What's the weather in Detroit, Michigan right now?",
+      component: "weather.observation", testId: "karen-weather-presentation",
+    },
+  ] as const) {
+  test(`one first ${scenario.label} prompt renders backend-attested UI immediately and after reload`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const target = new URL(approvedUrl!);
+    const revisionResponse = await page.context().request.get(
+      new URL("/api/deployment-revision", target).toString(),
+    );
+    expect(revisionResponse.ok(), "First-prompt acceptance requires a deployed revision").toBe(true);
+    const revision: unknown = await revisionResponse.json();
+    expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
+    await requireLiveCanonicalBackend(page, target);
+
+    if (!authState) {
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
+    }
+    await page.goto(new URL("/dashboard", target).toString());
+
+    const shell = page.getByTestId("karen-copilot-consumer-chat");
+    const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await shell.isVisible().catch(() => false)) &&
+        await launch.isVisible().catch(() => false)) {
+      await launch.click();
+    }
+    await expect(shell).toBeVisible({ timeout: 30_000 });
+
+    // Never touch a real user's existing conversation during release proof.
+    const previousId = await shell.getAttribute("data-conversation-id");
+    const newConversation = shell.getByRole("button", { name: "New conversation" });
+    await expect(newConversation).toBeVisible();
+    await newConversation.click();
+    await expect.poll(async () => {
+      const selected = await shell.getAttribute("data-conversation-id");
+      return selected && selected !== previousId ? selected : null;
+    }, { timeout: 30_000 }).not.toBeNull();
+    await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+    await expectRealCopilotKitStyles(page);
+
+    const conversationId = await shell.getAttribute("data-conversation-id");
+    expect(conversationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    const prompt = scenario.prompt;
+    const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+    await expect(composer).toBeVisible();
+
+    // Observe the actual SDK send. A retry, second Enter, or hidden duplicate
+    // execution must not be needed to produce the first generated surface.
+    const observedRunRequests: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (
+        path === "/api/copilotkit/agent/default/run" ||
+        path === "/api/chat/ag-ui" ||
+        path === "/api/chat/stream"
+      )) {
+        observedRunRequests.push(path);
+      }
+    });
+    const browserErrors: string[] = [];
+    page.on("pageerror", error => { browserErrors.push(error.message); });
+    page.on("console", message => {
+      if (message.type() === "error" &&
+          /ChunkLoadError|web-inspector|Failed to fetch dynamically imported module/i.test(message.text())) {
+        browserErrors.push(message.text());
+      }
+    });
+
+    await composer.fill(prompt);
+    await composer.press("Enter");
+
+    // Read the authoritative completed history: the presentation must be a
+    // verified CUSTOM event bound to the immediate assistant reply, not a
+    // free-floating client widget, inferred intent, or unsaved stream fragment.
+    let savedAnswer = "";
+    let savedPresentationId = "";
+    await expect.poll(async () => {
+      const { ok, body } = await readAuthorizedSameOriginJson(
+        page, `/api/copilotkit/threads/${conversationId}/messages`,
+      );
+      if (!ok || !body || typeof body !== "object") return false;
+      const snapshot = body as Record<string, unknown>;
+      if (snapshot.threadId !== conversationId ||
+          !Array.isArray(snapshot.messages) ||
+          !Array.isArray(snapshot.replayEvents)) return false;
+      const messages = snapshot.messages as Record<string, unknown>[];
+      const promptPositions = messages.flatMap((message, index) =>
+        message?.role === "user" && message.content === prompt ? [index] : []);
+      if (promptPositions.length !== 1) return false;
+      const reply = messages[promptPositions[0] + 1];
+      if (reply?.role !== "assistant" || typeof reply.id !== "string" ||
+          !reply.id || typeof reply.content !== "string" || !reply.content.trim()) return false;
+      const timeEvents = (snapshot.replayEvents as Record<string, unknown>[]).filter(event => {
+        if (!event || event.type !== "CUSTOM" ||
+            event.name !== "karen.presentation.v1" ||
+            event.messageId !== reply.id ||
+            !event.value || typeof event.value !== "object" ||
+            Array.isArray(event.value)) return false;
+        const value = event.value as Record<string, unknown>;
+        if (value.component_type === scenario.component) return true;
+        if (value.component_type !== "surface.composition" ||
+            !value.data || typeof value.data !== "object" ||
+            Array.isArray(value.data)) return false;
+        const items = (value.data as Record<string, unknown>).items;
+        return Array.isArray(items) && items.some(item =>
+          item && typeof item === "object" && !Array.isArray(item) &&
+          item.component_type === scenario.component);
+      });
+      if (timeEvents.length !== 1) return false;
+      const presentation = timeEvents[0].value as Record<string, unknown>;
+      // A direct observation has evidence but no model invocation. Validate
+      // the server-attested evidence binding rather than fabricating a model
+      // execution receipt for a source-only time/weather answer.
+      if (presentation.schema_version !== 1 ||
+          typeof presentation.presentation_id !== "string" ||
+          !presentation.presentation_id ||
+          typeof presentation.evidence_ref !== "string" ||
+          !presentation.evidence_ref.trim() ||
+          typeof presentation.correlation_id !== "string" ||
+          !presentation.correlation_id.trim()) return false;
+
+      const receipts = (snapshot.replayEvents as Record<string, unknown>[]).filter(event =>
+        event && event.type === "CUSTOM" &&
+        event.name === "karen.execution_receipt.v1" &&
+        event.messageId === reply.id);
+      if (receipts.length > 1) return false;
+      // When grounded synthesis truly ran an LLM, its receipt must identify
+      // the actual executor. A pure tool observation correctly has none.
+      if (receipts.length === 1) {
+        const receipt = receipts[0].value;
+        if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return false;
+        const model = receipt as Record<string, unknown>;
+        if (["actual_provider", "actual_model", "response_source"].some(key =>
+          typeof model[key] !== "string" || !(model[key] as string).trim() ||
+          ["unknown", "none", "unavailable"].includes(
+            (model[key] as string).trim().toLowerCase()
+          ))) return false;
+      }
+      savedAnswer = reply.content;
+      savedPresentationId = presentation.presentation_id;
+      return true;
+    }, {
+      timeout: 120_000,
+      intervals: [500, 1000, 2000],
+      message: "First prompt must persist one backend-attested rich surface attached to its assistant reply",
+    }).toBe(true);
+
+    const visibleCard = shell.getByTestId(scenario.testId);
+    await expect(visibleCard, "The actual first prompt must render generated UI without a second send")
+      .toHaveCount(1, { timeout: 30_000 });
+    await expect(visibleCard).toBeVisible();
+    const firstCardText = (await visibleCard.innerText()).trim();
+    if (scenario.label === "time") {
+      expect(firstCardText).toContain("Reported time");
+    } else {
+      expect(firstCardText).toContain("Source:");
+    }
+    expect(observedRunRequests, "One first prompt must cause exactly one execution")
+      .toHaveLength(1);
+
+    await page.reload();
+    const restored = page.getByTestId("karen-copilot-consumer-chat");
+    const restoredLaunch = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await restored.isVisible().catch(() => false)) &&
+        await restoredLaunch.isVisible().catch(() => false)) {
+      await restoredLaunch.click();
+    }
+    await expect(restored).toHaveAttribute("data-conversation-id", conversationId!);
+    await expect(restored.getByTestId("karen-copilot-controlled-chat"))
+      .toBeVisible({ timeout: 30_000 });
+    await expectRealCopilotKitStyles(page);
+    await expect(restored.getByTestId("karen-copilot-rail-unverified"))
+      .toHaveCount(0, { timeout: 30_000 });
+    await expect(restored.getByText(prompt, { exact: true })).toBeVisible();
+
+    const restoredCard = restored.getByTestId(scenario.testId);
+    await expect(restoredCard, "Reload must restore the actual verified UI surface")
+      .toHaveCount(1, { timeout: 30_000 });
+    expect((await restoredCard.innerText()).trim()).toBe(firstCardText);
+    const { ok, body } = await readAuthorizedSameOriginJson(
+      page, `/api/copilotkit/threads/${conversationId}/messages`,
+    );
+    expect(ok).toBe(true);
+    const savedEvents = (body as { replayEvents: Array<{
+      type: string; name: string; value: { presentation_id?: string };
+    }> }).replayEvents;
+    expect(savedEvents.some(event =>
+      event.type === "CUSTOM" &&
+      event.name === "karen.presentation.v1" &&
+      event.value?.presentation_id === savedPresentationId)).toBe(true);
+    expect(observedRunRequests).toHaveLength(1);
+    expect(browserErrors).toEqual([]);
+  });
+  }
 
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page }) => {
     test.setTimeout(120_000);

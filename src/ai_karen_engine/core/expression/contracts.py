@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 @dataclass(slots=True)
 class ExpressionTask:
@@ -18,6 +18,14 @@ class ExpressionTask:
     correlation_id: str | None = None
     request_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # In-process model text delivery only. Never store a callable in metadata,
+    # serialize it, or accept it from an HTTP/client-supplied request.
+    token_sink: Callable[[str], Awaitable[None]] | None = field(
+        default=None, repr=False, compare=False,
+    )
+    # Tracked by the canonical gateway to prohibit switching models after a
+    # partial response has already been made visible to the consumer.
+    stream_started: bool = field(default=False, repr=False, compare=False)
 
 @dataclass(slots=True)
 class ExpressionResult:

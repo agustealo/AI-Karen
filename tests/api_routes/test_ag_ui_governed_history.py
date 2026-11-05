@@ -99,6 +99,61 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
 
 
 @pytest.mark.asyncio
+async def test_first_prompt_verified_direct_capability_surface_returns_200_not_409(
+    monkeypatch, replay_on,
+):
+    """Real owned-history HTTP projection must accept the canonical first UI."""
+    import json
+
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "first-time",
+        "component_type": "time.observation",
+        "evidence_ref": REQUEST + ":time-query",
+        "data": {"formatted": "10:42 PM", "timezone": "America/Detroit"},
+    }
+    original = snapshot(rich=True)
+    original.messages[1].metadata.update({
+        "structured_content": {
+            "formatted": "10:42 PM", "timezone": "America/Detroit",
+            "presentation": envelope,
+        },
+        "verified_presentations_v1": [envelope],
+    })
+
+    class Owned:
+        async def get_owned_snapshot(self, context, *, message_limit):
+            assert context.tenant_id == TENANT and context.user_id == USER
+            assert message_limit == 501
+            return original
+
+    class Attestation:
+        async def completed_replay_attestations(self, **kwargs):
+            return {ASSISTANT: (
+                REQUEST, canonical_message_digest(original.messages[1]),
+            )}
+
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway
+    monkeypatch.setattr(
+        conversation_runtime_gateway, "get_conversation_runtime_gateway",
+        lambda: Owned(),
+    )
+    monkeypatch.setattr(route, "SqlChatRunRepository", Attestation)
+    result = await route.get_ag_ui_owned_history(
+        thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
+    )
+    assert result.status_code == 200
+    body = json.loads(result.body)
+    assert [event["name"] for event in body["replayEvents"]] == [
+        "karen.presentation.v1", "karen.execution_receipt.v1",
+    ]
+    assert body["replayEvents"][0]["messageId"] == ASSISTANT
+    assert body["replayEvents"][0]["value"] == envelope
+    assert "structured_content" not in str(body)
+    assert "never expose" not in str(body)
+
+
+@pytest.mark.asyncio
 async def test_governed_history_refuses_foreign_conversation_and_skips_attestation(
     monkeypatch, replay_on,
 ):

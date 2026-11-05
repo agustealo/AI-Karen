@@ -8,6 +8,7 @@ attached to ``app.state`` here so startup owns the live service graph and
 shutdown drains workers before database teardown.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -18,6 +19,65 @@ logger = logging.getLogger(__name__)
 
 _RUNTIME_ATTACHED_STATE_KEY = "_canonical_runtime_attached"
 _RUNTIME_SHUTDOWN_STATE_KEY = "_canonical_runtime_shutdown"
+_REDIS_LIFESPAN_OWNED_KEY = "_canonical_redis_lifespan_owned"
+
+
+async def initialize_application_redis(app: FastAPI) -> None:
+    """Initialize the one canonical Redis manager before runtime composition.
+
+    A failed private-Redis connection must leave /ready unready, never pretend
+    success or replace session memory with a second local in-process store.
+    Process liveness remains independent of this optional dependency.
+    """
+    from ai_karen_engine.core.runtime.operational_health import (
+        OperationalHealthService,
+    )
+
+    if not OperationalHealthService.redis_required():
+        return
+    if getattr(app.state, _REDIS_LIFESPAN_OWNED_KEY, False):
+        return
+
+    try:
+        from ai_karen_engine.platform.memory.redis import get_redis_manager
+
+        manager = get_redis_manager()
+        # Track ownership as soon as the manager is acquired, including when
+        # a connection attempt fails. This keeps partial pools cleanup-safe.
+        app.state.redis_connection_manager = manager
+        setattr(app.state, _REDIS_LIFESPAN_OWNED_KEY, True)
+        ready = await asyncio.wait_for(manager.is_healthy(), timeout=3.0)
+        if not ready:
+            ready = await asyncio.wait_for(manager.initialize(), timeout=5.0)
+        logger.info(
+            "Canonical Redis runtime startup inspected",
+            extra={"component": "redis", "status": "ready" if ready else "degraded"},
+        )
+    except Exception as exc:
+        # The readiness owner still probes the same manager and returns 503.
+        # Do not expose Redis URLs, credentials, or exception messages.
+        logger.warning(
+            "Canonical Redis runtime startup degraded",
+            extra={"component": "redis", "error_type": type(exc).__name__},
+        )
+
+
+async def shutdown_application_redis(app: FastAPI) -> None:
+    """Close only the Redis singleton owned by this application lifespan."""
+    if not getattr(app.state, _REDIS_LIFESPAN_OWNED_KEY, False):
+        return
+    try:
+        from ai_karen_engine.platform.memory.redis import shutdown_redis_manager
+
+        await shutdown_redis_manager()
+    except Exception as exc:
+        logger.warning(
+            "Canonical Redis runtime shutdown degraded",
+            extra={"component": "redis", "error_type": type(exc).__name__},
+        )
+    finally:
+        app.state.redis_connection_manager = None
+        setattr(app.state, _REDIS_LIFESPAN_OWNED_KEY, False)
 
 
 async def initialize_application_channel_host(app: FastAPI) -> None:
@@ -201,19 +261,29 @@ def create_application_lifespan(settings: Any):
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        await on_startup(settings, app)
-        await initialize_application_runtime(app)
         try:
+            await on_startup(settings, app)
+            # One Redis singleton, initialized before memory or session users
+            # are attached to the application Runtime.
+            await initialize_application_redis(app)
+            await initialize_application_runtime(app)
             yield
         finally:
-            await shutdown_application_runtime(app)
-            await on_shutdown(app)
+            try:
+                await shutdown_application_runtime(app)
+            finally:
+                try:
+                    await shutdown_application_redis(app)
+                finally:
+                    await on_shutdown(app)
 
     return lifespan
 
 
 __all__ = [
     "create_application_lifespan",
+    "initialize_application_redis",
+    "shutdown_application_redis",
     "initialize_application_channel_host",
     "initialize_application_runtime",
     "shutdown_application_runtime",

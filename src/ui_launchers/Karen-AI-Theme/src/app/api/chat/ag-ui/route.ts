@@ -6,7 +6,20 @@ export const dynamic = 'force-dynamic';
 
 /** Proxies the optional AG-UI wire protocol to Karen's canonical backend. */
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const backendBaseUrl = getBackendBaseUrl();
+  // Hosted deployments must not throw an unhandled error before a stream
+  // starts. The canonical backend resolver alone decides target eligibility.
+  let backendBaseUrl: string;
+  try {
+    backendBaseUrl = getBackendBaseUrl();
+  } catch {
+    return NextResponse.json(
+      {
+        detail: 'Canonical backend connection is not configured for this deployment.',
+        error_code: 'BACKEND_TARGET_NOT_CONFIGURED',
+      },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    );
+  }
   const headers = sanitizeHeaders(request.headers, backendBaseUrl);
   headers.set('Accept', 'text/event-stream');
   // The SDK may send a JSON body without declaring its media type. FastAPI

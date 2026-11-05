@@ -82,14 +82,21 @@ describe("canonical CopilotKit chat ownership", () => {
   });
 
   it("requires a live non-cacheable backend before approved browser sign-in", () => {
-    const preflight = "await requireLiveCanonicalBackend(page, target);";
-    expect(liveBrowser.split(preflight)).toHaveLength(3);
-    const firstSignIn = liveBrowser.indexOf("await signInApprovedKaren(page, approvedEmail!, approvedPassword!)");
-    const secondSignIn = liveBrowser.lastIndexOf("await signInApprovedKaren(page, approvedEmail!, approvedPassword!)");
-    const firstCheck = liveBrowser.indexOf(preflight);
-    const secondCheck = liveBrowser.lastIndexOf(preflight);
-    expect(firstCheck).toBeLessThan(firstSignIn);
-    expect(secondCheck).toBeLessThan(secondSignIn);
+    // Each independent real-browser scenario must verify backend readiness
+    // before credentials are used. Do not hardcode the number of scenarios:
+    // new time/weather acceptance must increase coverage without weakening auth.
+    const preflights = [...liveBrowser.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
+      .map(match => match.index!);
+    const signIns = [...liveBrowser.matchAll(/await signInApprovedKaren\(page, approvedEmail!, approvedPassword!\);/g)]
+      .map(match => match.index!);
+    expect(preflights.length).toBeGreaterThanOrEqual(2);
+    expect(preflights).toHaveLength(signIns.length);
+    preflights.forEach((position, index) => {
+      expect(position).toBeLessThan(signIns[index]);
+      if (index > 0) {
+        expect(position).toBeGreaterThan(signIns[index - 1]);
+      }
+    });
     expect(liveBrowser).toContain("backend_ready: true");
     expect(liveBrowser).toContain('new URL("/api/health", target)');
     expect(liveBrowser).toContain("maxRedirects: 0");
@@ -120,7 +127,9 @@ describe("canonical CopilotKit chat ownership", () => {
   });
 
   it("requires explicit submission, backend stop receipts and durable draft clearance", () => {
-    expect(controller).toContain("clearBeforeSubmit(text)");
+    expect(controller).toContain("prepareSubmission(text)");
+    expect(draftHook).toContain("return clearBeforeSubmit(submittedText)");
+    expect(draftHook).toContain("await startSave()");
     expect(controller).toContain("copilotkit.runAgent({ agent })");
     expect(controller).toContain("validStopReceipt(receipt)");
     expect(controller).toContain("copilotkit.stopAgent({ agent })");

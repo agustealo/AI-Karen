@@ -3,24 +3,10 @@ import os from 'os';
 import fs from 'fs';
 import type {NextConfig} from 'next';
 
-const isDocker = process.env.KAREN_DOCKER === 'true' || 
-                 process.env.IS_DOCKER === 'true' || 
-                 process.env.HOSTNAME?.includes('api') || 
-                 process.env.HOSTNAME?.includes('web');
-
-let BACKEND_URL = process.env.KAREN_BACKEND_URL || process.env.BACKEND_URL || '';
-
-if (isDocker) {
-    BACKEND_URL = 'http://api:8000';
-} else if (!BACKEND_URL) {
-    BACKEND_URL = 'http://localhost:8000';
-}
-
-const backendBaseUrl = BACKEND_URL.replace(/\/$/, '');
-
-console.log('🚀 Next.js Configuration:');
-console.log(`- isDocker: ${isDocker}`);
-console.log(`- RESOLVED backendBaseUrl: ${backendBaseUrl}`);
+// Canonical backend routing belongs to the server-only backend proxy.
+// This config does not select a backend and must never log an endpoint URL.
+// In particular, a build-time localhost default does not imply that hosted
+// authentication, persistence, or the AG-UI transport can reach that origin.
 
 const devOriginCandidates = [
   'localhost',

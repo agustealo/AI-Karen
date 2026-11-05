@@ -1,0 +1,98 @@
+name: Render Beta Service Reconcile
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact reviewed 40-character main SHA
+        type: string
+        required: true
+      mode:
+        description: Inspect only, or apply reviewed Git branch, manual deploy policy and HTTP liveness path to the existing service
+        type: choice
+        required: true
+        default: inspect
+        options:
+          - inspect
+          - apply
+          - inspect-env
+          - inspect-consumer
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-beta-service-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile-existing-beta-api:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: beta-release
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      MODE: ${{ inputs.mode }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_BETA_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID }}
+      RENDER_BETA_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID }}
+      RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID }}
+      RENDER_BETA_KEY_VALUE_ID: ${{ vars.RENDER_BETA_KEY_VALUE_ID }}
+
+    steps:
+      - name: Check out reviewed main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require approved main identity and protected credentials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Expected full reviewed main SHA"; exit 1; }
+          test "$TARGET_SHA" = "$GITHUB_SHA" || { echo "::error::Dispatched SHA does not match source checkout"; exit 1; }
+          test "$TARGET_SHA" = "$(git rev-parse HEAD)" || { echo "::error::Checkout SHA mismatch"; exit 1; }
+          ACTUAL_MAIN="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$TARGET_SHA" = "$ACTUAL_MAIN" || { echo "::error::Main moved after workflow dispatch"; exit 1; }
+          test -n "$RENDER_API_KEY" || { echo "::error::Protected Render API credential is missing"; exit 1; }
+          test -n "$RENDER_BETA_SERVICE_ID" || { echo "::error::Existing Render beta service ID is missing"; exit 1; }
+          test -n "$RENDER_BETA_WORKSPACE_ID" || { echo "::error::Existing Render workspace ID is missing"; exit 1; }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Reconcile only existing Render service Git source
+        if: env.MODE != 'inspect-env' && env.MODE != 'inspect-consumer'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/deploy/reconcile_render_beta_service.py \
+            --service-id "$RENDER_BETA_SERVICE_ID" \
+            --workspace-id "$RENDER_BETA_WORKSPACE_ID" \
+            --manifest deploy/render/render.yaml \
+            --mode "$MODE"
+
+      - name: Inspect the existing beta environment and private datastore links
+        if: env.MODE == 'inspect-env' || env.MODE == 'inspect-consumer'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_BETA_POSTGRES_ID" || { echo "::error::Existing Postgres ID is missing"; exit 1; }
+          test -n "$RENDER_BETA_KEY_VALUE_ID" || { echo "::error::Existing Key Value ID is missing"; exit 1; }
+          extra_args=()
+          if [[ "$MODE" == "inspect-consumer" ]]; then
+            extra_args+=(--require-governed-history)
+          fi
+          python scripts/deploy/inspect_render_beta_environment.py \
+            --service-id "$RENDER_BETA_SERVICE_ID" \
+            --workspace-id "$RENDER_BETA_WORKSPACE_ID" \
+            --postgres-id "$RENDER_BETA_POSTGRES_ID" \
+            --key-value-id "$RENDER_BETA_KEY_VALUE_ID" \
+            --manifest deploy/render/render.yaml "${extra_args[@]}"
+
+      # This workflow deliberately never deploys or modifies a database,
+      # Redis service, credentials, env vars, or frontend routing.

@@ -11,7 +11,9 @@ services:
     name: ai-karen-beta-api
     runtime: docker
     repo: https://github.com/agustealo/AI-Karen
-    branch: feat/chat-consumer-conversation-management-20261031
+    # Deploy only reviewed main releases. Live service settings must be updated
+    # explicitly; modifying this Blueprint does not mutate an existing service.
+    branch: main
     region: ohio
     plan: free
     dockerfilePath: ./Dockerfile
@@ -57,6 +59,15 @@ services:
         value: "false"
       - key: KAREN_BUILTIN_VLLM_ENABLED
         value: "false"
+      # Governed AG-UI replay requires migration 43 and durable-run proof.
+      # Explicit operator-supplied values, never automatic activation during
+      # Blueprint creation or a routine source-only deployment.
+      - key: KARI_ENABLE_AG_UI_BRIDGE
+        sync: false
+      - key: KARI_ENABLE_AG_UI_DURABLE_RUNS
+        sync: false
+      - key: KARI_ENABLE_AG_UI_EVENT_JOURNAL
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: ai-karen-beta-postgres
