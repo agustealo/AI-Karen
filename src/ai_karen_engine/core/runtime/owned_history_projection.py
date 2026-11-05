@@ -27,7 +27,7 @@ _MAX_TEXT = 65536
 _MAX_PRESENTATIONS = 6
 
 _UNSUPPORTED_RICH = frozenset({
-    "actions", "citations", "sources",
+    "actions",
     "attachments", "artifacts", "function_call", "function_response",
     "tool_activity", "tool_calls", "tool_results", "agent_steps",
     "execution_receipt", "presentation", "presentation_payload",
@@ -93,6 +93,82 @@ def _carries_value(value: Any) -> bool:
     return True
 
 
+
+def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
+    """Allow *withheld* provider source metadata only with an attested UI part.
+
+    This function grants no execution/replay authority. The completed-run
+    digest is still required in project_owned_history and raw source payloads
+    never reach the CopilotKit event projection.
+    """
+    sources = metadata.get("sources")
+    citations = metadata.get("citations")
+    if not _carries_value(sources) and not _carries_value(citations):
+        return True
+
+    structured = metadata.get("structured_content")
+    captured = metadata.get("verified_presentations_v1")
+    if (
+        not isinstance(structured, Mapping)
+        or not isinstance(captured, list)
+        or len(captured) != 1
+        or structured.get("presentation") != captured[0]
+    ):
+        return False
+    part = validate_presentation(captured[0])
+    if part is None or part != captured[0] or part["component_type"] not in {
+        "search.results", "weather.observation", "weather.comparison",
+    }:
+        return False
+    # A source/citation-bearing capability must carry the original completed
+    # request receipt; unpaired metadata from historical/legacy messages
+    # cannot be silently admitted as if it were verified.
+    if metadata.get("source") != "chat_runtime" or not isinstance(metadata.get("request_id"), str):
+        return False
+    evidence = part.get("evidence_ref")
+    if not isinstance(evidence, str) or not evidence.startswith(metadata["request_id"] + ":"):
+        return False
+
+    if sources is not None and not isinstance(sources, list):
+        return False
+    if citations is not None and not isinstance(citations, list):
+        return False
+    source_rows = sources or []
+    citation_rows = citations or []
+    if len(source_rows) > 100 or len(citation_rows) > 100:
+        return False
+    if any(
+        not isinstance(row, Mapping)
+        or not isinstance(row.get("url"), str)
+        or not 1 <= len(row["url"]) <= 1200
+        for row in source_rows + citation_rows
+    ):
+        return False
+
+    if part["component_type"] == "search.results":
+        # Every *displayed* result must have been in the saved source receipts.
+        # Other source/citation records may be retained by the canonical
+        # repository but must not be shipped to the renderer.
+        records = part["data"]["results"]
+        for displayed in records:
+            if not any(
+                row["url"] == displayed["url"]
+                and str(row.get("snippet") or row.get("content") or "").strip()
+                    == displayed["snippet"]
+                and ("title" not in displayed or row.get("title") == displayed["title"])
+                and (
+                    "published_at" not in displayed
+                    or row.get("published_at") == displayed["published_at"]
+                )
+                for row in source_rows
+            ):
+                return False
+    # Weather observations have independent source measurements and optional
+    # citation links; the original weather contract and completed-run digest
+    # determine validity. Never imply that a citation itself is a measurement.
+    return True
+
+
 def project_owned_history(
     snapshot: ConversationSnapshot,
     *,
@@ -132,6 +208,8 @@ def project_owned_history(
         if not isinstance(metadata, Mapping):
             raise UnreplayableHistory("invalid_message_metadata")
         if any(_carries_value(metadata.get(key)) for key in _UNSUPPORTED_RICH):
+            raise UnreplayableHistory("unsupported_rich_history")
+        if not _verified_source_context(metadata):
             raise UnreplayableHistory("unsupported_rich_history")
 
         # The direct-capability stream persists its *same* approved surface
