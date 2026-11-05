@@ -51,6 +51,27 @@ jobs:
           python -m py_compile scripts/ci/ollama_settings_live_proof.py
           bash -n scripts/ci/production-first-boot-smoke.sh
 
+      # This job builds the full API image *and* runs a model daemon on a
+      # temporary GitHub-hosted runner. Preinstalled unrelated SDKs can exhaust
+      # the runner during Docker's image export/unpack even when compilation
+      # succeeds. Reclaim those disposable runner assets before either stage.
+      - name: Reclaim unused hosted runner disk for real-model proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          for sdk_path in \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/share/powershell; do
+            if [[ -d "$sdk_path" ]]; then
+              sudo rm -rf -- "$sdk_path"
+            fi
+          done
+          docker system prune --all --force --volumes
+          df -h /
+
       - name: Start a real Ollama daemon and install a small model
         shell: bash
         run: |
