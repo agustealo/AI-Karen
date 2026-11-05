@@ -2713,6 +2713,7 @@ class ChatRuntime:
             part = (
                 ChatRuntime._verified_planner_presentation(decision, plan, result)
                 or ChatRuntime._verified_weather_presentation(request, decision, plan, result)
+                or ChatRuntime._verified_search_sources_presentation(request, decision, plan, result)
             )
             part = validate_presentation(part)
             if not part or part.get("component_type") == "surface.composition":
@@ -2738,6 +2739,76 @@ class ChatRuntime:
             seen.add(key)
             collected.append(part)
         return collected
+
+    @staticmethod
+    def _verified_search_sources_presentation(request, decision, plan, result):
+        """Expose search-result links only from the current allowed capability receipt.
+
+        A retrieved snippet is not an article-fetch receipt or proof of
+        freshness. The renderer calls these sources, never verified facts.
+        """
+        if decision.intent != "search.general" or not result.success or result.degraded:
+            return None
+        if result.source not in {"tool", "plugin"} or not isinstance(result.source_id, str):
+            return None
+        allowed = (
+            plan.allowed_tools if result.source == "tool" else plan.allowed_plugins
+        )
+        if result.source_id not in set(allowed):
+            return None
+        if not any(
+            isinstance(attempt, dict)
+            and attempt.get("type") == result.source
+            and attempt.get("id") == result.source_id
+            and attempt.get("status") == "success"
+            for attempt in (result.attempts or [])
+        ):
+            return None
+
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+        evidence = f"{request.context.request_id}:{result.source_id}"
+        base = {
+            "schema_version": 1,
+            "presentation_id": f"search-{request.context.request_id}",
+            "component_type": "search.source_list",
+            "evidence_ref": evidence,
+            "correlation_id": request.context.correlation_id,
+        }
+        items = []
+        urls = set()
+        for raw in result.sources if isinstance(result.sources, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            url = raw.get("url")
+            snippet = raw.get("snippet") or raw.get("content")
+            if not isinstance(url, str) or url in urls or not isinstance(snippet, str):
+                continue
+            item = {"url": url, "snippet": snippet.strip()[:500]}
+            if isinstance(raw.get("title"), str):
+                item["title"] = raw["title"].strip()[:180]
+            if isinstance(raw.get("published_at"), str):
+                item["published_at"] = raw["published_at"]
+            validated = validate_presentation({
+                **base, "data": {"items": [item]},
+            })
+            if not validated:
+                # An invalid/missing provider timestamp is not publication
+                # evidence. Preserve an otherwise verified search excerpt.
+                item.pop("published_at", None)
+                validated = validate_presentation({
+                    **base, "data": {"items": [item]},
+                })
+            if not validated:
+                continue
+            safe = validated["data"]["items"][0]
+            items.append(safe)
+            urls.add(safe["url"])
+            if len(items) >= 6:
+                break
+        return validate_presentation({
+            **base, "data": {"items": items},
+        }) if items else None
 
     @staticmethod
     def _verified_planner_presentation(decision, plan, result):
