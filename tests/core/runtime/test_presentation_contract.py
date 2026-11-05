@@ -90,6 +90,32 @@ def test_weather_fahrenheit_strings_parse_without_being_relabelled():
     }) is None
 
 
+def test_weather_reports_source_condition_without_unverified_fields():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "weather-conditions",
+        "component_type": "weather.observation",
+        "evidence_ref": "request-1:web_search",
+        "data": {
+            "location": "Detroit", "temperature": "61°F",
+            "conditions": "light rain",
+            "private_token": "secret-value",
+        },
+    }
+    observed = validate_presentation(base)
+    assert observed is not None
+    assert observed["data"]["conditions"] == "light rain"
+    assert "private_token" not in str(observed)
+
+    for description in (0, "", "x" * 121, {"html": "<script>"}):
+        assert validate_presentation({
+            **base, "data": {**base["data"], "conditions": description},
+        }) is None
+    assert validate_presentation({
+        **base, "data": {**base["data"], "condition": "sunny"},
+    }) is None
+
+
 def test_verified_time_presentation_is_bounded_and_minimized():
     base = {
         "schema_version": 1,

@@ -171,6 +171,20 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         location = item.get("location")
         if not isinstance(location, str) or not 1 <= len(location.strip()) <= 160:
             return False
+        # Source-reported words may be displayed, never converted to WMO
+        # weather codes, fabricated icons, or extra meteorological evidence.
+        descriptions = [
+            item[key].strip() for key in ("conditions", "condition")
+            if key in item and isinstance(item[key], str)
+        ]
+        if any(
+            key in item and (
+                not isinstance(item[key], str)
+                or not 1 <= len(item[key].strip()) <= 120
+            )
+            for key in ("conditions", "condition")
+        ) or len({value.casefold() for value in descriptions}) > 1:
+            return False
         temperatures = [
             item.get(key) for key in ("temperature_f", "temperatureF")
             if key in item
@@ -208,7 +222,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         "high_f", "low_f", "high", "low", "humidity",
         "wind_speed_mph", "windMph", "precipitation_probability",
         "weather_code", "weatherCode", "observed_at", "timezone",
-        "provider", "source_url",
+        "provider", "source_url", "conditions", "condition",
     })
     safe_observations = [
         {key: value for key, value in item.items() if key in allowed_weather_fields}

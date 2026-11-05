@@ -7,17 +7,19 @@ import pytest
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 
 
-def _run(*, success=True, degraded=False, source="tool", allowed=("weather_tool",), attempts=None):
+def _run(*, success=True, degraded=False, source="tool", allowed=("weather_tool",), allowed_plugins=(), attempts=None, payload=None):
     request = SimpleNamespace(context=SimpleNamespace(request_id="req-1", correlation_id="corr-1"))
     decision = SimpleNamespace(intent="search.weather")
-    plan = SimpleNamespace(allowed_tools=allowed)
+    plan = SimpleNamespace(allowed_tools=allowed, allowed_plugins=allowed_plugins)
     result = SimpleNamespace(
         success=success,
         degraded=degraded,
         source=source,
         source_id="weather_tool",
         attempts=[{"type": "tool", "id": "weather_tool", "status": "success"}] if attempts is None else attempts,
-        payload={"extractedData": {"location": "Detroit", "temperature_f": 60.3}},
+        payload=payload if payload is not None else {
+            "extractedData": {"location": "Detroit", "temperature_f": 60.3},
+        },
     )
     return ChatRuntime._verified_weather_presentation(request, decision, plan, result)
 
@@ -28,6 +30,84 @@ def test_authorized_successful_weather_result_builds_valid_presentation():
     assert presentation["component_type"] == "weather.observation"
     assert presentation["data"]["temperature_f"] == 60.3
     assert presentation["evidence_ref"] == "req-1:weather_tool"
+
+
+@pytest.mark.parametrize("key", ["extractedData", "weather", "current", "observation"])
+def test_all_canonical_weather_evidence_shapes_render_first_prompt(key):
+    # This is the same response shape returned by the live web_search tool.
+    # A valid tool reading must produce the surface on the very first request.
+    reading = {
+        "location": "Detroit", "temperature": "61°F",
+        "conditions": "light rain", "precipitation": "40%",
+        "private_debug_token": "must-never-render",
+    }
+    projected = _run(payload={key: reading})
+    assert projected is not None
+    assert projected["component_type"] == "weather.observation"
+    assert projected["data"]["location"] == "Detroit"
+    assert projected["data"]["temperature"] == "61°F"
+    assert projected["data"]["conditions"] == "light rain"
+    assert "private_debug_token" not in str(projected)
+    assert projected["evidence_ref"] == "req-1:weather_tool"
+    assert projected["correlation_id"] == "corr-1"
+
+
+def test_valid_observation_after_invalid_extracted_data_can_still_render():
+    projected = _run(payload={
+        "extractedData": {"location": "incomplete", "temperature": "not verified"},
+        "weather": {"location": "Detroit", "temperature": "61°F"},
+    })
+    assert projected is not None
+    assert projected["data"] == {"location": "Detroit", "temperature": "61°F"}
+
+
+@pytest.mark.parametrize("payload", [
+    {"weather": {"location": "Detroit", "temperature": "61"}},
+    {"weather": {"location": "Detroit", "temperature_f": 800}},
+    {"weather": {"location": "Detroit", "conditions": "fine"}},
+    {"weather": {"temperature": "61°F"}},
+    {"results": [{"url": "https://example.com", "snippet": "Weather in Detroit"}]},
+])
+def test_search_snippets_or_unverified_measurements_cannot_create_weather_cards(payload):
+    assert _run(payload=payload) is None
+
+
+def test_weather_source_must_have_an_authorized_successful_tool_receipt_even_if_data_valid():
+    measured = {"weather": {"location": "Detroit", "temperature": "61°F"}}
+    assert _run(payload=measured, success=False) is None
+    assert _run(payload=measured, degraded=True) is None
+    assert _run(payload=measured, source="model") is None
+    assert _run(payload=measured, source="plugin") is None
+    assert _run(payload=measured, allowed=()) is None
+    assert _run(payload=measured, attempts=[
+        {"type": "tool", "id": "weather_tool", "status": "failed"},
+    ]) is None
+
+
+def test_authorized_weather_plugin_fallback_emits_same_attested_ui():
+    measured = {"observation": {"location": "Detroit", "temperature": "61°F"}}
+    projected = _run(
+        payload=measured, source="plugin",
+        allowed_plugins=("weather_tool",),
+        attempts=[{"type": "plugin", "id": "weather_tool", "status": "success"}],
+    )
+    assert projected is not None
+    assert projected["component_type"] == "weather.observation"
+    assert projected["data"]["temperature"] == "61°F"
+    assert projected["evidence_ref"] == "req-1:weather_tool"
+
+    assert _run(
+        payload=measured, source="plugin", allowed_plugins=(),
+        attempts=[{"type": "plugin", "id": "weather_tool", "status": "success"}],
+    ) is None
+    assert _run(
+        payload=measured, source="plugin", allowed_plugins=("weather_tool",),
+        attempts=[{"type": "plugin", "id": "weather_tool", "status": "failed"}],
+    ) is None
+    assert _run(
+        payload=measured, source="plugin", allowed_plugins=("weather_tool",),
+        attempts=[{"type": "tool", "id": "weather_tool", "status": "success"}],
+    ) is None
 
 
 def test_denied_failed_or_degraded_tool_never_generates_presentation():

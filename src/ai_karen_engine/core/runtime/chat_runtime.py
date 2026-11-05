@@ -2757,7 +2757,11 @@ class ChatRuntime:
         # This is not a model-authored layout or a substitute for evidence RBAC.
         presentation = None
         attempts = result.attempts if isinstance(result.attempts, list) else []
-        observed = isinstance(result.payload, dict) and result.payload.get("extractedData")
+        # The canonical web_search capability accepts meteorological readings
+        # from extractedData, weather, current, or observation. The presentation
+        # path must recognize the same source shapes, not silently drop a
+        # successful first-prompt weather observation.
+        observed_payload = result.payload if isinstance(result.payload, dict) else {}
         verified_tool = (
             result.success and not result.degraded
             and result.source == "tool"
@@ -2771,20 +2775,43 @@ class ChatRuntime:
                 for attempt in attempts
             )
         )
-        if decision.intent == "search.weather" and verified_tool and isinstance(observed, dict):
-            evidence_id = f"{request.context.request_id}:{result.source_id}"
-            candidate = {
-                "schema_version": 1,
-                "presentation_id": f"weather-{request.context.request_id}",
-                "component_type": "weather.observation",
-                "data": dict(observed),
-                "evidence_ref": evidence_id,
-                "correlation_id": request.context.correlation_id,
-            }
+        verified_weather_plugin = (
+            decision.intent == "search.weather"
+            and result.success and not result.degraded
+            and result.source == "plugin"
+            and isinstance(result.source_id, str)
+            and result.source_id in set(getattr(plan, "allowed_plugins", ()))
+            and any(
+                isinstance(attempt, dict)
+                and attempt.get("type") == "plugin"
+                and attempt.get("id") == result.source_id
+                and attempt.get("status") == "success"
+                for attempt in attempts
+            )
+        )
+        if decision.intent == "search.weather" and (
+            verified_tool or verified_weather_plugin
+        ):
             from ai_karen_engine.core.runtime.presentation_contract import (
                 validate_presentation,
             )
-            presentation = validate_presentation(candidate)
+
+            evidence_id = f"{request.context.request_id}:{result.source_id}"
+            for key in ("extractedData", "weather", "current", "observation"):
+                observed = observed_payload.get(key)
+                if not isinstance(observed, dict):
+                    continue
+                candidate = {
+                    "schema_version": 1,
+                    "presentation_id": f"weather-{request.context.request_id}",
+                    "component_type": "weather.observation",
+                    "data": dict(observed),
+                    "evidence_ref": evidence_id,
+                    "correlation_id": request.context.correlation_id,
+                }
+                presentation = validate_presentation(candidate)
+                if presentation is not None:
+                    break
 
         verified_time_plugin = (
             decision.intent == "time.current"
