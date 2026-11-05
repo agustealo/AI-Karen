@@ -122,6 +122,8 @@ def test_only_public_url_excerpts_enter_search_cards():
     "http://localhost:8000",
     "http://127.0.0.1/path",
     "http://192.168.1.1/",
+    "http://0x7f000001/",
+    "https://example.org\\\\@127.0.0.1/",
     "https://user:password@example.org/",
     "https://example.org/space here",
 ])
