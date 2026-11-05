@@ -1,4 +1,4 @@
-"""Reconcile an existing Render beta API's safe Git source settings only.
+"""Reconcile an existing Render beta API's Git source and HTTP liveness path.
 
 No service creation, environment mutation, production secret disclosure, or
 implicit deployment. The checked-in Render Blueprint is the desired state.
@@ -39,6 +39,7 @@ class Manifest:
     repo: str
     branch: str
     auto_deploy_trigger: str
+    health_check_path: str
 
     @classmethod
     def read(cls, path: Path) -> "Manifest":
@@ -59,15 +60,28 @@ class Manifest:
             repo=scalar("repo"),
             branch=scalar("branch"),
             auto_deploy_trigger=scalar("autoDeployTrigger"),
+            health_check_path=scalar("healthCheckPath"),
         )
         if (
             manifest.branch != "main"
             or manifest.auto_deploy_trigger != "off"
+            or manifest.health_check_path != "/health/live"
             or not REPO_PATTERN.fullmatch(manifest.repo)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", manifest.name)
         ):
-            raise ReconcileError("Blueprint must use reviewed main, manual deploy and a canonical GitHub repo")
+            raise ReconcileError("Blueprint must use reviewed main, manual deploy, HTTP liveness and a canonical GitHub repo")
         return manifest
+
+
+def _health_check_path(service: dict[str, Any]) -> str:
+    """Read one web-service HTTP probe; an unset path is expected legacy drift."""
+    details = service.get("serviceDetails")
+    if not isinstance(details, dict):
+        raise ReconcileError("Render web-service details cannot be verified")
+    path = details.get("healthCheckPath", "")
+    if not isinstance(path, str):
+        raise ReconcileError("Render web-service health-check path is malformed")
+    return path
 
 
 def _trigger(service: dict[str, Any]) -> str:
@@ -177,7 +191,11 @@ class RenderClient:
         self._request(
             service_id,
             method="PATCH",
-            body={"branch": manifest.branch, "autoDeployTrigger": manifest.auto_deploy_trigger},
+            body={
+                "branch": manifest.branch,
+                "autoDeployTrigger": manifest.auto_deploy_trigger,
+                "serviceDetails": {"healthCheckPath": manifest.health_check_path},
+            },
         )
 
 
@@ -208,19 +226,27 @@ def reconcile(
         raise ReconcileError("Unknown reconciliation mode")
     current = client.get(service_id)
     verify_identity(current, service_id=service_id, workspace_id=workspace_id, manifest=manifest)
-    drift = current.get("branch") != manifest.branch or _trigger(current) != manifest.auto_deploy_trigger
+    drift = (
+        current.get("branch") != manifest.branch
+        or _trigger(current) != manifest.auto_deploy_trigger
+        or _health_check_path(current) != manifest.health_check_path
+    )
     if not drift:
-        return "Existing Render beta API already matches the reviewed Git source and manual deployment policy. No deployment triggered."
+        return "Existing Render beta API already matches reviewed Git source, HTTP liveness and manual deployment policy. No deployment triggered."
     if mode == "inspect":
-        raise ReconcileError("Existing Render beta API Git source differs from reviewed Blueprint; no changes applied")
-    # Update only source branch + manual-deploy policy. Environment variables,
-    # databases, service plans, credentials and deployments are untouched.
+        raise ReconcileError("Existing Render beta API source or HTTP liveness differs from reviewed Blueprint; no changes applied")
+    # Update only source branch, manual-deploy policy and the declared HTTP
+    # liveness path. Secrets, datastores, plans and deploys are untouched.
     client.patch_source(service_id, manifest)
     final = client.get(service_id)
     verify_identity(final, service_id=service_id, workspace_id=workspace_id, manifest=manifest)
-    if final.get("branch") != manifest.branch or _trigger(final) != "off":
+    if (
+        final.get("branch") != manifest.branch
+        or _trigger(final) != "off"
+        or _health_check_path(final) != manifest.health_check_path
+    ):
         raise ReconcileError("Render API did not confirm source reconciliation")
-    return "Existing Render beta API now tracks reviewed main with auto-deploy off. No deployment triggered."
+    return "Existing Render beta API tracks reviewed main with auto-deploy off and HTTP liveness configured. No deployment triggered."
 
 
 def main(argv: list[str] | None = None) -> int:
