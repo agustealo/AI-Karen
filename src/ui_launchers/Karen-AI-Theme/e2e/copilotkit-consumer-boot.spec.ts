@@ -317,8 +317,18 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
   });
 
-  test("one first time prompt renders backend-attested UI immediately and after reload", async ({ page }) => {
-    test.setTimeout(180_000);
+  for (const scenario of [
+    {
+      label: "time", prompt: "What time is it?",
+      component: "time.observation", testId: "karen-time-presentation",
+    },
+    {
+      label: "weather", prompt: "What's the weather in Detroit, Michigan right now?",
+      component: "weather.observation", testId: "karen-weather-presentation",
+    },
+  ] as const) {
+  test(`one first ${scenario.label} prompt renders backend-attested UI immediately and after reload`, async ({ page }) => {
+    test.setTimeout(240_000);
     const target = new URL(approvedUrl!);
     const revisionResponse = await page.context().request.get(
       new URL("/api/deployment-revision", target).toString(),
@@ -357,7 +367,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect(conversationId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
-    const prompt = "What time is it?";
+    const prompt = scenario.prompt;
     const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
     await expect(composer).toBeVisible();
 
@@ -414,14 +424,14 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
             !event.value || typeof event.value !== "object" ||
             Array.isArray(event.value)) return false;
         const value = event.value as Record<string, unknown>;
-        if (value.component_type === "time.observation") return true;
+        if (value.component_type === scenario.component) return true;
         if (value.component_type !== "surface.composition" ||
             !value.data || typeof value.data !== "object" ||
             Array.isArray(value.data)) return false;
         const items = (value.data as Record<string, unknown>).items;
         return Array.isArray(items) && items.some(item =>
           item && typeof item === "object" && !Array.isArray(item) &&
-          item.component_type === "time.observation");
+          item.component_type === scenario.component);
       });
       if (timeEvents.length !== 1) return false;
       const presentation = timeEvents[0].value as Record<string, unknown>;
@@ -433,17 +443,21 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     }, {
       timeout: 120_000,
       intervals: [500, 1000, 2000],
-      message: "First time prompt must persist one backend-attested time surface attached to its assistant reply",
+      message: "First prompt must persist one backend-attested rich surface attached to its assistant reply",
     }).toBe(true);
 
     await expectVerifiedExecutionReceipt(page, conversationId!, savedAnswer);
-    const visibleCard = shell.getByTestId("karen-time-presentation");
-    await expect(visibleCard, "The actual first prompt must render a time card without a second send")
+    const visibleCard = shell.getByTestId(scenario.testId);
+    await expect(visibleCard, "The actual first prompt must render generated UI without a second send")
       .toHaveCount(1, { timeout: 30_000 });
     await expect(visibleCard).toBeVisible();
     const firstCardText = (await visibleCard.innerText()).trim();
-    expect(firstCardText).toContain("Reported time");
-    expect(observedRunRequests, "One first time prompt must cause exactly one execution")
+    if (scenario.label === "time") {
+      expect(firstCardText).toContain("Reported time");
+    } else {
+      expect(firstCardText).toContain("Source:");
+    }
+    expect(observedRunRequests, "One first prompt must cause exactly one execution")
       .toHaveLength(1);
 
     await page.reload();
@@ -462,7 +476,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(restored.getByText(prompt, { exact: true })).toBeVisible();
     await expectVerifiedExecutionReceipt(page, conversationId!, savedAnswer);
 
-    const restoredCard = restored.getByTestId("karen-time-presentation");
+    const restoredCard = restored.getByTestId(scenario.testId);
     await expect(restoredCard, "Reload must restore the actual verified UI surface")
       .toHaveCount(1, { timeout: 30_000 });
     expect((await restoredCard.innerText()).trim()).toBe(firstCardText);
@@ -480,6 +494,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect(observedRunRequests).toHaveLength(1);
     expect(browserErrors).toEqual([]);
   });
+  }
 
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page }) => {
     test.setTimeout(120_000);
