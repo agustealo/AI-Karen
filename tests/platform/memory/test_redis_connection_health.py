@@ -29,3 +29,27 @@ async def test_uninitialized_canonical_redis_manager_cannot_report_healthy() -> 
     manager._degraded_mode = False
     client.ping = AsyncMock(side_effect=ConnectionError("offline"))
     assert await manager.is_healthy() is False
+
+
+@pytest.mark.asyncio
+async def test_redis_health_and_connection_metadata_redact_credentials(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "dont-expose-redis-secret-98765"
+    url = f"redis://:{secret}@red-private:6379/0"
+    manager = RedisConnectionManager(redis_url=url)
+    manager._client = type(
+        "BrokenClient", (),
+        {"ping": AsyncMock(side_effect=ConnectionError(f"{url} unavailable"))},
+    )()
+
+    assert await manager.is_healthy() is False
+    report = await manager.health_check()
+    assert report["healthy"] is False
+    assert report["error_type"] == "ConnectionError"
+    assert report["connection_info"]["redis_url"] == "[REDACTED]"
+    assert secret not in repr(report)
+    assert secret not in repr(manager.get_connection_info())
+
+    assert await manager._test_connection() is False
+    assert secret not in caplog.text
