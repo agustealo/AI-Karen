@@ -240,6 +240,26 @@ async function handle(request: NextRequest): Promise<Response> {
   }
   const auth = await verifyKarenCopilotSession(request, backendBaseUrl);
   if (auth instanceof NextResponse) return auth;
+
+  // Recovery must remain accessible even when AG-UI capability discovery or
+  // rich event replay is temporarily unavailable. This is a separate,
+  // authenticated, strictly read-only projection of backend-owned text.
+  // Never mount it as an SDK thread or silently downgrade normal replay.
+  const recoveryThreadId = request.method === "GET"
+    ? ownedThreadHistoryId(request) : null;
+  const viewKeys = [...request.nextUrl.searchParams.keys()];
+  if (recoveryThreadId && viewKeys.includes("view")) {
+    if (viewKeys.length !== 1 || request.nextUrl.searchParams.get("view") !== "transcript") {
+      return NextResponse.json({ detail: "Unsupported conversation view" }, {
+        status: 400, headers: { "Cache-Control": "no-store" },
+      });
+    }
+    return readKarenOwnedThreadMessages(
+      request, backendBaseUrl, auth.headers, auth.principal,
+      recoveryThreadId, false, true,
+    );
+  }
+
   const capabilities = await readKarenAgUiCapabilities(request, backendBaseUrl, auth.headers);
   if (capabilities instanceof NextResponse) return capabilities;
 
