@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -59,5 +61,22 @@ describe("Canonical backend proxy execution redirects", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("OK");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Hosted backend target single-owner contract", () => {
+  it("keeps backend routing and URL validation in the server proxy, not Next build logging", () => {
+    const nextConfig = readFileSync(resolve(process.cwd(), "next.config.ts"), "utf8");
+    const proxy = readFileSync(
+      resolve(process.cwd(), "src/app/api/_lib/backend-proxy.ts"), "utf8",
+    );
+    expect(nextConfig).not.toContain("process.env.KAREN_BACKEND_URL");
+    expect(nextConfig).not.toContain("process.env.BACKEND_URL");
+    expect(nextConfig).not.toContain("RESOLVED backendBaseUrl");
+    expect(nextConfig).not.toContain("http://localhost:8000");
+    expect(proxy).toContain("const EXPLICIT_BACKEND_URL = HOSTED_ON_VERCEL");
+    expect(proxy).toContain("if (!EXPLICIT_BACKEND_URL.trim()) return 'missing'");
+    expect(proxy).toContain("getBackendTargetStatus()");
+    expect(proxy).toContain("BACKEND_TARGET_NOT_CONFIGURED");
   });
 });
