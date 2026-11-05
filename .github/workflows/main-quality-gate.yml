@@ -187,6 +187,9 @@ jobs:
           # Source observations need an attested surface but must not invent
           # an LLM receipt. This invariant is part of release quality.
           pytest tests/core/runtime/test_direct_capability_provenance.py -q
+          pytest tests/core/runtime/test_verified_search_presentation.py -q
+          pytest tests/core/runtime/test_search_results_capability_routing.py -q
+          pytest tests/core/runtime/test_verified_weather_presentation.py -q
           pytest tests/core/runtime/test_ag_ui_event_projection.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
           pytest tests/core/intelligence/test_reward_progress.py -q
