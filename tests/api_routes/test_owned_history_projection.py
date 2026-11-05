@@ -163,6 +163,99 @@ def test_first_prompt_search_result_replays_only_attested_source_cards():
     assert "private_provider_debug" not in str(result)
 
 
+def _search_surface():
+    return {
+        "schema_version": 1, "presentation_id": "search-verified",
+        "component_type": "search.results",
+        "evidence_ref": REQUEST_ID + ":web_search",
+        "data": {"results": [{
+            "url": "https://example.org/report",
+            "title": "Source headline",
+            "snippet": "Source-reported excerpt",
+            "published_at": "2026-11-05T09:00:00Z",
+        }]},
+    }
+
+
+def _search_source():
+    return {
+        "url": "https://example.org/report",
+        "title": "Source headline",
+        "snippet": "Source-reported excerpt",
+        "published_at": "2026-11-05T09:00:00Z",
+        "full_content": "CANONICAL-PRIVATE-CONTENT",
+    }
+
+
+def test_search_sources_and_citations_are_withheld_but_replay_still_works():
+    part = _search_surface()
+    snapshot = saved([assistant({
+        **receipt(),
+        "structured_content": {"presentation": part, "query": "latest news"},
+        "verified_presentations_v1": [part],
+        "sources": [_search_source()],
+        "citations": [{
+            "url": "https://example.org/report", "id": "citation_0",
+            "metadata": {"source": "web_search"},
+        }],
+    })])
+    result = project_owned_history(snapshot, attestations=attested(snapshot))
+    assert result["replayEvents"][0]["name"] == "karen.presentation.v1"
+    assert result["replayEvents"][0]["value"] == part
+    assert "CANONICAL-PRIVATE-CONTENT" not in str(result)
+    assert "citation_0" not in str(result)
+    assert "sources" not in str(result)
+
+
+@pytest.mark.parametrize("mutation", [
+    {"sources": [{"url": "https://example.org/other", "snippet": "Other"}]},
+    {"sources": [{"url": "https://example.org/report", "snippet": "Forged"}]},
+    {"sources": "not-an-array"},
+    {"citations": [{"private": "missing-url"}]},
+    {"citations": ["no-structured-citation"]},
+    {"sources": [_search_source()] * 101},
+])
+def test_search_sources_cannot_authorize_new_or_malformed_replay(mutation):
+    part = _search_surface()
+    meta = {
+        **receipt(), "structured_content": {"presentation": part},
+        "verified_presentations_v1": [part], "sources": [_search_source()],
+    }
+    meta.update(mutation)
+    snapshot = saved([assistant(meta)])
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_owned_history(snapshot, attestations=attested(snapshot))
+
+
+def test_unattested_source_rich_search_remains_closed():
+    part = _search_surface()
+    snap = saved([assistant({
+        **receipt(), "structured_content": {"presentation": part},
+        "verified_presentations_v1": [part], "sources": [_search_source()],
+    })])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(snap, attestations={})
+
+
+def test_weather_with_bounded_provider_sources_does_not_trigger_409():
+    part = {
+        "schema_version": 1, "presentation_id": "weather-verified",
+        "component_type": "weather.observation",
+        "evidence_ref": REQUEST_ID + ":web_search",
+        "data": {"location": "Detroit", "temperature": "61°F",
+                 "conditions": "light rain"},
+    }
+    snap = saved([assistant({
+        **receipt(), "structured_content": {"presentation": part},
+        "verified_presentations_v1": [part],
+        "sources": [{"url": "https://open-meteo.com/data"}],
+        "citations": [{"url": "https://open-meteo.com/data"}],
+    })])
+    result = project_owned_history(snap, attestations=attested(snap))
+    assert result["replayEvents"][0]["value"] == part
+    assert "https://open-meteo.com/data" not in str(result)
+
+
 @pytest.mark.parametrize("rich", [
     {"structured_content": {"formatted": "10:42 PM"},
      "verified_presentations_v1": [presentation()]},
