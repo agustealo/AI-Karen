@@ -93,6 +93,60 @@ describe("versioned presentation registry", () => {
     expect(presentationFromStructuredContent([])).toBeNull();
   });
 
+  it("renders a safe source-backed result list for current news or movie searches", () => {
+    const envelope = {
+      ...valid, component_type: "search.source_list",
+      data: { items: [
+        { url: "https://example.org/news/movie", title: "Film release update",
+          snippet: "A search provider excerpt.", published_at: "2026-11-05T15:00:00Z" },
+        { url: "https://example.net/news", snippet: "<script>Untrusted source excerpt</script>" },
+      ] },
+    };
+    expect(parseKarenPresentation(envelope)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={envelope} />);
+    expect(html).toContain("karen-search-sources-presentation");
+    expect(html).toContain("Film release update");
+    expect(html).toContain("Published (provider-reported)");
+    expect(html).toContain("https://example.org/news/movie");
+    expect(html).toContain("noopener noreferrer");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("example.net");
+  });
+
+  it.each([
+    ["untrusted protocol", "javascript:alert(1)"],
+    ["HTTP-only link", "http://example.org/latest"],
+    ["private URL", "https://127.0.0.1/internal"],
+    ["local service", "https://db.local/secrets"],
+    ["credential URL", "https://me:secret@example.org/page"],
+    ["nondefault port", "https://example.org:8080/api"],
+  ])("refuses unsafe search source %s", (_label, url) => {
+    const envelope = {
+      ...valid, component_type: "search.source_list",
+      data: { items: [{ url, snippet: "Reported by a source" }] },
+    };
+    expect(parseKarenPresentation(envelope)).toBeNull();
+  });
+
+  it("refuses unbounded, duplicated, and unproven search metadata", () => {
+    const item = { url: "https://example.org/news", snippet: "Reported excerpt" };
+    const base = {
+      ...valid, component_type: "search.source_list", data: { items: [item] },
+    };
+    expect(parseKarenPresentation({ ...base, data: { items: [] } })).toBeNull();
+    expect(parseKarenPresentation({ ...base, data: { items: [item, item] } })).toBeNull();
+    expect(parseKarenPresentation({ ...base, data: { items: [
+      { ...item, private_secret: "leak" },
+    ] } })).toBeNull();
+    expect(parseKarenPresentation({ ...base, data: { items: [
+      { ...item, snippet: "x".repeat(501) },
+    ] } })).toBeNull();
+    expect(parseKarenPresentation({ ...base, data: { items: [
+      { ...item, published_at: "today" },
+    ] } })).toBeNull();
+  });
+
   it("renders validated weather evidence", () => {
     expect(parseKarenPresentation(valid)?.presentation_id).toBe("weather-detroit-1");
     const html = renderToStaticMarkup(<KarenPresentationRegistry data={valid} />);
