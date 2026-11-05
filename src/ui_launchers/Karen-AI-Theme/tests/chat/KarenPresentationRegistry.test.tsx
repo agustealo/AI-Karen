@@ -101,6 +101,28 @@ describe("versioned presentation registry", () => {
     expect(html).toContain("mph");
   });
 
+  it("renders short verified condition text without fabricating a weather code", () => {
+    const reported = {
+      ...valid,
+      data: {
+        location: "Detroit, Michigan", temperature: "61°F",
+        conditions: "light rain", private_note: "do not display",
+      },
+    };
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={reported} />);
+    expect(parseKarenPresentation(reported)).not.toBeNull();
+    expect(html).toContain("light rain");
+    expect(html).not.toContain("private_note");
+    expect(html).not.toContain("do not display");
+    expect(html).toContain("karen-weather-presentation");
+    expect(parseKarenPresentation({
+      ...reported, data: { ...reported.data, conditions: "s".repeat(121) },
+    })).toBeNull();
+    expect(parseKarenPresentation({
+      ...reported, data: { ...reported.data, condition: "different reading" },
+    })).toBeNull();
+  });
+
   it("renders verified weather comparisons without synthesizing any measurements", () => {
     const comparison = { ...valid, component_type: "weather.comparison", data: [
       valid.data,
