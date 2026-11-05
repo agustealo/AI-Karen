@@ -144,6 +144,51 @@ def test_valid_existing_resources_and_env_are_read_only_and_secret_free(m):
     assert "testpassword" not in repr(result)
 
 
+def test_governed_history_readiness_is_explicit_and_never_inferred(m):
+    # A bootable beta environment is not automatically a consumer-ready
+    # CopilotKit deployment. The legacy preflight remains read-only and
+    # separate from the explicit migration-gated history acceptance mode.
+    configured = safe_env(m)
+    initial = inspect(m, FakeClient(configured))
+    assert initial.ready
+
+    disabled = m.inspect(
+        client=FakeClient(configured), service_id=SERVICE,
+        workspace_id=WORKSPACE, postgres_id=POSTGRES, key_value_id=KV,
+        manifest=m.Manifest.read(m.BLUEPRINT),
+        blueprint=m.BLUEPRINT.read_text(encoding="utf-8"),
+        required_defaults=m.required_environment_defaults(m.SERVER_CONFIG),
+        require_governed_history=True,
+    )
+    assert not disabled.ready
+    for key in m.GOVERNED_HISTORY_REQUIRED:
+        assert f"disabled:{key}" in disabled.failures
+
+    for key in m.GOVERNED_HISTORY_REQUIRED:
+        configured[key] = "true"
+    enabled = m.inspect(
+        client=FakeClient(configured), service_id=SERVICE,
+        workspace_id=WORKSPACE, postgres_id=POSTGRES, key_value_id=KV,
+        manifest=m.Manifest.read(m.BLUEPRINT),
+        blueprint=m.BLUEPRINT.read_text(encoding="utf-8"),
+        required_defaults=m.required_environment_defaults(m.SERVER_CONFIG),
+        require_governed_history=True,
+    )
+    assert enabled.ready
+    assert enabled.failures == ()
+    assert "testpassword" not in repr(enabled)
+
+
+def test_event_journal_cannot_be_enabled_without_durable_history(m):
+    configured = safe_env(m)
+    configured[m.AG_UI_EVENT_JOURNAL] = "true"
+    bad = inspect(m, FakeClient(configured))
+    assert f"invalid:{m.AG_UI_EVENT_JOURNAL}" in bad.failures
+    configured["KARI_ENABLE_AG_UI_BRIDGE"] = "true"
+    configured["KARI_ENABLE_AG_UI_DURABLE_RUNS"] = "true"
+    assert inspect(m, FakeClient(configured)).ready
+
+
 def test_all_missing_names_detected_without_disclosing_values(m):
     report = inspect(m, FakeClient({}))
     assert not report.ready
@@ -265,6 +310,8 @@ def test_inspection_never_downgrades_or_accepts_wrong_redis_scheme(m):
 def test_source_workflow_is_protected_and_read_only():
     text = (ROOT / ".github/workflows/render-beta-service-reconcile.yml").read_text()
     assert "inspect-env" in text
+    assert "inspect-consumer" in text
+    assert "--require-governed-history" in text
     assert "environment: beta-release" in text
     assert "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}" in text
     assert "RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID }}" in text
