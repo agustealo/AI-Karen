@@ -33,6 +33,7 @@ def _run(
         degraded=degraded,
         source=source,
         source_id="web_search",
+        payload={},
         attempts=(
             [{"type": source, "id": "web_search", "status": "success"}]
             if attempts is None else attempts
