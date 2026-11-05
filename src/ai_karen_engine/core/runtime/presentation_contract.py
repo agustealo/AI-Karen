@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.source_list"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -86,6 +86,89 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         except (TypeError, ValueError, OverflowError):
             return None
         return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "search.source_list":
+        # Pure read-only projection of authorized search-result evidence.
+        # These are provider-reported excerpts, NOT proof a page was fetched,
+        # independently verified, published today or released in theaters.
+        from datetime import datetime
+        from ipaddress import ip_address
+        from urllib.parse import urlsplit
+
+        if not isinstance(data, dict) or set(data) != {"items"}:
+            return None
+        items = data.get("items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 6:
+            return None
+        safe_items = []
+        seen_urls = set()
+        for item in items:
+            if not isinstance(item, dict) or set(item) - {
+                "url", "title", "snippet", "published_at",
+            }:
+                return None
+            url, title, snippet = (
+                item.get("url"), item.get("title"), item.get("snippet")
+            )
+            if not isinstance(url, str) or not 1 <= len(url) <= 1200:
+                return None
+            if any(ord(char) < 32 or ord(char) == 127 for char in url):
+                return None
+            try:
+                parsed = urlsplit(url)
+                host = parsed.hostname or ""
+                if parsed.scheme != "https" or not host or "." not in host or (
+                    parsed.username is not None or parsed.password is not None
+                    or parsed.port is not None
+                    or host.endswith((".local", ".internal", ".localhost", ".test"))
+                    or host in {"localhost", "0.0.0.0"}
+                ):
+                    return None
+                try:
+                    ip_address(host)
+                    return None
+                except ValueError:
+                    pass
+            except ValueError:
+                return None
+            if url in seen_urls or not isinstance(snippet, str) or not (
+                1 <= len(snippet.strip()) <= 500
+            ):
+                return None
+            if title is not None and (
+                not isinstance(title, str)
+                or not 1 <= len(title.strip()) <= 180
+            ):
+                return None
+            published = item.get("published_at")
+            if published is not None:
+                if not isinstance(published, str) or len(published) > 45:
+                    return None
+                try:
+                    if published.endswith("Z"):
+                        parsed_time = datetime.fromisoformat(
+                            published[:-1] + "+00:00"
+                        )
+                    else:
+                        parsed_time = datetime.fromisoformat(published)
+                    if parsed_time.tzinfo is None or parsed_time.utcoffset() is None:
+                        return None
+                except ValueError:
+                    return None
+            safe = {"url": url, "snippet": snippet.strip()}
+            if title is not None:
+                safe["title"] = title.strip()
+            if published is not None:
+                safe["published_at"] = published
+            safe_items.append(safe)
+            seen_urls.add(url)
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe["data"] = {"items": safe_items}
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+
     if component_type == "date.observation":
         if not isinstance(data, dict):
             return None
