@@ -96,8 +96,7 @@ class OperationalHealthService:
         checks["configuration"] = self._configuration_check(production=production)
         checks["database"] = await self._database_check()
 
-        memory_required = self._env_bool("KARI_ENABLE_MEMORY_SERVICE", default=True)
-        checks["redis"] = await self._redis_check(required=memory_required)
+        checks["redis"] = await self._redis_check(required=self.redis_required())
 
         ready = all(bool(check.get("ready")) for check in checks.values())
         return OperationalHealthResult(
@@ -219,6 +218,11 @@ class OperationalHealthService:
             return target.scheme == "rediss" and bool(password)
         except (ValueError, TypeError):
             return False
+
+    @classmethod
+    def redis_required(cls) -> bool:
+        """Single runtime authority for Redis-backed STM dependency policy."""
+        return cls._env_bool("KARI_ENABLE_MEMORY_SERVICE", default=True)
 
     @staticmethod
     def _env_bool(name: str, *, default: bool) -> bool:
