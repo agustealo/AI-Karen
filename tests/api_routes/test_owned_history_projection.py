@@ -132,6 +132,37 @@ def test_first_prompt_surface_from_runtime_structured_metadata_restores_without_
     assert "structured_content" not in str(result)
 
 
+def test_first_prompt_search_result_replays_only_attested_source_cards():
+    surface = {
+        "schema_version": 1,
+        "presentation_id": "search-verified",
+        "component_type": "search.results",
+        "evidence_ref": "request-1:web_search",
+        "data": {"results": [{
+            "url": "https://example.org/report",
+            "title": "Source headline",
+            "snippet": "Source-reported excerpt",
+            "published_at": "2026-11-05T09:00:00Z",
+        }]},
+    }
+    snapshot = saved([
+        Message(id="user-search", conversation_id=THREAD, tenant_id=TENANT,
+                role="user", content="latest news", metadata={}),
+        assistant({
+            **receipt(),
+            "structured_content": {"presentation": surface},
+            "verified_presentations_v1": [surface],
+            "private_provider_debug": "must-not-replay",
+        }),
+    ])
+    result = project_owned_history(snapshot, attestations=attested(snapshot))
+    assert [event["name"] for event in result["replayEvents"]] == [
+        "karen.presentation.v1", "karen.execution_receipt.v1",
+    ]
+    assert result["replayEvents"][0]["value"] == surface
+    assert "private_provider_debug" not in str(result)
+
+
 @pytest.mark.parametrize("rich", [
     {"structured_content": {"formatted": "10:42 PM"},
      "verified_presentations_v1": [presentation()]},
