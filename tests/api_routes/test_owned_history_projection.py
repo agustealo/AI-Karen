@@ -133,6 +133,8 @@ def test_first_prompt_surface_from_runtime_structured_metadata_restores_without_
 
 
 @pytest.mark.parametrize("rich", [
+    {"structured_content": {"formatted": "10:42 PM"},
+     "verified_presentations_v1": [presentation()]},
     {"structured_content": {"presentation": presentation()}},
     {"structured_content": {"presentation": presentation(), "private": "secret"},
      "verified_presentations_v1": [presentation()]},
