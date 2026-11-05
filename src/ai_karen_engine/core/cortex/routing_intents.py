@@ -72,6 +72,11 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "search.general": {
         "triggers": ["search the internet", "look online", "find current", "latest", "web search"],
         "patterns": [
+            # Explicit current-film queries require live discovery. Ordinary
+            # recommendations and film analysis stay in model conversation.
+            r"^(?:what(?:'s| is)|show me|find|list|tell me about)\\s+(?:the\\s+)?(?:latest|new|recent|currently playing)\\s+(?:movies|films)(?:\\s+(?:in|at|on|for)\\s+[\\w .'-]+)?[?!.]*$",
+            r"^(?:latest|new|recent)\\s+(?:movies|films)(?:\\s+(?:in theaters|in cinemas|on streaming|released this week))?[?!.]*$",
+            r"^(?:what(?:'s| is)|show me|find|list)\\s+(?:the\\s+)?(?:latest|new|recent)\\s+(?:movie|film)\\s+(?:releases?|premieres?)(?:\\s+.+)?[?!.]*$",
             r"\bsearch\s+(?:the\s+)?(?:web|internet|online)\b",
             r"\bweb\s+search\b",
             r"\blook\s+(?:it\s+)?up\s+online\b",
