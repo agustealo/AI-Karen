@@ -77,7 +77,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             # Fresh film releases require a live source, not model memory.
             # This is search.general, not a second movie-specific executor.
             r"^(?:(?:what(?:'s| is| are)|which are|show me|find|list|tell me about)\s+(?:the\s+)?)?(?:latest|new|recent|upcoming)\s+(?:movies?|films?)(?:\s+(?:out|released?|playing|in theaters?|on streaming|this week|this month|now))?[?!.]*$",
-            r"^(?:what(?:'s| is| are)|which)\s+(?:movies?|films?)\s+(?:are\s+)?(?:now\s+)?(?:in theaters?|out this week|new on streaming|released? (?:this week|today|this month))[?!.]*$",
+            r"^(?:what(?:'s| is| are)|which)\s+(?:movies?|films?)\s+(?:are\s+)?(?:now\s+)?(?:in theaters?|out this week|new on streaming|released? (?:this week|today|this month))(?:\s+now)?[?!.]*$",
             r"\blook\s+(?:it\s+)?up\s+online\b",
             r"\blook\s+online\s+(?:for|at)\b",
             r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:in|from|about|on|for)\s+[\w .'-]+\s+(?:news|headlines|updates?)[?!.]*$",
