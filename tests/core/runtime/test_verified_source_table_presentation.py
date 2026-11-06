@@ -173,3 +173,110 @@ def test_source_table_does_not_invent_unknown_data_on_missing_cells():
     )
     assert projected is not None
     assert projected["data"]["rows"][0]["fact"] is None
+
+@pytest.mark.parametrize("prompt", [
+    "Show latest releases in a table",
+    "Tabulate the latest movie sources",
+    "Give me a tabular list of recent web sources",
+])
+def test_first_prompt_explicit_source_table_uses_only_verified_search_results(prompt):
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": prompt}]
+    result.sources = [
+        {"url": "https://example.org/a", "title": "Publisher A",
+         "snippet": "Reported headline A"},
+        {"url": "https://example.org/b", "title": "Publisher B",
+         "snippet": "Reported headline B"},
+    ]
+    projected = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert projected is not None
+    assert projected["data"]["title"] == "Verified search source excerpts"
+    assert projected["data"]["rows"] == [
+        {"source_title": "Publisher A", "source_excerpt": "Reported headline A",
+         "source_url": "https://example.org/a"},
+        {"source_title": "Publisher B", "source_excerpt": "Reported headline B",
+         "source_url": "https://example.org/b"},
+    ]
+    assert ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, plan, result)]
+    ) == [projected]
+
+
+def test_regular_search_keeps_original_search_cards():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "latest movies"}]
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None
+    surfaces = ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, plan, result)]
+    )
+    assert len(surfaces) == 1
+    assert surfaces[0]["component_type"] == "search.results"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"success": False},
+    {"degraded": True},
+    {"source": "model"},
+    {"allowed_tools": ()},
+    {"attempts": []},
+    {"sources": []},
+    {"sources": [{"url": "javascript:alert(1)", "title": "Unsafe", "snippet": "Bad"}]},
+])
+def test_explicit_source_table_cannot_bypass_receipt_gate(overrides):
+    request, decision, plan, result = _execution(payload={}, **overrides)
+    request.messages = [{"role": "user", "content": "show as a table"}]
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None
+
+def test_explicit_table_truncates_only_source_excerpt_from_original_text():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "show source results in a table"}]
+    result.sources = [{
+        "url": "https://example.org/long-article",
+        "title": "Original source title",
+        "snippet": "e" * 300,
+    }]
+    surface = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert surface is not None
+    assert surface["data"]["rows"][0]["source_excerpt"] == "e" * 240
+
+
+def test_unusable_source_url_falls_back_to_verified_search_card():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "table of sources"}]
+    result.sources = [{
+        "url": "https://example.org/" + "p" * 250,
+        "title": "Published title",
+        "snippet": "Published excerpt",
+    }]
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None
+    surfaces = ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, plan, result)]
+    )
+    assert len(surfaces) == 1
+    assert surfaces[0]["component_type"] == "search.results"
+
+def test_explicit_table_utf16_excerpt_bounds_preserve_source_prefix():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "latest movies in a table"}]
+    result.sources = [{
+        "url": "https://example.org/unicode",
+        "title": "Publisher",
+        "snippet": "🔎" * 121,
+    }]
+    table = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert table is not None
+    excerpt = table["data"]["rows"][0]["source_excerpt"]
+    assert excerpt == "🔎" * 120
+    assert result.sources[0]["snippet"].startswith(excerpt)
