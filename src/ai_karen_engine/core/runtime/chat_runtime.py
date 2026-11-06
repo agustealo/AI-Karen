@@ -2818,7 +2818,12 @@ class ChatRuntime:
             )
             if verified_sources is None:
                 return None
-            records = verified_sources["data"]["results"]
+            records = [
+                record for record in verified_sources["data"]["results"]
+                if len(record["url"]) <= 240
+            ]
+            if not records:
+                return None
             data = {
                 "title": "Verified search source excerpts",
                 "columns": [
@@ -2829,7 +2834,7 @@ class ChatRuntime:
                 "rows": [
                     {
                         "source_title": record.get("title"),
-                        "source_excerpt": record["snippet"],
+                        "source_excerpt": record["snippet"][:240],
                         "source_url": record["url"],
                     } for record in records
                 ],
@@ -2874,8 +2879,18 @@ class ChatRuntime:
                 values.add(source["title"])
             if source.get("published_at") is not None:
                 values.add(source["published_at"])
-            if any(value is not None and value not in values for value in row.values()):
-                return None
+            for key, value in row.items():
+                if value is None:
+                    continue
+                if (
+                    key == "source_excerpt"
+                    and isinstance(value, str)
+                    and bool(value)
+                    and source["snippet"].startswith(value)
+                ):
+                    continue
+                if value not in values:
+                    return None
         return candidate
 
     @staticmethod

@@ -232,3 +232,35 @@ def test_explicit_source_table_cannot_bypass_receipt_gate(overrides):
     assert ChatRuntime._verified_source_table_presentation(
         request, decision, plan, result
     ) is None
+
+def test_explicit_table_truncates_only_source_excerpt_from_original_text():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "show source results in a table"}]
+    result.sources = [{
+        "url": "https://example.org/long-article",
+        "title": "Original source title",
+        "snippet": "e" * 300,
+    }]
+    surface = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert surface is not None
+    assert surface["data"]["rows"][0]["source_excerpt"] == "e" * 240
+
+
+def test_unusable_source_url_falls_back_to_verified_search_card():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "table of sources"}]
+    result.sources = [{
+        "url": "https://example.org/" + "p" * 250,
+        "title": "Published title",
+        "snippet": "Published excerpt",
+    }]
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None
+    surfaces = ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, plan, result)]
+    )
+    assert len(surfaces) == 1
+    assert surfaces[0]["component_type"] == "search.results"
