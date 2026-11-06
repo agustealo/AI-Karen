@@ -1585,62 +1585,28 @@ class AuthService(BaseService):
             return False
 
     async def get_auth_stats(self) -> Dict[str, Any]:
+        """Return authoritative auth statistics through the canonical session scope."""
         try:
-            from sqlalchemy import select, func, text
-            from ai_karen_engine.database.models import AuthUser, AuthSession
-            from ai_karen_engine.database.client import MultiTenantPostgresClient
-            if not self._db_session:
-                try:
-                    temp_client = MultiTenantPostgresClient()
-                    async with temp_client.get_async_session() as session:
-                        result = await session.execute(select(func.count()).select_from(AuthUser))
-                        total_users = result.scalar() or 0
-                        result = await session.execute(
-                            select(func.count()).select_from(AuthUser).where(AuthUser.is_active)
-                        )
-                        active_users = result.scalar() or 0
-                        result = await session.execute(select(func.count()).select_from(AuthSession))
-                        total_sessions = result.scalar() or 0
-                        result = await session.execute(
-                            select(func.count())
-                            .select_from(AuthSession)
-                            .where(
-                                AuthSession.is_active,
-                                AuthSession.last_used >= text("NOW() - INTERVAL '24 hours'"),
-                            )
-                        )
-                        active_sessions = result.scalar() or 0
-                    return {
-                        "total_users": total_users,
-                        "active_users": active_users,
-                        "total_sessions": total_sessions,
-                        "active_sessions": active_sessions,
-                        "service_status": "running" if self._initialized else "stopped",
-                    }
-                except Exception as temp_error:
-                    logger.warning(f"Could not use temporary database client: {temp_error}")
-                    return {
-                        "total_users": 0,
-                        "active_users": 0,
-                        "total_sessions": 0,
-                        "active_sessions": 0,
-                        "service_status": "error",
-                        "error": "Database session not available",
-                    }
-            result = await self._db_session.execute(select(func.count()).select_from(AuthUser))
-            total_users = result.scalar() or 0
-            result = await self._db_session.execute(
-                select(func.count()).select_from(AuthUser).where(AuthUser.is_active)
-            )
-            active_users = result.scalar() or 0
-            result = await self._db_session.execute(select(func.count()).select_from(AuthSession))
-            total_sessions = result.scalar() or 0
-            result = await self._db_session.execute(
-                select(func.count())
-                .select_from(AuthSession)
-                .where(AuthSession.is_active, AuthSession.last_used >= text("NOW() - INTERVAL '24 hours'"))
-            )
-            active_sessions = result.scalar() or 0
+            async with self._session_scope() as session:
+                result = await session.execute(select(func.count()).select_from(AuthUser))
+                total_users = result.scalar() or 0
+                result = await session.execute(
+                    select(func.count()).select_from(AuthUser).where(AuthUser.is_active)
+                )
+                active_users = result.scalar() or 0
+                result = await session.execute(
+                    select(func.count()).select_from(AuthSession)
+                )
+                total_sessions = result.scalar() or 0
+                result = await session.execute(
+                    select(func.count())
+                    .select_from(AuthSession)
+                    .where(
+                        AuthSession.is_active,
+                        AuthSession.last_used >= text("NOW() - INTERVAL '24 hours'"),
+                    )
+                )
+                active_sessions = result.scalar() or 0
             return {
                 "total_users": total_users,
                 "active_users": active_users,
@@ -1648,29 +1614,27 @@ class AuthService(BaseService):
                 "active_sessions": active_sessions,
                 "service_status": "running" if self._initialized else "stopped",
             }
-        except Exception as e:
-            logger.error(f"Failed to get auth stats: {e}")
+        except Exception:
+            logger.exception("Failed to get auth statistics")
             return {
                 "total_users": 0,
                 "active_users": 0,
                 "total_sessions": 0,
                 "active_sessions": 0,
                 "service_status": "error",
-                "error": str(e),
+                "error": "Database session not available",
             }
 
     async def is_first_run(self) -> bool:
-        """Check if this is the first run (no users exist)."""
+        """Read durable bootstrap state using the caller's request-scoped session."""
         try:
-            if not self._db_session:
-                temp_client = MultiTenantPostgresClient()
-                async with temp_client.get_async_session() as session:
-                    result = await session.execute(select(func.count()).select_from(AuthUser))
-                    return (result.scalar() or 0) == 0
-            result = await self._db_session.execute(select(func.count()).select_from(AuthUser))
-            return (result.scalar() or 0) == 0
+            async with self._session_scope() as session:
+                result = await session.execute(
+                    select(func.count()).select_from(AuthUser)
+                )
+                return (result.scalar() or 0) == 0
         except Exception as exc:
-            logger.error("Failed to determine first-run status: %s", exc)
+            logger.exception("Failed to determine first-run status")
             raise RuntimeError("First-run state unavailable") from exc
 
     async def create_first_admin(

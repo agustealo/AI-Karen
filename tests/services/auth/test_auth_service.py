@@ -650,3 +650,96 @@ def test_auth_token_keeps_roles_separate_from_permission_claims(monkeypatch):
     assert captured["permissions"] == []
     assert captured["tenant_id"] == "tenant-a"
     assert captured["user_type"] == "admin"
+
+
+class TestAuthRequestSessionReuse:
+    """The singleton service must not escape request-local database authority."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("user_count, expected", [(0, True), (3, False)])
+    async def test_first_run_uses_injected_session_without_creating_client(
+        self, monkeypatch, user_count, expected,
+    ):
+        service = AuthService()
+        session = MagicMock()
+        result = MagicMock()
+        result.scalar.return_value = user_count
+        session.execute = AsyncMock(return_value=result)
+        service.set_db_session(session)
+        monkeypatch.setattr(
+            service, "_get_db_client",
+            lambda: (_ for _ in ()).throw(AssertionError("extra client")),
+        )
+        with patch.object(auth_service_module, "select", return_value=MagicMock()):
+            assert await service.is_first_run() is expected
+        session.execute.assert_awaited_once()
+        auth_service_module._db_session_ctx.set(None)
+
+    @pytest.mark.asyncio
+    async def test_first_run_denial_fails_closed_and_hides_database_details(
+        self, monkeypatch,
+    ):
+        service = AuthService()
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=RuntimeError("private database address"))
+        service.set_db_session(session)
+        monkeypatch.setattr(
+            service, "_get_db_client",
+            lambda: (_ for _ in ()).throw(AssertionError("extra client")),
+        )
+        with patch.object(auth_service_module, "select", return_value=MagicMock()):
+            with pytest.raises(RuntimeError, match="First-run state unavailable") as err:
+                await service.is_first_run()
+        assert "private database address" not in str(err.value)
+        auth_service_module._db_session_ctx.set(None)
+
+    @pytest.mark.asyncio
+    async def test_stats_reuses_request_session_and_does_not_return_fake_success(
+        self, monkeypatch,
+    ):
+        service = AuthService()
+        service._initialized = True
+        session = MagicMock()
+        values = []
+        for number in (4, 3, 6, 2):
+            result = MagicMock()
+            result.scalar.return_value = number
+            values.append(result)
+        session.execute = AsyncMock(side_effect=values)
+        service.set_db_session(session)
+        monkeypatch.setattr(
+            service, "_get_db_client",
+            lambda: (_ for _ in ()).throw(AssertionError("extra client")),
+        )
+        import sqlalchemy
+        with patch.object(sqlalchemy, "select", return_value=MagicMock()):
+            stats = await service.get_auth_stats()
+        assert stats == {
+            "total_users": 4,
+            "active_users": 3,
+            "total_sessions": 6,
+            "active_sessions": 2,
+            "service_status": "running",
+        }
+        assert session.execute.await_count == 4
+        auth_service_module._db_session_ctx.set(None)
+
+    @pytest.mark.asyncio
+    async def test_request_sessions_are_isolated_across_concurrent_tasks(self):
+        import asyncio
+
+        service = AuthService()
+
+        async def probe(value: int):
+            session = MagicMock()
+            result = MagicMock()
+            result.scalar.return_value = value
+            session.execute = AsyncMock(return_value=result)
+            service.set_db_session(session)
+            await asyncio.sleep(0)
+            with patch.object(auth_service_module, "select", return_value=MagicMock()):
+                outcome = await service.is_first_run()
+            session.execute.assert_awaited_once()
+            return outcome
+
+        assert await asyncio.gather(probe(0), probe(5)) == [True, False]
