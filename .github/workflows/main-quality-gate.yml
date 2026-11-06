@@ -65,6 +65,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Require canonical CopilotKit convergence ledger update
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed_files="$(mktemp)"
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > "$changed_files"
+          ledger="docs/capabilities/copilotkit-execution-plan.md"
+          # Enforce documentation on edits to this initiative's execution owners.
+          # Do not require unrelated feature PRs to edit the Karen ledger.
+          affected='^(src/ui_launchers/Karen-AI-Theme/src/components/chat/copilotkit/|src/ui_launchers/Karen-AI-Theme/src/app/api/copilotkit/|src/ui_launchers/Karen-AI-Theme/src/components/chat/(KarenPresentationRegistry|KarenPersonaSelector|SessionProvider|KarenComposerRuntimeCatalog)\.tsx$|src/ai_karen_engine/core/runtime/(chat_runtime|decision_pipeline|workflow_runtime|owned_history_projection|presentation_contract|ag_ui_event_projection|chat_run_lifecycle)\.py$|src/ai_karen_engine/core/runtime/prompt/|src/ai_karen_engine/agent_medusa/|src/ai_karen_engine/services/persona/|src/ai_karen_engine/core/persona/|src/ai_karen_engine/api_routes/users/persona\.py$)'
+          if grep -Eq "$affected" "$changed_files" &&
+             ! grep -Fxq "$ledger" "$changed_files"; then
+            echo "::error::CopilotKit/Persona/Agent changes must update $ledger with KCON task IDs, status, and proof. Do not add a parallel plan."
+            exit 1
+          fi
+          echo "Living convergence ledger path contract satisfied."
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
