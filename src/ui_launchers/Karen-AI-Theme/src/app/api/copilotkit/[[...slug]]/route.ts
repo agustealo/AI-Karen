@@ -255,7 +255,7 @@ async function handle(request: NextRequest): Promise<Response> {
     if (requestedView !== "transcript" ||
         viewKeys.length !== (offsetText === null ? 1 : 2) ||
         new Set(viewKeys).size !== viewKeys.length ||
-        (offsetText !== null && (!/^(0|[1-9]\\d*)$/.test(offsetText) ||
+        (offsetText !== null && (!/^(0|[1-9][0-9]*)$/.test(offsetText) ||
           !Number.isSafeInteger(transcriptOffset) ||
           transcriptOffset % 500 !== 0 || transcriptOffset > 100000))) {
       return NextResponse.json({ detail: "Unsupported conversation view" }, {
