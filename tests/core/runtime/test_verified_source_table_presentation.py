@@ -173,3 +173,62 @@ def test_source_table_does_not_invent_unknown_data_on_missing_cells():
     )
     assert projected is not None
     assert projected["data"]["rows"][0]["fact"] is None
+
+@pytest.mark.parametrize("prompt", [
+    "Show latest releases in a table",
+    "Tabulate the latest movie sources",
+    "Give me a tabular list of recent web sources",
+])
+def test_first_prompt_explicit_source_table_uses_only_verified_search_results(prompt):
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": prompt}]
+    result.sources = [
+        {"url": "https://example.org/a", "title": "Publisher A",
+         "snippet": "Reported headline A"},
+        {"url": "https://example.org/b", "title": "Publisher B",
+         "snippet": "Reported headline B"},
+    ]
+    projected = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert projected is not None
+    assert projected["data"]["title"] == "Verified search source excerpts"
+    assert projected["data"]["rows"] == [
+        {"source_title": "Publisher A", "source_excerpt": "Reported headline A",
+         "source_url": "https://example.org/a"},
+        {"source_title": "Publisher B", "source_excerpt": "Reported headline B",
+         "source_url": "https://example.org/b"},
+    ]
+    assert ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, plan, result)]
+    ) == [projected]
+
+
+def test_regular_search_keeps_original_search_cards():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "latest movies"}]
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None
+    surfaces = ChatRuntime._collect_authorized_surface_parts(
+        request, [(decision, plan, result)]
+    )
+    assert len(surfaces) == 1
+    assert surfaces[0]["component_type"] == "search.results"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"success": False},
+    {"degraded": True},
+    {"source": "model"},
+    {"allowed_tools": ()},
+    {"attempts": []},
+    {"sources": []},
+    {"sources": [{"url": "javascript:alert(1)", "title": "Unsafe", "snippet": "Bad"}]},
+])
+def test_explicit_source_table_cannot_bypass_receipt_gate(overrides):
+    request, decision, plan, result = _execution(payload={}, **overrides)
+    request.messages = [{"role": "user", "content": "show as a table"}]
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None

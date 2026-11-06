@@ -2791,9 +2791,51 @@ class ChatRuntime:
             return None
         payload = result.payload if isinstance(result.payload, dict) else {}
         data = payload.get("structured_table")
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+        # An explicit source-list table is useful without claiming that
+        # search excerpts are verified comparable facts. Derive it exclusively
+        # from the same sanitized source records as search.results.
+        if data is None:
+            user_messages = getattr(request, "messages", None) or ()
+            latest_prompt = next(
+                (
+                    item["content"] for item in reversed(user_messages)
+                    if isinstance(item, dict)
+                    and item.get("role") == "user"
+                    and isinstance(item.get("content"), str)
+                ), "",
+            ).casefold()
+            import re
+
+            requested_table = bool(re.search(
+                r"\\b(?:table|tabulate|tabular)\\b", latest_prompt
+            ))
+            if not requested_table:
+                return None
+            verified_sources = ChatRuntime._verified_search_presentation(
+                request, decision, plan, result
+            )
+            if verified_sources is None:
+                return None
+            records = verified_sources["data"]["results"]
+            data = {
+                "title": "Verified search source excerpts",
+                "columns": [
+                    {"key": "source_title", "label": "Source title"},
+                    {"key": "source_excerpt", "label": "Source excerpt"},
+                    {"key": "source_url", "label": "Source URL"},
+                ],
+                "rows": [
+                    {
+                        "source_title": record.get("title"),
+                        "source_excerpt": record["snippet"],
+                        "source_url": record["url"],
+                    } for record in records
+                ],
+            }
         if not isinstance(data, dict):
             return None
-        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 
         candidate = validate_presentation({
             "schema_version": 1,
