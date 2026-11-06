@@ -29,12 +29,13 @@ function reply(
     user_id: identity,
     messages,
     tenant_id: "tenant-A",
+    updated_at: "2026-11-05T22:00:00Z",
     metadata: { authorization: "never-forward" },
   });
 }
 
 function guardedBackend(
-  conversation: () => Response = () => reply("user-A"),
+  conversation: (url: string) => Response = () => reply("user-A"),
 ) {
   const urls: string[] = [];
   const upstream = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -50,7 +51,10 @@ function guardedBackend(
     if (url === "http://api:8000/api/chat/ag-ui/capabilities") {
       return Response.json({ enabled: true });
     }
-    if (url === "http://api:8000/api/conversations/" + THREAD + "?message_limit=501") return conversation();
+    if (url === "http://api:8000/api/conversations/" + THREAD + "?message_limit=501" ||
+        /^http:\/\/api:8000\/api\/conversations\/.+\?message_limit=501&message_offset=\d+$/.test(url)) {
+      return conversation(url);
+    }
     throw new Error("Unexpected external call " + url);
   });
   globalThis.fetch = upstream as typeof fetch;
@@ -200,6 +204,8 @@ describe("CopilotKit owned thread history", () => {
     const body = await result.json();
     expect(body).toEqual({
       threadId: THREAD, read_only: true, text_only: true, omitted_entries: 1,
+      snapshot_revision: "2026-11-05T22:00:00Z",
+      page_offset: 0, has_more: false, next_offset: null,
       messages: [
         { id: "user-1", role: "user", content: "What is happening?" },
         { id: "assistant-1", role: "assistant", content: "Here is the report" },
@@ -213,6 +219,49 @@ describe("CopilotKit owned thread history", () => {
       "http://api:8000/api/auth/me",
       "http://api:8000/api/conversations/" + THREAD + "?message_limit=501",
     ]);
+  });
+
+  it("pages past the 500th canonical entry without disclosing a partial SDK thread", async () => {
+    const all = Array.from({ length: 503 }, (_, index) => ({
+      id: "message-" + index, role: index % 2 ? "assistant" : "user",
+      content: "Canonical text " + index,
+    }));
+    const { urls } = guardedBackend(url => reply(
+      "user-A",
+      url.includes("message_offset=500") ? all.slice(500) : all.slice(0, 501),
+    ));
+    const first = await GET(request("kari_session=user-A", "?view=transcript"));
+    expect(first.status).toBe(200);
+    const firstPage = await first.json();
+    expect(firstPage.messages).toHaveLength(500);
+    expect(firstPage.messages.at(-1).id).toBe("message-499");
+    expect(firstPage.has_more).toBe(true);
+    expect(firstPage.next_offset).toBe(500);
+    expect(firstPage.snapshot_revision).toBe("2026-11-05T22:00:00Z");
+
+    const next = await GET(request("kari_session=user-A", "?view=transcript&offset=500"));
+    expect(next.status).toBe(200);
+    const secondPage = await next.json();
+    expect(secondPage.messages).toHaveLength(3);
+    expect(secondPage.messages[0].id).toBe("message-500");
+    expect(secondPage.messages[2].content).toBe("Canonical text 502");
+    expect(secondPage.has_more).toBe(false);
+    expect(secondPage.next_offset).toBeNull();
+    expect(secondPage.page_offset).toBe(500);
+    expect(secondPage.snapshot_revision).toBe(firstPage.snapshot_revision);
+    expect(urls.at(-1)).toBe(
+      "http://api:8000/api/conversations/" + THREAD + "?message_limit=501&message_offset=500",
+    );
+  });
+
+  it("reauthorizes every transcript page and denies foreign owners", async () => {
+    guardedBackend(url => reply(
+      url.includes("message_offset=500") ? "foreign-owner" : "user-A",
+      [{ id: "m", role: "assistant", content: "Private second page" }],
+    ));
+    const result = await GET(request("kari_session=user-A", "?view=transcript&offset=500"));
+    expect(result.status).toBe(404);
+    expect(JSON.stringify(await result.json())).not.toContain("Private second page");
   });
 
   it("keeps read-only recovery subject to owner and strict message validation", async () => {
@@ -244,6 +293,8 @@ describe("CopilotKit owned thread history", () => {
     const { urls } = guardedBackend();
     for (const suffix of [
       "?view=full", "?view=transcript&admin=true", "?view=transcript&view=transcript",
+      "?view=transcript&offset=-1", "?view=transcript&offset=250",
+      "?view=transcript&offset=500&offset=500", "?view=transcript&offset=500.5",
     ]) {
       const result = await GET(request("kari_session=user-A", suffix));
       expect(result.status).toBe(400);
