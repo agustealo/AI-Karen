@@ -296,3 +296,56 @@ def test_search_source_url_rejects_fragments_for_backend_ui_parity():
     }
     assert validate_presentation(base) is not None
     assert validate_presentation({**base, "data": {"results": [{"url": "https://example.com/story#section", "snippet": "Reported event"}]}}) is None
+
+def test_bounded_readonly_data_table_uses_only_approved_cells():
+    data = {
+        "schema_version": 1,
+        "presentation_id": "table-one",
+        "component_type": "data.table",
+        "evidence_ref": "authorized-research-1",
+        "data": {
+            "title": "Research comparison",
+            "columns": [
+                {"key": "item", "label": "Item"},
+                {"key": "fact", "label": "Reported fact"},
+            ],
+            "rows": [
+                {"item": "A", "fact": "Reported observation"},
+                {"item": "B", "fact": None},
+            ],
+        },
+    }
+    assert validate_presentation(data) == data
+    for broken in (
+        {"rows": [{"item": "A", "fact": "hello", "secret": "leak"}]},
+        {"columns": [{"key": "item", "label": "Item"}, {"key": "item", "label": "Duplicate"}]},
+        {"rows": [{"item": "A", "fact": 3}]},
+        {"rows": [{"item": "A", "fact": "<script>" * 100}]},
+        {"rows": [{"item": "A", "fact": "bad\\x00"}]},
+        {"rows": [{"item": "A", "fact": {"html": "<img>"}}]},
+        {"rows": []},
+        {"rows": [{"item": "A", "fact": "x"}] * 21},
+    ):
+        assert validate_presentation({
+            **data, "data": {**data["data"], **broken}
+        }) is None
+    too_large = {**data, "data": {
+        **data["data"], "rows": [{"item": "🔎" * 200, "fact": "x"}] * 20
+    }}
+    assert validate_presentation(too_large) is None
+
+
+def test_data_table_can_be_composed_without_nested_authority():
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+
+    item = {
+        "schema_version": 1, "presentation_id": "table-part",
+        "component_type": "data.table", "evidence_ref": "authorized-research-1",
+        "data": {"columns": [{"key": "finding", "label": "Finding"}],
+                 "rows": [{"finding": "Verified"}]},
+    }
+    assert compose_authorized_surface(
+        presentation_id="composed-research", evidence_ref="authorized-research-1",
+        authorized_parts=[item],
+        proposed_layout={"layout": "stack", "part_ids": ["table-part"]},
+    ) is not None

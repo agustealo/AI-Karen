@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -114,6 +114,34 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     if (typeof clock !== "string" || !clock.trim() || clock.length > 160) return null;
     if (timezone !== undefined && (typeof timezone !== "string" || timezone.length > 100)) return null;
     if (Object.keys(value).some((key) => !["formatted", "timezone"].includes(key))) return null;
+  } else if (result.data.component_type === "data.table") {
+    const value = result.data.data;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).some((key) => !["title", "columns", "rows"].includes(key)) ||
+        !Array.isArray(record.columns) || !Array.isArray(record.rows) ||
+        record.columns.length < 1 || record.columns.length > 6 ||
+        record.rows.length < 1 || record.rows.length > 20 ||
+        (record.title !== undefined && (typeof record.title !== "string" ||
+          !record.title.trim() || record.title.trim().length > 160))) return null;
+    const columns = record.columns as Record<string, unknown>[];
+    if (!columns.every((column) => column && typeof column === "object" &&
+      !Array.isArray(column) && Object.keys(column).sort().join(",") === "key,label" &&
+      typeof column.key === "string" && /^[a-z][a-z0-9_]{0,31}$/.test(column.key) &&
+      typeof column.label === "string" && !!column.label.trim() &&
+      column.label.trim().length <= 80)) return null;
+    const keys = columns.map((column) => column.key as string);
+    if (new Set(keys).size !== keys.length) return null;
+    const expected = [...keys].sort().join(",");
+    for (const row of record.rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row) ||
+          Object.keys(row).sort().join(",") !== expected) return null;
+      for (const key of keys) {
+        const cell = (row as Record<string, unknown>)[key];
+        if (cell !== null && (typeof cell !== "string" || cell.length > 240 ||
+          /[\\u0000-\\u0008\\u000b-\\u001f]/.test(cell))) return null;
+      }
+    }
   } else if (result.data.component_type === "search.results") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -195,6 +223,30 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
         <p className="mt-1 text-2xl font-semibold tabular-nums">{display.time}</p>
         {display.date && <p className="mt-1 text-xs text-muted-foreground">{display.date}</p>}
         {clock.timezone && <p className="mt-1 text-xs text-muted-foreground">{clock.timezone}</p>}
+      </section>;
+    }
+    case "data.table": {
+      const table = envelope.data as {
+        title?: string;
+        columns: { key: string; label: string }[];
+        rows: Record<string, string | null>[];
+      };
+      return <section aria-label={table.title || "Verified data table"}
+        data-testid="karen-data-table" className="my-3 min-w-0 rounded-xl border border-border/70 p-3">
+        {table.title && <h3 className="mb-3 font-semibold">{table.title}</h3>}
+        <div className="w-full overflow-x-auto">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead><tr>{table.columns.map((column) =>
+              <th scope="col" key={column.key} className="border-b border-border/70 px-3 py-2 font-semibold">
+                {column.label}
+              </th>)}</tr></thead>
+            <tbody>{table.rows.map((row, index) =>
+              <tr key={index}>{table.columns.map((column) =>
+                <td key={column.key} className="border-b border-border/50 px-3 py-2 align-top whitespace-pre-wrap break-words">
+                  {row[column.key] === null ? <span className="text-muted-foreground">Not provided</span> : row[column.key]}
+                </td>)}</tr>)}</tbody>
+          </table>
+        </div>
       </section>;
     }
     case "search.results": {

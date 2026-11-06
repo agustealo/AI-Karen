@@ -185,3 +185,40 @@ describe("search source link parity", () => {
     expect(parseKarenPresentation({ ...base, data: { results: [{ ...base.data.results[0], url: "https://example.com/story#section" }] } })).toBeNull();
   });
 });
+
+describe("bounded reusable data table", () => {
+  const data = {
+    schema_version: 1, presentation_id: "table-one",
+    component_type: "data.table", evidence_ref: "authorized-research-1",
+    data: {
+      title: "Research comparison",
+      columns: [{ key: "item", label: "Item" }, { key: "fact", label: "Reported fact" }],
+      rows: [{ item: "A", fact: "Reported observation" }, { item: "B", fact: null }],
+    },
+  };
+  it("renders accessible static table and preserves replay", () => {
+    const persisted = JSON.parse(JSON.stringify({ presentation: data }));
+    expect(presentationFromStructuredContent(persisted)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={data} />);
+    expect(html).toContain("karen-data-table");
+    expect(html).toContain("<table");
+    expect(html).toContain("scope=\"col\"");
+    expect(html).toContain("Reported observation");
+    expect(html).toContain("Not provided");
+    expect(html).not.toContain("<button");
+  });
+  it("rejects hostile, malformed and unbounded rows", () => {
+    const rejected = [
+      { ...data.data, rows: [{ item: "A", fact: "x", private: "secret" }] },
+      { ...data.data, rows: [{ item: "A", fact: 3 }] },
+      { ...data.data, rows: [] },
+      { ...data.data, rows: Array.from({ length: 21 }, () => ({ item: "A", fact: "x" })) },
+      { ...data.data, rows: [{ item: "A", fact: "x".repeat(241) }] },
+      { ...data.data, rows: [{ item: "A", fact: "bad\\u0000" }] },
+      { ...data.data, columns: [{ key: "item", label: "Item" }, { key: "item", label: "Repeated" }] },
+    ];
+    for (const value of rejected) {
+      expect(parseKarenPresentation({ ...data, data: value })).toBeNull();
+    }
+  });
+});
