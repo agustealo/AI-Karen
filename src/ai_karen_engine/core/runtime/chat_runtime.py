@@ -2866,6 +2866,26 @@ class ChatRuntime:
         if candidate is None:
             return None
 
+        # Cell provenance is insufficient if a source can assign misleading
+        # field labels (e.g. a snippet rebranded as an authoritative price).
+        # Search tables expose only a canonical, typed source-field vocabulary.
+        known_columns = {
+            "name": "Name",
+            "fact": "Fact",
+            "source_title": "Source title",
+            "source_excerpt": "Source excerpt",
+            "source_url": "Source URL",
+        }
+        if any(
+            known_columns.get(column["key"]) != column["label"]
+            for column in candidate["data"]["columns"]
+        ):
+            return None
+
+        # A title supplied by an external source is a claim, not provenance.
+        # Project a stable, descriptive title owned by the runtime.
+        candidate["data"]["title"] = "Verified search source excerpts"
+
         # A tool's "success" status alone does not authorize arbitrary claims.
         # Every row must cite one search receipt previously sanitized by the
         # same source projector, and every visible cell must be verbatim from
@@ -2887,22 +2907,20 @@ class ChatRuntime:
             if not isinstance(url, str) or url not in verified:
                 return None
             source = verified[url]
-            values = {source["url"], source["snippet"]}
-            if source.get("title") is not None:
-                values.add(source["title"])
-            if source.get("published_at") is not None:
-                values.add(source["published_at"])
             for key, value in row.items():
                 if value is None:
                     continue
-                if (
-                    key == "source_excerpt"
-                    and isinstance(value, str)
-                    and bool(value)
-                    and source["snippet"].startswith(value)
-                ):
+                expected = (
+                    source["url"] if key == "source_url"
+                    else source.get("title") if key in {"name", "source_title"}
+                    else source["snippet"] if key in {"fact", "source_excerpt"}
+                    else None
+                )
+                if key == "source_excerpt" and isinstance(value, str):
+                    if not value or not isinstance(expected, str) or not expected.startswith(value):
+                        return None
                     continue
-                if value not in values:
+                if value != expected:
                     return None
         return candidate
 
