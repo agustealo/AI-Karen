@@ -95,6 +95,10 @@ jobs:
           tasks = re.findall(r"^- \[[ x]\] \*\*(KCON-\d{3})\*\*", ledger, re.MULTILINE)
           if len(tasks) < 80 or len(tasks) != len(set(tasks)):
               raise SystemExit("Living convergence ledger has missing/duplicate task IDs")
+          referenced = set(re.findall(r"\bKCON-\d{3}\b", ledger))
+          unknown = sorted(referenced - set(tasks))
+          if unknown:
+              raise SystemExit(f"Living convergence ledger references undefined tasks: {unknown}")
           if not {"## 2. Feature-by-feature adoption, preservation and truth matrix",
                   "## 4. Dependency-ordered execution checklist",
                   "## 8. Progress change log"}.issubset(ledger.splitlines()):
