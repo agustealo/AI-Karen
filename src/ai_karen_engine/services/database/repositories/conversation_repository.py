@@ -155,9 +155,15 @@ class ConversationRepository(Repository):
 
     @abstractmethod
     async def get_messages(
-        self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0
+        self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0,
+        *, newest_first: bool = False,
     ) -> RepositoryResult[List[Message]]:
-        """Retrieve messages for a conversation in chronological order."""
+        """Read canonical messages in a bounded deterministic order.
+
+        Normal reads remain chronological. Only an explicit, owner-governed
+        recent-window read may request reverse chronological order. Consumers
+        must reverse that result for the visible canonical conversation.
+        """
 
     @abstractmethod
     async def update_message(self, message: Message) -> RepositoryResult[bool]:
