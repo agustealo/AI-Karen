@@ -243,7 +243,13 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
             <tbody>{table.rows.map((row, index) =>
               <tr key={index}>{table.columns.map((column) =>
                 <td key={column.key} className="border-b border-border/50 px-3 py-2 align-top whitespace-pre-wrap break-words">
-                  {row[column.key] === null ? <span className="text-muted-foreground">Not provided</span> : row[column.key]}
+                  {row[column.key] === null
+                    ? <span className="text-muted-foreground">Not provided</span>
+                    : column.key === "source_url" && isPublicSourceUrl(row[column.key])
+                      ? <a href={row[column.key]} target="_blank" rel="noopener noreferrer"
+                          className="break-all underline underline-offset-2"
+                          aria-label="Open verified source in a new tab">{row[column.key]}</a>
+                      : row[column.key]}
                 </td>)}</tr>)}</tbody>
           </table>
         </div>

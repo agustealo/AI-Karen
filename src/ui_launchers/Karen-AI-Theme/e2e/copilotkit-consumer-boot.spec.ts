@@ -514,6 +514,14 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         expect(parsed.password).toBe("");
         expect(parsed.hostname).not.toMatch(/^(?:localhost|127\.|10\.|192\.168\.)/);
       }
+      const sourceLinks = visibleCard.locator("tbody tr td:last-child a");
+      await expect(sourceLinks).toHaveCount(urlCells.length);
+      for (let index = 0; index < urlCells.length; index += 1) {
+        const link = sourceLinks.nth(index);
+        await expect(link).toHaveAttribute("href", urlCells[index].trim());
+        await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+        await expect(link).toHaveAttribute("target", "_blank");
+      }
       await expect(visibleCard.locator("button")).toHaveCount(0);
     } else {
       expect(firstCardText).toContain("View source:");

@@ -207,6 +207,53 @@ describe("bounded reusable data table", () => {
     expect(html).toContain("Not provided");
     expect(html).not.toContain("<button");
   });
+  it("renders authorized source URL cells as safe links after persisted replay", () => {
+    const sourceData = {
+      ...data,
+      data: {
+        title: "Verified search source excerpts",
+        columns: [
+          { key: "source_title", label: "Source title" },
+          { key: "source_url", label: "Source URL" },
+        ],
+        rows: [{ source_title: "Publisher", source_url: "https://example.org/news" }],
+      },
+    };
+    const persisted = JSON.parse(JSON.stringify({ presentation: sourceData }));
+    const parsed = presentationFromStructuredContent(persisted);
+    expect(parsed).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={parsed} />);
+    expect(html).toContain('href="https://example.org/news"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('aria-label="Open verified source in a new tab"');
+    expect(html).not.toContain("<button");
+  });
+
+  it("never makes untrusted URL cells or arbitrary table values actionable", () => {
+    const sourceTable = {
+      ...data,
+      data: {
+        columns: [
+          { key: "source_url", label: "Source URL" },
+          { key: "fact", label: "Fact" },
+        ],
+        rows: [
+          { source_url: "javascript:alert(1)", fact: "https://example.com/value" },
+          { source_url: "http://localhost/private", fact: "plain text" },
+          { source_url: "https://example.org#fragment", fact: "plain text" },
+          { source_url: "https://example.org/ok", fact: "plain text" },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={sourceTable} />);
+    expect((html.match(/<a /g) ?? []).length).toBe(1);
+    expect(html).toContain('href="https://example.org/ok"');
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('href="http://localhost');
+    expect(html).not.toContain('href="https://example.com/value"');
+  });
+
   it("rejects hostile, malformed and unbounded rows", () => {
     const rejected = [
       { ...data.data, rows: [{ item: "A", fact: "x", private: "secret" }] },

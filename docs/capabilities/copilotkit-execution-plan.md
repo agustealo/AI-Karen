@@ -419,4 +419,6 @@ Merge / rollout / rollback:
 
 | 2026-11-06 | `fix/kcon-consumer-durable-postgres-readiness-20261106` | Candidate: existing Render read-only environment inspector rejects free/expiring PostgreSQL in explicit `inspect-consumer` mode while retaining warnings in ordinary beta mode; no invented Redis durability requirement | KCON-160, KCON-730 | Exact-head CI PENDING; real service configuration unchanged; protected authenticated browser NOT_RUN |
 
+| 2026-11-06 | `feat/kcon710-table-source-links-20261106` | Candidate: existing read-only `data.table` renderer exposes only public evidence-bound `source_url` cells as safe external links, with persisted replay and hostile-URL checks in canonical unit/browser suites | KCON-710, KCON-730 | Exact-head CI PENDING; source runtime merged, signed-in deployed browser NOT_RUN; backend Render startup configuration still blocked |
+
 **Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.
