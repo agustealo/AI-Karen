@@ -549,6 +549,9 @@ async def get_conversation(
         100, ge=1, le=501,
         description="Maximum canonical messages; 501 permits overflow detection during replay",
     ),
+    message_offset: int = Query(
+        0, ge=0, le=100000, description="Canonical conversation message page offset",
+    ),
     conversation_gateway: ConversationRuntimeGateway = Depends(
         get_conversation_runtime_gateway
     ),
@@ -564,6 +567,7 @@ async def get_conversation(
                 conversation_id=conversation_id,
             ),
             message_limit=message_limit,
+            message_offset=message_offset,
         )
         return _canonical_snapshot_to_response(snapshot)
     except HTTPException:
