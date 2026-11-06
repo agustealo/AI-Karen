@@ -3,7 +3,7 @@
 > **SINGLE LIVING CHECKLIST — KEEP THIS FILE CURRENT WITH EVERY RELEVANT PR.**
 >
 > **Status:** ACTIVE ENGINEERING PLAN; **consumer release NOT VERIFIED**.  
-> **As-of/source baseline:** 2026-11-06, verified live `main@abfa3245c4d67cac8d32fa1cb7234c762f7e1f4c` (merged PR #674); pending PR #675 tracked separately.  
+> **As-of/source baseline:** 2026-11-06, verified live `main@1c496a64319e55d061df64a14a09d8f9d617382d` (PR #682 merged). Source CI is not Render deployment or consumer acceptance.  
 > **Document owner:** Karen architecture / consumer experience maintainers. **Execution owners:** the existing domain owners below.  
 > **Scope:** first-class CopilotKit chat, Persona Studio, agentic tasks, AG-UI, model/prompt/context/memory, native tool/suggestion/approval UX, history, generated presentation, MCP/skills/sandbox, channels, resilience, telemetry, security, accessibility, CI, and removal of replaced logic.
 >
@@ -28,11 +28,11 @@
 
 ### Status header, update with each merge or relevant PR
 
-**Current merge chain (2026-11-06):** `#670 → #671 → #672 → #673 → #674` merged on `main`; [#675](https://github.com/agustealo/AI-Karen/pull/675) is draft and targets the same release gate. Do not mark table, source provenance or browser readiness DONE until live signed-in acceptance records an exact deployed revision, browser run URL, valid source receipts and replay.
+**Current merge chain (2026-11-06):** `#670–#675 → #677 → #679–#682` merged on `main` (excluding superseded #676). PR #682 added fail-closed exact-live-SHA Render inspection, but no Render configuration change, deployment, or authenticated browser acceptance is established. Do not mark table, source provenance or browser readiness DONE until live signed-in acceptance records an exact deployed revision, browser run URL, valid source receipts and replay.
 
 | Tracking field | Current evidence |
 |---|---|
-| Canonical baseline | Live `main@abfa3245c4d67cac8d32fa1cb7234c762f7e1f4c` verified 2026-11-06; #671/#672/#673/#674 merged, #675 draft; source CI and Vercel READY are **not** authenticated consumer browser acceptance |
+| Canonical baseline | Live `main@1c496a64319e55d061df64a14a09d8f9d617382d` verified 2026-11-06; #682 merged; Main Quality Gate, backend/frontend quality and deployment contracts succeeded on this main SHA. Render source reconciliation, boot, durable PostgreSQL and signed-in browser acceptance are NOT_RUN/UNVERIFIED |
 | Native React view | `@copilotkit/react-core@1.79.1` declared; `CopilotKitProvider` + `CopilotChatView` mounted in source |
 | High-level chat | `CopilotChat` **not mounted**; automatic initial `runAgent` conflicts with trusted history boot |
 | Chat controller | Karen-controlled submit/draft/stop; uses SDK `copilotkit.runAgent({ agent })` correctly |
@@ -41,10 +41,10 @@
 | Medusa/Deep Agents | agent coordination source exists; `deepagents_research_enabled` defaults false; real agentic journey unverified |
 | Persona | saved selector/snapshot source exists; default prompt projects tone, verbosity, language; purpose specialization is not proven |
 | Presentation | Eight validated types on main, including `data.table`. #671 added Python/React schema and renderer; #672 authorized runtime projection; #673 produces source-attested search-excerpt tables for explicit first-turn prompts; #674 restricts labels and field mappings. Source merged/CI proven; live browser first-send/reload **NOT_RUN**; comparative facts, recipes and steps still missing |
-| Known recent work | #661–#665 merged recovery/native transport; #666/#668 governed search and browser acceptance specifications; #670–#674 merged URL parity and source-attested tables. #675 draft to gate observed `/api/auth/first-run` proxy availability. **No authenticated browser pass inferred** |
+| Known recent work | #661–#665 recovery/native transport; #666/#668 governed search and acceptance specs; #670–#675 source tables/provenance and first-run preflight; #677 auth DB session reuse; #679 durable-database preflight; #680 safe clickable source links; #681 ledger; #682 exact live Render SHA preflight. No authenticated browser pass inferred |
 | Search/movie work | PR [#659](https://github.com/agustealo/AI-Karen/pull/659) CLOSED as superseded by merged [#666](https://github.com/agustealo/AI-Karen/pull/666); do not merge the old draft or restore its stale history/CI changes |
-| CI | Exact-head #670 23/23, #671 22/22, #672 23/23, #673 24/24, #674 23/23 green. #675 CI pending. Signed-in Playwright consumer table scenario exists in source, **not executed against production** |
-| Production and release | Vercel independently reports **READY production** at `6e3fd07b85793408e3a3c69e1e5165c9cb363740` (PR #673), deployment `dpl_Ag3VDwkUpyPJ1iioLjGCYbTMuCeE`, with aliases. This is behind latest `main`; deployment logs contain `GET /api/auth/first-run` proxy `AbortError`. Protected browser signoff **NOT_RUN**, backend failure root cause unconfirmed. **NO CONSUMER SIGNOFF** |
+| CI | Latest `main@1c496a64` commit checks: Main Quality, backend quality, frontend quality, classifier burn, deployment/production deployment contracts, production database baseline contract all success (7 checks). Source-only success; signed-in Playwright consumer scenario not verified against a live backend |
+| Production and release | Earlier Vercel READY observation was at `6e3fd07b85793408e3a3c69e1e5165c9cb363740` (#673), behind reviewed main; `/api/auth/first-run` proxy AbortError observed. Render previously tracked Oct 31 legacy branch with failed deploys and no HTTP health probe. Latest Render state not reattested; existing protected reconcile `apply` has not been verified executed. Render production env, durable PostgreSQL, live exact SHA, Vercel upstream target match, migration 43 and signed-in browser remain unresolved. **NO CONSUMER SIGNOFF** |
 
 ### Architecture documents that remain authoritative for their own domains
 
@@ -424,5 +424,7 @@ Merge / rollout / rollback:
 | 2026-11-06 | `main@a5f22a22` | PR #680 merged: validated public source URL cells are safe clickable links in the existing `data.table` renderer; persisted replay and hostile-link tests, plus signed-in browser assertions added; 8/8 exact-head checks passed | KCON-710, KCON-730 | Deployed signed-in first-send/replay NOT_RUN; Render FastAPI startup still blocked by required production configuration |
 
 | 2026-11-06 | `fix/kcon-consumer-render-exact-live-sha-20261106` | Candidate: existing protected `inspect-consumer` preflight now requires read-only newest Render deployment to be `live` on exact reviewed main SHA, independently of env configuration, DB durability, migrations and browser proof | KCON-160, KCON-730, KCON-750 | Exact-head CI PENDING; real Render deploy remains failed/legacy branch, browser NOT_RUN; no deployment or secret mutation |
+
+| 2026-11-06 | `main@1c496a64` | PR #682 merged existing read-only `inspect-consumer` latest Render deployment status and full expected main SHA verification; latest seven main commit checks successful. The currently observed canonical header previously lagged #675; #676 is a superseded old ledger-only PR, not a merge candidate. No Render apply/deploy or browser run verified in this audit | KCON-160, KCON-730, KCON-750, KCON-920, KCON-970 | Next: protected Render reconcile `apply` only on current reviewed `main` (manual approved workflow); then inspect-env, provision genuine production config and non-expiring PostgreSQL with operator approval, deploy explicitly, inspect-consumer on exact live SHA, verify auth/migration, and execute signed-in browser acceptance. Vercel/Render target link remains unverified |
 
 **Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.
