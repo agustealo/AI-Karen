@@ -264,3 +264,19 @@ def test_unusable_source_url_falls_back_to_verified_search_card():
     )
     assert len(surfaces) == 1
     assert surfaces[0]["component_type"] == "search.results"
+
+def test_explicit_table_utf16_excerpt_bounds_preserve_source_prefix():
+    request, decision, plan, result = _execution(payload={})
+    request.messages = [{"role": "user", "content": "latest movies in a table"}]
+    result.sources = [{
+        "url": "https://example.org/unicode",
+        "title": "Publisher",
+        "snippet": "🔎" * 121,
+    }]
+    table = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert table is not None
+    excerpt = table["data"]["rows"][0]["source_excerpt"]
+    assert excerpt == "🔎" * 120
+    assert result.sources[0]["snippet"].startswith(excerpt)

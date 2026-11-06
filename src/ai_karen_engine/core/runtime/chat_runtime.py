@@ -2776,6 +2776,19 @@ class ChatRuntime:
         )
 
     @staticmethod
+    def _verified_table_excerpt(snippet: str) -> str:
+        """Bound source text to 240 browser UTF-16 code units without rewriting facts."""
+        output = []
+        remaining = 240
+        for character in snippet:
+            units = 2 if ord(character) > 0xFFFF else 1
+            if units > remaining:
+                break
+            output.append(character)
+            remaining -= units
+        return "".join(output)
+
+    @staticmethod
     def _verified_source_table_presentation(request, decision, plan, result):
         """Project structured table data only from an executed, allowed source.
 
@@ -2834,7 +2847,7 @@ class ChatRuntime:
                 "rows": [
                     {
                         "source_title": record.get("title"),
-                        "source_excerpt": record["snippet"][:240],
+                        "source_excerpt": ChatRuntime._verified_table_excerpt(record["snippet"]),
                         "source_url": record["url"],
                     } for record in records
                 ],
