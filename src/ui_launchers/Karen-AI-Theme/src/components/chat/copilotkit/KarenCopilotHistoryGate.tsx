@@ -450,16 +450,14 @@ export function KarenCopilotHistoryGate({
                 ` ${recovered.omittedEntries} non-chat entries were withheld.`}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {(
-                <button type="button" onClick={() => {
-                  textContinuationRequested.current = true;
-                  setRetryAttempt(attempt => attempt + 1);
-                }} className="min-h-11 rounded-lg border border-input px-3 text-sm">
-                  {recovered.hasMore || recovered.pageOffset > 0
-                    ? "Continue original conversation using recent verified text"
-                    : "Continue original conversation with verified text only"}
-                </button>
-              )}
+              <button type="button" onClick={() => {
+                textContinuationRequested.current = true;
+                setRetryAttempt(attempt => attempt + 1);
+              }} className="min-h-11 rounded-lg border border-input px-3 text-sm">
+                {recovered.hasMore || recovered.pageOffset > 0
+                  ? "Continue original conversation using recent verified text"
+                  : "Continue original conversation with verified text only"}
+              </button>
               <button type="button" disabled={copyBusy || pageBusy || recovered.messages.length === 0}
                 onClick={() => void copyRecoveredText()}
                 className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">
