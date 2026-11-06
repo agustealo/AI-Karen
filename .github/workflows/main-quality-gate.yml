@@ -65,6 +65,50 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Require canonical CopilotKit convergence ledger update
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed_files="$(mktemp)"
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > "$changed_files"
+          ledger="docs/capabilities/copilotkit-execution-plan.md"
+          # Enforce documentation on edits to this initiative's execution owners.
+          # Do not require unrelated feature PRs to edit the Karen ledger.
+          affected='^(src/ui_launchers/Karen-AI-Theme/src/components/chat/copilotkit/|src/ui_launchers/Karen-AI-Theme/src/app/api/copilotkit/|src/ui_launchers/Karen-AI-Theme/src/components/chat/(KarenPresentationRegistry|KarenPersonaSelector|SessionProvider|KarenComposerRuntimeCatalog)\.tsx$|src/ai_karen_engine/core/runtime/(chat_runtime|decision_pipeline|workflow_runtime|owned_history_projection|presentation_contract|ag_ui_event_projection|chat_run_lifecycle)\.py$|src/ai_karen_engine/core/runtime/prompt/|src/ai_karen_engine/agent_medusa/|src/ai_karen_engine/services/persona/|src/ai_karen_engine/core/persona/|src/ai_karen_engine/api_routes/users/persona\.py$)'
+          if grep -Eq "$affected" "$changed_files"; then
+            if ! grep -Fxq "$ledger" "$changed_files"; then
+              echo "::error::CopilotKit/Persona/Agent changes must update $ledger with KCON task IDs, status, and proof. Do not add a parallel plan."
+              exit 1
+            fi
+            if ! git diff --unified=0 "origin/${{ github.base_ref }}...HEAD" -- "$ledger" |
+                 awk '/^\+[^+]/ && /KCON-[0-9][0-9][0-9]/ {found=1} END {exit !found}'; then
+              echo "::error::$ledger must update at least one affected KCON task or its progress evidence."
+              exit 1
+            fi
+          fi
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          ledger = Path("docs/capabilities/copilotkit-execution-plan.md").read_text()
+          tasks = re.findall(r"^- \[[ x]\] \*\*(KCON-\d{3})\*\*", ledger, re.MULTILINE)
+          if len(tasks) < 80 or len(tasks) != len(set(tasks)):
+              raise SystemExit("Living convergence ledger has missing/duplicate task IDs")
+          referenced = set(re.findall(r"\bKCON-\d{3}\b", ledger))
+          unknown = sorted(referenced - set(tasks))
+          if unknown:
+              raise SystemExit(f"Living convergence ledger references undefined tasks: {unknown}")
+          headers = [line for line in ledger.splitlines() if line.startswith("## ")]
+          required = ("## 2. Feature-by-feature adoption, preservation and truth matrix",
+                      "## 4. Dependency-ordered execution checklist",
+                      "## 8. Progress change log")
+          if not all(any(header.startswith(prefix) for header in headers) for prefix in required):
+              raise SystemExit("Living convergence ledger is missing canonical sections")
+          print(f"Validated {len(tasks)} stable convergence task IDs.")
+          PY
+          echo "Living convergence ledger contract satisfied."
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

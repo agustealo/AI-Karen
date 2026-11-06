@@ -1,325 +1,387 @@
-# CopilotKit-first migration: canonical execution and adversarial implementation plan
+# Karen × CopilotKit: canonical convergence plan and living execution ledger
 
-**Status:** Design and evidence audit; no frontend migration or SDK install claimed.
-**Repository:** agustealo/AI-Karen
-**Scope:** CopilotKit UI/agent interactions, AG-UI, canonical Karen runtime, plugin/Channels, approvals, historic cleanup and consumer UX.
-**Decision:** CopilotKit takes precedence for overlapping *interaction* capabilities; Karen's governed execution/memory/persistence stays authoritative.
-**Canonical plan:** This document supersedes the older CK-02..CK-07 outline and the temporary v2 companion. Historical feature intentions and source evidence are retained here.
-**Companion:** `docs/architecture/decisions/2026-10-25-copilotkit-first.md`, `docs/capabilities/copilotkit-legacy-retirement.md`, PR #553 capability baseline.
+> **SINGLE LIVING CHECKLIST — KEEP THIS FILE CURRENT WITH EVERY RELEVANT PR.**
+>
+> **Status:** ACTIVE ENGINEERING PLAN; **consumer release NOT VERIFIED**.  
+> **As-of/source baseline:** 2026-11-05, `main` at `66c8913e983d406e7be6ff443083432ce766fb3e`.  
+> **Document owner:** Karen architecture / consumer experience maintainers. **Execution owners:** the existing domain owners below.  
+> **Scope:** first-class CopilotKit chat, Persona Studio, agentic tasks, AG-UI, model/prompt/context/memory, native tool/suggestion/approval UX, history, generated presentation, MCP/skills/sandbox, channels, resilience, telemetry, security, accessibility, CI, and removal of replaced logic.
+>
+> This **replaces the stale 2026-10-25 static migration outline** in this very same canonical path. Do not create another checklist or "v2 plan" for this initiative. The accepted architecture, narrower implementation design, and specialized release evidence remain linked below. A feature mentioned in a design is not implemented; a feature in source is not necessarily enabled; a green unit test is not a consumer browser pass.
 
-## A. Verified repository owners and architectural consequences
+## 0. How every contributor uses this file
 
-| Domain | Verified implementation | Canonical disposition |
-| --- | --- | --- |
-| Chat execution | `src/ai_karen_engine/core/runtime/chat_runtime.py` | All inference, provider/model selection, fallback, prompts, streams, persistence/degradation receipts remain here |
-| AG-UI backend ingress | `src/ai_karen_engine/api_routes/chat/runtime.py` | Reuse; thin, authenticated, policy-governed; do not create another direct agent endpoint |
-| AG-UI projection | `src/ai_karen_engine/core/runtime/ag_ui_event_projection.py` | Preserve event provenance, stream lifecycle and terminal integrity |
-| AG-UI frontend proxy | `src/ui_launchers/Karen-AI-Theme/src/app/api/chat/ag-ui/route.ts` | Preserve auth header sanitization, response IDs, abort/terminal/SSE checks |
-| AG-UI config | `src/ai_karen_engine/config/runtime.py` `FeatureFlags.enable_ag_ui_bridge=False` | Explicit authorized enablement and negative testing required; never override in React |
-| Current chat mount | `src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx` | One active chat mount, cut over with a centrally governed feature gate |
-| Current chat | `src/ui_launchers/Karen-AI-Theme/src/components/chat/assistant-ui/KarenAssistantChat.tsx` | Capture every consumer contract and replace rendering after parity |
-| Conversation state | `src/ui_launchers/Karen-AI-Theme/src/components/chat/SessionProvider.tsx` | Reuse canonical session identities, bootstrap deduplication and APIs; no second conversation store |
-| Persona, model, voice, history | `src/components/chat/assistant-ui/KarenPersonaSelector.tsx`, `KarenComposerRuntimeCatalog.tsx`, `KarenBrowserDictation.tsx`, `KarenLocalDictation.tsx`, `KarenHistoryRestoration.ts` | Move behavior into CopilotKit slots/adapters; do not throw away available functions |
-| Presentation and rail | `KarenPresentationRegistry.tsx`, `KarenWeatherPresentation.tsx`, `observedAgentSteps.ts`, `src/components/chat/ConversationContextRail.tsx` | Reuse evidence-bound data schemas and layout; change rendering adapter, not canonical presentation meaning |
-| UI design system | `src/ui_launchers/Karen-AI-Theme/src/app/globals.css`, `tailwind.config.ts` | Preserve the existing HSL tokens, dark theme, typography, breakpoints and three-panel composition |
-| Plugin catalog/execution | `src/ai_karen_engine/extensions/plugin_kernel.py`, `extensions/platform/core/registry/plugin_registry.py`, `extensions/registry.py` | Single extension manifest/catalog/execution authority; do not add another plugin registry |
-| Extension packages | `src/ai_karen_engine/extensions/plugins/*/manifest.json` | Existing package convention; reuse validator, permission and lifecycle contracts |
-| Channel adapter contracts | `src/ai_karen_engine/extensions/channels/contracts.py` | Use current ChannelAdapter and native event/identity/delivery schema, extend only if needed |
-| Channel host | `src/ai_karen_engine/services/channels/{host,activation,linking,ingress,execution,delivery,worker,credentials}.py` | ALREADY IMPLEMENTED host/ingress/worker lifecycle. CopilotKit Channels is a transport/native-UI adapter, not a replacement host |
-| Channel persistence | `src/ai_karen_engine/persistence/repositories/channel_repository.py` | Durable inbox/outbox, identity and tenant ownership remain |
-| Channel config | `src/ai_karen_engine/config/channels.py` | `ChannelHostSettings` disabled by default with validated installation/credential policy |
-| Approval authority | `src/ai_karen_engine/services/approvals.py` | Reuse runtime-owned approval lifecycle and request fingerprinting |
-| Approval store | `src/ai_karen_engine/persistence/repositories/approval_repository.py` | Reuse tenant-scoped durable one-shot approval receipts and RLS; no duplicate database |
-| Approval API | `src/ai_karen_engine/api_routes/automation/approvals.py` | Reuse for policy-authorized approval decisions; no side effects in HTTP/controller |
-| Plugin UI | `src/ui_launchers/Karen-AI-Theme/src/components/plugins/`, `src/ui_launchers/Karen-AI-Theme/src/plugin_host/` | Existing consumer plugin installation and navigation, never mount a new second plugin store |
+**Start each new development slice:** read this ledger; check actual `main` SHA; locate the current owner and imports; inspect relevant existing PRs, docs, schemas, tests, and SDK package typings; choose one or more existing `KCON-` task IDs; record baseline proof. **Do not create another renderer, agent runtime, registry, schema, store, or transport to solve a missing integration**.
 
-These paths were read or enumerated from GitHub `main` on 2026-10-25. Existence is **not** live availability, package compatibility or readiness proof. Where a document says the plugin/approval owners are unknown, this table supersedes it.
+**For every relevant PR:** update the relevant unchecked task(s) here in the *same PR*. Keep IDs stable; add source paths, existing feature reuses, the PR link and its status, tests and exact commit, and remaining gaps. A task becomes `DONE` only after its defined proof completes on the candidate commit; subsequent failures reopen it. Link screenshots, structured receipts, logs, browser acceptance and database evidence by durable CI/PR URLs, not unpublished local claims. For merge, update the evidence row after CI, or state explicitly that browser/release proof remains pending. On each subsequent scoped PR, reconcile the ledger with `main`, not just with a prior PR head.
 
-## B. Confirmed adversarial issues
+**States:**
+- `NOT_STARTED`: no qualifying implementation verified.
+- `SOURCE_ONLY`: implementation or tests are present in repository; not proof of an authorized, deployed user journey.
+- `IN_PROGRESS`: active reviewed PR/change, not merged and/or gates pending.
+- `BLOCKED`: specific gate failed; record error, owning task and deterministic remedy. An unavailable external environment is `NOT_RUN` for the dependent proof, not permission to say green.
+- `MERGED_UNVERIFIED`: committed to live `main`, but defined real runtime/browser acceptance outstanding.
+- `DONE`: source, tests, exact-head CI, authentic runtime and/or human browser proof required for that item are recorded and passed.
+- `DEFERRED`: intentional scope exclusion, with rationale and a product decision. Never substitute this for an incomplete committed feature.
 
-### P0-01: Duplicate chat execution and premature UI cutover
-A second CopilotKit Runtime may be needed as a *thin SDK transport facade* but may not own providers, prompts, model selection, tools, memory, thread persistence or policy. Evaluate whether the current AG-UI endpoint can be used directly by the pinned v2 SDK; if not, create one authenticated, bounded bridge. Do not add another general chat API or node-based agent.
+**Checkbox semantics:** `[x]` means `DONE` and must have a cited durable evidence location. `[ ]` means unfinished, including code already merged when the acceptance gate is unproven. The descriptive status matrix is evidence-based and is not a second checklist. Record every skipped test, unknown environment flag and missing provider as NOT_RUN.
 
-### P0-02: Disabled AG-UI backend behind a seemingly functional frontend
-The runtime's `enable_ag_ui_bridge` defaults false. Define opt-in configuration and backend health/eligibility display before mount. Test disabled/unknown/misconfigured/allowed states and avoid client-side configuration overrides.
+### Status header, update with each merge or relevant PR
 
-### P0-03: Existing conversation bootstrap versus CopilotChat automatic run
-Current SessionProvider deduplicates conversation boots. CopilotChat v2 documentation describes running an agent on initial mount when not run; that behavior must not generate unintended initial answers, duplicate writes, reset session IDs or clear unsent drafts during transitions. Validate real installed SDK behavior and select the supported configuration/slot strategy.
+| Tracking field | Current evidence |
+|---|---|
+| Canonical baseline | `main@66c8913e` inspected 2026-11-05; document-only branch is **not** a deployment |
+| Native React view | `@copilotkit/react-core@1.79.1` declared; `CopilotKitProvider` + `CopilotChatView` mounted in source |
+| High-level chat | `CopilotChat` **not mounted**; automatic initial `runAgent` conflicts with trusted history boot |
+| Chat controller | Karen-controlled submit/draft/stop; uses SDK `copilotkit.runAgent({ agent })` correctly |
+| History | owner-checked manual hydration; strict rich event replay; on unsupported replay, read-only text recovery |
+| Runtime | `ChatRuntime` authority; CORTEX and RuntimePolicy decide; direct, reasoning, normal, graph paths in source |
+| Medusa/Deep Agents | agent coordination source exists; `deepagents_research_enabled` defaults false; real agentic journey unverified |
+| Persona | saved selector/snapshot source exists; default prompt projects tone, verbosity, language; purpose specialization is not proven |
+| Presentation | six admitted types on baseline: weather observation/comparison, time, date, planner tasks, composition |
+| Known recent work | PR [#648](https://github.com/agustealo/AI-Karen/pull/648) merged, PR [#658](https://github.com/agustealo/AI-Karen/pull/658) merged for first-prompt/replay corrections; **no production browser attestation inferred** |
+| Active neighboring work | PR [#659](https://github.com/agustealo/AI-Karen/pull/659) OPEN at baseline: authorized search/movie first-turn cards. Do not count this as `main`, and require its author to update this ledger before merge |
+| CI | Main Quality Gate, Chat System Burn, Presentation Contract and existing targeted/e2e tests exist; latest deploy/browser success **not established by this source audit** |
+| Release decision | **NO CONSUMER SIGNOFF** |
 
-### P0-04: Current design tokens conflict with CopilotKit v2 CSS expectations
-Karen uses Tailwind 3 + HSL variables; CopilotKit v2 documents Tailwind 4/shadcn-style OKLCH scoped tokens. DO NOT upgrade the whole application to Tailwind 4 as a precondition unless necessary and regression-proven. First test isolated stylesheet import and scoped token conversions without overwriting Karen's global token values. Preserve sidebars, right rail scrolling, sticky composer, responsive breakpoints, font sizes, contrast and focus rings.
+### Architecture documents that remain authoritative for their own domains
 
-### P0-05: Existing Channels lifecycle could be forked
-Canonical PluginKernel, ChannelHostSettings, ChannelIngressService, ChannelExecutionService, SqlChannelRepository, workers and ChannelAdapter contracts already exist. Building a new OpenTag-shaped channel runtime, manager, queue, retry worker, secret store, or conversation mapping would violate DRY/local-first. Use CopilotKit Channels SDK and OpenTag patterns as *adapter implementation inputs*, with explicitly mediated optional managed runner. Native cards cannot assert execution or persistence success.
+- [Architecture Authority](../development/ARCHITECTURE_AUTHORITY.md) for control-plane ownership.
+- [CopilotKit-first ADR](../architecture/decisions/2026-10-25-copilotkit-first.md) for the accepted SDK-first product direction.
+- [Consumer Experience Contract](../development/CONSUMER_EXPERIENCE_CONTRACT.md) for end-user lifecycle and usability.
+- [Persona implementation contract](../architecture/KPERSONA_FIRST_CLASS_IMPLEMENTATION.md) and [Persona data/skills guide](../architecture/PERSONA_SKILLS_LEARNING_DATA_GUIDE.md) for PersonaService, task-purpose/knowledge boundary and learning.
+- [Run ledger and cancellation](ck07-runtime-run-ledger.md) for durable chat execution and honest stop receipts.
+- [Governed generative UI](../architecture/governed-generative-ui.md) and [legacy-retirement ledger](copilotkit-legacy-retirement.md) for provenance and per-artifact deletion evidence.
+- [Consumer truth map](../ux/CK-27A-CONSUMER-CAPABILITY-TRUTH-MAP.md) and [testing/release contract](../development/TESTING_RELEASE.md) for observed journeys.
+- [Response lifecycle authority audit](../architecture/response-lifecycle-ownership-audit.md) for final-answer ownership.
+- Official pinned-v2 reference: https://docs.copilotkit.ai/reference/v2 ; high-level chat: https://docs.copilotkit.ai/reference/v2/components/CopilotChat ; hooks: https://docs.copilotkit.ai/reference .
 
-### P0-06: Approvals already exist; frontend controls cannot become authority
-ApprovalService/SqlApprovalRepository and runtime approval policy are real. Map CopilotKit `useHumanInTheLoop`/interrupt affordances to existing approval ID/state/transitions. Distinguish a chat execution approval from a granular side-effect tool approval before reusing the exact same contract; extend the canonical owner only when the schema cannot represent the necessary audited action. Test expiration, revocation, replay, one-shot consumption, concurrent approval and post-approval reauthorization.
+**Conflict rule:** the current implementation and verified test evidence establish actual status. This ledger establishes *initiative scope and pending work*. Existing ADR/security/architecture contracts determine ownership. Correct stale descriptive content in linked docs in the same PR where practical; do not resurrect obsolete modules merely because old prose names them.
 
-### P0-07: Live/restored/streaming data parity could be lost
-`KarenHistoryRestoration.ts` reconstructs `karen.presentation.v1` and `karen.execution_receipt.v1` parts from authenticated history. New CopilotKit renderers must consume real versioned events and durable history with the same evidence, source/ref and permission checks. Preserve requested versus actual provider/model and degradation metadata. Don't claim completion on RUN_FINISHED without canonical result.
+## 1. Target user journey and boundaries
 
-### P0-08: Legacy removal can weaken security or delete unique features
-Legacy `copilot.py` has compatibility predictors, and `copilotkit/safety_middleware.py` may still contain checks not reimplemented elsewhere. No blanket remove, shim-only replacement, simulated success, or unverified source deletion. Reference audit with runtime mount/manifest checks first; require verified successor, tests, and explicit removal in a follow-up commit within the same workstream.
+One authenticated consumer conversation persists while navigating Chat, Persona Studio, Planner, Agent Runtime, settings, models and approved other surfaces. The user writes an ordinary request **once**. The backend resolves identity, persona snapshot, user-approved context and memory, tool/agent eligibility, provider and model. CORTEX selects ordinary chat, direct capability, reasoning, governed tool action or real graph/agent execution; RuntimePolicy constrains every action. A simple answer starts quickly; a complex request can plan, use capabilities, pause for approval, verify and return a result without forcing a separate Agent workspace. CopilotKit renders genuine SDK messages, suggestions, tool state, approvals, composition and progress, but never owns provider choice, tool authority, permissions or canonical persistence. On refresh, switch or failure, identity and saved messages remain accessible, and only attested rich content is replayed. Unsupported rich elements must not erase readable history or permit an unsafe rich replay; define and prove a safe continuation protocol rather than silently creating a new SDK thread.
 
-### P1-09: Documentation and SDK v1/v2 API drift
-Official docs have pages with different provider naming between versions; use a pinned `@copilotkit/react-core` version's published types and canonical versioned docs to settle `CopilotKitProvider` versus compatibility `CopilotKit`, `agentId`, `runtimeUrl`, styles and hooks. The v2 `CopilotChat` is in `@copilotkit/react-core/v2`; don't introduce the deprecated v1 `@copilotkit/react-ui` chat accidentally.
+Four distinct concepts:
+1. **Persona:** approved communication/collaboration profile, purpose, terminology, task framing and scoped, authorized knowledge references; **no executable authority**.
+2. **Agent:** governed work executor with objective, plan, tool permissions and lifecycle; subagents only under authorized real multi-step work.
+3. **Skills/plugins/MCP:** versioned capabilities, manifests and eligible external resources; **not** independent models or permissions granted by persona selection.
+4. **Runtime:** the only executor/persistence coordinator; **not** a substitute user persona or second policy engine.
 
-### P1-10: Lockfile and package manager drift
-Web app has `package.json`, `package-lock.json` and `pnpm-workspace.yaml`. Decide and enforce one install/lockfile authority for reproducible CopilotKit releases; honor existing approved native dependency scripts and CI without blanket trust. Capture bundle output, React/Next/Tailwind compatibility and duplicate AG-UI dependency versions.
+**Never:** arbitrary client-authored agent/model routing; hidden fallback from agent to canned prose; trust browser state for tenant/approval identity; initial mount invoking inference; synthetic RUN_FINISHED; parallel stores; SDK-native thread writes bypassing Karen repository; a persona acting as a system-policy override; unbounded executable model-generated UI.
 
-### P1-11: Feature inventory and CI fragmentation
-PR #553 proposes a conservative capability baseline. Reconcile into one source of product truth and existing tests. Integrate migrations with Main Quality Gate, Chat System Burn, Presentation Contract, plugin-ci, relevant channel/approval tests and Playwright. Avoid a parallel gate not invoked by the canonical workflows.
+## 2. Feature-by-feature adoption, preservation and truth matrix
 
-## C. Non-negotiable UX preservation matrix
+Definitions: **TAKE** = adopt native CopilotKit behavior/hooks/UI where available at pinned version; **KEEP** = existing Karen truth/behavior stays authoritative; **ADAPT** = one bridge/slot/serialization mapping; **REJECT** = no second owner or unsafe behavior. **SOURCE_ONLY** means source exists but end-to-end consumer proof is outstanding. Rows with `GAP` describe required work, **not** installed features.
 
-| Journey | Karen behavior to retain | CopilotKit replacement strategy | Evidence |
-| --- | --- | --- | --- |
-| Core chat | Run, cancel, retry, stream, scroll/resize and truthful error | v2 `CopilotChat` or `CopilotChatView` slots | Real authenticated AG-UI browser run and SSE abort |
-| Conversation | Create/switch/delete/rename, stable ID, durable reload | Keep SessionProvider + repository; configure CopilotKit thread binding | `karen-durable-history-restoration.spec.ts`, `kchat-workspace-continuity.spec.ts` |
-| Composer | Persistent draft, per-run provider and agent request, shared input across views | CopilotKit input slot + existing canonical draft/selection context | Switch pane/persona/reload without loss |
-| Persona | Active persona, scope/revision and error truth | Existing selector in CopilotKit slot/toolbar | Authorized selection and scoped response |
-| Models | Backend-reported inventory, request vs executed, fallback | Existing catalog component + CopilotKit component slot | Real provider receipt in live and history |
-| Voice | Browser/local dictation and cancellation | Retain Karen dictation adapters in composer slot unless CopilotKit equivalent proven | Mic permissions, audio, error and interruption |
-| Presentation | Weather/time/research/planner/evidence cards | `useRenderTool`/component slots + canonical `karen.presentation.v1` | Stream, restore, source trust and XSS |
-| Agent activity | Medusa/LangGraph real steps, subagents, planning | CopilotKit tool/activity renderer using actual AG-UI events | Same activity IDs/status, no invented steps |
-| Right rail | Intelligence cards, right scroll, typography parity, responsive behavior | Preserve Karen rail; CopilotKit occupies chat center only | Responsive screenshot/keyboard checks |
-| Approvals | Pending/approve/reject/expire + durable receipts | CopilotKit approval UI; existing ApprovalService backend | One-shot, concurrent, unprivileged negative cases |
-| Plugins and Channels | Enable/disable/uninstall, native cards, identity bindings | Existing PluginKernel + ChannelHost with CopilotKit SDK adapter | Real channel message and tenant/RBAC tests |
-| Accessibility | Labels, focus, contrast, motion, keyboard | Scoped CopilotKit slots/tokens | axe/Playwright manual checks with screenshots |
+### 2A. Conversation and interaction
 
-UX dimensions to inspect: typography scale, density, line lengths, keyboard focus, scroll restoration, sticky footer/rail, action discoverability, empty/loading/degraded/success states, mobile viewport, reduced-motion, locale, screen readers. Screenshots supplement behavioral tests and must not be manipulated to hide differences.
+| Capability | TAKE from CopilotKit | KEEP from Karen / authority | Current evidence → disposition | Gate |
+|---|---|---|---|---|
+| Chat shell, transcript, toolbar | `CopilotChatView`, native assistant/user message slots | One dashboard mount, Karen UX tokens | SOURCE_ONLY native view mounted; preserve | KCON-110 |
+| High-level `CopilotChat` | Built-in agent wire-up, pending, clear, suggestions | No initial inference; verified identity/draft | GAP: not mounted; evaluate, do not force | KCON-120 |
+| Streaming and stop UI | SDK stream/stop controls | AG-UI validated transport, durable exact-run cancel | SOURCE_ONLY current controlled view | KCON-130, KCON-604 |
+| Composer, input, keyboard | Native input, send/stop/selection/toolbar slots | Durable draft, CAS conflicts, user-driven send, shared workspace | SOURCE_ONLY custom controller | KCON-140 |
+| Conversation threads/drawer | `useThreads` and native drawer if adapter can consume canonical history | `SessionProvider` / DB identity, RLS, CRUD | SOURCE_ONLY session/history controls; native sync unproven | KCON-150 |
+| Saved replay | SDK agent messages/UI slots | Owner-verified canonical history, complete run attestation | SOURCE_ONLY strict gate and text-only recovery | KCON-160 |
+| Branches, edit/retry/regenerate | Native affordance only after verified protocol mapping | New run/version, immutable prior receipts, audit | GAP; no invented historical branches | KCON-170 |
+| Welcome/prompts/suggestions | `useConfigureSuggestions`, `useSuggestions` | Backend eligibility, declared model/tool availability | GAP in mounted view | KCON-180 |
+| App-wide popups/sidebar | CopilotKit popup/sidebar *view* where needed | Single SessionProvider/one mounted agent/composer | GAP: avoid duplicate floating runtimes | KCON-190 |
+| Accessibility, themes, responsive | Native customizable slots/styles | Karen design system, focus, language, scroll parity | SOURCE_ONLY UX tests; browser gate | KCON-900 |
 
-## D. Implementation stages and acceptance
+### 2B. Agentic execution and user-action integration
 
-### CK-00: Baseline and owner reconciliation
-- Merge/reconcile #553 only after its static verifier tests pass; preserve all existing features and link original PR decisions.
-- Derive actual import, route, manifest, config and state graph from the repository, not filename guesses.
-- Bind feature records to existing architecture and browser tests.
-- Output: a baseline with known `implemented_unverified` vs `verified` distinctions; no production code changes.
+| Capability | TAKE from CopilotKit | KEEP from Karen / authority | Current evidence → disposition | Gate |
+|---|---|---|---|---|
+| Native tool-call rendering | `useRenderTool` / `useComponent` / default renderer | Tool receipts, evidence, ACL, action IDs | GAP in mounted chat integration | KCON-410 |
+| Frontend tool calls | `useFrontendTool` only for bounded UI-local actions | Server reauthorization for writes/privileged operations | GAP; forbid unguarded direct side effects | KCON-420 |
+| Human in loop | `useHumanInTheLoop` and `useInterrupt` surfaces | RuntimePolicy + existing ApprovalService/repository | GAP in mounted chat; existing backend owners | KCON-430 |
+| Shared UI/application state | Agent/context hooks and state snapshots/deltas as UI hints | Canonical persisted state, authorization, revision checks | GAP; backend currently rejects arbitrary client state | KCON-440 |
+| Plan, progress, subagent timeline | SDK activity/tool messages + slots | CORTEX decisions, WorkflowRuntime/Medusa events, real run ledger | SOURCE_ONLY observability rail; live proof pending | KCON-450 |
+| Agent discovery and invoke | Native chat entry points, optional tool UI | Registry/catalog, eligibility intersection, Medusa execution | SOURCE_ONLY separate workspace; one-prompt journey gap | KCON-460 |
+| Multi-step workflows / checkpoints | Render statuses and interrupts | LangGraph only when graph required; Medusa governed, durable run owner | SOURCE_ONLY; Deep Agents disabled by default | KCON-470 |
+| Agent run artifacts | Native message cards where appropriate | Canonical verified artifacts and authorization | GAP for general durable artifact experience | KCON-480 |
+| Schedules / tasks / planner | Agent-driven interaction / approval presentations | Existing tasks/jobs/planner and durable ownership | SOURCE_ONLY separate screens; connection gap | KCON-490 |
 
-### CK-01: SDK and visual compatibility spike
-- In `src/ui_launchers/Karen-AI-Theme/`, validate pinned `@copilotkit/react-core/v2` exports, provider config, built-in `CopilotChat` slots, styles and AG-UI semantics against current React/Next/TS/Tailwind.
-- Use package manager's locked install, without duplicating package managers or unnecessarily adding `@copilotkit/react-ui`.
-- Test SSR boundary, CSP, bundle, css token conversion, dark/light, fonts and breakpoint screenshots.
-- Proof: typecheck, unit tests, build, isolated Playwright captures and import-contract assertions.
-- Rollback: dependency-only revert, no active-mount changes.
+### 2C. Intelligence, identity, resources and safety
 
-### CK-02: Canonical AG-UI/SDK connection
-- Determine whether pinned v2 frontend speaks directly to `/api/chat/ag-ui`; document exact request/event compatibility and auth propagation.
-- If SDK requires CopilotRuntime facade, use *one thin, local-only gateway* with fixed agent registration, bounded envelope, auth/correlation delegation to backend. No independent generator/orchestrator.
-- Reuse backend `ChatRuntime`, `AGUIEventProjection` and existing Next proxy. Validate `enable_ag_ui_bridge` server-side.
-- Proof: nonstream/stream parity, idempotent cancellation, invalid forwarding, tenant boundary, model request/reported identity, failures and replay.
+| Capability | TAKE from CopilotKit | KEEP from Karen / authority | Current evidence → disposition | Gate |
+|---|---|---|---|---|
+| Intent/routing | Nothing: SDK is a projection | CORTEX → RuntimePolicy → ChatRuntime | SOURCE_ONLY execution branches exist | KCON-210 |
+| Provider/model selection | Catalog display/optional UI slots | Provider registry, health, requested/actual/fallback truth | SOURCE_ONLY model request/receipt | KCON-220 |
+| Prompt/persona resolution | Optional visible selector | PersonaService, PromptRuntime allowlist, user/tenant scope | SOURCE_ONLY tone/verbosity/language path | KCON-230 |
+| Scoped learning/knowledge | Read-only user-facing evidence cards | NeuroRecall, NeuroVault, user model, provenance, consent | SOURCE_ONLY domain infrastructure | KCON-240 |
+| Per-turn context budgets | UI disclosure only | PromptRuntime token budget, evidence inclusion | SOURCE_ONLY; measure losses | KCON-250 |
+| Web/current search and weather/time | Display results via native slots | Authorized plugin tool, source validity and time provenance | SOURCE_ONLY; #659 OPEN for search cards | KCON-260 |
+| MCP integrations | Visualize eligible tools/resources | Existing `mcp/`, extension manifests/registry and ActionExecutionGate | SOURCE_ONLY infrastructure, consumer discovery unverified | KCON-500 |
+| Skills | Discover/describe eligible skills and task need | Existing plugin/capability contracts, versioned prompts, RBAC | GAP: no second skill engine | KCON-510 |
+| Sandbox | Status/approval/artifact UI | Existing isolated execution infrastructure, egress/secrets and tenant fences | SOURCE_ONLY related utility; enforcement audit required | KCON-520 |
+| Attachments, files, images | Native input affordances only if supported/pinned | Upload scan, MIME/size quotas, canonical storage/ACL, model capability | GAP/UNVERIFIED for this mounted journey | KCON-530 |
+| Voice/dictation | Native voice where reliably supported | Karen browser/local speech capture, permissions, safe draft port | SOURCE_ONLY existing voice controls | KCON-540 |
+| Channels (Slack/Teams/etc.) | Channels SDK UI/transport only when useful | Existing ChannelHost, ingress, identity, queues, delivery, secrets | SOURCE_ONLY backend host; integration optional | KCON-550 |
+| Security / RBAC | UI approval/notification only | Auth, RLS, policy, audit, tool execution, tenant isolation | SOURCE_ONLY defenses; negative live proof needed | KCON-600 |
+| Observability/diagnostics | UI activity/status slots | Structured traces, receipts, persisted result, redaction | SOURCE_ONLY metrics; parity audit needed | KCON-650 |
 
-### CK-03: Parallel rendering comparison without parallel execution
-- Build CopilotKit UI under existing frontend app and guarded single mount. Do not run two mounted agents or both send requests.
-- Preserve SessionProvider, conversation server truth, default persona, model catalog, voice and contextual rail.
-- No independent local conversation cache except transient UI state; use server revision for conflicts.
-- Golden tests: conversation creation/restore, cancel/retry, persona switch, provider request, long thread, draft persistence and accessibility.
+### 2D. Generative output and production UX
 
-### CK-04: One-active-mount CopilotKit cutover
-- Switch `src/app/dashboard/page.tsx` to a single CopilotKit chat mount only after gates pass.
-- Preserve responsive three-column visual arrangement and typography; validate both themes.
-- Record before/after screenshots (desktop/tablet/mobile), measured bundle/latency and unchanged server request semantics.
-- Then delete superseded assistant-ui component imports and adapter-only modules when reference and behavior audits approve.
+| Capability | TAKE from CopilotKit | KEEP from Karen / authority | Current evidence → disposition | Gate |
+|---|---|---|---|---|
+| Ordinary Markdown/structured text | SDK message renderer/toolbar | Grounded response policy and provider attribution | SOURCE_ONLY; quality/latency proof missing | KCON-700 |
+| Tables/charts/lists/comparison | Reusable typed renderers or approved A2UI where supported | Karen evidence schema + canonical registry and source references | GAP, do **not** implement topic-specific renderer per query | KCON-710 |
+| Time/weather/date/planner cards | Native slot renders Karen validated envelope | `karen.presentation.v1`, verified tool evidence | SOURCE_ONLY, merged corrections without browser proof | KCON-720 |
+| News, movies, recipe, research | Native reusable cards/layouts; not arbitrary model HTML | Verified source/admission; live data freshness; recipe task data | GAP; #659 open search/movie subset | KCON-730 |
+| MCP Apps/A2UI interactive UI | Evaluate upstream v2 capabilities and pinned compatibility | Sandbox/allowlist/ACL/content security/replay | DEFER until trust/size/security proof | KCON-740 |
+| Citations/source list | Native component slots | Authorized citations, same source ID replay, safe URL handling | SOURCE_ONLY legacy components; integrated proof pending | KCON-750 |
+| Exports/print/share/download | Native UI hooks only for display/navigation | Permissioned artifact store, content rights, destination limits | GAP/UNVERIFIED | KCON-760 |
+| Error/degraded/slow network | SDK error/empty/loading surfaces | Honest no-model fallbacks, actual runtime receipts, no fake answers | SOURCE_ONLY partial guards | KCON-770 |
+| Rollout, telemetry, test, retire | No SDK replacement for release authority | Exact SHA, real model/DB/browser burn, human signoff | NOT_DONE | KCON-920, KCON-950 |
 
-### CK-05: Native agentic features and approved actions
-- Implement app-context synchronization, suggestions, CopilotKit tool renderers and interrupts through existing governed runtime action APIs.
-- Scoped frontend state can describe active document/task and selected panel; canonical backend must validate all privileged IDs/content independently.
-- Use ApprovalService and current audit pipeline; no duplicated approval tables.
-- Tests: hostile state, forged approval, stale permissions, revocation, expired nonce, concurrent execution, persistence and replay.
+**Upstream feature ≠ installed/usable Karen feature.** Check exports, type signatures, behavior and licensing against the *locked* `1.79.1` dependencies before any migration. In particular, CopilotKit's high-level `CopilotChat` can invoke an initial agent run on mount. Do not mount it against unhydrated persistent history. It is permissible for the **final** architecture to keep native `CopilotChatView` when necessary to preserve verified no-inference boot, provided all equivalent native v2 interactions are integrated through supported slots/hooks. Do not make a component-name swap a success metric.
 
-### CK-06: Generative presentation
-- Keep one `karen.presentation.v1` registry and backend evidence semantics. Adapt the CopilotKit UI renderer, not the model/persistence schema.
-- Verify compositional component allowlist, payload/URI budgets, source authenticity, no arbitrary model JS, safe text fallback and accessibility.
-- Prove typed data on live AG-UI stream, nonstream, reload and persisted history.
+## 3. Explicit ownership and data flow (no duplication)
 
-### CK-07: Runtime-owned chat cancellation and complete replay (P0)
+`User intent + authenticated account/tenant + conversation + saved persona preference` → existing authenticated Next proxy → `/api/copilotkit` compatibility gateway → existing `/api/chat/ag-ui` ingress → `ConversationRuntimeGateway` validates ownership → `ChatRuntime.execute_stream` freezes persona snapshot → `CORTEX` intent/evidence needs → `RuntimePolicy` allowed plan → `NeuroRecall/MemoryRuntimeManager` authorized evidence → `PromptRuntime` approved context → canonical provider routing / ordinary model / approved direct tool / reasoning / WorkflowRuntime → `AgentMedusa` only if eligible → `ActionExecutionGate` before tool side effects → canonical persistence + run finality/receipts + telemetry → `AGUIEventProjection` → CopilotKit SDK state/renderers → user.
 
-**Scope correction (CK-06 follow-on, 2026-10-25):** This stage owns active run lifecycle and lossless conversation restoration. Channels is the distinct CK-07C workstream below. The previously completed CK-06 SDK `connect` response replays only eligible completed plaintext history; its synthetic history-run markers are NOT provider-run receipts or active stream reconnects.
+**Never move these functions into the SDK gateway:** model selection, fallback order, prompt building, memory recall, session ownership, tool invocation, signing/trusting receipts, checkpoint commit, approval authorization, tenant scoping, backend state mutation or agent scheduling.
 
-**One owner:** `ChatRuntime` owns execution, cancellation checkpoints, persistence and terminal truth. The existing canonical conversation repository owns message history. A tenant-scoped durable run record owned by runtime is allowed ONLY for in-flight state/leases/cancel intent and durable execution-event references, not another transcript or SDK session store. Reuse existing PostgreSQL transaction and RLS patterns (as used for approvals and model-download leases). Do not reuse the process-local `copilotkit/agent_ui_service.py` task dictionary as cross-worker authority.
+| Owner | Canonical sources / required changes |
+|---|---|
+| Interaction shell | `src/ui_launchers/Karen-AI-Theme/src/components/chat/copilotkit/{KarenCopilotChat,KarenCopilotConsumerChat,KarenCopilotControlledChat,KarenCopilotHistoryGate,KarenCopilotVerifiedHistory,KarenCopilotVerifiedRail}.tsx`; consolidate, do not fork |
+| Session | `components/chat/SessionProvider.tsx` and existing conversation API/repository |
+| SDK gateway/transport | `src/app/api/copilotkit/[[...slug]]/route.ts` + `_lib/owned-*.ts`; AG-UI proxy and `src/ai_karen_engine/api_routes/chat/runtime.py` |
+| Core execution | `src/ai_karen_engine/core/runtime/{chat_runtime,decision_pipeline,workflow_runtime,chat_run_lifecycle,ag_ui_event_projection,owned_history_projection}.py` |
+| Cognitive, policy, tool | `core/cortex/`, `core/runtime/policy/`, `core/runtime/contracts.py`, existing extension/action gate |
+| Models and prompts | `core/model_runtime/`, `core/expression/`, `core/runtime/prompt/` |
+| Persona | `services/persona/persona_service.py`, `core/persona/contracts.py`, `core/runtime/prompt/persona_contract.py`, `api_routes/users/persona.py`, existing Persona Studio |
+| Memory | `core/memory/`, `core/personalization/`, `platform/memory/`, governed persistence repositories |
+| Agent/workflows | `agent_medusa/`, `core/runtime/workflow_runtime.py`, existing workflow configs/registry |
+| Presentation | `core/runtime/presentation_contract.py`, `components/chat/KarenPresentationRegistry.tsx`, existing source and card renderers |
+| Tools/MCP/skills | `extensions/`, `mcp/`, `extensions/platform/core/host/mcp_integration.py`, existing manifests/capability registry |
+| Isolation | `extensions/platform/core/integration/sandbox_manager.py`; relevant platform isolation and tool gates |
+| Approvals | `services/approvals.py`, `persistence/repositories/approval_repository.py`, `api_routes/automation/approvals.py` |
+| Channels | `services/channels/`, `extensions/channels/`, `config/channels.py` |
+| Observability and release | Existing platform observability and `.github/workflows/{main-quality-gate,chat-system-burn,presentation-contract,beta-release-gate}.yml` |
 
-Required staged work and security contract:
+## 4. Dependency-ordered execution checklist
 
-1. **CK-07A, durable run admission:** Define a migration with tenant_id, user_id, conversation_id, transport run_id, canonical internal execution_id, request/correlation IDs, worker/lease fencing token, finite expiry, status, created/updated/terminal timestamps, and idempotent cancel intent. Choose a composite identity that prevents two callers or tenants with the same SDK runId from sharing a record. Enforce database RLS, appropriate user/tenant scoping, strict transitions, retention and uniqueness. Keep SDK-supplied runId a correlation value, never an authority token. On a missing migration/backend outage, fail closed before model work.
-2. **CK-07B, governed stop:** Authenticate the SDK request, enforce canonical conversation ownership and runtime permission on EVERY request, match the exact execution_id and scoped run, and atomically set cancel_requested. Duplicate stop, already-complete, missing, foreign, or expired-leased runs have deterministic, non-disclosing outcomes. A worker with an active lease observes cancel intent and cancels the actual `ChatRuntime` task, including while upstream model I/O is awaiting; acknowledgements are not proof of cancellation. Handle lease renewal/fencing, worker crash, delayed cancellation, concurrent completion, multiple workers, and lease loss. Disallow stale-owner finalization. Do not forward arbitrary browser headers, tool/state/context or SDK memory authority.
-3. **CK-07C0, finality and receipts:** Only runtime completion after authorized persistence can produce `RUN_FINISHED`. Accepted cancellation produces an explicit non-success termination with stable correlation; never emit fake successful completion, never save a partial answer as a completed assistant message, never cancel another execution. Preserve requested versus actual provider/model, runtime engine, degraded/fallback markers and persistence outcome. Cancellation cannot bypass approval, RBAC, audit or plugin permission boundaries.
-4. **CK-07D, complete history/replay:** Reuse canonical conversation/message records plus governed versioned presentation/event/receipt payloads. Project trusted `karen.presentation.v1`, citations, tool/activity status and `karen.execution_receipt.v1` to CopilotKit with schema validation and safe limits. Do not regenerate outputs or invent missing events. Snapshot/reconnect must distinguish persisted-history playback from live run event continuation; use a durable, ordered event cursor/checkpoint ONLY if canonically persisted. Unknown versions remain unsupported with an explicit error instead of silently dropping data.
-5. **CK-07E, real continuity tests:** Prove model-to-runtime-to-PostgreSQL-to-CopilotKit read-after-write and refresh; per-run identity and replay exactly once; duplicate stop; same runId across users/tenants; interleaved conversations; concurrent stop versus completion; stop during token generation and blocked provider I/O; worker death and lease takeover/loss; browser disconnect; reconnect to live versus completed run; restart; redaction, presentation and receipts. Run against real PostgreSQL and an actual permitted model for E2E claims, in addition to mocked component/unit tests. Compare current assistant-ui behavior and mobile/desktop visual parity.
+> The order below is intentional: **source-of-truth → trustworthy conversation → intelligence → native UX → agentic actions → rich presentation → proof → deletion.** Implement vertical slices using current owners. For every box, add `PR/commit` and **exact proof** before checking it.
 
-**Gates:** Keep `/api/copilotkit/agent/default/stop` denied until B-E are authorized and verified; no fake SDK-side success. Keep #556 draft and assistant-ui mounted until full functional, security, persistence, cancellation, streaming and visual parity. Merge the migration and runtime code only with explicit exact-head evidence and no unowned legacy artifacts. Favor extension of existing owner modules over duplicating helper classes.
+### Wave 0 — Architecture, inventory and live status (P0, gate for other waves)
 
-### CK-07C: Channels + OpenTag adapter
-- Extend canonical ChannelAdapter in the existing `extensions/plugins/` convention and PluginKernel; use OpenTag as reference, not agent code/runner ownership.
-- Investigate managed CopilotKit Intelligence or self-operated runner explicitly. Default remains local-first with optional managed delivery, not silently required hosted infrastructure.
-- Slack read-only signed event/identity binding first, then native cards, authorized approvals, idempotent write, durable outbox and web-history continuity; Teams afterwards.
-- Gate with `tests/extensions/test_channel_*`, webhook transport tests, `tests/integration/test_channel_claim_concurrency_postgres.py` plus live Slack and browser proof.
+- [ ] **KCON-001** Audit all current runtime/chat/persona/agent entrypoints, route mounts, dynamic imports, test references, flags and extension manifests; classify each as canonical, adapter, useful incomplete, legacy dead, or experimental. **Owner:** architecture. **Proof:** import/call graph and reference audit at exact SHA.
+- [ ] **KCON-002** Reconcile current capability inventory with `docs/capabilities/baseline.v1.json` and existing UI truth map. Record backend existence, UI exposure, source-only vs browser verification, config availability, safety and UX dependencies. **Proof:** reviewed matrix and eligibility audit.
+- [ ] **KCON-003** Verify locked CopilotKit 1.79.1 and all transitive AG-UI/React/Next/Tailwind dependencies using actual installed package types and reproducible install; document which hooks/components are *really* available. **Proof:** lockfile, `npm ls`, import test, build.
+- [ ] **KCON-004** Audit duplicate chat/agent/formatter/provider/plugin/SDK compatibility services, including `agents/agent_orchestrator.py`, `copilotkit/` and `integrations/providers/copilotkit_provider.py`; do not delete before consumers/protection proven. **Proof:** dependency graph and replacement map.
+- [ ] **KCON-005** Capture clean signed-in baseline journeys, UX/screenshots, first-token latency, total latency, empty responses, token budget, selected vs actual provider and all current failure classes. **Proof:** immutable test artifacts and deployed SHA.
+- [ ] **KCON-006** Reconcile open #659 against current main; ensure first-prompt search/movie projection and canonical replay are not independently reimplemented in this initiative. **Proof:** linked PR decision, conflict check and post-merge status.
+- [ ] **KCON-007** Prove target running API and deployed browser revision match reviewed git SHA; local source and unmerged PR are not deployed truth. **Proof:** signed revision / browser result.
+- [ ] **KCON-008** Record baseline release decision and unknowns before changing defaults: **NO consumer readiness assertion** without the release gate. **Proof:** PR review record.
 
-### CK-08: Reference-audited legacy retirement
-- Remove dead `@assistant-ui/react` and `@assistant-ui/react-ag-ui` packages, import paths, obsolete renderers/stores, styles, flags and docs when proven superseded.
-- Audit pseudo-provider `integrations/providers/copilotkit_provider.py` and historical `copilotkit/` task/session files for real references and security behavior before retiring.
-- No duplicate channel worker, approval service, runtime/route/store or mirrored CopilotKit UI remains.
-- Document each deletion's purpose, replacement, references, test evidence, risk and rollback; block resurrection with architecture contracts.
+### Wave 1 — Native CopilotKit interaction without losing durable trust (P0)
 
-### CK-09: Consumer readiness and distribution
-- Run existing CI and real provider/PostgreSQL/browser/channel tests on exact target commit.
-- Include screenshot review, visual contrast/typography, keyboard/focus, responsive, offline/unavailable, missing auth, stale session, provider down, feature flag off and worker restarts.
-- No release/distribution build until a human validates consumer readiness. No invented success receipts.
+- [ ] **KCON-110** Keep exactly one mounted CopilotKit SDK provider/agent/chat for the authenticated scoped conversation. Prove no duplicate renderer, composer, shadow agent or useAgent registration across shell/workspaces. **Proof:** real browser mount/call counters, tests.
+- [ ] **KCON-120** Evaluate high-level `CopilotChat` against controlled `CopilotChatView` with saved history and new chats. Decision must show whether built-in setup can meet **zero inferred runs on mount**, no duplicate history and preserved draft. Adopt high-level only if every guard holds; otherwise retain native view and reuse native hooks/slots. **Proof:** initial-mount zero-run adversarial test on pinned SDK.
+- [ ] **KCON-130** Verify SDK message streams, lifecycle, terminal states, error and stop event parity through existing AG-UI proxy; preserve request/correlation IDs. **Proof:** protocol tests plus real streaming model.
+- [ ] **KCON-140** Converge SDK input lifecycle and Karen CAS-persisted drafts; never clear or invent a successful send before server acknowledgement. Support keyboard, submit, stop, failed-message restore and concurrent edits. **Proof:** browser reload/multi-tab/conflict/failed-submit suite.
+- [ ] **KCON-150** Reconcile native `useThreads`/drawer, if used, with `SessionProvider` and canonical conversation repository; no second thread history, phantom thread, or unowned delete/rename. **Proof:** create/search/list/rename/archive/delete/pagination with RLS.
+- [ ] **KCON-160** Make supported history safely **usable and continuable**; preserve canonical text independent of rich attachments while verifying events separately. Unknown rich content is withheld, counted, and never trusted; don't block ordinary authorized conversation forever. Define an owner-validated continuation handshake before enabling sends from recovered mode. **Proof:** 409, invalid event, replay, 500+ turns, tenant/cross-user and safe continuation tests.
+- [ ] **KCON-170** Evaluate edit/regenerate/retry/branch semantics, if present in pinned SDK, against immutable receipts and conversation versioning. Do not surface an action until backend supports honest append/branch semantics. **Proof:** audited accepted/rejected mutation tests.
+- [ ] **KCON-180** Wire native suggestions/welcome prompts only from available, authorized backend capabilities. Prevent pre-mount model runs, fictional tools and cross-persona suggestions. **Proof:** first mount and disabled-capability tests.
+- [ ] **KCON-190** Preserve shared shell workspace context and optional sidebar/popup appearance without mounting another independent agent or memory store. **Proof:** navigate Chat/Planner/Persona/Agents with unchanged conversation/draft.
+- [ ] **KCON-195** Remove only duplicated local presentation and composer state after native slots prove parity; retain unique safety controls. **Proof:** import-reference audit and UX diff.
 
-## E. Exact proof entry points already in repo
+### Wave 2 — Core intelligence and model attribution (P0)
 
-Backend:
+- [ ] **KCON-210** Verify one-prompt CORTEX topology selection for simple chat, time, weather, news, explicit reasoning, tool action, graph workflow and subagent request. No UX mode switch needed for eligible tasks. **Proof:** request → decision → policy → actual executor trajectory for each.
+- [ ] **KCON-211** Test explicit preferred provider/model does not silently downgrade the separate reasoning path or force a different topology; refactor any consequential branch condition in `chat_runtime.py` using canonical capability/routing policy, not scattered overrides. **Proof:** matrix of selected/default models and direct/reasoning/graph routes.
+- [ ] **KCON-212** Audit no repeated expensive tool/provider startup on short chats; eliminate duplicate inference/formatting/response synthesis where unnecessary. **Proof:** measured p50/p95 first token and end-to-end budget across warm/cold runs.
+- [ ] **KCON-213** Unify ordinary and streamed answer behavior (grounding, token usage, error finality, direct capabilities) under current runtime contract. **Proof:** identical inputs and completed receipts, no "status-only success".
+- [ ] **KCON-220** Validate provider registry health, enabled models, user preference and true fallback order; UI shows actual runtime engine, requested vs executed provider/model, degraded and honest unavailable. **Proof:** real local and optional external/provider-down integration.
+- [ ] **KCON-221** Prevent "internal continuity candidate", tool IDs, runtime JSON/debug metadata or unverified reasoning internals from leaking as user-facing ordinary speech. **Proof:** response hygiene adversarial corpus and real answer review.
+- [ ] **KCON-250** Audit context token selection, history truncation, continuity candidate inclusion, memory-source provenance and task prompt adherence with the selected model. **Proof:** PromptRuntime inclusion receipts and regression quality corpus.
+- [ ] **KCON-260** Close verified direct capability results for current time/weather/search; ensure supported data shapes, timezone, source freshness, denial and first-turn/reload parity. **Proof:** real tool receipts; #658 merged is source evidence only.
+
+### Wave 3 — Persona theory becomes functional specialization (P0/P1)
+
+- [ ] **KCON-230** Confirm persona contract split: identity/purpose and collaboration preferences are **data**, never elevated system policy, model selector, memory grant, tool permission, agent runtime or sandbox owner. **Proof:** typed authority-denial and prompt-injection tests.
+- [ ] **KCON-231** Reconcile `core/persona/contracts.py`, PersonaService CRUD, revisions and PromptRuntime's presentation allowlist; remove schema drift, not protections. **Proof:** import, auth, migration, API, service and prompt tests.
+- [ ] **KCON-232** Extend the **existing permitted prompt projection** with bounded purpose, role terminology, collaboration/task method and authorized document reference descriptors. Retain policy/system precedence; test same-model controlled task quality, not only tone. **Proof:** real model A/B, applied-field evidence, token/latency changes.
+- [ ] **KCON-233** Snapshot one approved persona revision **before** CORTEX/evidence/prompt for each turn, preserving immutable user/tenant identity, purpose scope, and reset on principal change. **Proof:** concurrent tabs, switch during run, tenant and private-scope tests.
+- [ ] **KCON-234** Make Persona Studio save, activate, preview, version/conflict/revert and effective fields truthful. Show preview as a separate real-model transaction; never fabricate saved preference success. **Proof:** real PostgreSQL + signed-in browser.
+- [ ] **KCON-235** Attach approved project resources/skills by reference to persona purpose; actual retrieval/permissions are checked each run, and revocation invalidates access. **Proof:** revoked data, cross-persona/cross-tenant isolation, denied skill.
+- [ ] **KCON-236** Add governed correction-to-preference candidate workflow with explicit consent, versioning, rollback and evidence source; never silently promote quoted text into directives. **Proof:** accepted/rejected/quoted corrections and reload tests.
+- [ ] **KCON-237** Persona UX: active identity, what the persona knows, applicable collaboration fields, why a field was ignored, evidence gaps, and effective source status. **Proof:** consumer usability and accessible controls.
+- [ ] **KCON-238** Evaluate helpfulness gain against unchanged base model and task suite (accuracy, preference adherence, retrieval relevance, leakage, latency) before promoting industry labels as "expert" capability. **Proof:** repeatable real-model evaluation and negative controls.
+
+### Wave 4 — Memory, durable identity and history (P0/P1)
+
+- [ ] **KCON-240** Verify STM, episodic, LTM, NeuroRecall and NeuroVault ownership/retrieval/persistence across simple chat, tool and agent paths. Avoid new persona/agent-specific memory stores. **Proof:** live PostgreSQL + authorized retrieval lineage.
+- [ ] **KCON-241** Check conversation history exact owner and tenant scope at API, database, SDK bridge, agent invocation, tool output and restore; no client-supplied alias expansion. **Proof:** RLS and cross-principal denial.
+- [ ] **KCON-242** Verify user+assistant write order, atomic completed-run identity, evidence and presentation capture, idempotent retry and no false persistence success. **Proof:** fault injection and read-after-write.
+- [ ] **KCON-243** Reconcile private persona-scoped recall vs conversation continuation. Unauthorized context stays withheld; a backend-derived allowed text projection can remain visible. **Proof:** persona switch and context authorization tests.
+- [ ] **KCON-244** Audit message retention/export/delete/redaction and artifact lineage, including saved events and caches. **Proof:** retention, export, delete, backup/restore and cross-tenant negative cases.
+
+### Wave 5 — Agents, workflows, tool execution and governed autonomy (P1)
+
+- [ ] **KCON-450** Map real Medusa/LangGraph activity event kinds to SDK step/tool progress, stable step IDs and terminal receipts. No fabricated plans from model prose or an empty activity rail incorrectly implying failure for normal chat. **Proof:** real run emitted/replayed event parity.
+- [ ] **KCON-460** Enable one ordinary chat prompt to invoke an eligible registered agent without navigating the Agents workspace; preserve catalog eligibility, policy and user consent. **Proof:** signed-in request, actual tool action, verified output.
+- [ ] **KCON-470** Validate `WorkflowRuntime` → Medusa/Deep Agents on a controlled opt-in tenant and installed model; no rollout of disabled-by-default Deep Agents merely to animate UI. **Proof:** actual delegated task, cancellation, failure, durable status.
+- [ ] **KCON-471** Define a single objective/plan/run/step lifecycle, including budgets, retries, timeout, checkpoint provenance, restart and resume restrictions. **Proof:** multi-worker and interrupted-run test.
+- [ ] **KCON-472** Restrict subagents to valid graph tasks; enforce allowed agents, tools, per-step budget, tenant identity and action gate after each delegation. **Proof:** hostile subagent, bad scope and denied tool tests.
+- [ ] **KCON-480** Store verified outputs/artifacts in existing governed repositories; show accepted, partial/failed and not-run results honestly. **Proof:** artifact integrity, ownership and download.
+- [ ] **KCON-490** Connect Planner, Tasks, Jobs and scheduled runs to chat actions through existing service APIs; authorization and persistence remain server-owned. **Proof:** create/modify/delete, real schedule, stop, replay and denial.
+- [ ] **KCON-495** Verify no shadow agent execution authority in legacy `agents/agent_orchestrator.py`, old copilot providers, LangGraph delegates or client action handlers. **Proof:** imports/route/call audit; retire after safe coverage.
+
+### Wave 6 — Native tools, approvals, MCP, skills, sandbox and channels (P1)
+
+- [ ] **KCON-410** Add SDK native tool renderers for observed canonical tool calls and statuses, with typed, bounded name/arguments/results and default safe fallback. **Proof:** legitimate/tool-error/unknown-tool/live-replay contracts.
+- [ ] **KCON-420** Add frontend tools only for bounded UI-local intents; privileged mutations execute through existing authenticated backend action gates with fresh policy/RBAC/tenant validation. **Proof:** forged client state and revoked capability negative tests.
+- [ ] **KCON-430** Bind native interrupt/HITL form/confirmation to existing ApprovalService, immutable action digest, one-shot consumption, expiration and exact-run reauthorization. **Proof:** approve/reject/expire/replay/race tests, visible pending state after refresh.
+- [ ] **KCON-440** Project safe scoped app context with native CopilotKit state hooks only after schema/byte-limit validation. State snapshots/deltas are presentation hints, not persisted truth or action permissions. **Proof:** malicious state, oversized input and cross-tenant denial.
+- [ ] **KCON-500** Inventory actual existing MCP clients/registry and extension PluginKernel. Add/update only canonical manifest-backed adapters; do not create another MCP registry or client credential cache. **Proof:** discovery/connect/deny/timeout/disable tests.
+- [ ] **KCON-510** Map skill manifests/prompt contracts/capability eligibility to task decisions and persona resource references without granting persona ownership of tools. Verify installed skill capability against live health. **Proof:** version/permission/schema and real execution receipt.
+- [ ] **KCON-520** Audit sandbox isolation for filesystem, command execution, code runners, MCP Apps and external artifact processing; enforce per-run tenant, egress, secrets, quotas, cleanup and audit. No sandbox allocated just for selecting persona. **Proof:** escape, secret, cross-tenant, timeout, cleanup tests.
+- [ ] **KCON-530** Choose native file/attachment UX only where SDK and Karen backend support it; validate MIME/size/scanning, model capability, explicit resource scope and post-revocation reads. **Proof:** real image/document upload and denial/quota/browser refresh.
+- [ ] **KCON-540** Preserve browser/local dictation via current Karen port until a native SDK replacement proves permission, cancellation and draft fidelity. **Proof:** permitted/denied mic, long speech, stop/navigation, browser.
+- [ ] **KCON-550** Map optional CopilotKit Channels SDK to existing ChannelHost/ChannelAdapter and owned inbox/outbox; verify signed ingress, identity linking, approval, redaction, delivery retries and no second hosted agent. **Proof:** one real channel + browser readback before broad rollout.
+- [ ] **KCON-551** Validate explicit opt-in for managed Channels/Intelligence features; core local chat, models, memory and governance must work without hosted license/API key. **Proof:** offline/local-first and disabled-key tests.
+
+### Wave 7 — Generative UI, grounding, artifacts and response quality (P0/P1)
+
+- [ ] **KCON-700** Verify natural-language text response through CopilotKit with no internal metadata leakage, valid Markdown, copy, citations and accessible typography. **Proof:** real first turn, long answer, partial stream, replay.
+- [ ] **KCON-710** Define a **small reusable** set of bounded presentation primitives (table, comparison, source-list, chart, steps, document/artifact, action/approval, media only where authorized) inside existing `presentation_contract.py` and `KarenPresentationRegistry.tsx`. Avoid one renderer per topic. **Proof:** typed schema and adversarial unknown/oversized/hostile payload.
+- [ ] **KCON-711** Prove any A2UI, MCP App or richer generated component is data-only/allowlisted or isolated; no model-authored HTML/JS executable in privileged UI. **Proof:** malicious HTML/URL/protocol, CSP and sandbox tests.
+- [ ] **KCON-720** Repair all admitted time/weather/date/planner first-prompt cards and verify exact equality after durable history reload. **Proof:** real tool observations, first prompt, reload, denial.
+- [ ] **KCON-730** Cover news, current movies, recipes, research summaries, recommendations and comparisons using eligible live tools and reusable component types, not invented evidence. **Proof:** one-prompt table/cards, citations, serialized replay, stale/failure handling; reconcile #659 first.
+- [ ] **KCON-740** Decide whether A2UI/MCP Apps are required for consumer launch; otherwise DEFER with explicit risk and documented API compatibility/sandbox gate. **Proof:** security assessment and exact SDK support matrix.
+- [ ] **KCON-750** Preserve canonical citation/source IDs and safe external links from runtime through stream and reload; block model-generated fabricated sources. **Proof:** grounded-vs-forged source, deleted source, URL safety.
+- [ ] **KCON-760** Reuse existing artifact/export/print capability only after backend ownership/format/access checks. **Proof:** output is identical to verified server artifact, with correct MIME and permission.
+- [ ] **KCON-770** Treat failures as honest outcomes: no "success" for empty model text, missing image, unsupported card, partial run, failed persistence or unavailable tool. Render useful source-backed text when rich UI alone fails safely. **Proof:** fault matrix + screenshot.
+- [ ] **KCON-771** Verify user-selected persona and layout preferences do not change facts, evidence scope, privacy or provider permission. **Proof:** same evidence under multiple personas and layouts.
+
+### Wave 8 — Security, data controls and observability (P0, continuous)
+
+- [ ] **KCON-600** Threat-model all CopilotKit request/response fields: `tools`, `state`, `context`, `forwardedProps`, run/thread IDs, redirects, headers, cookie forwarding and XSS. Reject unauthorized nonempty fields until specifically gated by typed server policy. **Proof:** hostile browser request suite.
+- [ ] **KCON-601** Reject AG-UI redirect re-POST to off-origin destinations; fixed backend origin, no client-controlled URLs and request-scoped credential forwarding. Check actual installed AG-UI SDK behavior, not old issue claims. **Proof:** controlled 301/302/303/307/308 hostile redirect test.
+- [ ] **KCON-602** Test permissions at *final side effect*, including admin/tool/approval/channel/sandbox/extension execution; protect session and user/tenant isolation under concurrent requests. **Proof:** RBAC + RLS + mutation denial.
+- [ ] **KCON-603** Check secrets and sensitive evidence never appear in prompts/traces/SDK event payloads or tool UI; external results are untrusted instructions. **Proof:** seeded secret and prompt-injection negative tests.
+- [ ] **KCON-604** Validate run lifecycle cancellation is lease-fenced, per-tenant, exact-run, idempotent and terminal truth reflects committed results, not a client abort. **Proof:** live multi-worker, blocked-provider stop, crash and cancel race.
+- [ ] **KCON-650** Emit/read structured `request_id`, `correlation_id`, tenant/user/session/conversation, intent, persona revision, route, plan, provider/model, fallback, skill/tool/plugin IDs, progress and memory recall count. **Proof:** sampled end-to-end trace with redaction.
+- [ ] **KCON-651** Measure p50/p95 time-to-first-token, total latency, startup overhead, cancellation success, model calls, tool success, replay failures, first-prompt presentation, UI engagement and eval quality per topology. **Proof:** baseline-vs-change dashboard and reproducible queries.
+- [ ] **KCON-652** Surface safe consumer-facing receipts and errors, leave developer detail in authorized diagnostics. No synthetic success or claims of model intelligence from a source observation. **Proof:** UI contract and actual trace parity.
+
+### Wave 9 — UX / visual / accessibility / deployment / cleanup (P0 for release)
+
+- [ ] **KCON-900** Perform signed-in human UX review on desktop/tablet/mobile: navigation, layout, font sizes, scroll parity, sticky composer, focus, keyboard, reduced motion, loading/error states, colors, contrast, message density and tool discoverability. **Proof:** screenshots + manual report at deployed SHA.
+- [ ] **KCON-901** Confirm first-time user can discover and execute Chat, Personas, Agent tasks, Planner, registered tools, model selection, Settings, history, voice and available presentation without seeking hidden admin pages. **Proof:** 10 real consumer scenarios with success receipts.
+- [ ] **KCON-902** Respect offline/local-first degradation, feature flags, unavailable provider/tool and reconnect without dishonest generated answers. **Proof:** controlled network/drop, disabled-feature and outage tests.
+- [ ] **KCON-910** Preserve reproducible pnpm/npm lock authority and SDK stylesheet compatibility; no wholesale Tailwind/React upgrades solely for CopilotKit. **Proof:** clean install, typecheck, tests, bundle and CSS screenshot.
+- [ ] **KCON-920** Require exact-head Main Quality Gate, Chat System Burn, Presentation Contract, production auth, migration/schema and front-end tests. Ensure path triggers cover changed scoped files. **Proof:** CI run URLs at one SHA.
+- [ ] **KCON-930** Require real PostgreSQL, real enabled model, authenticated AG-UI browser stream, actual tool/agent action, saved/replayed presentation, tenant denial and cancellation tests; no skipped test counted green. **Proof:** clean live acceptance artifacts.
+- [ ] **KCON-940** Run remaining complete-loop scenarios: cold boot, warm chat, long thread, reload, persona switch, model request, tool, approval, artifact, provider failover, crash, worker restart, cross-tenant attack. **Proof:** pass/fail ledger and screenshots.
+- [ ] **KCON-950** After successor equivalence, audit/decommission replaced assistant-ui, deprecated `agents/agent_orchestrator.py`, old CopilotKit pseudo-provider, duplicate API shims and redundant formatter/renderer code **one artifact at a time**; preserve migrations, RBAC, auth and audit. **Proof:** purpose → replacement → import/reference search → deletion commit → tests → risk.
+- [ ] **KCON-960** Update stale docs/readmes/help and operator runbooks; report actual available vs staged capabilities, environment flags, known limits and ownership. **Proof:** versioned documentation review.
+- [ ] **KCON-970** Human consumer-readiness signoff before production rollout/distribution; exact deployed revision, browser proof and rollback verified. **Proof:** signed human review + release evidence.
+- [ ] **KCON-980** Close initiative only when **every required checkbox** is DONE or explicitly marked DEFERRED by a documented product decision; no open P0, no bypassed security gate, no unresolved first-prompt/replay loss. **Proof:** final review against this document.
+
+## 5. Mandatory acceptance matrix, real user prompts
+
+All cases start from a **fresh authenticated browser** and **one user action** unless explicitly marked as follow-up. Compare text, observed tool/model receipt, state, database records, stream, reload and any permitted screenshot. Never infer actual tool execution from a badge.
+
+| Scenario | Expected observed behavior | Required owner evidence |
+|---|---|---|
+| "Hello" and a follow-up | Fast model answer, continuous context, no agent activity falsely implied | prompt/provider trace, 2-turn readback |
+| "What time is it?" | Verified local clock, natural explanation, valid first-turn card | successful time capability + same restored envelope |
+| "Weather now" | Authorized observation or honest unavailable | tool evidence, no invented forecast; replay |
+| "Latest news" and "New movies" | Retrieved dated sources with truthful publication context and first-turn cards | source IDs/URL bounds, #659 disposition |
+| "Give me a recipe" | Complete usable recipe, optional structured steps without fake ingredients | model/task output contract; verified renderer |
+| "Explain this deeply" + explicit model | No unexpected loss of reasoning topology; quality not downgraded by provider selection | decision/allowed reasoner/provider trace |
+| "Create Troy and use my approved brand guide" | Safe persona save/activate, purpose-aware answer and scoped resource read | revision, applied fields, authorized evidence |
+| "Switch to Kent and review my repo" | New persona scope without leaking Troy; optional governed repository tools | persona snapshot + tenant gates |
+| "Audit repo and run tests" | Agent plan, truthful steps, tool execution and verified outcome from ordinary chat | Medusa step IDs, tool receipts, artifact |
+| "Change my planner deadline" | State preview and required approval, one canonical write | approval nonce, database receipt, replay |
+| Stop mid-generation | One exact-run cancel with honest pending/terminal status | durable lease/run ID and no late false success |
+| Refresh after tool + UI card | Same canonical messages, approved rich content and receipts, no new LLM call | byte-for-byte evidence envelope, zero mount runs |
+| Legacy/unknown rich history | Owner-authorized text readable; unsafe rich withheld; safe continuation only when backend protocol verified | 409 recovery, denial, continuation tests |
+| Login as another tenant | No restored thread, persona, draft, memory, tool or run from prior principal | RLS + browser isolation |
+| Offline/provider down | Visible degraded/unavailable status, preserved unsent draft, no fake assistant answer | circuit/fallback/persistence telemetry |
+| Voice, image/file and mobile | Controls only for supported options; correct permissions and responsive focus | voice/upload owner tests + human UX |
+
+Required nonfunctional budgets: fix **measured** current baseline first. Set provisional SLOs (p50/p95 TTFT, turn success, crash-free runs, history restoration success, accessible flows) in an operator-approved config/quality contract after 10+ representative cold/warm traces; do not invent absolute latency benchmarks without real hardware/provider measurements.
+
+## 6. Exact proof commands and scope notes
+
+Execute at the actual candidate SHA and report pass/fail/not-run. These are entrypoints, **not** a claim they were executed while authoring this ledger.
+
+Backend, from repository root:
+
 ```bash
-python -m compileall src
-pytest tests/api_routes/test_chat_ag_ui_transport.py tests/services/test_approval_service.py -q
-pytest tests/architecture/test_runtime_approval_authority.py tests/architecture/test_plugin_runtime_authority.py -q
-pytest tests/extensions/test_channel_host_lifecycle.py tests/extensions/test_channel_ingress_service.py tests/extensions/test_channel_execution_service.py -q
-pytest tests/integration/test_channel_claim_concurrency_postgres.py -q
+python -m compileall -q src server scripts
+pytest tests/architecture/test_copilotkit_migration_wiring.py -q
+pytest tests/core/runtime/test_persona_execution_snapshot.py tests/core/runtime/test_persona_prompt_authority.py -q
+pytest tests/core/runtime/test_chat_runtime_stream_contract.py tests/api_routes/test_owned_history_projection.py -q
+pytest tests/agent_medusa/ -q
+pytest tests/services/test_persona_activation_single_authority.py tests/services/test_persona_atomic_activation.py -q
+pytest tests/core/runtime/test_verified_weather_presentation.py -q
+pytest tests/architecture/test_response_lifecycle_ownership_contract.py -q
 ruff check src tests
 mypy src
+docker compose config
 ```
-Integration test environments (Postgres, channel credentials, live model) must be real when used to claim E2E success; a missing test dependency yields `not_run` or `blocked_environment`, never green.
 
-Frontend (from `src/ui_launchers/Karen-AI-Theme`):
+Frontend, from `src/ui_launchers/Karen-AI-Theme`; verify currently defined scripts/package manager before execution:
+
 ```bash
 npm run lint
 npm run typecheck
 npx vitest run
 npm run build
-npm run test:e2e -- e2e/karen-durable-history-restoration.spec.ts
-npm run test:e2e -- e2e/kchat-workspace-continuity.spec.ts
-npm run test:e2e -- e2e/ux-user-journeys.spec.ts
+npx playwright test e2e/karen-copilotkit-native-acceptance.spec.ts e2e/karen-copilotkit-protocol-acceptance.spec.ts e2e/kchat-workspace-continuity.spec.ts
 ```
-The currently inspected package.json has no `test` script, so run the existing Vitest CLI directly or add one through the canonical package scripts only after validating coverage. Use the resolved package-manager authority and supported CLI arguments in the checked-out project. Review generated screenshots, not just pixel-diff flags.
 
-Existing workflow owners: `main-quality-gate.yml`, `chat-system-burn.yml`, `presentation-contract.yml`, `plugin-ci.yml`, `karen-history-browser-acceptance.yml`, `production-auth-security.yml`, `production-first-boot-smoke.yml`. Update their path triggers when new CopilotKit/channels files affect behavior.
+Existing CI ownership: `main-quality-gate.yml`, `chat-system-burn.yml`, `presentation-contract.yml`, `beta-release-gate.yml`, auth-security and dedicated browser runs. **Observed real-model/postgres/production claims require correctly provisioned test infrastructure**. Mock tests, skipped browser tests, a green source-level contract or a provider health probe are insufficient for release proof. Record each actual workflow run ID and associated SHA alongside task closure.
 
-## F. Decision gates
+### Required PR update and retirement scorecard
 
-1. **Preserve:** if CopilotKit cannot match a Karen feature without weakening the user journey, keep the feature implemented via Karen extension/slot until it can.
-2. **Prefer:** when CopilotKit built-in behavior is equivalent and verified, use it and remove bespoke duplicate UI.
-3. **No accidental second owners:** every new source file must name its canonical module owner and who owns persistence, execution, RBAC and telemetry.
-4. **Local-first:** external channel delivery may be optional; no mandatory CopilotKit-managed dependency for local chat, model execution, memory or core UI.
-5. **No false success:** live request completion, provider identity, persistence and channel delivery claims originate in server receipts.
-6. **Retire:** when both old and new implementation work, do not keep both indefinitely. Complete cutover + deletion with green contract tests.
-7. **Honest status:** docs/plans vs code-installed vs wired vs E2E verified vs consumer-ready are distinct, always.
+Every scoped implementation PR must show:
 
-## G. New CI contract requirements
+```text
+Ledger IDs: KCON-...
+Existing owner reused:
+CopilotKit feature adopted (exact v2 import/version):
+Karen behavior retained:
+Changed files / existing aliases removed:
+User-visible capability / eligibility / disabled behavior:
+Schema/API migration impact:
+Auth / tenant / RBAC / consent / audit impact:
+Streaming / persistence / replay / stop impact:
+Telemetry / requested-vs-actual model impact:
+Tests run (command, run URL, exact SHA, pass/fail/not-run):
+Real model / PostgreSQL / browser proof (or explicit NOT_RUN):
+Stale refs and deletion audit:
+Ledger checkbox state + remaining blockers:
+Merge / rollout / rollback:
+```
 
-- Capability impact: relevant old capability tests are automatically selected when source paths change.
-- Forbidden ownership imports: frontend cannot choose provider/fallback or persist memory; routes cannot invoke ungoverned plugins.
-- Dependency lock: no duplicate CopilotKit v1 chat, no orphan assistant-ui packages after cutover, one compatible AG-UI graph.
-- Approval policy: UI cannot report approved write success from a click or HTTP 200 alone.
-- Channel contract: SDK integration cannot open a second inbox/outbox, identity ledger, agent runner or tenant mapper.
-- Browser UX: first run, long conversations, overflow, scroll parity, draft retention and actual screen-reader accessible controls.
-- Release: exact-head tests and manual certification required for consumer-ready state.
+**Continuous update rule:** scoped code changes without a corresponding edit to this canonical file must fail the existing Main Quality Gate. The CI guard should be narrow and path-based so unrelated repository work is not forced into the initiative; this is *process enforcement*, not a new configuration or runtime. A documentation-only PR may refresh evidence without changing source. If multiple PRs overlap, rebase/resolve and update from latest merged ledger before merging.
 
-## H. References
+## 7. Risks, sequencing and decisions to revisit
 
-- CopilotKit v2 API: https://docs.copilotkit.ai/reference/v2
-- CopilotKit v2 chat slots: https://docs.copilotkit.ai/reference/v2/components/CopilotChat
-- CopilotChatView slots: https://docs.copilotkit.ai/reference/v2/components/CopilotChatView
-- CopilotKit CSS: https://docs.copilotkit.ai/agent-spec/custom-look-and-feel/css
-- Channels SDK: https://github.com/CopilotKit/channels-sdk
-- OpenTag: https://github.com/CopilotKit/OpenTag
-- OpenTag setup: https://github.com/CopilotKit/OpenTag/blob/main/setup.md
+- **High-level controller:** `CopilotChat` auto-run may break zero-inference history boot; status is evaluation pending, not a mandate to swap. Preserve `CopilotChatView` if high-level cannot provide safe equivalent behavior.
+- **SDK-vs-runtime:** SDK components can improve UX, not intrinsically intelligence. Prompt, context, model and CORTEX fidelity must be proven separately.
+- **Legacy replay:** strict verification is valuable, but must not strand an entire saved conversation. Data recovery and safe continuation are distinct stages.
+- **Agentic readiness:** a disabled or unverified Deep Agents adapter is not an implemented user capability. Do not display fake agent steps.
+- **Persona specialization:** avoid authority escalation through free-text `system_prompt`; expand governed task-purpose *data* to PromptRuntime with precedence and tests.
+- **Tool/MCP/App UI:** MCP Apps, A2UI and frontend tools are optional native possibilities, not a license to execute user-supplied code or bypass backend gates.
+- **Channels:** existing channel host is the owner. CopilotKit managed runners must be opt-in and not required for local chat.
+- **CSS/build:** preserve Karen's existing design tokens/scroll/typography and security policy, with pinned package verification before upgrades.
+- **Parallel PRs:** PR #659 may edit presentation contracts; don't reimplement its scope on this branch. Resolve against current main and update one ledger row instead.
 
-**Evidence boundary:** Verified source paths and documented upstream behavior; no dependency install, code cutover, test run or UI screenshot claim in this plan.
+## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+| Date | Main/candidate SHA | What changed / observed | Affected IDs | Proof / next gate |
+|---|---|---|---|---|
+| 2026-11-05 | `main@66c8913e` | Consolidated earlier static plan into this one living ledger; no runtime/code/browser acceptance claimed; CopilotKit view and source-level runtime mapped | KCON-001–980 baseline | Source review only; all implementation task checkboxes remain open pending task-specific proof |
+| 2026-11-05 | `main@66c8913e` | #648 and #658 previously merged; first-prompt cards/replay remain unverified in deployed consumer browser; #659 open | KCON-160, 260, 720, 730 | Exact-head authenticated browser + #659 conflict/CI disposition |
 
-## I. Production Runtime compatibility decision (SDK evidence 2026-10-25)
-
-The official v2 API names the provider `CopilotKitProvider` from
-`@copilotkit/react-core/v2`; it uses `agentId`, not the v1 wrapper's
-`agent` prop. The high-level `CopilotChat` can run when first mounted
-and clears its internal composer after submit. Treat these as concrete
-consumer-journey hazards, not mere styling concerns.
-
-**Do not use the development-only `agents__unsafe_dev_only` direct-agent
-connection in a production migration.** CopilotKit documents that direct
-HttpAgent connections bypass the supported Runtime middleware path and
-lose supported ecosystem features, including threading. Establish the
-supported `@copilotkit/runtime/v2` host using `CopilotRuntime` and
-`createCopilotRuntimeHandler` as a restricted gateway to the existing
-`/api/chat/ag-ui` backend. The SDK gateway is an interaction adapter only.
-
-Before implementation of the gateway, establish these exact contracts:
-
-1. **Per-request credential propagation.** The currently authenticated Karen
-   principal and tenant must be resolved by existing server-auth middleware.
-   Never trust browser-supplied `x-user-id`/`x-tenant-id` or a cached
-   process-global identity. Forward only canonical allowed auth headers and
-   cookies to backend, and scope any SDK agent/middleware state per principal.
-2. **Absolute internal endpoint.** A server-side SDK `HttpAgent` must reach
-   the configured trusted backend base URL rather than a browser-relative
-   `/api/chat/ag-ui`. Do not use user-supplied host or target URLs.
-3. **Thread normalization.** The CopilotKit thread ID must match Karen's
-   owned conversation identity. First-run creation, resumed threads,
-   cancellation and ownership must be tested. No phantom SDK-only threads
-   and no in-memory duplicate canonical transcripts.
-4. **Request compatibility.** Karen's AG-UI endpoint deliberately rejects
-   nonempty client `tools`, `context` and `state`, and accepts only
-   allowlisted `forwardedProps`. The new SDK must not send unaudited shared
-   state or frontend tools into that endpoint. Extend canonical ingestion only
-   with explicit policy-safe input schemas and tests where needed.
-5. **Runtime discovery and shutdown.** Probe the SDK `/api/copilotkit/info`
-   response for known agent configuration and matching multi-route mode,
-   then verify actual authenticated run, cancel, transport failure,
-   backend-disabled response and serialized replay. A healthy `/info`
-   response alone cannot certify chat functionality.
-6. **Local first.** No CopilotKit Intelligence key is mandatory for local
-   chat. Current SDK docs describe tradeoffs between local in-memory
-   runner and managed features. Do not enable a second durable SDK
-   conversation/thread store; preserve Karen's authoritative history.
-7. **SDK/package graph.** Avoid `@copilotkit/react-ui` v1 chat. Use one
-   pinned compatible `@ag-ui/client` version if explicitly imported;
-   current backend/frontend uses 0.0.59 while recent CopilotKit guidance
-   documents version 1.0.2. Run a real `npm ls @ag-ui/client`, lockfile
-   verification and a live stream test before migration.
-
-The migration guard implementation starts in
-[PR #555](https://github.com/agustealo/AI-Karen/pull/555):
-`scripts/architecture/audit_copilotkit_wiring.py` and
-`tests/architecture/test_copilotkit_migration_wiring.py`. These detect
-known architecture regressions but are **not** a substitute for SDK
-installation, live integration or browser proof.
-
-Official versioned references:
-- https://docs.copilotkit.ai/reference/v2
-- https://docs.copilotkit.ai/reference/v2/components/CopilotChat
-- https://docs.copilotkit.ai/backend/runtime-endpoints
-- https://docs.copilotkit.ai/agent-spec
-- https://docs.copilotkit.ai/langgraph-python/troubleshooting/migrate-to-v2
-- https://docs.copilotkit.ai/ag2/copilot-runtime
-
-
-## J. New transport security finding: redirected agent requests
-
-AG-UI issue [#2520](https://github.com/ag-ui-protocol/ag-ui/issues/2520)
-reports that `HttpAgent` 0.0.58 followed 307/308 redirects, potentially
-forwarding an agent-run POST to an unintended origin (including request content
-and non-Authorization headers). This report does **not** establish that Karen's
-currently declared 0.0.59 or a future upgraded dependency is affected; test
-the exact installed version and network runtime.
-
-Mandatory pre-cutover proof:
-- A trusted, config-resolved fixed backend origin with no user-supplied URL.
-- The chosen `HttpAgent` / fetch transport rejects redirects; 301/302/303/307/308
-  MUST NOT reissue the authenticated run to a new origin.
-- Use a controlled hostile-redirect integration test that verifies no body,
-  secret, cookie, tenant header or signed identity leaves the trusted destination.
-- Preserve the existing Next `/api/chat/ag-ui` proxy's `redirect: 'manual'`
-  behavior, terminal stream checks and sanitized authentication forwarding.
-- No global shared authenticated HttpAgent with credentials from a previous
-  request. Use request-scoped identity/agent binding if that is the selected SDK
-  integration approach.
-- Track AG-UI SDK vulnerability advisories and resolved versions before
-  lockfile updates; do not assume a package upgrade alone fixes this.
-
-This is a P0 security gate on the actual gateway implementation, not an
-assertion of a confirmed vulnerability in the deployed Karen environment.
-
-
-## Verified application package versions (preserved from previous plan)
-
-The inspected web package on 2026-10-25 used Next 15.5.23, React 18.3.1, TypeScript 5 and Tailwind ^3.4.1, with assistant-ui 0.15.29, assistant-ui AG-UI 0.0.70 and AG-UI client 0.0.59. These are baseline observations, not dependency resolutions for the new CopilotKit SDK.
+**Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.
