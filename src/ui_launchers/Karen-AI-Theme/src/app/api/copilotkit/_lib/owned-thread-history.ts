@@ -198,6 +198,8 @@ export async function readKarenOwnedThreadMessages(
     return failure("Conversation history verification failed", 502);
   }
   // A bounded read-only viewing projection, never a partial SDK replay.
+  // Parent updated_at is only a best-effort change hint, not an immutable
+  // history revision or authorization token; each page is reauthorized.
   const revision = data.updated_at;
   if (readOnlyTranscript &&
       (typeof revision !== "string" || revision.length < 1 || revision.length > 100)) {
@@ -273,7 +275,7 @@ export async function readKarenOwnedThreadMessages(
       ? {
         threadId, messages, read_only: true, text_only: true,
         omitted_entries: omittedEntries,
-        snapshot_revision: revision,
+        conversation_updated_at: revision,
         page_offset: transcriptOffset,
         has_more: hasMore,
         next_offset: hasMore ? transcriptOffset + MAX_MESSAGES : null,
