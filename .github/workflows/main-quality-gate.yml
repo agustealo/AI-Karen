@@ -187,6 +187,8 @@ jobs:
           # environment preflight in the required release architecture gate.
           pytest tests/architecture/test_render_beta_service_reconcile.py -q
           pytest tests/architecture/test_render_beta_environment_preflight.py -q
+          # Read-only migration inspection must fail closed on unknown/duplicate history.
+          pytest tests/services/database/test_migration_validator.py -q
           pytest tests/architecture/test_render_beta_blueprint_contract.py -q
           # Production /ready must actively check canonical Redis connectivity,
           # accept only secured targets, and match the frontend health contract.
