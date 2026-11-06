@@ -358,6 +358,74 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.subscribe).not.toHaveBeenCalled();
   });
 
+  it("navigates independently authenticated transcript pages without SDK hydration or model inference", async () => {
+    const revision = "2026-11-05T22:00:00Z";
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("rich content unsupported"), { status: 409 }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        snapshot_revision: revision, page_offset: 0, has_more: true,
+        next_offset: 500, omitted_entries: 2,
+        messages: [{ id: "first", role: "user", content: "Beginning of conversation" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        snapshot_revision: revision, page_offset: 500, has_more: false,
+        next_offset: null, omitted_entries: 0,
+        messages: [{ id: "last", role: "assistant", content: "After 500 entries" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        snapshot_revision: revision, page_offset: 0, has_more: true,
+        next_offset: 500, omitted_entries: 2,
+        messages: [{ id: "first", role: "user", content: "Beginning of conversation" }],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByText("Beginning of conversation")).toBeTruthy());
+    expect(screen.queryByText("After 500 entries")).toBeNull();
+    expect(screen.getByRole("button", { name: "Copy this verified transcript page" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Next 500 saved entries" }));
+    await waitFor(() => expect(screen.getByText("After 500 entries")).toBeTruthy());
+    expect(screen.queryByText("Beginning of conversation")).toBeNull();
+    expect(screen.getByText(/Saved entry page 2/)).toBeTruthy();
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      3, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=transcript&offset=500",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
+    await waitFor(() => expect(screen.getByText("Beginning of conversation")).toBeTruthy());
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      4, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=transcript&offset=0",
+    );
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.subscribe).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+  });
+
+  it("rejects a stale transcript page after canonical revision changes", async () => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("rich content unsupported"), { status: 409 }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        snapshot_revision: "revision-1", page_offset: 0, has_more: true,
+        next_offset: 500, omitted_entries: 0,
+        messages: [{ id: "a1", role: "assistant", content: "Safe first page" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        snapshot_revision: "revision-2", page_offset: 500, has_more: false,
+        next_offset: null, omitted_entries: 0,
+        messages: [{ id: "a2", role: "assistant", content: "Changed conversation" }],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByText("Safe first page")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next 500 saved entries" }));
+    await waitFor(() => expect(screen.getByTestId("karen-recovered-page-status").textContent)
+      .toContain("could not be verified"));
+    expect(screen.getByText("Safe first page")).toBeTruthy();
+    expect(screen.queryByText("Changed conversation")).toBeNull();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+  });
+
   it("never displays a transcript unless the independent recovery read attests owner, mode and message shape", async () => {
     for (const forged of [
       { threadId: CONVERSATION_B, read_only: true, text_only: true, omitted_entries: 0,
