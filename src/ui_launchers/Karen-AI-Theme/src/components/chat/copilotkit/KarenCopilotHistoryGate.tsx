@@ -172,6 +172,7 @@ export function validatedKarenTextContinuation(
       (snapshot.omitted_rich_message_count as number) > 500 ||
       typeof snapshot.history_window_has_older !== "boolean" ||
       snapshot.history_window_message_limit !== 500 ||
+      !Array.isArray(snapshot.messages) ||
       (snapshot.history_window_has_older && snapshot.messages.length !== 500)) {
     throw new Error("Attested text-only continuation was not authorized");
   }
