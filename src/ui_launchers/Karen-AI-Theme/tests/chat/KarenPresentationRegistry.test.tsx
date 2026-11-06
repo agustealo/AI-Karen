@@ -222,3 +222,17 @@ describe("bounded reusable data table", () => {
     }
   });
 });
+
+describe("data table UTF-16 cell parity", () => {
+  const base = {
+    schema_version: 1, presentation_id: "emoji-table",
+    component_type: "data.table", evidence_ref: "verified-receipt",
+    data: { columns: [{ key: "fact", label: "Fact" }], rows: [{ fact: "🔎".repeat(120) }] },
+  };
+  it("accepts 240 UTF-16 units and rejects 242", () => {
+    expect(parseKarenPresentation(base)).not.toBeNull();
+    expect(parseKarenPresentation({ ...base, data: {
+      ...base.data, rows: [{ fact: "🔎".repeat(121) }],
+    } })).toBeNull();
+  });
+});

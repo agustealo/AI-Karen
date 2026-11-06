@@ -351,3 +351,14 @@ def test_data_table_can_be_composed_without_nested_authority():
         authorized_parts=[item],
         proposed_layout={"layout": "stack", "part_ids": ["table-part"]},
     ) is not None
+
+def test_table_cell_length_uses_browser_utf16_code_units():
+    base = {
+        "schema_version": 1, "presentation_id": "emoji-table",
+        "component_type": "data.table", "evidence_ref": "verified-receipt",
+        "data": {"columns": [{"key": "fact", "label": "Fact"}],
+                 "rows": [{"fact": "🔎" * 120}]},
+    }
+    assert validate_presentation(base) is not None
+    base["data"]["rows"][0]["fact"] = "🔎" * 121
+    assert validate_presentation(base) is None
