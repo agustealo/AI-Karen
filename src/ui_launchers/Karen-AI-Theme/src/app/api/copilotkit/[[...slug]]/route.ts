@@ -249,14 +249,22 @@ async function handle(request: NextRequest): Promise<Response> {
     ? ownedThreadHistoryId(request) : null;
   const viewKeys = [...request.nextUrl.searchParams.keys()];
   if (recoveryThreadId && viewKeys.includes("view")) {
-    if (viewKeys.length !== 1 || request.nextUrl.searchParams.get("view") !== "transcript") {
+    const requestedView = request.nextUrl.searchParams.get("view");
+    const offsetText = request.nextUrl.searchParams.get("offset");
+    const transcriptOffset = offsetText === null ? 0 : Number(offsetText);
+    if (requestedView !== "transcript" ||
+        viewKeys.length !== (offsetText === null ? 1 : 2) ||
+        new Set(viewKeys).size !== viewKeys.length ||
+        (offsetText !== null && (!/^(0|[1-9][0-9]*)$/.test(offsetText) ||
+          !Number.isSafeInteger(transcriptOffset) ||
+          transcriptOffset % 500 !== 0 || transcriptOffset > 100000))) {
       return NextResponse.json({ detail: "Unsupported conversation view" }, {
         status: 400, headers: { "Cache-Control": "no-store" },
       });
     }
     return readKarenOwnedThreadMessages(
       request, backendBaseUrl, auth.headers, auth.principal,
-      recoveryThreadId, false, true,
+      recoveryThreadId, false, true, transcriptOffset,
     );
   }
 

@@ -147,13 +147,16 @@ export async function readKarenOwnedThreadMessages(
   threadId: string,
   governedHistory = false,
   readOnlyTranscript = false,
+  transcriptOffset = 0,
 ): Promise<Response> {
   if (governedHistory && !readOnlyTranscript) {
     return readKarenGovernedHistory(request, baseUrl, headers, principal, threadId);
   }
   let response: Response;
   try {
-    response = await fetch(baseUrl + "/api/conversations/" + threadId + "?message_limit=" + (MAX_MESSAGES + 1), {
+    response = await fetch(baseUrl + "/api/conversations/" + threadId + "?message_limit=" +
+      (MAX_MESSAGES + 1) +
+      (readOnlyTranscript && transcriptOffset > 0 ? "&message_offset=" + transcriptOffset : ""), {
       method: "GET",
       headers,
       redirect: "manual",
@@ -190,14 +193,25 @@ export async function readKarenOwnedThreadMessages(
   if (data.id !== threadId || data.user_id !== principal.user_id) {
     return failure("Conversation unavailable", 404);
   }
-  if (!Array.isArray(data.messages) || data.messages.length > MAX_MESSAGES) {
+  if (!Array.isArray(data.messages) ||
+      data.messages.length > (readOnlyTranscript ? MAX_MESSAGES + 1 : MAX_MESSAGES)) {
     return failure("Conversation history verification failed", 502);
   }
+  // A bounded read-only viewing projection, never a partial SDK replay.
+  // Parent updated_at is only a best-effort change hint, not an immutable
+  // history revision or authorization token; each page is reauthorized.
+  const revision = data.updated_at;
+  if (readOnlyTranscript &&
+      (typeof revision !== "string" || revision.length < 1 || revision.length > 100)) {
+    return failure("Conversation revision unavailable", 502);
+  }
+  const hasMore = readOnlyTranscript && data.messages.length > MAX_MESSAGES;
+  const page = readOnlyTranscript ? data.messages.slice(0, MAX_MESSAGES) : data.messages;
 
   const messages: Array<{ id: string; role: "user" | "assistant"; content: string }> = [];
   const seenIds = new Set<string>();
   let omittedEntries = 0;
-  for (const item of data.messages) {
+  for (const item of page) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return failure("Invalid canonical conversation message", 502);
     }
@@ -261,6 +275,10 @@ export async function readKarenOwnedThreadMessages(
       ? {
         threadId, messages, read_only: true, text_only: true,
         omitted_entries: omittedEntries,
+        conversation_updated_at: revision,
+        page_offset: transcriptOffset,
+        has_more: hasMore,
+        next_offset: hasMore ? transcriptOffset + MAX_MESSAGES : null,
       }
       : { threadId, messages },
     { headers: { "Cache-Control": "private, no-store" } },

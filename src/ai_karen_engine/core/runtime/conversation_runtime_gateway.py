@@ -269,13 +269,17 @@ class ConversationRuntimeGateway:
         context: ChatExecutionContext,
         *,
         message_limit: int = 100,
+        message_offset: int = 0,
     ) -> ConversationSnapshot:
+        """Read one owner-validated canonical message page, never an SDK store."""
+        if message_offset < 0:
+            raise ValueError("invalid_message_offset")
         conversation = await self.require_owned_conversation(context)
         messages_result = await self._repository.get_messages(
             str(conversation.id),
             context.tenant_id,
             limit=max(0, int(message_limit)),
-            offset=0,
+            offset=int(message_offset),
         )
         if not messages_result.success:
             raise RuntimeError(

@@ -186,7 +186,28 @@ async def test_get_messages_uses_parent_conversation_tenant_scope_and_real_schem
     assert "JOIN conversations c" in normalized_sql
     assert "c.tenant_id = :tenant_id" in normalized_sql
     assert "m.updated_at" not in normalized_sql
+    assert "ORDER BY m.created_at ASC" in normalized_sql
+    assert "CASE m.role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC" in normalized_sql
+    assert "m.message_id ASC" in normalized_sql
     assert params["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_get_messages_preserves_offset_while_enforcing_tenant_scope_and_stable_order() -> None:
+    session = _Session([_Result(rows=[])])
+    result = await _repository(session).get_messages(
+        conversation_id="22222222-2222-2222-2222-222222222222",
+        tenant_id="tenant-a", limit=501, offset=500,
+    )
+    assert result.success is True
+    assert result.data == []
+    sql, params = session.executions[0]
+    assert "ORDER BY m.created_at ASC" in sql
+    assert "m.message_id ASC" in sql
+    assert "c.tenant_id = :tenant_id" in sql
+    assert params["tenant_id"] == "tenant-a"
+    assert params["limit"] == 501
+    assert params["offset"] == 500
 
 
 @pytest.mark.asyncio

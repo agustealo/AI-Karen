@@ -244,6 +244,50 @@ def test_derived_conversation_identity_is_distinct_across_tenants() -> None:
 
 
 @pytest.mark.asyncio
+async def test_owned_conversation_snapshot_paginates_after_500_with_scope_preserved() -> None:
+    repository = _Repository()
+    context = _context()
+    conversation_id = context.conversation_id or ""
+    repository.conversations[(context.tenant_id, conversation_id)] = Conversation(
+        id=conversation_id, tenant_id=context.tenant_id, user_id=context.user_id,
+    )
+    repository.messages = [
+        Message(
+            id=f"message-{index}", conversation_id=conversation_id,
+            tenant_id=context.tenant_id,
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"Saved turn {index}",
+        )
+        for index in range(503)
+    ]
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    first = await gateway.get_owned_snapshot(context, message_limit=501)
+    second = await gateway.get_owned_snapshot(
+        context, message_limit=501, message_offset=500,
+    )
+    assert len(first.messages) == 501
+    assert len(second.messages) == 3
+    assert first.messages[500].id == second.messages[0].id
+    assert second.messages[-1].content == "Saved turn 502"
+
+    with pytest.raises((RuntimeError, PermissionError)):
+        await gateway.get_owned_snapshot(
+            _context(user_id="different-user"),
+            message_limit=501, message_offset=500,
+        )
+    with pytest.raises((RuntimeError, PermissionError)):
+        await gateway.get_owned_snapshot(
+            _context(tenant_id="different-tenant"),
+            message_limit=501, message_offset=500,
+        )
+    with pytest.raises(ValueError, match="invalid_message_offset"):
+        await gateway.get_owned_snapshot(
+            context, message_limit=501, message_offset=-1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_completed_turn_persists_user_and_assistant_through_one_repository() -> None:
     repository = _Repository()
     gateway = ConversationRuntimeGateway(repository=repository)
