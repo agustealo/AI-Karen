@@ -236,6 +236,10 @@ jobs:
           pytest tests/core/intelligence/test_reward_progress.py -q
           pytest tests/services/test_reward_progress.py -q
 
+      - name: Governed history and explicit continuation proofs
+        run: |
+          pytest tests/api_routes/test_ag_ui_governed_history.py tests/api_routes/test_owned_history_projection.py tests/core/runtime/test_owned_history_duplicate_identity.py -q
+
       - name: Classifier burn contracts
         run: |
           pytest tests/core/intelligence/test_intent_classifier_burn.py -q
