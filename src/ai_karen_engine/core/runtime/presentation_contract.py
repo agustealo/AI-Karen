@@ -177,7 +177,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
                 value = row[key]
                 if value is not None and (
                     not isinstance(value, str) or len(value) > 240
-                    or any(ord(character) < 32 and character not in "\\t\\n" for character in value)
+                    or any(ord(character) < 32 for character in value)
                 ):
                     return None
                 safe_row[key] = value

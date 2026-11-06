@@ -139,7 +139,7 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
       for (const key of keys) {
         const cell = (row as Record<string, unknown>)[key];
         if (cell !== null && (typeof cell !== "string" || cell.length > 240 ||
-          /[\\u0000-\\u0008\\u000b-\\u001f]/.test(cell))) return null;
+          Array.from(cell).some((character) => character.charCodeAt(0) < 32))) return null;
       }
     }
   } else if (result.data.component_type === "search.results") {
