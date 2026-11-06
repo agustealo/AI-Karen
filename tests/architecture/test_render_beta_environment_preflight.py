@@ -330,11 +330,63 @@ def test_inspection_never_downgrades_or_accepts_wrong_redis_scheme(m):
     assert "red-private" not in repr(rejected)
 
 
+
+
+def test_exact_latest_render_deployment_is_required_for_consumer_mode(m):
+    exact = "a" * 40
+
+    class DeployClient:
+        def __init__(self, records):
+            self.records = records
+            self.calls = []
+
+        def _request_path(self, endpoint, *, method):
+            self.calls.append((endpoint, method))
+            return self.records
+
+    good = DeployClient([{
+        "deploy": {"status": "live", "commit": {"id": exact}},
+        "cursor": "last-page",
+    }])
+    m.verify_live_render_deployment(good, SERVICE, exact)
+    assert good.calls == [
+        (f"/v1/services/{SERVICE}/deploys?limit=1", "GET"),
+    ]
+
+    denied = [
+        [], {}, [{}], [{"deploy": None}], [{"deploy": {}}],
+        [{"deploy": {"status": "update_failed", "commit": {"id": exact}}}],
+        [{"deploy": {"status": "queued", "commit": {"id": exact}}}],
+        [{"deploy": {"status": "live", "commit": {"id": "b" * 40}}}],
+        [{"deploy": {"status": "live", "commit": None}}],
+        [{"deploy": {"status": "live", "commit": {"id": exact}}},
+         {"deploy": {"status": "live", "commit": {"id": exact}}}],
+    ]
+    for records in denied:
+        client = DeployClient(records)
+        with pytest.raises(m.ReconcileError, match="deployment|reviewed main"):
+            m.verify_live_render_deployment(client, SERVICE, exact)
+        assert all(method == "GET" for _, method in client.calls)
+
+
+@pytest.mark.parametrize("invalid", [
+    "", "main", "a" * 39, "A" * 40, "a" * 41, "a" * 40 + "\\n",
+])
+def test_render_revision_denies_invalid_expected_sha_without_network(m, invalid):
+    class NoNetwork:
+        def _request_path(self, endpoint, *, method):
+            raise AssertionError("Unapproved API call")
+
+    with pytest.raises(m.ReconcileError, match="identity"):
+        m.verify_live_render_deployment(NoNetwork(), SERVICE, invalid)
+
+
 def test_source_workflow_is_protected_and_read_only():
     text = (ROOT / ".github/workflows/render-beta-service-reconcile.yml").read_text()
     assert "inspect-env" in text
     assert "inspect-consumer" in text
     assert "--require-governed-history" in text
+    assert '--expected-deployed-sha "$TARGET_SHA"' in text
     assert "environment: beta-release" in text
     assert "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}" in text
     assert "RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID }}" in text
