@@ -325,6 +325,13 @@ async def test_owned_recent_window_keeps_last_501_chronological_and_owner_scoped
     with pytest.raises(ValueError, match="invalid_recent_message_limit"):
         await gateway.get_owned_recent_snapshot(context, message_limit=502)
 
+    # A nonconforming adapter is not allowed to bypass the fixed memory bound.
+    async def oversized_page(*args, **kwargs):
+        return RepositoryResult(success=True, data=repository.messages[:502])
+    repository.get_messages = oversized_page  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="invalid_recent_conversation_page"):
+        await gateway.get_owned_recent_snapshot(context, message_limit=501)
+
 
 @pytest.mark.asyncio
 async def test_completed_turn_persists_user_and_assistant_through_one_repository() -> None:
