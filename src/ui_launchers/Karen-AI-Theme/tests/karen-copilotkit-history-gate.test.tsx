@@ -225,6 +225,29 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
   });
 
+  it.each([502, 503])(
+    "preserves owner-verified read-only text when complete rich replay returns %i",
+    async (status) => {
+      backend.fetchConversation
+        .mockRejectedValueOnce(Object.assign(new Error("unavailable full replay"), { status }))
+        .mockResolvedValueOnce({
+          threadId: CONVERSATION_A, read_only: true, text_only: true,
+          omitted_entries: 0, page_offset: 0, has_more: false,
+          next_offset: null, conversation_updated_at: "2026-11-05T22:00:00Z",
+          messages: [{ id: "a1", role: "assistant", content: "Recovered original text" }],
+        });
+      render(guardedHistory());
+      await waitFor(() => expect(screen.getByText("Recovered original text")).toBeTruthy());
+      expect(screen.getByRole("alert").textContent).toContain("No partial conversation was opened");
+      expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+        2, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=transcript",
+      );
+      expect(screen.queryByTestId("agent-chat")).toBeNull();
+      expect(backend.agent.setMessages).not.toHaveBeenCalled();
+      expect(backend.agent.subscribe).not.toHaveBeenCalled();
+    },
+  );
+
   it("recovers the complete authorized text view from an unsupported rich replay without mounting SDK chat", async () => {
     backend.fetchConversation
       .mockRejectedValueOnce(
