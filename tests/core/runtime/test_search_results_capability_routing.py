@@ -22,6 +22,19 @@ def test_current_movie_discovery_requires_live_authorized_search(prompt):
 
 
 @pytest.mark.parametrize("prompt", [
+    "Latest news about NASA",
+    "What's the latest news about NASA?",
+    "What's the latest in technology news?",
+])
+def test_natural_current_news_requests_require_live_authorized_search(prompt):
+    decision = resolve_capability_decision(prompt)
+    assert decision.intent == "search.general"
+    assert decision.requires_tool is True
+    assert decision.requires_live_data is True
+    assert decision.allow_llm_only is False
+
+
+@pytest.mark.parametrize("prompt", [
     "Explain film noir",
     "Recommend classic movies",
     "Write a science fiction screenplay",

@@ -330,6 +330,14 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       label: "search", prompt: "Search the internet for the latest NASA news today.",
       component: "search.results", testId: "karen-search-results",
     },
+    {
+      label: "news", prompt: "Latest news about NASA",
+      component: "search.results", testId: "karen-search-results",
+    },
+    {
+      label: "current movies", prompt: "Show me the latest movies",
+      component: "search.results", testId: "karen-search-results",
+    },
   ] as const) {
   test(`one first ${scenario.label} prompt renders backend-attested UI immediately and after reload`, async ({ page }) => {
     test.setTimeout(240_000);
@@ -481,6 +489,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       .toHaveCount(1, { timeout: 30_000 });
     await expect(visibleCard).toBeVisible();
     const firstCardText = (await visibleCard.innerText()).trim();
+    let originalSourceUrls: string[] = [];
     if (scenario.label === "time") {
       expect(firstCardText).toContain("Reported time");
     } else if (scenario.label === "weather") {
@@ -489,6 +498,18 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       expect(firstCardText).toContain("View source:");
       const links = visibleCard.locator('a[href^="https://"], a[href^="http://"]');
       expect(await links.count(), "Verified search cards must expose a source link").toBeGreaterThan(0);
+      originalSourceUrls = await links.evaluateAll(nodes =>
+        nodes.map(node => (node as HTMLAnchorElement).href),
+      );
+      // The browser must never make a source card carry an auth credential,
+      // javascript URL, or a synthetic view URL instead of source evidence.
+      for (const sourceUrl of originalSourceUrls) {
+        const parsed = new URL(sourceUrl);
+        expect(["https:", "http:"]).toContain(parsed.protocol);
+        expect(parsed.username).toBe("");
+        expect(parsed.password).toBe("");
+        expect(parsed.hostname).not.toMatch(/^(?:localhost|127\.|10\.|192\.168\.)/);
+      }
     }
     expect(observedRunRequests, "One first prompt must cause exactly one execution")
       .toHaveLength(1);
@@ -512,6 +533,13 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(restoredCard, "Reload must restore the actual verified UI surface")
       .toHaveCount(1, { timeout: 30_000 });
     expect((await restoredCard.innerText()).trim()).toBe(firstCardText);
+    if (originalSourceUrls.length > 0) {
+      const restoredSourceUrls = await restoredCard.locator(
+        'a[href^="https://"], a[href^="http://"]',
+      ).evaluateAll(nodes => nodes.map(node => (node as HTMLAnchorElement).href));
+      expect(restoredSourceUrls, "The exact provider-verified source links must survive reload")
+        .toEqual(originalSourceUrls);
+    }
     const { ok, body } = await readAuthorizedSameOriginJson(
       page, `/api/copilotkit/threads/${conversationId}/messages`,
     );
