@@ -21,6 +21,9 @@ type KarenOwnedThreadResponse = {
   threadId: string;
   messages: KarenOwnedHistoryMessage[];
   replayEvents?: unknown;
+  text_only?: unknown;
+  continuation_authorized?: unknown;
+  omitted_rich_message_count?: unknown;
 };
 
 type KarenRecoveredTranscript = {
@@ -152,6 +155,24 @@ export function toCopilotTextMessages(
   });
 }
 
+/** Only an explicit, authenticated, attested backend response can resume text-only chat. */
+export function validatedKarenTextContinuation(
+  snapshot: KarenOwnedThreadResponse,
+  conversationId: string,
+): KarenCopilotTextMessage[] {
+  if (snapshot.threadId !== conversationId ||
+      snapshot.text_only !== true ||
+      snapshot.continuation_authorized !== true ||
+      !Array.isArray(snapshot.replayEvents) ||
+      snapshot.replayEvents.length !== 0 ||
+      !Number.isInteger(snapshot.omitted_rich_message_count) ||
+      (snapshot.omitted_rich_message_count as number) < 0 ||
+      (snapshot.omitted_rich_message_count as number) > 500) {
+    throw new Error("Attested text-only continuation was not authorized");
+  }
+  return toCopilotTextMessages(snapshot.messages);
+}
+
 /**
  * Hold the v2 chat mount until Karen confirms the selected conversation
  * actually belongs to the signed-in user. Never replace failed history
@@ -186,6 +207,11 @@ export function KarenCopilotHistoryGate({
   const [copyBusy, setCopyBusy] = useState(false);
   const [pageBusy, setPageBusy] = useState(false);
   const [pageStatus, setPageStatus] = useState<string | null>(null);
+  const [textContinuationActive, setTextContinuationActive] = useState(false);
+  const [textContinuationStatus, setTextContinuationStatus] = useState<string | null>(null);
+  // Explicit click is required per mount. A normal history GET cannot enter
+  // this mode or trigger a provider run.
+  const textContinuationRequested = useRef(false);
   const recoveryGeneration = useRef(0);
 
   useEffect(() => {
@@ -200,6 +226,8 @@ export function KarenCopilotHistoryGate({
     setCopyBusy(false);
     setPageBusy(false);
     setPageStatus(null);
+    setTextContinuationActive(false);
+    setTextContinuationStatus(null);
 
     // Run events merely trigger another authenticated read; they do not
     // authorize a client CUSTOM event as a saved execution receipt.
@@ -223,22 +251,29 @@ export function KarenCopilotHistoryGate({
           try {
             // Authorization-sensitive read. Never reuse process-local UI
             // bootstrap cache across account or tenant transitions.
+            const textMode = textContinuationRequested.current;
             const snapshot = await apiClient.get<KarenOwnedThreadResponse>(
-              "/api/copilotkit/threads/" + conversationId + "/messages",
+              "/api/copilotkit/threads/" + conversationId + "/messages" +
+                (textMode ? "?view=continuation" : ""),
             );
             if (cancelled) return false;
             if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
               throw new Error("Conversation history identity mismatch");
             }
-            // Validate the complete backend-verified rich replay before
-            // installing it. A newer event invalidates this read's freshness.
-            const messages = toCopilotTextMessages(snapshot.messages);
-            const parts = parseKarenVerifiedHistory(
+            // Complete rich replay and explicitly requested text continuation
+            // are independent backend-attested contracts. Text mode never
+            // treats omitted rich content as restored or as a tool capability.
+            const messages = textMode
+              ? validatedKarenTextContinuation(snapshot, conversationId)
+              : toCopilotTextMessages(snapshot.messages);
+            const parts = textMode ? new Map() : parseKarenVerifiedHistory(
               snapshot.replayEvents ?? [], messages,
             );
             if (restoreQueued) continue;
             agent.setMessages(messages);
             setVerifiedParts(parts);
+            setTextContinuationActive(textMode);
+            setTextContinuationStatus(null);
             setTranscript(null);
             setError(null);
             setLoaded(conversationId);
@@ -251,8 +286,13 @@ export function KarenCopilotHistoryGate({
             // 503 can mean the governed event journal is unavailable. Neither
             // authorizes an SDK replay, but an INDEPENDENT owner-verified text
             // projection can still be shown read-only. Never recover 401/404.
-            const replayUnsupported = status === 409 || status === 502 ||
-              status === 503 || (
+            const continuationDenied = textContinuationRequested.current;
+            if (continuationDenied) {
+              textContinuationRequested.current = false;
+              setTextContinuationActive(false);
+            }
+            const replayUnsupported = continuationDenied ||
+              status === 409 || status === 502 || status === 503 || (
                 error instanceof Error && /^Unsupported verified /.test(error.message)
               );
             if (replayUnsupported) {
@@ -273,6 +313,11 @@ export function KarenCopilotHistoryGate({
               setTranscript(null);
             }
             if (!cancelled && !restoreQueued) {
+              if (continuationDenied) {
+                setTextContinuationStatus(
+                  "Karen could not authorize text-only continuation. Verified saved text remains read-only.",
+                );
+              }
               setError(replayUnsupported
                 ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available."
                 : "Karen could not verify or restore this conversation.");
@@ -394,6 +439,14 @@ export function KarenCopilotHistoryGate({
                 ` ${recovered.omittedEntries} non-chat entries were withheld.`}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
+              {recovered.pageOffset === 0 && !recovered.hasMore && (
+                <button type="button" onClick={() => {
+                  textContinuationRequested.current = true;
+                  setRetryAttempt(attempt => attempt + 1);
+                }} className="min-h-11 rounded-lg border border-input px-3 text-sm">
+                  Continue original conversation with verified text only
+                </button>
+              )}
               <button type="button" disabled={copyBusy || pageBusy || recovered.messages.length === 0}
                 onClick={() => void copyRecoveredText()}
                 className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">
@@ -428,6 +481,9 @@ export function KarenCopilotHistoryGate({
                 )}
               </nav>
             )}
+            {textContinuationStatus && <p role="status"
+              data-testid="karen-text-continuation-status"
+              className="mt-2 text-xs text-muted-foreground">{textContinuationStatus}</p>}
             {pageStatus && <p role="status" data-testid="karen-recovered-page-status"
               className="mt-2 text-xs text-muted-foreground">{pageStatus}</p>}
             {copyStatus && <p role="status" data-testid="karen-recovered-copy-status"
@@ -455,6 +511,15 @@ export function KarenCopilotHistoryGate({
   return (
     <ScopedAgentContext.Provider value={registration}>
       <KarenVerifiedHistoryProvider parts={verifiedParts}>
+        {textContinuationActive && (
+          <p role="status" data-testid="karen-text-continuation-banner"
+            className="border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
+            You are continuing the original saved conversation using authenticated
+            text only. Older cards, citations, attachments and tool activity were
+            not replayed. Karen verifies permissions and context again for each
+            new request.
+          </p>
+        )}
         {children}
       </KarenVerifiedHistoryProvider>
     </ScopedAgentContext.Provider>
