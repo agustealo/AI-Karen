@@ -186,7 +186,7 @@ async def test_long_original_thread_continuation_reads_only_newest_500_attested_
             role="assistant" if index % 2 else "user",
             content=f"Saved message {index}", metadata={},
         )
-        for index in range(1003)
+        for index in range(1004)
     ]
     # Metadata with a run receipt requires exact canonical digest; older
     # entries outside the recent window are never passed to UI projection.
@@ -233,8 +233,8 @@ async def test_long_original_thread_continuation_reads_only_newest_500_attested_
     assert body["history_window_has_older"] is True
     assert body["history_window_message_limit"] == 500
     assert len(body["messages"]) == 500
-    assert body["messages"][0]["id"] == "m-503"
-    assert body["messages"][-1]["id"] == "m-1002"
+    assert body["messages"][0]["id"] == "m-504"
+    assert body["messages"][-1]["id"] == "m-1003"
     assert body["replayEvents"] == []
     assert "Saved message 0" not in str(body)
     assert "opaque-old-card" not in str(body)
