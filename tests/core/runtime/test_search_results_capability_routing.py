@@ -51,6 +51,8 @@ def test_static_movie_discussion_does_not_require_live_search(prompt):
     "Give me a tabular list of recent web sources",
     "List the latest news in a table",
     "Show me the new movies as a table",
+    "Latest movies in a table",
+    "Recent news as a table",
 ])
 def test_explicit_current_source_table_routes_to_live_search(prompt):
     decision = resolve_capability_decision(prompt)
