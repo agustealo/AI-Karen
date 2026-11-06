@@ -232,11 +232,13 @@ jobs:
       # Never upload traces, videos, screenshots, or credential-bearing reports.
 
 
-  # Read-only SDK-protocol proof only. Native CopilotKit UI parity still unverified.
+  # Governed protocol and operator-approved real consumer acceptance. The
+  # consumer suite includes multiple first-turn live source/reload checks;
+  # leave enough job time for all scenarios without changing test deadlines.
   authenticated-copilotkit-protocol:
     if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_COPILOTKIT_ACCEPTANCE_URL }}

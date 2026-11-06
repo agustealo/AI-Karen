@@ -269,13 +269,17 @@ class ConversationRuntimeGateway:
         context: ChatExecutionContext,
         *,
         message_limit: int = 100,
+        message_offset: int = 0,
     ) -> ConversationSnapshot:
+        """Read one owner-validated canonical message page, never an SDK store."""
+        if message_offset < 0:
+            raise ValueError("invalid_message_offset")
         conversation = await self.require_owned_conversation(context)
         messages_result = await self._repository.get_messages(
             str(conversation.id),
             context.tenant_id,
             limit=max(0, int(message_limit)),
-            offset=0,
+            offset=int(message_offset),
         )
         if not messages_result.success:
             raise RuntimeError(
@@ -284,6 +288,39 @@ class ConversationRuntimeGateway:
         return ConversationSnapshot(
             conversation=conversation,
             messages=tuple(messages_result.data or []),
+        )
+
+    async def get_owned_recent_snapshot(
+        self,
+        context: ChatExecutionContext,
+        *,
+        message_limit: int = 501,
+    ) -> ConversationSnapshot:
+        """Return the newest bounded canonical messages in chronological order.
+
+        This is a different view over the SAME tenant-owned repository, not a
+        separate transcript store or an SDK conversation. Its caller MUST
+        report if an older-message sentinel was omitted from the UI window.
+        Unsupported repository adapters fail closed, not to an earlier page.
+        """
+        if not 1 <= message_limit <= 501:
+            raise ValueError("invalid_recent_message_limit")
+        conversation = await self.require_owned_conversation(context)
+        result = await self._repository.get_messages(
+            str(conversation.id),
+            context.tenant_id,
+            limit=message_limit,
+            offset=0,
+            newest_first=True,
+        )
+        if not result.success:
+            raise RuntimeError(result.error or "conversation_history_read_failed")
+        rows = result.data
+        if not isinstance(rows, list) or len(rows) > message_limit:
+            raise RuntimeError("invalid_recent_conversation_page")
+        return ConversationSnapshot(
+            conversation=conversation,
+            messages=tuple(reversed(rows)),
         )
 
     async def get_owned_snapshot_by_session(

@@ -132,6 +132,130 @@ def test_first_prompt_surface_from_runtime_structured_metadata_restores_without_
     assert "structured_content" not in str(result)
 
 
+def test_first_prompt_search_result_replays_only_attested_source_cards():
+    surface = {
+        "schema_version": 1,
+        "presentation_id": "search-verified",
+        "component_type": "search.results",
+        "evidence_ref": "request-1:web_search",
+        "data": {"results": [{
+            "url": "https://example.org/report",
+            "title": "Source headline",
+            "snippet": "Source-reported excerpt",
+            "published_at": "2026-11-05T09:00:00Z",
+        }]},
+    }
+    snapshot = saved([
+        Message(id="user-search", conversation_id=THREAD, tenant_id=TENANT,
+                role="user", content="latest news", metadata={}),
+        assistant({
+            **receipt(),
+            "structured_content": {"presentation": surface},
+            "verified_presentations_v1": [surface],
+            "private_provider_debug": "must-not-replay",
+        }),
+    ])
+    result = project_owned_history(snapshot, attestations=attested(snapshot))
+    assert [event["name"] for event in result["replayEvents"]] == [
+        "karen.presentation.v1", "karen.execution_receipt.v1",
+    ]
+    assert result["replayEvents"][0]["value"] == surface
+    assert "private_provider_debug" not in str(result)
+
+
+def _search_surface():
+    return {
+        "schema_version": 1, "presentation_id": "search-verified",
+        "component_type": "search.results",
+        "evidence_ref": REQUEST_ID + ":web_search",
+        "data": {"results": [{
+            "url": "https://example.org/report",
+            "title": "Source headline",
+            "snippet": "Source-reported excerpt",
+            "published_at": "2026-11-05T09:00:00Z",
+        }]},
+    }
+
+
+def _search_source():
+    return {
+        "url": "https://example.org/report",
+        "title": "Source headline",
+        "snippet": "Source-reported excerpt",
+        "published_at": "2026-11-05T09:00:00Z",
+        "full_content": "CANONICAL-PRIVATE-CONTENT",
+    }
+
+
+def test_search_sources_and_citations_are_withheld_but_replay_still_works():
+    part = _search_surface()
+    snapshot = saved([assistant({
+        **receipt(),
+        "structured_content": {"presentation": part, "query": "latest news"},
+        "verified_presentations_v1": [part],
+        "sources": [_search_source()],
+        "citations": [{
+            "url": "https://example.org/report", "id": "citation_0",
+            "metadata": {"source": "web_search"},
+        }],
+    })])
+    result = project_owned_history(snapshot, attestations=attested(snapshot))
+    assert result["replayEvents"][0]["name"] == "karen.presentation.v1"
+    assert result["replayEvents"][0]["value"] == part
+    assert "CANONICAL-PRIVATE-CONTENT" not in str(result)
+    assert "citation_0" not in str(result)
+    assert "sources" not in str(result)
+
+
+@pytest.mark.parametrize("mutation", [
+    {"sources": [{"url": "https://example.org/other", "snippet": "Other"}]},
+    {"sources": [{"url": "https://example.org/report", "snippet": "Forged"}]},
+    {"sources": "not-an-array"},
+    {"citations": [{"private": "missing-url"}]},
+    {"citations": ["no-structured-citation"]},
+    {"sources": [_search_source()] * 101},
+])
+def test_search_sources_cannot_authorize_new_or_malformed_replay(mutation):
+    part = _search_surface()
+    meta = {
+        **receipt(), "structured_content": {"presentation": part},
+        "verified_presentations_v1": [part], "sources": [_search_source()],
+    }
+    meta.update(mutation)
+    snapshot = saved([assistant(meta)])
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_owned_history(snapshot, attestations=attested(snapshot))
+
+
+def test_unattested_source_rich_search_remains_closed():
+    part = _search_surface()
+    snap = saved([assistant({
+        **receipt(), "structured_content": {"presentation": part},
+        "verified_presentations_v1": [part], "sources": [_search_source()],
+    })])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(snap, attestations={})
+
+
+def test_weather_with_bounded_provider_sources_does_not_trigger_409():
+    part = {
+        "schema_version": 1, "presentation_id": "weather-verified",
+        "component_type": "weather.observation",
+        "evidence_ref": REQUEST_ID + ":web_search",
+        "data": {"location": "Detroit", "temperature": "61°F",
+                 "conditions": "light rain"},
+    }
+    snap = saved([assistant({
+        **receipt(), "structured_content": {"presentation": part},
+        "verified_presentations_v1": [part],
+        "sources": [{"url": "https://open-meteo.com/data"}],
+        "citations": [{"url": "https://open-meteo.com/data"}],
+    })])
+    result = project_owned_history(snap, attestations=attested(snap))
+    assert result["replayEvents"][0]["value"] == part
+    assert "https://open-meteo.com/data" not in str(result)
+
+
 @pytest.mark.parametrize("rich", [
     {"structured_content": {"formatted": "10:42 PM"},
      "verified_presentations_v1": [presentation()]},
@@ -185,6 +309,86 @@ def test_fake_runtime_metadata_is_not_a_replay_capability(proof):
 def test_unsupported_or_incomplete_rich_content_aborts_whole_snapshot(metadata):
     with pytest.raises(UnreplayableHistory):
         project_attested(saved([assistant({**receipt(), **metadata})]))
+
+
+def test_explicit_text_continuation_requires_exact_attestation_for_unsupported_rich():
+    original = assistant({
+        **receipt(),
+        "attachments": [{"filename": "private-document.pdf"}],
+        "citations": [{"url": "https://private.example.invalid"}],
+        "tool_calls": [{"name": "historical_tool"}],
+        "structured_content": {"unrecognized_future_card": {"unsafe": "payload"}},
+    })
+    snapshot = saved([
+        Message(id="u1", conversation_id=THREAD, tenant_id=TENANT,
+                role="user", content="Continue my project", metadata={}),
+        original,
+    ])
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_owned_history(snapshot, attestations=attested(snapshot))
+
+    text_only = project_owned_history(
+        snapshot, attestations=attested(snapshot),
+        text_continuation=True,
+    )
+    assert text_only["threadId"] == THREAD
+    assert text_only["response_source"] == "persisted_history"
+    assert text_only["text_only"] is True
+    assert text_only["continuation_authorized"] is True
+    assert text_only["omitted_rich_message_count"] == 1
+    assert text_only["replay_only"] is True
+    assert text_only["replayEvents"] == []
+    assert text_only["messages"] == [
+        {"id": "u1", "role": "user", "content": "Continue my project"},
+        {"id": ASSISTANT_ID, "role": "assistant", "content": "Verified original answer"},
+    ]
+    serialized = str(text_only)
+    for forbidden in ("private-document.pdf", "private.example.invalid",
+                      "historical_tool", "unrecognized_future_card"):
+        assert forbidden not in serialized
+
+
+def test_text_continuation_rejects_missing_or_modified_completed_run_attestation():
+    original = assistant({**receipt(), "attachments": [{"private": "hidden"}]})
+    snapshot = saved([original])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(snapshot, attestations={}, text_continuation=True)
+
+    proof = attested(snapshot)
+    original.content = "Edited original answer"
+    with pytest.raises(UnreplayableHistory, match="modified_attested_message"):
+        project_owned_history(snapshot, attestations=proof, text_continuation=True)
+
+
+def test_text_continuation_rejects_untrusted_roles_and_overflow():
+    for role in ("tool", "system", "developer"):
+        with pytest.raises(UnreplayableHistory, match="invalid_canonical_message"):
+            project_owned_history(
+                saved([Message(id="other", tenant_id=TENANT,
+                               conversation_id=THREAD, role=role,
+                               content="privileged", metadata={})]),
+                attestations={}, text_continuation=True,
+            )
+    records = [
+        Message(id=f"m-{i}", tenant_id=TENANT, conversation_id=THREAD,
+                role="user", content="text", metadata={})
+        for i in range(501)
+    ]
+    with pytest.raises(UnreplayableHistory, match="history_message_limit"):
+        project_owned_history(
+            saved(records), attestations={}, text_continuation=True,
+        )
+
+
+def test_legacy_plain_text_can_continue_without_invented_rich_events():
+    original = saved([assistant({"private": "never-export"})])
+    result = project_owned_history(
+        original, attestations={}, text_continuation=True,
+    )
+    assert result["messages"][0]["content"] == "Verified original answer"
+    assert result["replayEvents"] == []
+    assert result["omitted_rich_message_count"] == 0
+    assert "never-export" not in str(result)
 
 
 def test_invalid_saved_presentation_cannot_be_revalidated_into_new_evidence():

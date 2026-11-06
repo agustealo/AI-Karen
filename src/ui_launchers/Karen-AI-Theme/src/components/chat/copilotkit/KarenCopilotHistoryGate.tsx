@@ -1,7 +1,7 @@
 "use client";
 
 import { useAgent } from "@copilotkit/react-core/v2";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { apiClient } from "@/lib/api";
@@ -21,12 +21,21 @@ type KarenOwnedThreadResponse = {
   threadId: string;
   messages: KarenOwnedHistoryMessage[];
   replayEvents?: unknown;
+  text_only?: unknown;
+  continuation_authorized?: unknown;
+  omitted_rich_message_count?: unknown;
+  history_window_has_older?: unknown;
+  history_window_message_limit?: unknown;
 };
 
 type KarenRecoveredTranscript = {
   conversationId: string;
   messages: KarenCopilotTextMessage[];
   omittedEntries: number;
+  pageOffset: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+  revision: string | null;
 };
 
 // The canonical history endpoint bounds the original response to 2 MiB.
@@ -47,7 +56,49 @@ type KarenOwnedTranscriptResponse = {
   read_only: true;
   text_only: true;
   omitted_entries: number;
+  page_offset?: number;
+  has_more?: boolean;
+  next_offset?: number | null;
+  conversation_updated_at?: string;
 };
+
+function verifiedTranscriptPage(
+  recovery: KarenOwnedTranscriptResponse,
+  conversationId: string,
+  offset: number,
+  expectedRevision: string | null = null,
+): KarenRecoveredTranscript {
+  if (recovery.threadId !== conversationId ||
+      recovery.read_only !== true || recovery.text_only !== true ||
+      !Number.isInteger(recovery.omitted_entries) ||
+      recovery.omitted_entries < 0 || recovery.omitted_entries > 500) {
+    throw new Error("Recovery transcript identity or mode mismatch");
+  }
+  const pageOffset = recovery.page_offset ?? 0;
+  const hasMore = recovery.has_more ?? false;
+  // The parent timestamp can detect some concurrent edits, not all history
+  // mutations. Every displayed page still requires fresh owner verification.
+  const revision = recovery.conversation_updated_at ?? null;
+  if (pageOffset !== offset || typeof hasMore !== "boolean" ||
+      (revision !== null && (typeof revision !== "string" ||
+        revision.length === 0 || revision.length > 100)) ||
+      (expectedRevision !== null && revision !== expectedRevision) ||
+      (offset > 0 && revision === null) ||
+      (hasMore && (revision === null || recovery.next_offset !== offset + 500)) ||
+      (!hasMore && recovery.next_offset !== undefined &&
+        recovery.next_offset !== null)) {
+    throw new Error("Recovery transcript page integrity mismatch");
+  }
+  return {
+    conversationId,
+    messages: toCopilotTextMessages(recovery.messages),
+    omittedEntries: recovery.omitted_entries,
+    pageOffset,
+    hasMore,
+    nextOffset: hasMore ? offset + 500 : null,
+    revision,
+  };
+}
 
 // The history gate owns the sole SDK agent registration for this conversation.
 // Children consume the same instance; a second useAgent call with the same ID
@@ -106,6 +157,28 @@ export function toCopilotTextMessages(
   });
 }
 
+/** Only an explicit, authenticated, attested backend response can resume text-only chat. */
+export function validatedKarenTextContinuation(
+  snapshot: KarenOwnedThreadResponse,
+  conversationId: string,
+): KarenCopilotTextMessage[] {
+  if (snapshot.threadId !== conversationId ||
+      snapshot.text_only !== true ||
+      snapshot.continuation_authorized !== true ||
+      !Array.isArray(snapshot.replayEvents) ||
+      snapshot.replayEvents.length !== 0 ||
+      !Number.isInteger(snapshot.omitted_rich_message_count) ||
+      (snapshot.omitted_rich_message_count as number) < 0 ||
+      (snapshot.omitted_rich_message_count as number) > 500 ||
+      typeof snapshot.history_window_has_older !== "boolean" ||
+      snapshot.history_window_message_limit !== 500 ||
+      !Array.isArray(snapshot.messages) ||
+      (snapshot.history_window_has_older && snapshot.messages.length !== 500)) {
+    throw new Error("Attested text-only continuation was not authorized");
+  }
+  return toCopilotTextMessages(snapshot.messages);
+}
+
 /**
  * Hold the v2 chat mount until Karen confirms the selected conversation
  * actually belongs to the signed-in user. Never replace failed history
@@ -138,8 +211,18 @@ export function KarenCopilotHistoryGate({
   const [transcript, setTranscript] = useState<KarenRecoveredTranscript | null>(null);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [copyBusy, setCopyBusy] = useState(false);
+  const [pageBusy, setPageBusy] = useState(false);
+  const [pageStatus, setPageStatus] = useState<string | null>(null);
+  const [textContinuationActive, setTextContinuationActive] = useState(false);
+  const [continuationWindowHasOlder, setContinuationWindowHasOlder] = useState(false);
+  const [textContinuationStatus, setTextContinuationStatus] = useState<string | null>(null);
+  // Explicit click is required per mount. A normal history GET cannot enter
+  // this mode or trigger a provider run.
+  const textContinuationRequested = useRef(false);
+  const recoveryGeneration = useRef(0);
 
   useEffect(() => {
+    recoveryGeneration.current += 1;
     if (!isReady) return;
     let cancelled = false;
     setLoaded(null);
@@ -148,6 +231,11 @@ export function KarenCopilotHistoryGate({
     setTranscript(null);
     setCopyStatus(null);
     setCopyBusy(false);
+    setPageBusy(false);
+    setPageStatus(null);
+    setTextContinuationActive(false);
+    setContinuationWindowHasOlder(false);
+    setTextContinuationStatus(null);
 
     // Run events merely trigger another authenticated read; they do not
     // authorize a client CUSTOM event as a saved execution receipt.
@@ -171,22 +259,32 @@ export function KarenCopilotHistoryGate({
           try {
             // Authorization-sensitive read. Never reuse process-local UI
             // bootstrap cache across account or tenant transitions.
+            const textMode = textContinuationRequested.current;
             const snapshot = await apiClient.get<KarenOwnedThreadResponse>(
-              "/api/copilotkit/threads/" + conversationId + "/messages",
+              "/api/copilotkit/threads/" + conversationId + "/messages" +
+                (textMode ? "?view=continuation" : ""),
             );
             if (cancelled) return false;
             if (snapshot.threadId !== conversationId || !Array.isArray(snapshot.messages)) {
               throw new Error("Conversation history identity mismatch");
             }
-            // Validate the complete backend-verified rich replay before
-            // installing it. A newer event invalidates this read's freshness.
-            const messages = toCopilotTextMessages(snapshot.messages);
-            const parts = parseKarenVerifiedHistory(
+            // Complete rich replay and explicitly requested text continuation
+            // are independent backend-attested contracts. Text mode never
+            // treats omitted rich content as restored or as a tool capability.
+            const messages = textMode
+              ? validatedKarenTextContinuation(snapshot, conversationId)
+              : toCopilotTextMessages(snapshot.messages);
+            const parts = textMode ? new Map() : parseKarenVerifiedHistory(
               snapshot.replayEvents ?? [], messages,
             );
             if (restoreQueued) continue;
             agent.setMessages(messages);
             setVerifiedParts(parts);
+            setTextContinuationActive(textMode);
+            setContinuationWindowHasOlder(
+              textMode && snapshot.history_window_has_older === true,
+            );
+            setTextContinuationStatus(null);
             setTranscript(null);
             setError(null);
             setLoaded(conversationId);
@@ -195,9 +293,20 @@ export function KarenCopilotHistoryGate({
             if (cancelled || restoreQueued) continue;
             const status = error && typeof error === "object" && "status" in error
               ? (error as { status?: unknown }).status : undefined;
-            const replayUnsupported = status === 409 || (
-              error instanceof Error && /^Unsupported verified /.test(error.message)
-            );
+            // A 502 may mean the bounded full replay exceeds 500 messages;
+            // 503 can mean the governed event journal is unavailable. Neither
+            // authorizes an SDK replay, but an INDEPENDENT owner-verified text
+            // projection can still be shown read-only. Never recover 401/404.
+            const continuationDenied = textContinuationRequested.current;
+            if (continuationDenied) {
+              textContinuationRequested.current = false;
+              setTextContinuationActive(false);
+              setContinuationWindowHasOlder(false);
+            }
+            const replayUnsupported = continuationDenied ||
+              status === 409 || status === 502 || status === 503 || (
+                error instanceof Error && /^Unsupported verified /.test(error.message)
+              );
             if (replayUnsupported) {
               // A fresh authenticated request to the canonical owned snapshot
               // is the only authority for text recovery. Never reuse an
@@ -207,18 +316,7 @@ export function KarenCopilotHistoryGate({
                   "/api/copilotkit/threads/" + conversationId + "/messages?view=transcript",
                 );
                 if (cancelled || restoreQueued) continue;
-                if (recovery.threadId !== conversationId ||
-                    recovery.read_only !== true || recovery.text_only !== true ||
-                    !Number.isInteger(recovery.omitted_entries) ||
-                    recovery.omitted_entries < 0 ||
-                    recovery.omitted_entries > 500) {
-                  throw new Error("Recovery transcript identity or mode mismatch");
-                }
-                setTranscript({
-                  conversationId,
-                  messages: toCopilotTextMessages(recovery.messages),
-                  omittedEntries: recovery.omitted_entries,
-                });
+                setTranscript(verifiedTranscriptPage(recovery, conversationId, 0));
               } catch {
                 if (cancelled || restoreQueued) continue;
                 setTranscript(null);
@@ -227,6 +325,11 @@ export function KarenCopilotHistoryGate({
               setTranscript(null);
             }
             if (!cancelled && !restoreQueued) {
+              if (continuationDenied) {
+                setTextContinuationStatus(
+                  "Karen could not authorize text-only continuation. Verified saved text remains read-only.",
+                );
+              }
               setError(replayUnsupported
                 ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available."
                 : "Karen could not verify or restore this conversation.");
@@ -260,9 +363,41 @@ export function KarenCopilotHistoryGate({
 
     return () => {
       cancelled = true;
+      recoveryGeneration.current += 1;
       unsubscribe?.();
     };
   }, [agent, conversationId, isReady, retryAttempt]);
+
+  const loadRecoveredPage = async (offset: number) => {
+    const previous = transcript;
+    if (!previous || previous.conversationId !== conversationId || pageBusy ||
+        !previous.revision || !Number.isInteger(offset) || offset < 0 ||
+        offset > 100000 || offset % 500 !== 0 ||
+        (offset !== previous.pageOffset - 500 &&
+         offset !== previous.nextOffset)) return;
+
+    const generation = recoveryGeneration.current;
+    setPageBusy(true);
+    setPageStatus(null);
+    try {
+      const page = await apiClient.get<KarenOwnedTranscriptResponse>(
+        "/api/copilotkit/threads/" + conversationId +
+        "/messages?view=transcript&offset=" + offset,
+      );
+      if (generation !== recoveryGeneration.current) return;
+      const verified = verifiedTranscriptPage(
+        page, conversationId, offset, previous.revision,
+      );
+      setTranscript(verified);
+      setCopyStatus(null);
+    } catch {
+      if (generation === recoveryGeneration.current) {
+        setPageStatus("Another transcript page could not be verified. The last verified page remains available.");
+      }
+    } finally {
+      if (generation === recoveryGeneration.current) setPageBusy(false);
+    }
+  };
 
   const copyRecoveredText = async () => {
     if (!transcript || transcript.conversationId !== conversationId ||
@@ -280,7 +415,12 @@ export function KarenCopilotHistoryGate({
         return;
       }
       await navigator.clipboard.writeText(text);
-      setCopyStatus("Verified conversation text copied. Start a new conversation and paste it there if you want Karen to use that context.");
+      setCopyStatus(
+        (transcript.pageOffset > 0 || transcript.hasMore
+          ? "Verified transcript page copied. "
+          : "Verified conversation text copied. ") +
+        "Start a new conversation and paste it there if you want Karen to use that context.",
+      );
     } catch {
       setCopyStatus("Copy could not be confirmed. Select the messages below to copy them manually.");
     } finally {
@@ -306,14 +446,24 @@ export function KarenCopilotHistoryGate({
               not shown. Messages cannot be sent from this view. Copying text
               does not restore hidden cards, attachments, citations or tool
               results. A new conversation will not automatically inherit it.
+              {recovered.revision && " Each page is owner-verified separately."}
               {recovered.omittedEntries > 0 &&
                 ` ${recovered.omittedEntries} non-chat entries were withheld.`}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button type="button" disabled={copyBusy || recovered.messages.length === 0}
+              <button type="button" onClick={() => {
+                textContinuationRequested.current = true;
+                setRetryAttempt(attempt => attempt + 1);
+              }} className="min-h-11 rounded-lg border border-input px-3 text-sm">
+                {recovered.hasMore || recovered.pageOffset > 0
+                  ? "Continue original conversation using recent verified text"
+                  : "Continue original conversation with verified text only"}
+              </button>
+              <button type="button" disabled={copyBusy || pageBusy || recovered.messages.length === 0}
                 onClick={() => void copyRecoveredText()}
                 className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">
-                {copyBusy ? "Copying verified text…" : "Copy verified conversation text"}
+                {copyBusy ? "Copying verified text…" : recovered.pageOffset > 0 || recovered.hasMore
+                  ? "Copy this verified transcript page" : "Copy verified conversation text"}
               </button>
               {onStartNewConversation && (
                 <button type="button" onClick={() => void onStartNewConversation()}
@@ -322,6 +472,32 @@ export function KarenCopilotHistoryGate({
                 </button>
               )}
             </div>
+            {recovered.revision && (recovered.pageOffset > 0 || recovered.hasMore) && (
+              <nav aria-label="Recovered transcript pages" className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  Saved entry page {recovered.pageOffset / 500 + 1}; only this page is displayed.
+                </span>
+                {recovered.pageOffset > 0 && (
+                  <button type="button" disabled={pageBusy}
+                    onClick={() => void loadRecoveredPage(recovered.pageOffset - 500)}
+                    className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">
+                    Previous page
+                  </button>
+                )}
+                {recovered.hasMore && recovered.nextOffset !== null && (
+                  <button type="button" disabled={pageBusy}
+                    onClick={() => void loadRecoveredPage(recovered.nextOffset!)}
+                    className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">
+                    Next 500 saved entries
+                  </button>
+                )}
+              </nav>
+            )}
+            {textContinuationStatus && <p role="status"
+              data-testid="karen-text-continuation-status"
+              className="mt-2 text-xs text-muted-foreground">{textContinuationStatus}</p>}
+            {pageStatus && <p role="status" data-testid="karen-recovered-page-status"
+              className="mt-2 text-xs text-muted-foreground">{pageStatus}</p>}
             {copyStatus && <p role="status" data-testid="karen-recovered-copy-status"
               className="mt-2 text-xs text-muted-foreground">{copyStatus}</p>}
             <ol className="mt-3 max-h-[65vh] space-y-3 overflow-y-auto"
@@ -347,6 +523,18 @@ export function KarenCopilotHistoryGate({
   return (
     <ScopedAgentContext.Provider value={registration}>
       <KarenVerifiedHistoryProvider parts={verifiedParts}>
+        {textContinuationActive && (
+          <p role="status" data-testid="karen-text-continuation-banner"
+            className="border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
+            You are continuing the original saved conversation using authenticated
+            text only. Older cards, citations, attachments and tool activity were
+            not replayed.
+            {continuationWindowHasOlder && (
+              " Only the most recent 500 saved messages are displayed. Older messages remain in Karen's canonical conversation; reopen this thread to browse paged read-only history."
+            )}
+            Karen verifies permissions and context again for each new request.
+          </p>
+        )}
         {children}
       </KarenVerifiedHistoryProvider>
     </ScopedAgentContext.Provider>

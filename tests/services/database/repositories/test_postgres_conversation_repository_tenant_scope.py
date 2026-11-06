@@ -186,6 +186,53 @@ async def test_get_messages_uses_parent_conversation_tenant_scope_and_real_schem
     assert "JOIN conversations c" in normalized_sql
     assert "c.tenant_id = :tenant_id" in normalized_sql
     assert "m.updated_at" not in normalized_sql
+    assert "ORDER BY m.created_at ASC" in normalized_sql
+    assert "CASE m.role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC" in normalized_sql
+    assert "m.message_id ASC" in normalized_sql
+    assert params["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_get_messages_preserves_offset_while_enforcing_tenant_scope_and_stable_order() -> None:
+    session = _Session([_Result(rows=[])])
+    result = await _repository(session).get_messages(
+        conversation_id="22222222-2222-2222-2222-222222222222",
+        tenant_id="tenant-a", limit=501, offset=500,
+    )
+    assert result.success is True
+    assert result.data == []
+    sql, params = session.executions[0]
+    assert "ORDER BY m.created_at ASC" in sql
+    assert "m.message_id ASC" in sql
+    assert "c.tenant_id = :tenant_id" in sql
+    assert params["tenant_id"] == "tenant-a"
+    assert params["limit"] == 501
+    assert params["offset"] == 500
+
+
+@pytest.mark.asyncio
+async def test_recent_messages_use_inverse_stable_sql_order_under_same_tenant_scope() -> None:
+    created_at = datetime(2026, 9, 27, 12, 0, 0)
+    rows = [
+        SimpleNamespace(
+            message_id=str(index), conversation_id="conversation-a",
+            tenant_id="tenant-a", role="assistant", content=str(index),
+            message_metadata={}, created_at=created_at,
+        )
+        for index in (9, 8)
+    ]
+    session = _Session([_Result(rows=rows)])
+    result = await _repository(session).get_messages(
+        "conversation-a", "tenant-a", limit=501, newest_first=True,
+    )
+    assert result.success is True
+    assert [message.id for message in result.data] == ["9", "8"]
+    sql, params = session.executions[0]
+    assert "ORDER BY m.created_at DESC" in sql
+    assert "m.message_id DESC" in sql
+    assert "c.tenant_id = :tenant_id" in sql
+    assert params["limit"] == 501
+    assert params["offset"] == 0
     assert params["tenant_id"] == "tenant-a"
 
 

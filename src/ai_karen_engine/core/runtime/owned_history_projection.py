@@ -2,7 +2,9 @@
 
 This is read-only presentation adaptation, not a message store or executor.
 Only backend-attested, atomically completed run/message pairs may restore
-runtime-specific rich data. Unsupported content fails the entire projection.
+runtime-specific rich data. Unsupported content fails complete rich replay.
+Explicit text continuation is a separate, attestation-checked projection that
+never fabricates rich events or permits model execution by itself.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ _MAX_TEXT = 65536
 _MAX_PRESENTATIONS = 6
 
 _UNSUPPORTED_RICH = frozenset({
-    "actions", "citations", "sources",
+    "actions",
     "attachments", "artifacts", "function_call", "function_response",
     "tool_activity", "tool_calls", "tool_results", "agent_steps",
     "execution_receipt", "presentation", "presentation_payload",
@@ -93,13 +95,94 @@ def _carries_value(value: Any) -> bool:
     return True
 
 
+def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
+    """Allow *withheld* provider source metadata only with an attested UI part.
+
+    This function grants no execution/replay authority. The completed-run
+    digest is still required in project_owned_history and raw source payloads
+    never reach the CopilotKit event projection.
+    """
+    sources = metadata.get("sources")
+    citations = metadata.get("citations")
+    if not _carries_value(sources) and not _carries_value(citations):
+        return True
+
+    structured = metadata.get("structured_content")
+    captured = metadata.get("verified_presentations_v1")
+    if (
+        not isinstance(structured, Mapping)
+        or not isinstance(captured, list)
+        or len(captured) != 1
+        or structured.get("presentation") != captured[0]
+    ):
+        return False
+    part = validate_presentation(captured[0])
+    if part is None or part != captured[0] or part["component_type"] not in {
+        "search.results", "weather.observation", "weather.comparison",
+    }:
+        return False
+    # A source/citation-bearing capability must carry the original completed
+    # request receipt; unpaired metadata from historical/legacy messages
+    # cannot be silently admitted as if it were verified.
+    if metadata.get("source") != "chat_runtime" or not isinstance(metadata.get("request_id"), str):
+        return False
+    evidence = part.get("evidence_ref")
+    if not isinstance(evidence, str) or not evidence.startswith(metadata["request_id"] + ":"):
+        return False
+
+    if sources is not None and not isinstance(sources, list):
+        return False
+    if citations is not None and not isinstance(citations, list):
+        return False
+    source_rows = sources or []
+    citation_rows = citations or []
+    if len(source_rows) > 100 or len(citation_rows) > 100:
+        return False
+    if any(
+        not isinstance(row, Mapping)
+        or not isinstance(row.get("url"), str)
+        or not 1 <= len(row["url"]) <= 1200
+        for row in source_rows + citation_rows
+    ):
+        return False
+
+    if part["component_type"] == "search.results":
+        # Every *displayed* result must have been in the saved source receipts.
+        # Other source/citation records may be retained by the canonical
+        # repository but must not be shipped to the renderer.
+        records = part["data"]["results"]
+        for displayed in records:
+            if not any(
+                row["url"] == displayed["url"]
+                and str(row.get("snippet") or row.get("content") or "").strip()
+                    == displayed["snippet"]
+                and ("title" not in displayed or row.get("title") == displayed["title"])
+                and (
+                    "published_at" not in displayed
+                    or row.get("published_at") == displayed["published_at"]
+                )
+                for row in source_rows
+            ):
+                return False
+    # Weather observations have independent source measurements and optional
+    # citation links; the original weather contract and completed-run digest
+    # determine validity. Never imply that a citation itself is a measurement.
+    return True
+
+
 def project_owned_history(
     snapshot: ConversationSnapshot,
     *,
     attestations: Mapping[str, tuple[str, str]],
     observed_activity: Mapping[str, tuple[str, str, str, list[dict[str, Any]]]] | None = None,
+    text_continuation: bool = False,
 ) -> dict[str, Any]:
-    """Build complete text snapshot plus vetted CUSTOM events or fail closed."""
+    """Project trusted history. Explicit text mode drops every rich event.
+
+    Authorization is already checked by ConversationRuntimeGateway. Rich
+    metadata must still be bound to a completed, exact-digest run. The caller
+    must require a separate explicit user action before mounting text mode.
+    """
     records = snapshot.messages
     if len(records) > _MAX_MESSAGES:
         raise UnreplayableHistory("history_message_limit")
@@ -114,6 +197,7 @@ def project_owned_history(
     messages: list[dict[str, str]] = []
     events: list[dict[str, Any]] = []
     seen_message_ids: set[str] = set()
+    omitted_rich_message_count = 0
 
     for message in records:
         role = str(message.role)
@@ -131,7 +215,19 @@ def project_owned_history(
         metadata = message.metadata
         if not isinstance(metadata, Mapping):
             raise UnreplayableHistory("invalid_message_metadata")
-        if any(_carries_value(metadata.get(key)) for key in _UNSUPPORTED_RICH):
+        has_unknown_rich = any(
+            _carries_value(metadata.get(key)) for key in _UNSUPPORTED_RICH
+        )
+        has_source_context = any(
+            _carries_value(metadata.get(key)) for key in ("sources", "citations")
+        )
+        if has_unknown_rich and not text_continuation:
+            raise UnreplayableHistory("unsupported_rich_history")
+        # Raw source and citation records may accompany a *fully attested*
+        # saved surface but cannot independently authorize new UI claims.
+        # In explicit text-only continuation, these are withheld; the exact
+        # completed-run digest remains necessary for the affected message.
+        if not text_continuation and not _verified_source_context(metadata):
             raise UnreplayableHistory("unsupported_rich_history")
 
         # The direct-capability stream persists its *same* approved surface
@@ -141,7 +237,7 @@ def project_owned_history(
         # response simply because it has this duplicate canonical envelope.
         # Runtime attestation and the digest check below still govern both.
         structured = metadata.get("structured_content")
-        if _carries_value(structured):
+        if _carries_value(structured) and not text_continuation:
             captured = metadata.get("verified_presentations_v1")
             if (
                 not isinstance(structured, Mapping)
@@ -152,7 +248,8 @@ def project_owned_history(
                 or structured["presentation"] != captured[0]
             ):
                 raise UnreplayableHistory("unsupported_rich_history")
-        if metadata.get("presentation_replay_incomplete") is True:
+        incomplete_presentation = metadata.get("presentation_replay_incomplete") is True
+        if incomplete_presentation and not text_continuation:
             raise UnreplayableHistory("incomplete_presentation_capture")
 
         observed = (observed_activity or {}).get(identifier)
@@ -160,6 +257,14 @@ def project_owned_history(
             observed is not None
             or any(_carries_value(metadata.get(key)) for key in _RUNTIME_RECEIPT)
             or _carries_value(metadata.get("verified_presentations_v1"))
+            or (
+                text_continuation and (
+                    has_unknown_rich
+                    or has_source_context
+                    or _carries_value(structured)
+                    or incomplete_presentation
+                )
+            )
         )
         if rich:
             # Metadata labels alone are NOT attestation. Only exact message
@@ -189,12 +294,33 @@ def project_owned_history(
                 ):
                     raise UnreplayableHistory("unattested_observed_activity")
                 try:
-                    events.extend(project_attested_agent_activity(
+                    validated_activity = project_attested_agent_activity(
                         observed[3], message_id=identifier,
                         transport_run_id=observed[2],
-                    ))
+                    )
                 except InvalidAgentActivity as exc:
                     raise UnreplayableHistory("invalid_attested_agent_activity") from exc
+                if not text_continuation:
+                    events.extend(validated_activity)
+            if text_continuation:
+                # Exact canonical content may be viewed and continued, but
+                # rich metadata, actions and receipts are never rehydrated.
+                # SDK state changes here do not invoke a model or tools.
+                omitted_rich_message_count += 1
+                messages.append({"id": identifier, "role": role, "content": content})
+                continue
+            # Rebuild events from a previously completed run. Its attested
+            # request identity is stable even when older saved messages lack
+            # correlation_id. This identifier is only required to satisfy
+            # ChatStreamChunk's canonical typing; AGUIEventProjection does
+            # not publish it as a claim about the original tracing ID.
+            recorded_correlation = metadata.get("correlation_id")
+            replay_trace_id = (
+                recorded_correlation
+                if isinstance(recorded_correlation, str)
+                and 1 <= len(recorded_correlation) <= 160
+                else attestation[0]
+            )
             projector = AGUIEventProjection(
                 thread_id=thread_id,
                 run_id="restored_" + identifier.replace("-", "_"),
@@ -214,16 +340,15 @@ def project_owned_history(
                     for event in projector.project(ChatStreamChunk(
                         type="presentation",
                         content="",
-                        correlation_id=str(metadata.get("request_id") or identifier),
+                        correlation_id=replay_trace_id,
                         metadata={"presentation_verified": True, "presentation": valid},
                     )):
                         if event.get("type") != "CUSTOM" or event.get("name") != "karen.presentation.v1":
                             raise UnreplayableHistory("invalid_presentation_projection")
                         events.append({**event, "messageId": identifier})
             for event in projector.project(ChatStreamChunk(
-                type="complete",
-                content="",
-                correlation_id=str(metadata.get("request_id") or identifier),
+                type="complete", content="",
+                correlation_id=replay_trace_id,
                 metadata=dict(metadata),
             )):
                 if event.get("type") == "CUSTOM":
@@ -246,6 +371,12 @@ def project_owned_history(
         "response_source": "persisted_history",
         "replay_only": True,
     }
+    if text_continuation:
+        result.update({
+            "text_only": True,
+            "continuation_authorized": True,
+            "omitted_rich_message_count": omitted_rich_message_count,
+        })
     try:
         length = len(json.dumps(result, allow_nan=False, separators=(",", ":")).encode("utf-8"))
     except (TypeError, ValueError, OverflowError) as exc:

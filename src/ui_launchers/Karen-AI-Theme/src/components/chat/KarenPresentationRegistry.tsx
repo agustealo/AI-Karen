@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -33,6 +33,34 @@ export function displayClockObservation(formatted: string): { time: string; date
       Number(match[5]) > 59 || (match[6] && Number(match[6]) > 59)) return { time: formatted };
   const displayHour = hour % 12 || 12;
   return { time: `${displayHour}:${match[5]} ${hour < 12 ? "AM" : "PM"}`, date: `${match[1]}-${match[2]}-${match[3]}` };
+}
+
+/**
+ * Source links are rendered, never fetched or executed by this component.
+ * Guard link schemes and local-network destinations independently of the
+ * backend's canonical evidence validator.
+ */
+function isPublicSourceUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value || value.length > 1200 ||
+      /[\s\u0000-\u001f\\]/.test(value)) return false;
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (!["http:", "https:"].includes(parsed.protocol) ||
+        parsed.username || parsed.password || parsed.port === "0" || parsed.hash ||
+        !/^[a-z0-9.-]+$/.test(host)) return false;
+    // Mirror the backend's DNS-only rule. Reject numeric hosts and URL
+    // parser aliases for loopback/private network IP addresses.
+    const labels = host.split(".");
+    return labels.length >= 2 && labels.every((label) =>
+      label.length > 0 && label.length <= 63 &&
+      !label.startsWith("-") && !label.endsWith("-") &&
+      /^[a-z0-9-]+$/.test(label)) &&
+      /[a-z]/.test(labels[labels.length - 1]) &&
+      host !== "localhost" && !/\.(localhost|local|internal)$/.test(host);
+  } catch {
+    return false;
+  }
 }
 
 export type KarenPresentationEnvelope = z.infer<typeof presentationSchema>;
@@ -86,6 +114,54 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     if (typeof clock !== "string" || !clock.trim() || clock.length > 160) return null;
     if (timezone !== undefined && (typeof timezone !== "string" || timezone.length > 100)) return null;
     if (Object.keys(value).some((key) => !["formatted", "timezone"].includes(key))) return null;
+  } else if (result.data.component_type === "data.table") {
+    const value = result.data.data;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).some((key) => !["title", "columns", "rows"].includes(key)) ||
+        !Array.isArray(record.columns) || !Array.isArray(record.rows) ||
+        record.columns.length < 1 || record.columns.length > 6 ||
+        record.rows.length < 1 || record.rows.length > 20 ||
+        (record.title !== undefined && (typeof record.title !== "string" ||
+          !record.title.trim() || record.title.trim().length > 160))) return null;
+    const columns = record.columns as Record<string, unknown>[];
+    if (!columns.every((column) => column && typeof column === "object" &&
+      !Array.isArray(column) && Object.keys(column).sort().join(",") === "key,label" &&
+      typeof column.key === "string" && /^[a-z][a-z0-9_]{0,31}$/.test(column.key) &&
+      typeof column.label === "string" && !!column.label.trim() &&
+      column.label.trim().length <= 80)) return null;
+    const keys = columns.map((column) => column.key as string);
+    if (new Set(keys).size !== keys.length) return null;
+    const expected = [...keys].sort().join(",");
+    for (const row of record.rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row) ||
+          Object.keys(row).sort().join(",") !== expected) return null;
+      for (const key of keys) {
+        const cell = (row as Record<string, unknown>)[key];
+        if (cell !== null && (typeof cell !== "string" || cell.length > 240 ||
+          Array.from(cell).some((character) => character.charCodeAt(0) < 32))) return null;
+      }
+    }
+  } else if (result.data.component_type === "search.results") {
+    const value = result.data.data;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 1 || !Array.isArray(record.results) ||
+        record.results.length < 1 || record.results.length > 5) return null;
+    const seen = new Set<string>();
+    for (const rawItem of record.results) {
+      if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) return null;
+      const item = rawItem as Record<string, unknown>;
+      if (Object.keys(item).some((key) => !["url", "title", "snippet", "published_at"].includes(key)) ||
+          !isPublicSourceUrl(item.url) || seen.has(item.url) ||
+          typeof item.snippet !== "string" || !item.snippet.trim() ||
+          item.snippet.trim().length > 600 ||
+          (item.title !== undefined && (typeof item.title !== "string" ||
+            !item.title.trim() || item.title.trim().length > 200)) ||
+          (item.published_at !== undefined && (typeof item.published_at !== "string" ||
+            !item.published_at.trim() || item.published_at.trim().length > 80))) return null;
+      seen.add(item.url);
+    }
   } else if (result.data.component_type === "planner.task_list") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -147,6 +223,51 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
         <p className="mt-1 text-2xl font-semibold tabular-nums">{display.time}</p>
         {display.date && <p className="mt-1 text-xs text-muted-foreground">{display.date}</p>}
         {clock.timezone && <p className="mt-1 text-xs text-muted-foreground">{clock.timezone}</p>}
+      </section>;
+    }
+    case "data.table": {
+      const table = envelope.data as {
+        title?: string;
+        columns: { key: string; label: string }[];
+        rows: Record<string, string | null>[];
+      };
+      return <section aria-label={table.title || "Verified data table"}
+        data-testid="karen-data-table" className="my-3 min-w-0 rounded-xl border border-border/70 p-3">
+        {table.title && <h3 className="mb-3 font-semibold">{table.title}</h3>}
+        <div className="w-full overflow-x-auto">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead><tr>{table.columns.map((column) =>
+              <th scope="col" key={column.key} className="border-b border-border/70 px-3 py-2 font-semibold">
+                {column.label}
+              </th>)}</tr></thead>
+            <tbody>{table.rows.map((row, index) =>
+              <tr key={index}>{table.columns.map((column) =>
+                <td key={column.key} className="border-b border-border/50 px-3 py-2 align-top whitespace-pre-wrap break-words">
+                  {row[column.key] === null ? <span className="text-muted-foreground">Not provided</span> : row[column.key]}
+                </td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      </section>;
+    }
+    case "search.results": {
+      const entries = (envelope.data as { results: {
+        url: string; title?: string; snippet: string; published_at?: string;
+      }[] }).results;
+      return <section aria-label="Verified web search results"
+        data-testid="karen-search-results" className="my-3 flex flex-col gap-3">
+        {entries.map((entry) => (
+          <article key={entry.url} className="min-w-0 rounded-xl border border-border/70 p-4">
+            <h3 className="font-semibold">{entry.title || "Source result"}</h3>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm">{entry.snippet}</p>
+            {entry.published_at && <p className="mt-2 text-xs text-muted-foreground">
+              Published (source-reported): {entry.published_at}
+            </p>}
+            <a href={entry.url} target="_blank" rel="noopener noreferrer"
+              className="mt-2 inline-block break-all text-sm underline underline-offset-2">
+              View source: {new URL(entry.url).hostname}
+            </a>
+          </article>
+        ))}
       </section>;
     }
     case "planner.task_list": {

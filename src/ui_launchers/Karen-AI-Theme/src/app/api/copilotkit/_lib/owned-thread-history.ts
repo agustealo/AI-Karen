@@ -48,11 +48,13 @@ async function readKarenGovernedHistory(
   headers: Record<string, string>,
   principal: KarenVerifiedPrincipal,
   threadId: string,
+  textContinuation = false,
 ): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(
-      baseUrl + "/api/chat/ag-ui/threads/" + threadId + "/history",
+      baseUrl + "/api/chat/ag-ui/threads/" + threadId + "/history" +
+        (textContinuation ? "?view=text_continuation" : ""),
       { method: "GET", headers, redirect: "manual", cache: "no-store", signal: request.signal },
     );
   } catch {
@@ -91,7 +93,18 @@ async function readKarenGovernedHistory(
   }
   if (!Array.isArray(data.messages) || data.messages.length > MAX_MESSAGES ||
       !Array.isArray(data.replayEvents) || data.replayEvents.length > MAX_MESSAGES * 108 ||
-      data.response_source !== "persisted_history" || data.replay_only !== true) {
+      data.response_source !== "persisted_history" || data.replay_only !== true ||
+      (textContinuation && (
+        data.continuation_authorized !== true || data.text_only !== true ||
+        !Number.isInteger(data.omitted_rich_message_count) ||
+        (data.omitted_rich_message_count as number) < 0 ||
+        (data.omitted_rich_message_count as number) > MAX_MESSAGES ||
+        data.replayEvents.length !== 0 ||
+        typeof data.history_window_has_older !== "boolean" ||
+        data.history_window_message_limit !== 500 ||
+        (data.history_window_has_older === true && data.messages.length !== 500)
+      )) ||
+      (!textContinuation && data.continuation_authorized === true)) {
     return failure("Invalid governed conversation history", 502);
   }
   const allowedRoles = new Set(["user", "assistant"]);
@@ -129,7 +142,15 @@ async function readKarenGovernedHistory(
     replayEvents.push({ type: "CUSTOM", name: e.name, value: e.value, messageId: e.messageId });
   }
   return NextResponse.json(
-    { threadId, messages, replayEvents },
+    textContinuation
+      ? {
+        threadId, messages, replayEvents: [],
+        text_only: true, continuation_authorized: true,
+        omitted_rich_message_count: data.omitted_rich_message_count,
+        history_window_has_older: data.history_window_has_older,
+        history_window_message_limit: 500,
+      }
+      : { threadId, messages, replayEvents },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }
@@ -147,13 +168,22 @@ export async function readKarenOwnedThreadMessages(
   threadId: string,
   governedHistory = false,
   readOnlyTranscript = false,
+  transcriptOffset = 0,
+  textContinuation = false,
 ): Promise<Response> {
+  if (textContinuation && !governedHistory) {
+    return failure("Attested text continuation unavailable", 404);
+  }
   if (governedHistory && !readOnlyTranscript) {
-    return readKarenGovernedHistory(request, baseUrl, headers, principal, threadId);
+    return readKarenGovernedHistory(
+      request, baseUrl, headers, principal, threadId, textContinuation,
+    );
   }
   let response: Response;
   try {
-    response = await fetch(baseUrl + "/api/conversations/" + threadId + "?message_limit=" + (MAX_MESSAGES + 1), {
+    response = await fetch(baseUrl + "/api/conversations/" + threadId + "?message_limit=" +
+      (MAX_MESSAGES + 1) +
+      (readOnlyTranscript && transcriptOffset > 0 ? "&message_offset=" + transcriptOffset : ""), {
       method: "GET",
       headers,
       redirect: "manual",
@@ -190,14 +220,25 @@ export async function readKarenOwnedThreadMessages(
   if (data.id !== threadId || data.user_id !== principal.user_id) {
     return failure("Conversation unavailable", 404);
   }
-  if (!Array.isArray(data.messages) || data.messages.length > MAX_MESSAGES) {
+  if (!Array.isArray(data.messages) ||
+      data.messages.length > (readOnlyTranscript ? MAX_MESSAGES + 1 : MAX_MESSAGES)) {
     return failure("Conversation history verification failed", 502);
   }
+  // A bounded read-only viewing projection, never a partial SDK replay.
+  // Parent updated_at is only a best-effort change hint, not an immutable
+  // history revision or authorization token; each page is reauthorized.
+  const revision = data.updated_at;
+  if (readOnlyTranscript &&
+      (typeof revision !== "string" || revision.length < 1 || revision.length > 100)) {
+    return failure("Conversation revision unavailable", 502);
+  }
+  const hasMore = readOnlyTranscript && data.messages.length > MAX_MESSAGES;
+  const page = readOnlyTranscript ? data.messages.slice(0, MAX_MESSAGES) : data.messages;
 
   const messages: Array<{ id: string; role: "user" | "assistant"; content: string }> = [];
   const seenIds = new Set<string>();
   let omittedEntries = 0;
-  for (const item of data.messages) {
+  for (const item of page) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return failure("Invalid canonical conversation message", 502);
     }
@@ -261,6 +302,10 @@ export async function readKarenOwnedThreadMessages(
       ? {
         threadId, messages, read_only: true, text_only: true,
         omitted_entries: omittedEntries,
+        conversation_updated_at: revision,
+        page_offset: transcriptOffset,
+        has_more: hasMore,
+        next_offset: hasMore ? transcriptOffset + MAX_MESSAGES : null,
       }
       : { threadId, messages },
     { headers: { "Cache-Control": "private, no-store" } },

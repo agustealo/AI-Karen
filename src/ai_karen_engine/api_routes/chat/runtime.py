@@ -14,7 +14,7 @@ import time
 import uuid
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -851,6 +851,7 @@ async def get_ag_ui_run_observed_events(
 async def get_ag_ui_owned_history(
     thread_id: str,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
+    view: Literal["full", "text_continuation"] = "full",
 ):
     """Governed, non-executing completed-run replay from canonical storage.
 
@@ -874,12 +875,27 @@ async def get_ag_ui_owned_history(
         request_id=correlation_id, correlation_id=correlation_id,
     )
     from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
-        get_conversation_runtime_gateway,
+        ConversationSnapshot, get_conversation_runtime_gateway,
     )
+    text_mode = view == "text_continuation"
+    window_has_older = False
     try:
-        snapshot = await get_conversation_runtime_gateway().get_owned_snapshot(
-            context, message_limit=501,
-        )
+        gateway = get_conversation_runtime_gateway()
+        if text_mode:
+            # A sentinel preceding the latest 500 messages proves older
+            # saved text exists without creating a partial full-rich replay.
+            recent = await gateway.get_owned_recent_snapshot(
+                context, message_limit=501,
+            )
+            window_has_older = len(recent.messages) > 500
+            snapshot = ConversationSnapshot(
+                conversation=recent.conversation,
+                messages=recent.messages[-500:],
+            )
+        else:
+            snapshot = await gateway.get_owned_snapshot(
+                context, message_limit=501,
+            )
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
     except RuntimeError as exc:
@@ -905,10 +921,27 @@ async def get_ag_ui_owned_history(
             if getattr(features, "enable_ag_ui_event_journal", False)
             else {}
         )
+        # Observed events from older saved entries are neither replayed nor
+        # promoted into authority by a bounded recent-message window.
+        if window_has_older:
+            eligible = {
+                str(message.id) for message in snapshot.messages
+                if str(message.role) == "assistant"
+            }
+            observed_activity = {
+                identifier: activity for identifier, activity in observed_activity.items()
+                if identifier in eligible
+            }
         history = project_owned_history(
             snapshot, attestations=attestations,
             observed_activity=observed_activity,
+            text_continuation=text_mode,
         )
+        if text_mode:
+            history.update({
+                "history_window_has_older": window_has_older,
+                "history_window_message_limit": 500,
+            })
     except UnreplayableHistory as exc:
         # Keep the public response fail-closed and generic. An internal,
         # allow-listed reason code makes the reported 409 diagnosable without
@@ -920,6 +953,7 @@ async def get_ag_ui_owned_history(
                 "correlation_id": correlation_id,
                 "reason_code": reason_code,
                 "failure_class": "governed_history_replay",
+                "projection_view": view,
             },
         )
         # A truncated/oversized history is an incomplete backend projection;

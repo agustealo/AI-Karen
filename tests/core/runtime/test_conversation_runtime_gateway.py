@@ -182,6 +182,8 @@ class _Repository(ConversationRepository):
         tenant_id: str,
         limit: int = 100,
         offset: int = 0,
+        *,
+        newest_first: bool = False,
     ) -> RepositoryResult[list[Message]]:
         rows = [
             message
@@ -189,6 +191,8 @@ class _Repository(ConversationRepository):
             if message.conversation_id == conversation_id
             and message.tenant_id == tenant_id
         ]
+        if newest_first:
+            rows = list(reversed(rows))
         return RepositoryResult(success=True, data=rows[offset : offset + limit])
 
     async def update_message(self, message: Message) -> RepositoryResult[bool]:
@@ -241,6 +245,92 @@ def test_derived_conversation_identity_is_distinct_across_tenants() -> None:
         _context(conversation_id=None, tenant_id="tenant-b", session_id="shared-session")
     )
     assert tenant_a != tenant_b
+
+
+@pytest.mark.asyncio
+async def test_owned_conversation_snapshot_paginates_after_500_with_scope_preserved() -> None:
+    repository = _Repository()
+    context = _context()
+    conversation_id = context.conversation_id or ""
+    repository.conversations[(context.tenant_id, conversation_id)] = Conversation(
+        id=conversation_id, tenant_id=context.tenant_id, user_id=context.user_id,
+    )
+    repository.messages = [
+        Message(
+            id=f"message-{index}", conversation_id=conversation_id,
+            tenant_id=context.tenant_id,
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"Saved turn {index}",
+        )
+        for index in range(503)
+    ]
+    gateway = ConversationRuntimeGateway(repository=repository)
+
+    first = await gateway.get_owned_snapshot(context, message_limit=501)
+    second = await gateway.get_owned_snapshot(
+        context, message_limit=501, message_offset=500,
+    )
+    assert len(first.messages) == 501
+    assert len(second.messages) == 3
+    assert first.messages[500].id == second.messages[0].id
+    assert second.messages[-1].content == "Saved turn 502"
+
+    with pytest.raises((RuntimeError, PermissionError)):
+        await gateway.get_owned_snapshot(
+            _context(user_id="different-user"),
+            message_limit=501, message_offset=500,
+        )
+    with pytest.raises((RuntimeError, PermissionError)):
+        await gateway.get_owned_snapshot(
+            _context(tenant_id="different-tenant"),
+            message_limit=501, message_offset=500,
+        )
+    with pytest.raises(ValueError, match="invalid_message_offset"):
+        await gateway.get_owned_snapshot(
+            context, message_limit=501, message_offset=-1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_owned_recent_window_keeps_last_501_chronological_and_owner_scoped() -> None:
+    repository = _Repository()
+    context = _context()
+    conversation_id = context.conversation_id or ""
+    repository.conversations[(context.tenant_id, conversation_id)] = Conversation(
+        id=conversation_id, tenant_id=context.tenant_id, user_id=context.user_id,
+    )
+    repository.messages = [
+        Message(
+            id=f"saved-{index}", conversation_id=conversation_id,
+            tenant_id=context.tenant_id,
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"Canonical message {index}",
+        )
+        for index in range(1003)
+    ]
+    gateway = ConversationRuntimeGateway(repository=repository)
+    window = await gateway.get_owned_recent_snapshot(context, message_limit=501)
+    assert len(window.messages) == 501
+    assert window.messages[0].id == "saved-502"
+    assert window.messages[-1].id == "saved-1002"
+    assert len({message.id for message in window.messages}) == 501
+    with pytest.raises(PermissionError):
+        await gateway.get_owned_recent_snapshot(
+            _context(user_id="different-user"), message_limit=501,
+        )
+    with pytest.raises((RuntimeError, PermissionError)):
+        await gateway.get_owned_recent_snapshot(
+            _context(tenant_id="different-tenant"), message_limit=501,
+        )
+    with pytest.raises(ValueError, match="invalid_recent_message_limit"):
+        await gateway.get_owned_recent_snapshot(context, message_limit=502)
+
+    # A nonconforming adapter is not allowed to bypass the fixed memory bound.
+    async def oversized_page(*args, **kwargs):
+        return RepositoryResult(success=True, data=repository.messages[:502])
+    repository.get_messages = oversized_page  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="invalid_recent_conversation_page"):
+        await gateway.get_owned_recent_snapshot(context, message_limit=501)
 
 
 @pytest.mark.asyncio

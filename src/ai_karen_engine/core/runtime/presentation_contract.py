@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -128,6 +128,140 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         safe["data"] = {"formatted": value.strip()}
         if timezone:
             safe["data"]["timezone"] = timezone
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "data.table":
+        # Read-only structured facts; the runtime must establish source authority
+        # before this validator is called. No model-authored links or actions.
+        import re
+
+        if not isinstance(data, dict) or set(data) not in (
+            {"columns", "rows"}, {"title", "columns", "rows"}
+        ):
+            return None
+        title = data.get("title")
+        if title is not None and (
+            not isinstance(title, str) or not 1 <= len(title.strip()) <= 160
+        ):
+            return None
+        columns = data["columns"]
+        rows = data["rows"]
+        if (
+            not isinstance(columns, list) or not 1 <= len(columns) <= 6
+            or not isinstance(rows, list) or not 1 <= len(rows) <= 20
+        ):
+            return None
+        safe_columns: list[dict[str, str]] = []
+        for column in columns:
+            if not isinstance(column, Mapping) or set(column) != {"key", "label"}:
+                return None
+            key, label = column["key"], column["label"]
+            if (
+                not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key)
+                or not isinstance(label, str) or not 1 <= len(label.strip()) <= 80
+            ):
+                return None
+            safe_columns.append({"key": key, "label": label.strip()})
+        keys = [column["key"] for column in safe_columns]
+        if len(keys) != len(set(keys)):
+            return None
+        safe_rows: list[dict[str, str | None]] = []
+        for row in rows:
+            if not isinstance(row, Mapping) or set(row) != set(keys):
+                return None
+            safe_row: dict[str, str | None] = {}
+            for key in keys:
+                value = row[key]
+                if value is not None and (
+                    not isinstance(value, str) or sum(2 if ord(character) > 0xFFFF else 1 for character in value) > 240
+                    or any(ord(character) < 32 for character in value)
+                ):
+                    return None
+                safe_row[key] = value
+            safe_rows.append(safe_row)
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe_data: dict[str, Any] = {"columns": safe_columns, "rows": safe_rows}
+        if title is not None:
+            safe_data["title"] = title.strip()
+        safe["data"] = safe_data
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "search.results":
+        # Search results are extracted only from authorized source receipts by
+        # ChatRuntime. Do not accept model-authored HTML, URLs, or claims here.
+        import re
+        from urllib.parse import urlsplit
+
+        if not isinstance(data, dict) or set(data) != {"results"}:
+            return None
+        entries = data["results"]
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 5:
+            return None
+        clean = []
+        seen_urls: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, Mapping) or set(entry) - {
+                "url", "title", "snippet", "published_at"
+            }:
+                return None
+            url, snippet = entry.get("url"), entry.get("snippet")
+            if (
+                not isinstance(url, str) or not 1 <= len(url) <= 1200
+                or any(ch.isspace() or ord(ch) < 32 or ch == chr(92) for ch in url)
+                or not isinstance(snippet, str)
+                or not 1 <= len(snippet.strip()) <= 600
+            ):
+                return None
+            try:
+                parsed = urlsplit(url)
+                host = parsed.hostname
+                if (
+                    parsed.scheme not in ("http", "https")
+                    or not host or not parsed.netloc or parsed.username is not None
+                    or parsed.password is not None or parsed.port == 0
+                    or host.lower() == "localhost"
+                    or host.lower().endswith((".localhost", ".local", ".internal"))
+                ):
+                    return None
+                # Require a DNS hostname, not a numeric/alternate IP
+                # notation that Python and browser URL parsers may interpret
+                # differently (hex, octal, shortened, or IPv6 addresses).
+                # Public IP links are intentionally omitted from UI.
+                if parsed.fragment:
+                    return None
+                labels = host.split(".")
+                if (
+                    len(labels) < 2
+                    or any(
+                        not label or len(label) > 63
+                        or label.startswith("-") or label.endswith("-")
+                        or not re.fullmatch(r"[a-zA-Z0-9-]+", label)
+                        for label in labels
+                    )
+                    or not any(ch.isalpha() for ch in labels[-1])
+                ):
+                    return None
+            except ValueError:
+                return None
+            if url in seen_urls:
+                return None
+            seen_urls.add(url)
+            item = {"url": url, "snippet": snippet.strip()}
+            for field, maximum in (("title", 200), ("published_at", 80)):
+                if field in entry:
+                    value = entry[field]
+                    if not isinstance(value, str) or not 1 <= len(value.strip()) <= maximum:
+                        return None
+                    item[field] = value.strip()
+            clean.append(item)
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe["data"] = {"results": clean}
         try:
             encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
         except (TypeError, ValueError, OverflowError):
