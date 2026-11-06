@@ -85,7 +85,7 @@ jobs:
           test -n "$RENDER_BETA_KEY_VALUE_ID" || { echo "::error::Existing Key Value ID is missing"; exit 1; }
           extra_args=()
           if [[ "$MODE" == "inspect-consumer" ]]; then
-            extra_args+=(--require-governed-history)
+            extra_args+=(--require-governed-history --expected-deployed-sha "$TARGET_SHA")
           fi
           python scripts/deploy/inspect_render_beta_environment.py \
             --service-id "$RENDER_BETA_SERVICE_ID" \

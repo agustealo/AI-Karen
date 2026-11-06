@@ -423,4 +423,6 @@ Merge / rollout / rollback:
 
 | 2026-11-06 | `main@a5f22a22` | PR #680 merged: validated public source URL cells are safe clickable links in the existing `data.table` renderer; persisted replay and hostile-link tests, plus signed-in browser assertions added; 8/8 exact-head checks passed | KCON-710, KCON-730 | Deployed signed-in first-send/replay NOT_RUN; Render FastAPI startup still blocked by required production configuration |
 
+| 2026-11-06 | `fix/kcon-consumer-render-exact-live-sha-20261106` | Candidate: existing protected `inspect-consumer` preflight now requires read-only newest Render deployment to be `live` on exact reviewed main SHA, independently of env configuration, DB durability, migrations and browser proof | KCON-160, KCON-730, KCON-750 | Exact-head CI PENDING; real Render deploy remains failed/legacy branch, browser NOT_RUN; no deployment or secret mutation |
+
 **Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.

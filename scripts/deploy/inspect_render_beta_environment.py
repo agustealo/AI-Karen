@@ -324,6 +324,33 @@ def inspect(
     return Report(tuple(sorted(failures)), tuple(sorted(advisories)))
 
 
+def verify_live_render_deployment(
+    client: RenderClient, service_id: str, expected_sha: str,
+) -> None:
+    """Attest the newest existing Render deploy against the reviewed main SHA.
+
+    This is read-only and intentionally separate from backend HTTP health,
+    migration proof and authenticated browser acceptance. An older live build
+    never hides a newer failed or pending deployment.
+    """
+    if (not SERVICE_ID_PATTERN.fullmatch(service_id)
+            or not re.fullmatch(r"[a-f0-9]{40}", expected_sha)):
+        raise ReconcileError("Reviewed Render deployment identity is invalid")
+    records = client._request_path(
+        f"/v1/services/{service_id}/deploys?limit=1", method="GET",
+    )
+    if (not isinstance(records, list) or len(records) != 1
+            or not isinstance(records[0], dict)):
+        raise ReconcileError("Render latest deployment cannot be attested")
+    latest = records[0].get("deploy")
+    if not isinstance(latest, dict):
+        raise ReconcileError("Render latest deployment has invalid metadata")
+    commit = latest.get("commit")
+    if (latest.get("status") != "live" or not isinstance(commit, dict)
+            or commit.get("id") != expected_sha):
+        raise ReconcileError("Render is not live on the reviewed main revision")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only existing Render beta environment preflight")
     parser.add_argument("--service-id", required=True)
@@ -331,6 +358,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--postgres-id", required=True)
     parser.add_argument("--key-value-id", required=True)
     parser.add_argument("--manifest", type=Path, default=BLUEPRINT)
+    parser.add_argument(
+        "--expected-deployed-sha",
+        default=None,
+        help="Full reviewed main SHA, required for governed consumer readiness",
+    )
     parser.add_argument(
         "--require-governed-history", action="store_true",
         help="Also require explicit AG-UI bridge and durable-run settings; "
@@ -352,6 +384,15 @@ def main(argv: list[str] | None = None) -> int:
             required_defaults=required_environment_defaults(SERVER_CONFIG),
             require_governed_history=args.require_governed_history,
         )
+        if args.require_governed_history:
+            if not isinstance(args.expected_deployed_sha, str) or not re.fullmatch(
+                r"[a-f0-9]{40}", args.expected_deployed_sha
+            ):
+                raise ReconcileError("Reviewed main deployment SHA is required")
+            if report.ready:
+                verify_live_render_deployment(
+                    client, args.service_id, args.expected_deployed_sha,
+                )
     except (ReconcileError, OSError, ValueError) as exc:
         if isinstance(exc, OSError):
             print("FAILED: Existing Render preflight source is unreadable", file=sys.stderr)
@@ -362,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print("Render beta environment audit (read-only, secrets excluded)")
     if args.require_governed_history:
-        print("Governed-history switches checked; migrations and live browser proof remain separate")
+        print("Governed-history and latest live Render revision checked; migrations and browser proof remain separate")
     for line in report.failures:
         print(f"FAIL: {line}")
     for line in report.advisories:
