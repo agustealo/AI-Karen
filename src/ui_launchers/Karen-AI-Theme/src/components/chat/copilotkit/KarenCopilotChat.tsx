@@ -16,8 +16,8 @@ const CONVERSATION_UUID =
  * ChatRuntime reconstructs historical context from the authenticated,
  * tenant-owned conversation. Never trust client replay as prompt context.
  *
- * A tool-follow-up run is still subject to Karen's existing AG-UI input and
- * action gates. The SDK repairs tool-call pairs before dispatching the filter.
+ * A tool-follow-up run remains subject to Karen's existing AG-UI input and
+ * action gates. The SDK also repairs filtered tool-call pairs for transport.
  */
 export const karenCanonicalRunMessageFilter = <T,>(messages: T[]): T[] =>
   messages.slice(-1);
