@@ -938,7 +938,11 @@ class PostgresConversationRepository(ConversationRepository):
                           ON m.conversation_id = c.conversation_id
                         WHERE m.conversation_id = :conversation_id
                           AND c.tenant_id = :tenant_id
-                        ORDER BY m.created_at ASC
+                        -- Stable pagination requires a deterministic tie-breaker.
+                        -- User text precedes assistant text for equal timestamps.
+                        ORDER BY m.created_at ASC,
+                                 CASE m.role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC,
+                                 m.message_id ASC
                         LIMIT :limit OFFSET :offset
                         """
                     ),
