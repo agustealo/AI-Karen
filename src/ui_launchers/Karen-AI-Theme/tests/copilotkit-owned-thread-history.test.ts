@@ -204,7 +204,7 @@ describe("CopilotKit owned thread history", () => {
     const body = await result.json();
     expect(body).toEqual({
       threadId: THREAD, read_only: true, text_only: true, omitted_entries: 1,
-      snapshot_revision: "2026-11-05T22:00:00Z",
+      conversation_updated_at: "2026-11-05T22:00:00Z",
       page_offset: 0, has_more: false, next_offset: null,
       messages: [
         { id: "user-1", role: "user", content: "What is happening?" },
@@ -237,7 +237,7 @@ describe("CopilotKit owned thread history", () => {
     expect(firstPage.messages.at(-1).id).toBe("message-499");
     expect(firstPage.has_more).toBe(true);
     expect(firstPage.next_offset).toBe(500);
-    expect(firstPage.snapshot_revision).toBe("2026-11-05T22:00:00Z");
+    expect(firstPage.conversation_updated_at).toBe("2026-11-05T22:00:00Z");
 
     const next = await GET(request("kari_session=user-A", "?view=transcript&offset=500"));
     expect(next.status).toBe(200);
@@ -248,7 +248,7 @@ describe("CopilotKit owned thread history", () => {
     expect(secondPage.has_more).toBe(false);
     expect(secondPage.next_offset).toBeNull();
     expect(secondPage.page_offset).toBe(500);
-    expect(secondPage.snapshot_revision).toBe(firstPage.snapshot_revision);
+    expect(secondPage.conversation_updated_at).toBe(firstPage.conversation_updated_at);
     expect(urls.at(-1)).toBe(
       "http://api:8000/api/conversations/" + THREAD + "?message_limit=501&message_offset=500",
     );
