@@ -123,6 +123,7 @@ describe("CK-07D governed CopilotKit history and reconnect", () => {
     const called = setup(() => Response.json(ownedHistory({
       text_only: true, continuation_authorized: true,
       omitted_rich_message_count: 1, replayEvents: [],
+      history_window_has_older: false, history_window_message_limit: 500,
     })));
     const requested = new NextRequest(
       "http://localhost:3000/api/copilotkit/threads/" + thread + "/messages?view=continuation",
@@ -138,9 +139,49 @@ describe("CK-07D governed CopilotKit history and reconnect", () => {
       ],
       replayEvents: [], text_only: true,
       continuation_authorized: true, omitted_rich_message_count: 1,
+      history_window_has_older: false, history_window_message_limit: 500,
     });
     expect(called).toEqual([AUTH, FLAGS, HISTORY + "?view=text_continuation"]);
     expect(called).not.toContain("http://api:8000/api/chat/ag-ui");
+  });
+
+  it("forwards a bounded 500-entry recent window with honest older-history marker", async () => {
+    const messages = Array.from({ length: 500 }, (_, i) => ({
+      id: "saved-" + (1000 + i), role: i % 2 === 0 ? "user" : "assistant",
+      content: "Canonical saved message " + (1000 + i),
+    }));
+    const called = setup(() => Response.json(ownedHistory({
+      messages, text_only: true, continuation_authorized: true,
+      omitted_rich_message_count: 0, replayEvents: [],
+      history_window_has_older: true, history_window_message_limit: 500,
+    })));
+    const result = await GET(new NextRequest(
+      "http://localhost:3000/api/copilotkit/threads/" + thread + "/messages?view=continuation",
+      { headers: { cookie: "kari_session=owner" } },
+    ));
+    expect(result.status).toBe(200);
+    const data = await result.json();
+    expect(data.history_window_has_older).toBe(true);
+    expect(data.history_window_message_limit).toBe(500);
+    expect(data.messages).toHaveLength(500);
+    expect(data.messages.at(0)?.id).toBe("saved-1000");
+    expect(data.messages.at(-1)?.id).toBe("saved-1499");
+    expect(data.replayEvents).toEqual([]);
+    expect(called).toEqual([AUTH, FLAGS, HISTORY + "?view=text_continuation"]);
+  });
+
+  it("rejects forged recent-window claim without 500 actual owner-verified messages", async () => {
+    setup(() => Response.json(ownedHistory({
+      text_only: true, continuation_authorized: true,
+      omitted_rich_message_count: 0, replayEvents: [],
+      history_window_has_older: true, history_window_message_limit: 500,
+    })));
+    const result = await GET(new NextRequest(
+      "http://localhost:3000/api/copilotkit/threads/" + thread + "/messages?view=continuation",
+      { headers: { cookie: "kari_session=owner" } },
+    ));
+    expect(result.status).toBe(502);
+    expect(JSON.stringify(await result.json())).not.toContain("10:42");
   });
 
   it("denies forged rich continuation, foreign owner and unknown query overrides", async () => {
