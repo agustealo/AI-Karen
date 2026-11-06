@@ -25,6 +25,8 @@ export interface KarenCopilotChatProps {
   /** Authorized, session-scoped Agent Runtime handoff, not a routing command. */
   workspaceRunId?: string | null;
   onBusyChange?: (busy: boolean) => void;
+  /** Canonical SessionProvider creation, available only in the full consumer workspace. */
+  onStartNewConversation?: () => Promise<void>;
 }
 
 export function KarenCopilotChat({
@@ -33,6 +35,7 @@ export function KarenCopilotChat({
   preferredModel = null,
   workspaceRunId = null,
   onBusyChange,
+  onStartNewConversation,
 }: KarenCopilotChatProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
   if (isLoading || !isAuthenticated || !user ||
@@ -86,7 +89,8 @@ export function KarenCopilotChat({
           incompatible Tailwind v4 import, so this is its sole CSS owner. */}
       <link rel="stylesheet" href="/vendor/copilotkit-v2.css" />
       <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" enableInspector={false} properties={forwardedProperties}>
-        <KarenCopilotHistoryGate conversationId={conversationId}>
+        <KarenCopilotHistoryGate conversationId={conversationId}
+          onStartNewConversation={onStartNewConversation}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />

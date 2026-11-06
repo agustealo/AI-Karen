@@ -357,6 +357,8 @@ export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents?: () =
         preferredModel={modelRequest?.model ?? null}
         workspaceRunId={workspaceRunId}
         onBusyChange={handleBusyChange}
+        onStartNewConversation={strictInitialSession
+          ? undefined : () => performNavigation(createNewSession)}
       />
     </section>
   );

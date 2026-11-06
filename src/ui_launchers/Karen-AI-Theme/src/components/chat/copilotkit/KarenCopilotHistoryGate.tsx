@@ -20,9 +20,33 @@ import {
 type KarenOwnedThreadResponse = {
   threadId: string;
   messages: KarenOwnedHistoryMessage[];
-  // Backend-verified CUSTOM events exist, but this v2 manual hydrator only
-  // supports text. Never silently discard presentation/receipt provenance.
   replayEvents?: unknown;
+};
+
+type KarenRecoveredTranscript = {
+  conversationId: string;
+  messages: KarenCopilotTextMessage[];
+  omittedEntries: number;
+};
+
+// The canonical history endpoint bounds the original response to 2 MiB.
+// Formatting adds labels and separators. Never silently truncate evidence.
+const MAX_RECOVERED_CLIPBOARD_BYTES = 2 * 1024 * 1024;
+
+export function formatRecoveredConversationText(
+  messages: readonly KarenCopilotTextMessage[],
+): string {
+  return messages.map(message =>
+    (message.role === "user" ? "You" : "Karen") + ":\n" + message.content,
+  ).join("\n\n");
+}
+
+type KarenOwnedTranscriptResponse = {
+  threadId: string;
+  messages: KarenOwnedHistoryMessage[];
+  read_only: true;
+  text_only: true;
+  omitted_entries: number;
 };
 
 // The history gate owns the sole SDK agent registration for this conversation.
@@ -94,9 +118,12 @@ export function toCopilotTextMessages(
 export function KarenCopilotHistoryGate({
   conversationId,
   children,
+  onStartNewConversation,
 }: {
   conversationId: string;
   children: ReactNode;
+  /** Only canonical SessionProvider navigation; never copies an SDK thread. */
+  onStartNewConversation?: () => Promise<void>;
 }) {
   const registration = useAgent({
     agentId: karenScopedAgentId(conversationId),
@@ -108,6 +135,9 @@ export function KarenCopilotHistoryGate({
   const [error, setError] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [verifiedParts, setVerifiedParts] = useState<VerifiedHistoryParts>(new Map());
+  const [transcript, setTranscript] = useState<KarenRecoveredTranscript | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [copyBusy, setCopyBusy] = useState(false);
 
   useEffect(() => {
     if (!isReady) return;
@@ -115,6 +145,9 @@ export function KarenCopilotHistoryGate({
     setLoaded(null);
     setError(null);
     setVerifiedParts(new Map());
+    setTranscript(null);
+    setCopyStatus(null);
+    setCopyBusy(false);
 
     // Run events merely trigger another authenticated read; they do not
     // authorize a client CUSTOM event as a saved execution receipt.
@@ -154,15 +187,48 @@ export function KarenCopilotHistoryGate({
             if (restoreQueued) continue;
             agent.setMessages(messages);
             setVerifiedParts(parts);
+            setTranscript(null);
             setError(null);
             setLoaded(conversationId);
             restored = true;
           } catch (error: unknown) {
+            if (cancelled || restoreQueued) continue;
+            const status = error && typeof error === "object" && "status" in error
+              ? (error as { status?: unknown }).status : undefined;
+            const replayUnsupported = status === 409 || (
+              error instanceof Error && /^Unsupported verified /.test(error.message)
+            );
+            if (replayUnsupported) {
+              // A fresh authenticated request to the canonical owned snapshot
+              // is the only authority for text recovery. Never reuse an
+              // unverified snapshot, invent messages, or mutate the SDK agent.
+              try {
+                const recovery = await apiClient.get<KarenOwnedTranscriptResponse>(
+                  "/api/copilotkit/threads/" + conversationId + "/messages?view=transcript",
+                );
+                if (cancelled || restoreQueued) continue;
+                if (recovery.threadId !== conversationId ||
+                    recovery.read_only !== true || recovery.text_only !== true ||
+                    !Number.isInteger(recovery.omitted_entries) ||
+                    recovery.omitted_entries < 0 ||
+                    recovery.omitted_entries > 500) {
+                  throw new Error("Recovery transcript identity or mode mismatch");
+                }
+                setTranscript({
+                  conversationId,
+                  messages: toCopilotTextMessages(recovery.messages),
+                  omittedEntries: recovery.omitted_entries,
+                });
+              } catch {
+                if (cancelled || restoreQueued) continue;
+                setTranscript(null);
+              }
+            } else {
+              setTranscript(null);
+            }
             if (!cancelled && !restoreQueued) {
-              const status = error && typeof error === "object" && "status" in error
-                ? (error as { status?: unknown }).status : undefined;
-              setError(status === 409
-                ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Retry after the required presentation support is available."
+              setError(replayUnsupported
+                ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available."
                 : "Karen could not verify or restore this conversation.");
               restored = false;
             }
@@ -198,13 +264,79 @@ export function KarenCopilotHistoryGate({
     };
   }, [agent, conversationId, isReady, retryAttempt]);
 
+  const copyRecoveredText = async () => {
+    if (!transcript || transcript.conversationId !== conversationId ||
+        copyBusy || transcript.messages.length === 0) return;
+    setCopyBusy(true);
+    setCopyStatus(null);
+    try {
+      const text = formatRecoveredConversationText(transcript.messages);
+      if (new TextEncoder().encode(text).byteLength > MAX_RECOVERED_CLIPBOARD_BYTES) {
+        setCopyStatus("Verified conversation text exceeds the clipboard limit. Select the messages below to copy them manually.");
+        return;
+      }
+      if (!navigator.clipboard?.writeText) {
+        setCopyStatus("Clipboard unavailable. Select the messages below to copy them manually.");
+        return;
+      }
+      await navigator.clipboard.writeText(text);
+      setCopyStatus("Verified conversation text copied. Start a new conversation and paste it there if you want Karen to use that context.");
+    } catch {
+      setCopyStatus("Copy could not be confirmed. Select the messages below to copy them manually.");
+    } finally {
+      setCopyBusy(false);
+    }
+  };
+
   if (!isReady || (loaded !== conversationId && !error)) {
     return <p role="status" className="text-sm text-muted-foreground">Restoring conversation...</p>;
   }
   if (error) {
+    const recovered = transcript?.conversationId === conversationId ? transcript : null;
     return (
-      <div className="flex flex-col items-start gap-2 p-3">
+      <div className="flex w-full min-w-0 flex-col items-start gap-3 p-3">
         <p role="alert" className="text-sm text-destructive">{error}</p>
+        {recovered && (
+          <section aria-label="Recovered read-only text transcript"
+            data-testid="karen-read-only-transcript" className="w-full min-w-0 rounded-md border p-3">
+            <h3 className="text-sm font-semibold">Saved conversation text</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              This is a read-only, owner-verified text projection, not a restored
+              chat. Rich cards, attachments, citations, and tool activity are
+              not shown. Messages cannot be sent from this view. Copying text
+              does not restore hidden cards, attachments, citations or tool
+              results. A new conversation will not automatically inherit it.
+              {recovered.omittedEntries > 0 &&
+                ` ${recovered.omittedEntries} non-chat entries were withheld.`}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button type="button" disabled={copyBusy || recovered.messages.length === 0}
+                onClick={() => void copyRecoveredText()}
+                className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">
+                {copyBusy ? "Copying verified text…" : "Copy verified conversation text"}
+              </button>
+              {onStartNewConversation && (
+                <button type="button" onClick={() => void onStartNewConversation()}
+                  className="min-h-11 rounded-lg border border-input px-3 text-sm">
+                  Start a new conversation
+                </button>
+              )}
+            </div>
+            {copyStatus && <p role="status" data-testid="karen-recovered-copy-status"
+              className="mt-2 text-xs text-muted-foreground">{copyStatus}</p>}
+            <ol className="mt-3 max-h-[65vh] space-y-3 overflow-y-auto"
+              aria-label="Saved user and assistant messages">
+              {recovered.messages.map(message => (
+                <li key={message.id} className="min-w-0 rounded-md border p-2">
+                  <p className="mb-1 text-xs font-semibold">
+                    {message.role === "user" ? "You" : "Karen"}
+                  </p>
+                  <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
         <button type="button" className="rounded-md border border-input px-3 py-2 text-sm"
           onClick={() => setRetryAttempt(attempt => attempt + 1)}>
           Retry verified conversation

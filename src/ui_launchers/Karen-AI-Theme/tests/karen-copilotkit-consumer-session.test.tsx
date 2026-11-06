@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   modelProps: [] as Array<{preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null}>,
   onModelChange: null as null | ((value: {provider: string; model: string} | null) => void),
   onBusyChange: null as null | ((busy: boolean) => void),
+  onStartNewConversation: undefined as undefined | (() => Promise<void>),
 }));
 
 vi.mock("@/components/chat/SessionProvider", () => ({
@@ -43,10 +44,11 @@ vi.mock("@/components/chat/KarenComposerRuntimeCatalog", () => ({
 }));
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotChat", () => ({
-  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, workspaceRunId, onBusyChange }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null; onBusyChange: (busy: boolean) => void }) => {
+  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, workspaceRunId, onBusyChange, onStartNewConversation }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null; onBusyChange: (busy: boolean) => void; onStartNewConversation?: () => Promise<void> }) => {
     state.mounts.push(conversationId);
     state.modelProps.push({ preferredProvider, preferredModel, workspaceRunId });
     state.onBusyChange = onBusyChange;
+    state.onStartNewConversation = onStartNewConversation;
     return <div data-testid="owned-copilot-chat">{conversationId}</div>;
   },
 }));
@@ -67,6 +69,7 @@ beforeEach(() => {
   state.modelProps.length = 0;
   state.onModelChange = null;
   state.onBusyChange = null;
+  state.onStartNewConversation = undefined;
   state.createNewSession.mockReset().mockResolvedValue(undefined);
   state.loadSession.mockReset().mockResolvedValue(true);
   state.updateSessionTitle.mockReset().mockResolvedValue(true);
@@ -162,6 +165,29 @@ describe("CopilotKit consumer session adapter", () => {
     expect(screen.queryByRole("searchbox", { name: "Find a conversation" })).toBeNull();
     expect(state.createNewSession).not.toHaveBeenCalled();
     expect(state.loadSession).not.toHaveBeenCalled();
+  });
+
+  it("offers an explicit recovery handoff through the existing SessionProvider only in consumer chat", async () => {
+    state.currentSession = { id: FIRST, title: "Saved conversation" };
+    state.sessions = [{ id: FIRST, title: "Saved conversation" }];
+    render(<KarenCopilotConsumerChat />);
+    expect(typeof state.onStartNewConversation).toBe("function");
+    expect(state.createNewSession).not.toHaveBeenCalled();
+    await act(async () => {
+      await state.onStartNewConversation?.();
+    });
+    expect(state.createNewSession).toHaveBeenCalledTimes(1);
+    // Navigation does not forge a new SDK thread or replace currentSession.
+    expect(screen.getByTestId("owned-copilot-chat").textContent).toBe(FIRST);
+  });
+
+  it("does not offer transcript handoff in the strict acceptance chat", () => {
+    state.strictInitialSession = true;
+    state.currentSession = { id: FIRST, title: "Pinned conversation" };
+    state.sessions = [{ id: FIRST, title: "Pinned conversation" }];
+    render(<KarenCopilotConsumerChat />);
+    expect(state.onStartNewConversation).toBeUndefined();
+    expect(state.createNewSession).not.toHaveBeenCalled();
   });
 
   it("binds the authorized selected session and searches owned titles only", async () => {

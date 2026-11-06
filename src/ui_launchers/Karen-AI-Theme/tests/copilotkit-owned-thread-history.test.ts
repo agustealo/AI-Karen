@@ -11,8 +11,8 @@ const originalFetch = globalThis.fetch;
 const THREAD = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 const URL = "http://localhost:3000/api/copilotkit/threads/" + THREAD + "/messages";
 
-function request(cookie = "kari_session=user-A"): NextRequest {
-  return new NextRequest(URL, {
+function request(cookie = "kari_session=user-A", view = ""): NextRequest {
+  return new NextRequest(URL + view, {
     headers: { cookie, "x-user-id": "attacker", "x-tenant-id": "foreign" },
   });
 }
@@ -180,6 +180,81 @@ describe("CopilotKit owned thread history", () => {
       expect(body).not.toContain("Sensitive tool output");
       expect(body).not.toContain("weather.observation");
     }
+  });
+
+  it("recovers authenticated rich conversations as read-only text without capability discovery", async () => {
+    const { urls } = guardedBackend(() => reply("user-A", [
+      { id: "user-1", role: "user", content: "What is happening?" },
+      { id: "tool-1", role: "tool", content: "private result with a token" },
+      { id: "assistant-1", role: "assistant", content: "Here is the report",
+        attachments: [{ file: "confidential.pdf" }],
+        metadata: {
+          structured_content: { component_type: "future.news.card" },
+          actual_provider: "local", actual_model: "verified-model",
+          api_key: "private-provider-secret",
+        } },
+    ]));
+    const result = await GET(request("kari_session=user-A", "?view=transcript"));
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toContain("no-store");
+    const body = await result.json();
+    expect(body).toEqual({
+      threadId: THREAD, read_only: true, text_only: true, omitted_entries: 1,
+      messages: [
+        { id: "user-1", role: "user", content: "What is happening?" },
+        { id: "assistant-1", role: "assistant", content: "Here is the report" },
+      ],
+    });
+    const raw = JSON.stringify(body);
+    for (const secret of ["private result", "private-provider-secret", "confidential.pdf", "future.news.card"]) {
+      expect(raw).not.toContain(secret);
+    }
+    expect(urls).toEqual([
+      "http://api:8000/api/auth/me",
+      "http://api:8000/api/conversations/" + THREAD + "?message_limit=501",
+    ]);
+  });
+
+  it("keeps read-only recovery subject to owner and strict message validation", async () => {
+    guardedBackend(() => reply("foreign-user", [
+      { id: "a1", role: "assistant", content: "Private answer" },
+    ]));
+    const foreign = await GET(request("kari_session=user-A", "?view=transcript"));
+    expect(foreign.status).toBe(404);
+    expect(JSON.stringify(await foreign.json())).not.toContain("Private answer");
+
+    guardedBackend(() => reply("user-A", [
+      { id: "same", role: "user", content: "First" },
+      { id: "same", role: "assistant", content: "Second" },
+    ]));
+    const duplicate = await GET(request("kari_session=user-A", "?view=transcript"));
+    expect(duplicate.status).toBe(502);
+    expect(JSON.stringify(await duplicate.json())).not.toContain("Second");
+
+    guardedBackend(() => reply("user-A", [
+      { id: "m1", role: "assistant", content: "Known" },
+      { id: "rogue", role: "unexpected", content: "untrusted" },
+    ]));
+    const untrusted = await GET(request("kari_session=user-A", "?view=transcript"));
+    expect(untrusted.status).toBe(502);
+    expect(JSON.stringify(await untrusted.json())).not.toContain("untrusted");
+  });
+
+  it("does not allow arbitrary transcript modes, query overrides or anonymous recovery", async () => {
+    const { urls } = guardedBackend();
+    for (const suffix of [
+      "?view=full", "?view=transcript&admin=true", "?view=transcript&view=transcript",
+    ]) {
+      const result = await GET(request("kari_session=user-A", suffix));
+      expect(result.status).toBe(400);
+    }
+    expect(urls.every(url => !url.includes("/api/conversations/"))).toBe(true);
+
+    const calls = vi.fn();
+    globalThis.fetch = calls as typeof fetch;
+    const anonymous = await GET(request("", "?view=transcript"));
+    expect(anonymous.status).toBe(401);
+    expect(calls).not.toHaveBeenCalled();
   });
 
   it("rejects anonymous history before contacting the backend", async () => {
