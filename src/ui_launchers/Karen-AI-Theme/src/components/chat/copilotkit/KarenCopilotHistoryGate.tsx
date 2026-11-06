@@ -54,7 +54,7 @@ type KarenOwnedTranscriptResponse = {
   page_offset?: number;
   has_more?: boolean;
   next_offset?: number | null;
-  snapshot_revision?: string;
+  conversation_updated_at?: string;
 };
 
 function verifiedTranscriptPage(
@@ -71,7 +71,9 @@ function verifiedTranscriptPage(
   }
   const pageOffset = recovery.page_offset ?? 0;
   const hasMore = recovery.has_more ?? false;
-  const revision = recovery.snapshot_revision ?? null;
+  // The parent timestamp can detect some concurrent edits, not all history
+  // mutations. Every displayed page still requires fresh owner verification.
+  const revision = recovery.conversation_updated_at ?? null;
   if (pageOffset !== offset || typeof hasMore !== "boolean" ||
       (revision !== null && (typeof revision !== "string" ||
         revision.length === 0 || revision.length > 100)) ||
