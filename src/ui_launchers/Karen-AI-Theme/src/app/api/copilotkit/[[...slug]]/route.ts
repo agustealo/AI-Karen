@@ -248,7 +248,10 @@ async function handle(request: NextRequest): Promise<Response> {
   const recoveryThreadId = request.method === "GET"
     ? ownedThreadHistoryId(request) : null;
   const viewKeys = [...request.nextUrl.searchParams.keys()];
-  if (recoveryThreadId && viewKeys.includes("view")) {
+  const continuationRequested = recoveryThreadId !== null &&
+    request.nextUrl.searchParams.get("view") === "continuation" &&
+    viewKeys.length === 1;
+  if (recoveryThreadId && viewKeys.includes("view") && !continuationRequested) {
     const requestedView = request.nextUrl.searchParams.get("view");
     const offsetText = request.nextUrl.searchParams.get("offset");
     const transcriptOffset = offsetText === null ? 0 : Number(offsetText);
@@ -296,9 +299,14 @@ async function handle(request: NextRequest): Promise<Response> {
 
   const requestedHistoryId = request.method === "GET" ? ownedThreadHistoryId(request) : null;
   if (requestedHistoryId) {
+    if (continuationRequested && !capabilities.governedHistory) {
+      return NextResponse.json({ detail: "Attested continuation unavailable" }, {
+        status: 404, headers: { "Cache-Control": "no-store" },
+      });
+    }
     return readKarenOwnedThreadMessages(
       request, backendBaseUrl, auth.headers, auth.principal, requestedHistoryId,
-      capabilities.governedHistory,
+      capabilities.governedHistory, false, 0, continuationRequested,
     );
   }
   const scopedStop = request.method === "POST"
