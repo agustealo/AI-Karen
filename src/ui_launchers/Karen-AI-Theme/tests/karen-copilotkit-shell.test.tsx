@@ -89,6 +89,34 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     expect(sdk.provider[0].properties).toBeUndefined();
   });
 
+  it("uses the pinned native outbound messageFilter without truncating the visible SDK transcript", () => {
+    const view = render(<KarenCopilotChat conversationId={CONVERSATION} />);
+    const filter = sdk.provider[0].messageFilter as
+      | ((messages: Array<{ id: string; role: string; content: string }>) =>
+          Array<{ id: string; role: string; content: string }>)
+      | undefined;
+    expect(filter).toBeTypeOf("function");
+    const history = Array.from({ length: 503 }, (_, index) => ({
+      id: "saved-" + index,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: "Persisted conversation turn " + index,
+    }));
+    history.push({ id: "new-user", role: "user", content: "Continue this saved conversation" });
+    const snapshot = history.map((message) => ({ ...message }));
+    expect(filter!(history)).toEqual([history[503]]);
+    expect(history).toEqual(snapshot);
+    expect(filter!([])).toEqual([]);
+    // Stable provider prop does not reset with preference updates or remount
+    // the thread. SDK messageFilter changes the wire request, not chat UI.
+    view.rerender(
+      <KarenCopilotChat conversationId={CONVERSATION}
+        preferredProvider="local" preferredModel="selected-model" />,
+    );
+    expect(sdk.provider.at(-1)?.messageFilter).toBe(filter);
+    expect(sdk.providerMounts).toBe(1);
+    expect(sdk.providerUnmounts).toBe(0);
+  });
+
   it("forwards only bounded paired model preferences, not execution authority", () => {
     render(
       <KarenCopilotChat
