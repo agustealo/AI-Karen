@@ -315,9 +315,12 @@ class ConversationRuntimeGateway:
         )
         if not result.success:
             raise RuntimeError(result.error or "conversation_history_read_failed")
+        rows = result.data
+        if not isinstance(rows, list) or len(rows) > message_limit:
+            raise RuntimeError("invalid_recent_conversation_page")
         return ConversationSnapshot(
             conversation=conversation,
-            messages=tuple(reversed(result.data or [])),
+            messages=tuple(reversed(rows)),
         )
 
     async def get_owned_snapshot_by_session(
