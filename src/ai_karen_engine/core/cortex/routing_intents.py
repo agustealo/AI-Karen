@@ -72,6 +72,12 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "search.general": {
         "triggers": ["search the internet", "look online", "find current", "latest", "web search"],
         "patterns": [
+            # Explicit source tables reuse live search routing, never a model-only
+            # guess about current releases or headlines. Keep bounded subjects.
+            r"^(?:show(?: me)?|list|find|give me)\s+(?:the\s+)?(?:latest|current|recent|new)\s+(?:(?:movie|film)\s+)?(?:releases|movies|films|news|headlines|results|sources)\s+(?:in|as)\s+(?:a\s+)?table[?!.]*$",
+            r"^tabulate\s+(?:the\s+)?(?:latest|current|recent|new)\s+(?:(?:movie|film|web|news)\s+)?(?:sources|results|releases|headlines)[?!.]*$",
+            r"^(?:give me|show me|list)\s+(?:a\s+)?tabular\s+list\s+of\s+(?:latest|recent|current)\s+(?:web|news|movie)\s+(?:sources|results|headlines)[?!.]*$",
+            r"^(?:latest|current|recent|new)\s+(?:(?:movie|film|web|news)\s+)?(?:movies|films|releases|news|headlines|sources|results)\s+(?:in|as)\s+(?:a\s+)?table[?!.]*$",
             # Explicit current-film queries require live discovery. Ordinary
             # recommendations and film analysis stay in model conversation.
             r"^(?:what(?:'s| is)|show me|find|list|tell me about)\s+(?:the\s+)?(?:latest|new|recent|currently playing)\s+(?:movies|films)(?:\s+(?:in|at|on|for)\s+[\w .'-]+)?[?!.]*$",

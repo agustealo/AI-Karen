@@ -338,6 +338,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       label: "current movies", prompt: "Show me the latest movies",
       component: "search.results", testId: "karen-search-results",
     },
+    {
+      label: "current movie source table", prompt: "Latest movies in a table",
+      component: "data.table", testId: "karen-data-table",
+    },
   ] as const) {
   test(`one first ${scenario.label} prompt renders backend-attested UI immediately and after reload`, async ({ page }) => {
     test.setTimeout(240_000);
@@ -494,6 +498,23 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       expect(firstCardText).toContain("Reported time");
     } else if (scenario.label === "weather") {
       expect(firstCardText).toContain("Source:");
+    } else if (scenario.component === "data.table") {
+      await expect(visibleCard.locator("table")).toHaveCount(1);
+      await expect(visibleCard.locator("thead th")).toHaveCount(3);
+      expect(firstCardText).toContain("Verified search source excerpts");
+      expect(firstCardText).toContain("Source URL");
+      // Source-backed table data must expose public source URLs, not actions
+      // or model-invented citations. Other components retain link checks.
+      const urlCells = await visibleCard.locator("tbody tr td:last-child").allInnerTexts();
+      expect(urlCells.length, "The table must include verified sources").toBeGreaterThan(0);
+      for (const url of urlCells) {
+        const parsed = new URL(url.trim());
+        expect(["https:", "http:"]).toContain(parsed.protocol);
+        expect(parsed.username).toBe("");
+        expect(parsed.password).toBe("");
+        expect(parsed.hostname).not.toMatch(/^(?:localhost|127\.|10\.|192\.168\.)/);
+      }
+      await expect(visibleCard.locator("button")).toHaveCount(0);
     } else {
       expect(firstCardText).toContain("View source:");
       const links = visibleCard.locator('a[href^="https://"], a[href^="http://"]');

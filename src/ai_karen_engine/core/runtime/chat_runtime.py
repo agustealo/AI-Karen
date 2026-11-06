@@ -2776,6 +2776,19 @@ class ChatRuntime:
         )
 
     @staticmethod
+    def _verified_table_excerpt(snippet: str) -> str:
+        """Bound source text to 240 browser UTF-16 code units without rewriting facts."""
+        output = []
+        remaining = 240
+        for character in snippet:
+            units = 2 if ord(character) > 0xFFFF else 1
+            if units > remaining:
+                break
+            output.append(character)
+            remaining -= units
+        return "".join(output)
+
+    @staticmethod
     def _verified_source_table_presentation(request, decision, plan, result):
         """Project structured table data only from an executed, allowed source.
 
@@ -2791,9 +2804,56 @@ class ChatRuntime:
             return None
         payload = result.payload if isinstance(result.payload, dict) else {}
         data = payload.get("structured_table")
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+        # An explicit source-list table is useful without claiming that
+        # search excerpts are verified comparable facts. Derive it exclusively
+        # from the same sanitized source records as search.results.
+        if data is None:
+            user_messages = getattr(request, "messages", None) or ()
+            latest_prompt = next(
+                (
+                    item["content"] for item in reversed(user_messages)
+                    if isinstance(item, dict)
+                    and item.get("role") == "user"
+                    and isinstance(item.get("content"), str)
+                ), "",
+            ).casefold()
+            import re
+
+            requested_table = bool(re.search(
+                r"\b(?:table|tabulate|tabular)\b", latest_prompt
+            ))
+            if not requested_table:
+                return None
+            verified_sources = ChatRuntime._verified_search_presentation(
+                request, decision, plan, result
+            )
+            if verified_sources is None:
+                return None
+            records = [
+                record for record in verified_sources["data"]["results"]
+                if len(record["url"]) <= 240
+            ]
+            if not records:
+                return None
+            data = {
+                "title": "Verified search source excerpts",
+                "columns": [
+                    {"key": "source_title", "label": "Source title"},
+                    {"key": "source_excerpt", "label": "Source excerpt"},
+                    {"key": "source_url", "label": "Source URL"},
+                ],
+                "rows": [
+                    {
+                        "source_title": record.get("title"),
+                        "source_excerpt": ChatRuntime._verified_table_excerpt(record["snippet"]),
+                        "source_url": record["url"],
+                    } for record in records
+                ],
+            }
         if not isinstance(data, dict):
             return None
-        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 
         candidate = validate_presentation({
             "schema_version": 1,
@@ -2832,8 +2892,18 @@ class ChatRuntime:
                 values.add(source["title"])
             if source.get("published_at") is not None:
                 values.add(source["published_at"])
-            if any(value is not None and value not in values for value in row.values()):
-                return None
+            for key, value in row.items():
+                if value is None:
+                    continue
+                if (
+                    key == "source_excerpt"
+                    and isinstance(value, str)
+                    and bool(value)
+                    and source["snippet"].startswith(value)
+                ):
+                    continue
+                if value not in values:
+                    return None
         return candidate
 
     @staticmethod
