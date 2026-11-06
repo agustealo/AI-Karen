@@ -176,7 +176,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             for key in keys:
                 value = row[key]
                 if value is not None and (
-                    not isinstance(value, str) or len(value.encode("utf-16-le")) // 2 > 240
+                    not isinstance(value, str) or sum(2 if ord(character) > 0xFFFF else 1 for character in value) > 240
                     or any(ord(character) < 32 for character in value)
                 ):
                     return None
