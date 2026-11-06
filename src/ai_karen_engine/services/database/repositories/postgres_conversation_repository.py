@@ -923,8 +923,22 @@ class PostgresConversationRepository(ConversationRepository):
         tenant_id: str,
         limit: int = 100,
         offset: int = 0,
+        *,
+        newest_first: bool = False,
     ) -> RepositoryResult[List[Message]]:
         start = time.perf_counter()
+        # Static, controlled SQL ordering only. Never interpolate request
+        # fields into query text. Reverse ordering is the exact inverse of
+        # the chronological order, including role and message-id ties.
+        order = (
+            "ORDER BY m.created_at DESC, "
+            "CASE m.role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END DESC, "
+            "m.message_id DESC"
+            if newest_first else
+            "ORDER BY m.created_at ASC, "
+            "CASE m.role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC, "
+            "m.message_id ASC"
+        )
         try:
             async with await self._session() as session:
                 result = await session.execute(
@@ -938,11 +952,8 @@ class PostgresConversationRepository(ConversationRepository):
                           ON m.conversation_id = c.conversation_id
                         WHERE m.conversation_id = :conversation_id
                           AND c.tenant_id = :tenant_id
-                        -- Stable pagination requires a deterministic tie-breaker.
-                        -- User text precedes assistant text for equal timestamps.
-                        ORDER BY m.created_at ASC,
-                                 CASE m.role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC,
-                                 m.message_id ASC
+                        -- Single canonical tie-breaker and controlled direction.
+                        {order}
                         LIMIT :limit OFFSET :offset
                         """
                     ),

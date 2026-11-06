@@ -119,6 +119,12 @@ async def test_owned_text_continuation_is_explicit_and_requires_completed_run_di
             assert message_limit == 501
             return original
 
+        async def get_owned_recent_snapshot(self, context, *, message_limit):
+            assert context.tenant_id == TENANT
+            assert context.user_id == USER
+            assert message_limit == 501
+            return original
+
     class Attestation:
         async def completed_replay_attestations(self, **kwargs):
             assert kwargs == {
@@ -150,6 +156,8 @@ async def test_owned_text_continuation_is_explicit_and_requires_completed_run_di
     assert body["text_only"] is True
     assert body["replayEvents"] == []
     assert body["omitted_rich_message_count"] == 1
+    assert body["history_window_has_older"] is False
+    assert body["history_window_message_limit"] == 500
     assert body["messages"][-1] == {
         "id": ASSISTANT, "role": "assistant", "content": "canonical answer",
     }
@@ -164,6 +172,80 @@ async def test_owned_text_continuation_is_explicit_and_requires_completed_run_di
             view="text_continuation",
         )
     assert tampered.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_long_original_thread_continuation_reads_only_newest_500_attested_messages(
+    monkeypatch, replay_on,
+):
+    import json
+
+    full = [
+        Message(
+            id=f"m-{index}", conversation_id=THREAD, tenant_id=TENANT,
+            role="assistant" if index % 2 else "user",
+            content=f"Saved message {index}", metadata={},
+        )
+        for index in range(1004)
+    ]
+    # Metadata with a run receipt requires exact canonical digest; older
+    # entries outside the recent window are never passed to UI projection.
+    last = full[-1]
+    last.metadata.update({
+        "source": "chat_runtime", "request_id": REQUEST,
+        "actual_provider": "local", "actual_model": "real-local",
+        "response_source": "local_inference",
+        "attachments": [{"name": "opaque-old-card"}],
+    })
+    recorded_digest = canonical_message_digest(last)
+    latest = ConversationSnapshot(
+        conversation=Conversation(id=THREAD, user_id=USER, tenant_id=TENANT),
+        messages=tuple(full[-501:]),
+    )
+
+    class Owned:
+        async def get_owned_recent_snapshot(self, context, *, message_limit):
+            assert context.tenant_id == TENANT and context.user_id == USER
+            assert message_limit == 501
+            return latest
+
+        async def get_owned_snapshot(self, context, *, message_limit):
+            raise AssertionError("Text continuation must not fetch the oldest page")
+
+    class Attestation:
+        async def completed_replay_attestations(self, **kwargs):
+            return {last.id: (REQUEST, recorded_digest)}
+
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway
+    monkeypatch.setattr(
+        conversation_runtime_gateway, "get_conversation_runtime_gateway",
+        lambda: Owned(),
+    )
+    monkeypatch.setattr(route, "SqlChatRunRepository", Attestation)
+    response = await route.get_ag_ui_owned_history(
+        thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
+        view="text_continuation",
+    )
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["continuation_authorized"] is True
+    assert body["text_only"] is True
+    assert body["history_window_has_older"] is True
+    assert body["history_window_message_limit"] == 500
+    assert len(body["messages"]) == 500
+    assert body["messages"][0]["id"] == "m-504"
+    assert body["messages"][-1]["id"] == "m-1003"
+    assert body["replayEvents"] == []
+    assert "Saved message 0" not in str(body)
+    assert "opaque-old-card" not in str(body)
+
+    last.content = "Unauthorized modification"
+    with pytest.raises(HTTPException) as denied:
+        await route.get_ag_ui_owned_history(
+            thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
+            view="text_continuation",
+        )
+    assert denied.value.status_code == 409
 
 
 @pytest.mark.asyncio

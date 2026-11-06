@@ -293,6 +293,7 @@ describe("CopilotKit canonical conversation hydration", () => {
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, text_only: true, continuation_authorized: true,
         omitted_rich_message_count: 1, replayEvents: [],
+        history_window_has_older: false, history_window_message_limit: 500,
         messages: [
           { id: "user1", role: "user", content: "Earlier project" },
           { id: "answer1", role: "assistant", content: "Verified historical response" },
@@ -301,6 +302,7 @@ describe("CopilotKit canonical conversation hydration", () => {
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, text_only: true, continuation_authorized: true,
         omitted_rich_message_count: 2, replayEvents: [],
+        history_window_has_older: false, history_window_message_limit: 500,
         messages: [
           { id: "user1", role: "user", content: "Earlier project" },
           { id: "answer1", role: "assistant", content: "Verified historical response" },
@@ -356,6 +358,7 @@ describe("CopilotKit canonical conversation hydration", () => {
       })
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, omitted_rich_message_count: 1,
+        history_window_has_older: false, history_window_message_limit: 500,
         messages: [{ id: "a1", role: "assistant", content: "Must not hydrate" }],
         ...overrides,
       })
@@ -379,7 +382,11 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(screen.queryByText("Must not hydrate")).toBeNull();
   });
 
-  it("never offers SDK continuation while only one page of a longer thread is displayed", async () => {
+  it("resumes a 1000-message original conversation only from a backend-attested recent window", async () => {
+    const saved = Array.from({ length: 500 }, (_, i) => ({
+      id: "saved-" + (1000 + i), role: i % 2 === 0 ? "user" : "assistant",
+      content: "Canonical message " + (1000 + i),
+    }));
     backend.fetchConversation
       .mockRejectedValueOnce(Object.assign(new Error("history overflow"), { status: 502 }))
       .mockResolvedValueOnce({
@@ -387,13 +394,28 @@ describe("CopilotKit canonical conversation hydration", () => {
         omitted_entries: 0, page_offset: 0, has_more: true,
         next_offset: 500, conversation_updated_at: "2026-11-05T22:00:00Z",
         messages: [{ id: "u1", role: "user", content: "First saved page" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, text_only: true, continuation_authorized: true,
+        omitted_rich_message_count: 0, replayEvents: [],
+        history_window_has_older: true, history_window_message_limit: 500,
+        messages: saved,
       });
     render(guardedHistory());
     await waitFor(() => expect(screen.getByText("First saved page")).toBeTruthy());
-    expect(screen.queryByRole("button", {
-      name: "Continue original conversation with verified text only",
-    })).toBeNull();
     expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Continue original conversation using recent verified text",
+    }));
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      3, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=continuation",
+    );
+    expect(backend.agent.setMessages).toHaveBeenCalledWith(saved);
+    expect(screen.getByTestId("karen-text-continuation-banner").textContent)
+      .toContain("Only the most recent 500 saved messages are displayed");
+    expect(backend.agent.subscribe).toHaveBeenCalledTimes(1);
   });
 
   it("validates the text-only continuation grant before ever touching CopilotKit messages", () => {
@@ -401,6 +423,7 @@ describe("CopilotKit canonical conversation hydration", () => {
       threadId: CONVERSATION_A, text_only: true,
       continuation_authorized: true,
       omitted_rich_message_count: 1, replayEvents: [],
+      history_window_has_older: false, history_window_message_limit: 500,
       messages: [{ id: "saved-answer", role: "assistant", content: "Canonical saved answer" }],
     };
     expect(validatedKarenTextContinuation(valid, CONVERSATION_A))

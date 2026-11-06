@@ -24,6 +24,8 @@ type KarenOwnedThreadResponse = {
   text_only?: unknown;
   continuation_authorized?: unknown;
   omitted_rich_message_count?: unknown;
+  history_window_has_older?: unknown;
+  history_window_message_limit?: unknown;
 };
 
 type KarenRecoveredTranscript = {
@@ -167,7 +169,11 @@ export function validatedKarenTextContinuation(
       snapshot.replayEvents.length !== 0 ||
       !Number.isInteger(snapshot.omitted_rich_message_count) ||
       (snapshot.omitted_rich_message_count as number) < 0 ||
-      (snapshot.omitted_rich_message_count as number) > 500) {
+      (snapshot.omitted_rich_message_count as number) > 500 ||
+      typeof snapshot.history_window_has_older !== "boolean" ||
+      snapshot.history_window_message_limit !== 500 ||
+      !Array.isArray(snapshot.messages) ||
+      (snapshot.history_window_has_older && snapshot.messages.length !== 500)) {
     throw new Error("Attested text-only continuation was not authorized");
   }
   return toCopilotTextMessages(snapshot.messages);
@@ -208,6 +214,7 @@ export function KarenCopilotHistoryGate({
   const [pageBusy, setPageBusy] = useState(false);
   const [pageStatus, setPageStatus] = useState<string | null>(null);
   const [textContinuationActive, setTextContinuationActive] = useState(false);
+  const [continuationWindowHasOlder, setContinuationWindowHasOlder] = useState(false);
   const [textContinuationStatus, setTextContinuationStatus] = useState<string | null>(null);
   // Explicit click is required per mount. A normal history GET cannot enter
   // this mode or trigger a provider run.
@@ -227,6 +234,7 @@ export function KarenCopilotHistoryGate({
     setPageBusy(false);
     setPageStatus(null);
     setTextContinuationActive(false);
+    setContinuationWindowHasOlder(false);
     setTextContinuationStatus(null);
 
     // Run events merely trigger another authenticated read; they do not
@@ -273,6 +281,9 @@ export function KarenCopilotHistoryGate({
             agent.setMessages(messages);
             setVerifiedParts(parts);
             setTextContinuationActive(textMode);
+            setContinuationWindowHasOlder(
+              textMode && snapshot.history_window_has_older === true,
+            );
             setTextContinuationStatus(null);
             setTranscript(null);
             setError(null);
@@ -290,6 +301,7 @@ export function KarenCopilotHistoryGate({
             if (continuationDenied) {
               textContinuationRequested.current = false;
               setTextContinuationActive(false);
+              setContinuationWindowHasOlder(false);
             }
             const replayUnsupported = continuationDenied ||
               status === 409 || status === 502 || status === 503 || (
@@ -439,14 +451,14 @@ export function KarenCopilotHistoryGate({
                 ` ${recovered.omittedEntries} non-chat entries were withheld.`}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {recovered.pageOffset === 0 && !recovered.hasMore && (
-                <button type="button" onClick={() => {
-                  textContinuationRequested.current = true;
-                  setRetryAttempt(attempt => attempt + 1);
-                }} className="min-h-11 rounded-lg border border-input px-3 text-sm">
-                  Continue original conversation with verified text only
-                </button>
-              )}
+              <button type="button" onClick={() => {
+                textContinuationRequested.current = true;
+                setRetryAttempt(attempt => attempt + 1);
+              }} className="min-h-11 rounded-lg border border-input px-3 text-sm">
+                {recovered.hasMore || recovered.pageOffset > 0
+                  ? "Continue original conversation using recent verified text"
+                  : "Continue original conversation with verified text only"}
+              </button>
               <button type="button" disabled={copyBusy || pageBusy || recovered.messages.length === 0}
                 onClick={() => void copyRecoveredText()}
                 className="min-h-11 rounded-lg border border-input px-3 text-sm disabled:opacity-50">
@@ -516,8 +528,11 @@ export function KarenCopilotHistoryGate({
             className="border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
             You are continuing the original saved conversation using authenticated
             text only. Older cards, citations, attachments and tool activity were
-            not replayed. Karen verifies permissions and context again for each
-            new request.
+            not replayed.
+            {continuationWindowHasOlder && (
+              " Only the most recent 500 saved messages are displayed. Older messages remain in Karen's canonical conversation; reopen this thread to browse paged read-only history."
+            )}
+            Karen verifies permissions and context again for each new request.
           </p>
         )}
         {children}

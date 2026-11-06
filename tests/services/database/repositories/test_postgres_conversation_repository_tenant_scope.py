@@ -211,6 +211,32 @@ async def test_get_messages_preserves_offset_while_enforcing_tenant_scope_and_st
 
 
 @pytest.mark.asyncio
+async def test_recent_messages_use_inverse_stable_sql_order_under_same_tenant_scope() -> None:
+    created_at = datetime(2026, 9, 27, 12, 0, 0)
+    rows = [
+        SimpleNamespace(
+            message_id=str(index), conversation_id="conversation-a",
+            tenant_id="tenant-a", role="assistant", content=str(index),
+            message_metadata={}, created_at=created_at,
+        )
+        for index in (9, 8)
+    ]
+    session = _Session([_Result(rows=rows)])
+    result = await _repository(session).get_messages(
+        "conversation-a", "tenant-a", limit=501, newest_first=True,
+    )
+    assert result.success is True
+    assert [message.id for message in result.data] == ["9", "8"]
+    sql, params = session.executions[0]
+    assert "ORDER BY m.created_at DESC" in sql
+    assert "m.message_id DESC" in sql
+    assert "c.tenant_id = :tenant_id" in sql
+    assert params["limit"] == 501
+    assert params["offset"] == 0
+    assert params["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
 async def test_update_message_is_tenant_scoped_and_does_not_write_missing_column() -> None:
     session = _Session([_Result(rowcount=1)])
     result = await _repository(session).update_message(_message())
