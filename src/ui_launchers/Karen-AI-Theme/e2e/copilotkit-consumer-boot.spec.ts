@@ -326,6 +326,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       label: "weather", prompt: "What's the weather in Detroit, Michigan right now?",
       component: "weather.observation", testId: "karen-weather-presentation",
     },
+    {
+      label: "search", prompt: "Search the internet for the latest NASA news today.",
+      component: "search.results", testId: "karen-search-results",
+    },
   ] as const) {
   test(`one first ${scenario.label} prompt renders backend-attested UI immediately and after reload`, async ({ page }) => {
     test.setTimeout(240_000);
@@ -479,8 +483,12 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const firstCardText = (await visibleCard.innerText()).trim();
     if (scenario.label === "time") {
       expect(firstCardText).toContain("Reported time");
-    } else {
+    } else if (scenario.label === "weather") {
       expect(firstCardText).toContain("Source:");
+    } else {
+      expect(firstCardText).toContain("View source:");
+      const links = visibleCard.locator('a[href^="https://"], a[href^="http://"]');
+      expect(await links.count(), "Verified search cards must expose a source link").toBeGreaterThan(0);
     }
     expect(observedRunRequests, "One first prompt must cause exactly one execution")
       .toHaveLength(1);

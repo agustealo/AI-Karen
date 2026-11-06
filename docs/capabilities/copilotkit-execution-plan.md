@@ -30,7 +30,7 @@
 
 | Tracking field | Current evidence |
 |---|---|
-| Canonical baseline | `main@66c8913e` inspected 2026-11-05; document-only branch is **not** a deployment |
+| Canonical baseline | `main@9a3a6f14` inspected 2026-11-05; source branch is **not** a deployed browser proof |
 | Native React view | `@copilotkit/react-core@1.79.1` declared; `CopilotKitProvider` + `CopilotChatView` mounted in source |
 | High-level chat | `CopilotChat` **not mounted**; automatic initial `runAgent` conflicts with trusted history boot |
 | Chat controller | Karen-controlled submit/draft/stop; uses SDK `copilotkit.runAgent({ agent })` correctly |
@@ -252,7 +252,7 @@ Definitions: **TAKE** = adopt native CopilotKit behavior/hooks/UI where availabl
 - [ ] **KCON-710** Define a **small reusable** set of bounded presentation primitives (table, comparison, source-list, chart, steps, document/artifact, action/approval, media only where authorized) inside existing `presentation_contract.py` and `KarenPresentationRegistry.tsx`. Avoid one renderer per topic. **Proof:** typed schema and adversarial unknown/oversized/hostile payload.
 - [ ] **KCON-711** Prove any A2UI, MCP App or richer generated component is data-only/allowlisted or isolated; no model-authored HTML/JS executable in privileged UI. **Proof:** malicious HTML/URL/protocol, CSP and sandbox tests.
 - [ ] **KCON-720** Repair all admitted time/weather/date/planner first-prompt cards and verify exact equality after durable history reload. **Proof:** real tool observations, first prompt, reload, denial.
-- [ ] **KCON-730** Cover news, current movies, recipes, research summaries, recommendations and comparisons using eligible live tools and reusable component types, not invented evidence. **Proof:** one-prompt table/cards, citations, serialized replay, stale/failure handling; reconcile #659 first.
+- [ ] **KCON-730** Cover news, current movies, recipes, research summaries, recommendations and comparisons using eligible live tools and reusable component types, not invented evidence. **Proof:** one-prompt table/cards, citations, serialized replay, stale/failure handling; reconcile #659 first. **Progress (2026-11-05, SOURCE_ONLY convergence candidate):** Adapted PR #659 onto current main without overwriting attested rich-history and text-only recovery. Reuses existing `search.results` contract and KarenPresentationRegistry, routes explicit current-film queries through approved web search, and requires proof-bound source metadata at replay. **Still open:** exact-head CI and authenticated first-prompt search/news/movie browser/reload/denial; recipes/general primitives are not covered.
 - [ ] **KCON-740** Decide whether A2UI/MCP Apps are required for consumer launch; otherwise DEFER with explicit risk and documented API compatibility/sandbox gate. **Proof:** security assessment and exact SDK support matrix.
 - [ ] **KCON-750** Preserve canonical citation/source IDs and safe external links from runtime through stream and reload; block model-generated fabricated sources. **Proof:** grounded-vs-forged source, deleted source, URL safety.
 - [ ] **KCON-760** Reuse existing artifact/export/print capability only after backend ownership/format/access checks. **Proof:** output is identical to verified server artifact, with correct MIME and permission.
@@ -393,5 +393,8 @@ Merge / rollout / rollback:
 | 2026-11-05 | `main@c7b43788` | #664 merged owner-attested opt-in continuation of the original chat as text, without replay of unsupported rich content; canonical chunk correlation contract repaired | KCON-160 | Main Quality, Chat Burn, Presentation, Context, Reasoning, live PostgreSQL and Vercel green at PR head; real browser remains NOT_RUN |
 
 | 2026-11-05 | `feat/kcon160-canonical-recent-window-20261105` | Candidate: latest 500 owner-verified saved messages with older-history disclosure, sourced from existing repository instead of an invented separate transcript | KCON-160 | Python/Next/React/PostgreSQL test contracts and exact-head CI pending; browser and immutable version still NOT_RUN |
+
+| 2026-11-05 | `main@9a3a6f14` | #665 merged bounded attested recent-window continuation for 1000+ saved messages; all prior history stays canonical | KCON-160 | Main Quality, Chat Burn, Presentation and PostgreSQL proof passed at PR head; deployed browser and immutable snapshot NOT_RUN |
+| 2026-11-05 | `feat/kcon730-governed-search-first-turn-converged-20261105` | Reconciled legacy draft #659 into current canonical presentation/runtime/replay contracts; retained KCON-160 text-only controls and CI ledger enforcement | KCON-730, KCON-720 | Exact-head CI and real-model/browser acceptance NOT_RUN; retire draft #659 only after integrated PR merges |
 
 **Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.
