@@ -2809,7 +2809,7 @@ class ChatRuntime:
             import re
 
             requested_table = bool(re.search(
-                r"\\b(?:table|tabulate|tabular)\\b", latest_prompt
+                r"\b(?:table|tabulate|tabular)\b", latest_prompt
             ))
             if not requested_table:
                 return None
