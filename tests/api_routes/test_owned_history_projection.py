@@ -187,6 +187,86 @@ def test_unsupported_or_incomplete_rich_content_aborts_whole_snapshot(metadata):
         project_attested(saved([assistant({**receipt(), **metadata})]))
 
 
+def test_explicit_text_continuation_requires_exact_attestation_for_unsupported_rich():
+    original = assistant({
+        **receipt(),
+        "attachments": [{"filename": "private-document.pdf"}],
+        "citations": [{"url": "https://private.example.invalid"}],
+        "tool_calls": [{"name": "historical_tool"}],
+        "structured_content": {"unrecognized_future_card": {"unsafe": "payload"}},
+    })
+    snapshot = saved([
+        Message(id="u1", conversation_id=THREAD, tenant_id=TENANT,
+                role="user", content="Continue my project", metadata={}),
+        original,
+    ])
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_owned_history(snapshot, attestations=attested(snapshot))
+
+    text_only = project_owned_history(
+        snapshot, attestations=attested(snapshot),
+        text_continuation=True,
+    )
+    assert text_only["threadId"] == THREAD
+    assert text_only["response_source"] == "persisted_history"
+    assert text_only["text_only"] is True
+    assert text_only["continuation_authorized"] is True
+    assert text_only["omitted_rich_message_count"] == 1
+    assert text_only["replay_only"] is True
+    assert text_only["replayEvents"] == []
+    assert text_only["messages"] == [
+        {"id": "u1", "role": "user", "content": "Continue my project"},
+        {"id": ASSISTANT_ID, "role": "assistant", "content": "Verified original answer"},
+    ]
+    serialized = str(text_only)
+    for forbidden in ("private-document.pdf", "private.example.invalid",
+                      "historical_tool", "unrecognized_future_card"):
+        assert forbidden not in serialized
+
+
+def test_text_continuation_rejects_missing_or_modified_completed_run_attestation():
+    original = assistant({**receipt(), "attachments": [{"private": "hidden"}]})
+    snapshot = saved([original])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(snapshot, attestations={}, text_continuation=True)
+
+    proof = attested(snapshot)
+    original.content = "Edited original answer"
+    with pytest.raises(UnreplayableHistory, match="modified_attested_message"):
+        project_owned_history(snapshot, attestations=proof, text_continuation=True)
+
+
+def test_text_continuation_rejects_untrusted_roles_and_overflow():
+    for role in ("tool", "system", "developer"):
+        with pytest.raises(UnreplayableHistory, match="invalid_canonical_message"):
+            project_owned_history(
+                saved([Message(id="other", tenant_id=TENANT,
+                               conversation_id=THREAD, role=role,
+                               content="privileged", metadata={})]),
+                attestations={}, text_continuation=True,
+            )
+    records = [
+        Message(id=f"m-{i}", tenant_id=TENANT, conversation_id=THREAD,
+                role="user", content="text", metadata={})
+        for i in range(501)
+    ]
+    with pytest.raises(UnreplayableHistory, match="history_message_limit"):
+        project_owned_history(
+            saved(records), attestations={}, text_continuation=True,
+        )
+
+
+def test_legacy_plain_text_can_continue_without_invented_rich_events():
+    original = saved([assistant({"private": "never-export"})])
+    result = project_owned_history(
+        original, attestations={}, text_continuation=True,
+    )
+    assert result["messages"][0]["content"] == "Verified original answer"
+    assert result["replayEvents"] == []
+    assert result["omitted_rich_message_count"] == 0
+    assert "never-export" not in str(result)
+
+
 def test_invalid_saved_presentation_cannot_be_revalidated_into_new_evidence():
     bad = {**presentation(), "data": {"formatted": "10:42 PM", "secret": "x"}}
     with pytest.raises(UnreplayableHistory, match="invalid_persisted_presentation"):
