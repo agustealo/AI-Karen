@@ -117,8 +117,7 @@ class AuthService(BaseService):
         self._tables_ensured = False
         self._lock: Optional[asyncio.Lock] = None
 
-        # Database session will be injected
-        self._db_session: Optional[AsyncSession] = None
+        # Request database sessions are context-local, never singleton attributes.
         self._db_client: Optional[MultiTenantPostgresClient] = None
 
         # Bounded runtime caches (optimization only; database is the authority)

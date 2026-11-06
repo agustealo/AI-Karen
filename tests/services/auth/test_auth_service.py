@@ -711,8 +711,9 @@ class TestAuthRequestSessionReuse:
             service, "_get_db_client",
             lambda: (_ for _ in ()).throw(AssertionError("extra client")),
         )
-        import sqlalchemy
-        with patch.object(sqlalchemy, "select", return_value=MagicMock()):
+        with patch.object(auth_service_module, "select", return_value=MagicMock()), \
+             patch.object(auth_service_module, "AuthUser", MagicMock()), \
+             patch.object(auth_service_module, "AuthSession", MagicMock()):
             stats = await service.get_auth_stats()
         assert stats == {
             "total_users": 4,
