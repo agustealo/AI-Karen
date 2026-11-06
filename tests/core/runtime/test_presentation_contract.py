@@ -332,7 +332,7 @@ def test_bounded_readonly_data_table_uses_only_approved_cells():
     too_large = {**data, "data": {
         **data["data"],
         "columns": [{"key": f"c{i}", "label": f"Column {i}"} for i in range(6)],
-        "rows": [{f"c{i}": "🔎" * 200 for i in range(6)} for _ in range(20)],
+        "rows": [{f"c{i}": "🔎" * 100 for i in range(6)} for _ in range(20)],
     }}
     assert validate_presentation(too_large) is None
 
