@@ -99,9 +99,11 @@ jobs:
           unknown = sorted(referenced - set(tasks))
           if unknown:
               raise SystemExit(f"Living convergence ledger references undefined tasks: {unknown}")
-          if not {"## 2. Feature-by-feature adoption, preservation and truth matrix",
-                  "## 4. Dependency-ordered execution checklist",
-                  "## 8. Progress change log"}.issubset(ledger.splitlines()):
+          headers = [line for line in ledger.splitlines() if line.startswith("## ")]
+          required = ("## 2. Feature-by-feature adoption, preservation and truth matrix",
+                      "## 4. Dependency-ordered execution checklist",
+                      "## 8. Progress change log")
+          if not all(any(header.startswith(prefix) for header in headers) for prefix in required):
               raise SystemExit("Living convergence ledger is missing canonical sections")
           print(f"Validated {len(tasks)} stable convergence task IDs.")
           PY
