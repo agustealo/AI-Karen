@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -128,6 +128,65 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         safe["data"] = {"formatted": value.strip()}
         if timezone:
             safe["data"]["timezone"] = timezone
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "data.table":
+        # Read-only structured facts; the runtime must establish source authority
+        # before this validator is called. No model-authored links or actions.
+        import re
+
+        if not isinstance(data, dict) or set(data) not in (
+            {"columns", "rows"}, {"title", "columns", "rows"}
+        ):
+            return None
+        title = data.get("title")
+        if title is not None and (
+            not isinstance(title, str) or not 1 <= len(title.strip()) <= 160
+        ):
+            return None
+        columns = data["columns"]
+        rows = data["rows"]
+        if (
+            not isinstance(columns, list) or not 1 <= len(columns) <= 6
+            or not isinstance(rows, list) or not 1 <= len(rows) <= 20
+        ):
+            return None
+        safe_columns: list[dict[str, str]] = []
+        for column in columns:
+            if not isinstance(column, Mapping) or set(column) != {"key", "label"}:
+                return None
+            key, label = column["key"], column["label"]
+            if (
+                not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key)
+                or not isinstance(label, str) or not 1 <= len(label.strip()) <= 80
+            ):
+                return None
+            safe_columns.append({"key": key, "label": label.strip()})
+        keys = [column["key"] for column in safe_columns]
+        if len(keys) != len(set(keys)):
+            return None
+        safe_rows: list[dict[str, str | None]] = []
+        for row in rows:
+            if not isinstance(row, Mapping) or set(row) != set(keys):
+                return None
+            safe_row: dict[str, str | None] = {}
+            for key in keys:
+                value = row[key]
+                if value is not None and (
+                    not isinstance(value, str) or sum(2 if ord(character) > 0xFFFF else 1 for character in value) > 240
+                    or any(ord(character) < 32 for character in value)
+                ):
+                    return None
+                safe_row[key] = value
+            safe_rows.append(safe_row)
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe_data: dict[str, Any] = {"columns": safe_columns, "rows": safe_rows}
+        if title is not None:
+            safe_data["title"] = title.strip()
+        safe["data"] = safe_data
         try:
             encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
         except (TypeError, ValueError, OverflowError):
