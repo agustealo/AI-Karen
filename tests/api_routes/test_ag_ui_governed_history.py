@@ -99,6 +99,74 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
 
 
 @pytest.mark.asyncio
+async def test_owned_text_continuation_is_explicit_and_requires_completed_run_digest(
+    monkeypatch, replay_on,
+):
+    import json
+
+    original = snapshot(rich=True)
+    original.messages[1].metadata.update({
+        "attachments": [{"name": "private.pdf"}],
+        "citations": [{"url": "https://hidden.example.invalid"}],
+        "structured_content": {"future_surface": {"private": True}},
+    })
+    recorded_digest = canonical_message_digest(original.messages[1])
+
+    class Owned:
+        async def get_owned_snapshot(self, context, *, message_limit):
+            assert context.tenant_id == TENANT
+            assert context.user_id == USER
+            assert message_limit == 501
+            return original
+
+    class Attestation:
+        async def completed_replay_attestations(self, **kwargs):
+            assert kwargs == {
+                "tenant_id": TENANT, "user_id": USER, "conversation_id": THREAD,
+            }
+            return {ASSISTANT: (REQUEST, recorded_digest)}
+
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway
+    monkeypatch.setattr(
+        conversation_runtime_gateway, "get_conversation_runtime_gateway",
+        lambda: Owned(),
+    )
+    monkeypatch.setattr(route, "SqlChatRunRepository", Attestation)
+
+    with pytest.raises(HTTPException) as default_failure:
+        await route.get_ag_ui_owned_history(
+            thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
+        )
+    assert default_failure.value.status_code == 409
+
+    response = await route.get_ag_ui_owned_history(
+        thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
+        view="text_continuation",
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    body = json.loads(response.body)
+    assert body["continuation_authorized"] is True
+    assert body["text_only"] is True
+    assert body["replayEvents"] == []
+    assert body["omitted_rich_message_count"] == 1
+    assert body["messages"][-1] == {
+        "id": ASSISTANT, "role": "assistant", "content": "canonical answer",
+    }
+    for secret in ("private.pdf", "hidden.example.invalid",
+                   "future_surface", "never expose"):
+        assert secret not in str(body)
+
+    original.messages[1].content = "Modified historical answer"
+    with pytest.raises(HTTPException) as tampered:
+        await route.get_ag_ui_owned_history(
+            thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
+            view="text_continuation",
+        )
+    assert tampered.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_first_prompt_verified_direct_capability_surface_returns_200_not_409(
     monkeypatch, replay_on,
 ):
