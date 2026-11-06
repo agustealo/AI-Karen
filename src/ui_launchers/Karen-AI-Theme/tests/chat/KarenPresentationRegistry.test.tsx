@@ -172,3 +172,16 @@ describe("versioned presentation registry", () => {
     expect(html).not.toContain("<script");
   });
 });
+
+
+describe("search source link parity", () => {
+  const base = {
+    schema_version: 1, presentation_id: "search-parity",
+    component_type: "search.results", evidence_ref: "source-receipt-1",
+    data: { results: [{ url: "https://example.com/story", snippet: "Reported event" }] },
+  };
+  it("disallows fragment-bearing source links", () => {
+    expect(parseKarenPresentation(base)).not.toBeNull();
+    expect(parseKarenPresentation({ ...base, data: { results: [{ ...base.data.results[0], url: "https://example.com/story#section" }] } })).toBeNull();
+  });
+});
