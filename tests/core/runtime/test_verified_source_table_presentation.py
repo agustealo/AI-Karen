@@ -40,7 +40,7 @@ def _execution(
                 "columns": [
                     {"key": "name", "label": "Name"},
                     {"key": "fact", "label": "Fact"},
-                    {"key": "source_url", "label": "Source"},
+                    {"key": "source_url", "label": "Source URL"},
                 ],
                 "rows": [{"name": "Reported A", "fact": "Reported B",
                          "source_url": "https://example.org/facts"}],
@@ -90,7 +90,7 @@ def test_authorized_first_turn_table_projection_and_surface_collection():
         "columns": [
             {"key": "name", "label": "Price: $1,000,000"},
             {"key": "fact", "label": "Fact"},
-            {"key": "source_url", "label": "Source"},
+            {"key": "source_url", "label": "Source URL"},
         ],
         "rows": [{"name": "Reported A", "fact": "Reported B",
                   "source_url": "https://example.org/facts"}],
@@ -99,7 +99,7 @@ def test_authorized_first_turn_table_projection_and_surface_collection():
         "columns": [
             {"key": "name", "label": "Name"},
             {"key": "fact", "label": "Fact"},
-            {"key": "source_url", "label": "Source"},
+            {"key": "source_url", "label": "Source URL"},
         ],
         "rows": [{"name": "Reported B", "fact": "Reported A",
                   "source_url": "https://example.org/facts"}],
@@ -113,7 +113,7 @@ def test_authorized_first_turn_table_projection_and_surface_collection():
     {"payload": {"structured_table": {
         "columns": [{"key": "name", "label": "Name"},
                     {"key": "fact", "label": "Fact"},
-                    {"key": "source_url", "label": "Source"}],
+                    {"key": "source_url", "label": "Source URL"}],
         "rows": [{"name": "Invented", "fact": "Reported B",
                   "source_url": "https://example.org/facts"}],
     }}},
@@ -174,7 +174,7 @@ def test_table_cannot_combine_facts_from_distinct_receipts():
             "columns": [
                 {"key": "name", "label": "Name"},
                 {"key": "fact", "label": "Fact"},
-                {"key": "source_url", "label": "Source"},
+                {"key": "source_url", "label": "Source URL"},
             ],
             "rows": [{"name": "A", "fact": "B fact",
                       "source_url": "https://example.org/a"}],
