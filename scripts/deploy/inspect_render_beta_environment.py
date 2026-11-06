@@ -299,10 +299,21 @@ def inspect(
         if env.get(key) and env[key] != expected:
             failures.add(f"mismatch:{key}")
 
-    if pg.get("plan") == "free":
+    # The canonical conversation journal lives in PostgreSQL. A free,
+    # expiring database is an advisory for initial beta inspection, but it
+    # cannot certify durable consumer history merely because AG-UI switches
+    # were enabled. Redis can remain an ephemeral STM cache.
+    postgres_plan = pg.get("plan")
+    postgres_expires = pg.get("expiresAt")
+    if postgres_plan == "free":
         advisories.add("production_persistence:postgres_free_plan")
-    if pg.get("expiresAt"):
+    if postgres_expires:
         advisories.add("production_persistence:postgres_expiration_present")
+    if require_governed_history:
+        if not isinstance(postgres_plan, str) or postgres_plan == "free":
+            failures.add("consumer_persistence:postgres_durable_plan_required")
+        if postgres_expires:
+            failures.add("consumer_persistence:postgres_expiration_present")
     if details.get("plan") == "free":
         advisories.add("production_capacity:api_free_plan")
     if kv.get("plan") == "free":

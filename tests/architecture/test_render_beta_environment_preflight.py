@@ -52,12 +52,13 @@ def safe_env(m):
 
 class FakeClient:
     def __init__(self, env, *, branch="main", health="/health/live",
-                 links=None, owner=WORKSPACE):
+                 links=None, owner=WORKSPACE, durable_postgres=False):
         self.env = env
         self.branch = branch
         self.health = health
         self.links = links or []
         self.owner = owner
+        self.durable_postgres = durable_postgres
         self.calls = []
 
     def get(self, service_id):
@@ -77,8 +78,9 @@ class FakeClient:
             return {
                 "id": POSTGRES, "owner": {"id": self.owner},
                 "name": "ai-karen-beta-postgres", "region": "ohio",
-                "status": "available", "plan": "free",
-                "expiresAt": "2026-12-01T16:21:27Z",
+                "status": "available",
+                "plan": "starter" if self.durable_postgres else "free",
+                "expiresAt": None if self.durable_postgres else "2026-12-01T16:21:27Z",
             }
         assert kind == "key-value"
         return {
@@ -167,7 +169,7 @@ def test_governed_history_readiness_is_explicit_and_never_inferred(m):
     for key in m.GOVERNED_HISTORY_REQUIRED:
         configured[key] = "true"
     enabled = m.inspect(
-        client=FakeClient(configured), service_id=SERVICE,
+        client=FakeClient(configured, durable_postgres=True), service_id=SERVICE,
         workspace_id=WORKSPACE, postgres_id=POSTGRES, key_value_id=KV,
         manifest=m.Manifest.read(m.BLUEPRINT),
         blueprint=m.BLUEPRINT.read_text(encoding="utf-8"),
@@ -177,6 +179,27 @@ def test_governed_history_readiness_is_explicit_and_never_inferred(m):
     assert enabled.ready
     assert enabled.failures == ()
     assert "testpassword" not in repr(enabled)
+
+
+@pytest.mark.parametrize("durable, expected", [(False, False), (True, True)])
+def test_consumer_history_requires_durable_nonexpiring_postgres(m, durable, expected):
+    configured = safe_env(m)
+    for key in m.GOVERNED_HISTORY_REQUIRED:
+        configured[key] = "true"
+    client = FakeClient(configured, durable_postgres=durable)
+    report = m.inspect(
+        client=client, service_id=SERVICE, workspace_id=WORKSPACE,
+        postgres_id=POSTGRES, key_value_id=KV,
+        manifest=m.Manifest.read(m.BLUEPRINT),
+        blueprint=m.BLUEPRINT.read_text(encoding="utf-8"),
+        required_defaults=m.required_environment_defaults(m.SERVER_CONFIG),
+        require_governed_history=True,
+    )
+    assert report.ready is expected
+    assert {call[0] for call in client.calls} == {"GET"}
+    if not durable:
+        assert "consumer_persistence:postgres_durable_plan_required" in report.failures
+        assert "consumer_persistence:postgres_expiration_present" in report.failures
 
 
 def test_event_journal_cannot_be_enabled_without_durable_history(m):
