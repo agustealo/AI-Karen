@@ -214,7 +214,7 @@ describe("bounded reusable data table", () => {
       { ...data.data, rows: [] },
       { ...data.data, rows: Array.from({ length: 21 }, () => ({ item: "A", fact: "x" })) },
       { ...data.data, rows: [{ item: "A", fact: "x".repeat(241) }] },
-      { ...data.data, rows: [{ item: "A", fact: "bad\\u0000" }] },
+      { ...data.data, rows: [{ item: "A", fact: "bad" + String.fromCharCode(0) }] },
       { ...data.data, columns: [{ key: "item", label: "Item" }, { key: "item", label: "Repeated" }] },
     ];
     for (const value of rejected) {

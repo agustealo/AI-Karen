@@ -321,7 +321,7 @@ def test_bounded_readonly_data_table_uses_only_approved_cells():
         {"columns": [{"key": "item", "label": "Item"}, {"key": "item", "label": "Duplicate"}]},
         {"rows": [{"item": "A", "fact": 3}]},
         {"rows": [{"item": "A", "fact": "<script>" * 100}]},
-        {"rows": [{"item": "A", "fact": "bad\\x00"}]},
+        {"rows": [{"item": "A", "fact": "bad\x00"}]},
         {"rows": [{"item": "A", "fact": {"html": "<img>"}}]},
         {"rows": []},
         {"rows": [{"item": "A", "fact": "x"}] * 21},
@@ -330,7 +330,9 @@ def test_bounded_readonly_data_table_uses_only_approved_cells():
             **data, "data": {**data["data"], **broken}
         }) is None
     too_large = {**data, "data": {
-        **data["data"], "rows": [{"item": "🔎" * 200, "fact": "x"}] * 20
+        **data["data"],
+        "columns": [{"key": f"c{i}", "label": f"Column {i}"} for i in range(6)],
+        "rows": [{f"c{i}": "🔎" * 200 for i in range(6)} for _ in range(20)],
     }}
     assert validate_presentation(too_large) is None
 
