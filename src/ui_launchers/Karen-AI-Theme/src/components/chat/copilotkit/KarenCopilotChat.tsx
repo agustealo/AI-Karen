@@ -11,6 +11,18 @@ const CONVERSATION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
+ * Native CopilotKit 1.79.1 messageFilter. The SDK keeps every saved message
+ * visible, while only the current run message crosses the transport.
+ * ChatRuntime reconstructs historical context from the authenticated,
+ * tenant-owned conversation. Never trust client replay as prompt context.
+ *
+ * A tool-follow-up run remains subject to Karen's existing AG-UI input and
+ * action gates. The SDK also repairs filtered tool-call pairs for transport.
+ */
+export const karenCanonicalRunMessageFilter = <T,>(messages: T[]): T[] =>
+  messages.slice(-1);
+
+/**
  * Canonical CopilotKit v2 chat shell, staged as the dashboard renderer on PR #585.
  * Runtime, authentication, saved history and execution receipts remain backend-owned.
  * The controlled view starts runs only on explicit user submission.
@@ -88,7 +100,9 @@ export function KarenCopilotChat({
           the gated acceptance pages. The webpack shim suppresses the SDK's
           incompatible Tailwind v4 import, so this is its sole CSS owner. */}
       <link rel="stylesheet" href="/vendor/copilotkit-v2.css" />
-      <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default" enableInspector={false} properties={forwardedProperties}>
+      <CopilotKitProvider key={scopeKey} runtimeUrl="/api/copilotkit" agentId="default"
+        messageFilter={karenCanonicalRunMessageFilter}
+        enableInspector={false} properties={forwardedProperties}>
         <KarenCopilotHistoryGate conversationId={conversationId}
           onStartNewConversation={onStartNewConversation}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
