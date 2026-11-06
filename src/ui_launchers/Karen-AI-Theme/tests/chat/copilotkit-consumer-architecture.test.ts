@@ -109,7 +109,8 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(consumer).toContain("<KarenCopilotChat");
     expect(consumer).toContain("workspaceRunId={workspaceRunId}");
     expect(shell).toContain('runtimeUrl="/api/copilotkit"');
-    expect(shell).toContain("<KarenCopilotHistoryGate conversationId={conversationId}>");
+    expect(shell).toContain("<KarenCopilotHistoryGate conversationId={conversationId}");
+    expect(shell).toContain("onStartNewConversation={onStartNewConversation}");
     expect(shell).toContain("<KarenCopilotVerifiedRail />");
     expect(history).toContain("parseKarenVerifiedHistory(");
     expect(history).toContain("agent.setMessages(messages)");
