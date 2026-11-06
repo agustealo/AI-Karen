@@ -224,6 +224,12 @@ def project_owned_history(
                 omitted_rich_message_count += 1
                 messages.append({"id": identifier, "role": role, "content": content})
                 continue
+            # Rebuild events from a previously completed run. Its attested
+            # request identity is stable even when older saved messages lack
+            # correlation_id. This identifier is only required to satisfy
+            # ChatStreamChunk's canonical typing; AGUIEventProjection does
+            # not publish it as a claim about the original tracing ID.
+            replay_trace_id = attestation[0]
             projector = AGUIEventProjection(
                 thread_id=thread_id,
                 run_id="restored_" + identifier.replace("-", "_"),
@@ -243,13 +249,16 @@ def project_owned_history(
                     for event in projector.project(ChatStreamChunk(
                         type="presentation",
                         content="",
+                        correlation_id=replay_trace_id,
                         metadata={"presentation_verified": True, "presentation": valid},
                     )):
                         if event.get("type") != "CUSTOM" or event.get("name") != "karen.presentation.v1":
                             raise UnreplayableHistory("invalid_presentation_projection")
                         events.append({**event, "messageId": identifier})
             for event in projector.project(ChatStreamChunk(
-                type="complete", content="", metadata=dict(metadata),
+                type="complete", content="",
+                correlation_id=replay_trace_id,
+                metadata=dict(metadata),
             )):
                 if event.get("type") == "CUSTOM":
                     if event.get("name") not in {
