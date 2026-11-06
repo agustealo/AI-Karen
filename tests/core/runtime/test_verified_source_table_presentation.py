@@ -18,6 +18,7 @@ def _execution(
     degraded=False,
     attempts=None,
     payload=None,
+    sources=None,
 ):
     request = SimpleNamespace(context=SimpleNamespace(
         request_id="req-table-1", correlation_id="corr-table-1",
@@ -39,12 +40,18 @@ def _execution(
                 "columns": [
                     {"key": "name", "label": "Name"},
                     {"key": "fact", "label": "Fact"},
+                    {"key": "source_url", "label": "Source"},
                 ],
-                "rows": [{"name": "Reported A", "fact": "Reported B"}],
+                "rows": [{"name": "Reported A", "fact": "Reported B",
+                         "source_url": "https://example.org/facts"}],
             }}
             if payload is None else payload
         ),
-        sources=[],
+        sources=([{
+            "url": "https://example.org/facts",
+            "title": "Reported A",
+            "snippet": "Reported B",
+        }] if sources is None else sources),
     )
     return request, decision, plan, result
 
@@ -59,7 +66,8 @@ def test_authorized_first_turn_table_projection_and_surface_collection():
     assert expected["evidence_ref"] == "req-table-1:web_search"
     assert expected["correlation_id"] == "corr-table-1"
     assert expected["data"]["rows"] == [
-        {"name": "Reported A", "fact": "Reported B"}
+        {"name": "Reported A", "fact": "Reported B",
+         "source_url": "https://example.org/facts"}
     ]
     assert ChatRuntime._collect_authorized_surface_parts(
         request, [(decision, plan, result)]
@@ -77,6 +85,18 @@ def test_authorized_first_turn_table_projection_and_surface_collection():
     {"attempts": [{"type": "tool", "id": "web_search", "status": "failed"}]},
     {"attempts": [{"type": "plugin", "id": "web_search", "status": "success"}]},
     {"payload": {"presentation": {"component_type": "data.table"}}},
+    {"sources": []},
+    {"sources": [{"url": "https://example.org/else",
+                  "title": "Reported A", "snippet": "Reported B"}]},
+    {"sources": [{"url": "https://example.org/facts",
+                  "title": "Reported A", "snippet": "Different fact"}]},
+    {"payload": {"structured_table": {
+        "columns": [{"key": "name", "label": "Name"},
+                    {"key": "fact", "label": "Fact"},
+                    {"key": "source_url", "label": "Source"}],
+        "rows": [{"name": "Invented", "fact": "Reported B",
+                  "source_url": "https://example.org/facts"}],
+    }}},
     {"payload": {"structured_table": {
         "columns": [{"key": "fact", "label": "Fact"}],
         "rows": [{"fact": "Visible", "private": "Forbidden"}],
@@ -123,3 +143,33 @@ def test_stale_tool_presentation_metadata_cannot_override_runtime_provenance():
     assert checked is not None
     assert checked["evidence_ref"] == "req-table-1:web_search"
     assert checked["correlation_id"] == "corr-table-1"
+
+def test_table_cannot_combine_facts_from_distinct_receipts():
+    request, decision, plan, result = _execution(
+        sources=[
+            {"url": "https://example.org/a", "title": "A", "snippet": "A fact"},
+            {"url": "https://example.org/b", "title": "B", "snippet": "B fact"},
+        ],
+        payload={"structured_table": {
+            "columns": [
+                {"key": "name", "label": "Name"},
+                {"key": "fact", "label": "Fact"},
+                {"key": "source_url", "label": "Source"},
+            ],
+            "rows": [{"name": "A", "fact": "B fact",
+                      "source_url": "https://example.org/a"}],
+        }},
+    )
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None
+
+
+def test_source_table_does_not_invent_unknown_data_on_missing_cells():
+    request, decision, plan, result = _execution()
+    result.payload["structured_table"]["rows"][0]["fact"] = None
+    projected = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert projected is not None
+    assert projected["data"]["rows"][0]["fact"] is None

@@ -2795,7 +2795,7 @@ class ChatRuntime:
             return None
         from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 
-        return validate_presentation({
+        candidate = validate_presentation({
             "schema_version": 1,
             "presentation_id": f"table-{request.context.request_id}",
             "component_type": "data.table",
@@ -2803,6 +2803,38 @@ class ChatRuntime:
             "evidence_ref": f"{request.context.request_id}:{result.source_id}",
             "correlation_id": request.context.correlation_id,
         })
+        if candidate is None:
+            return None
+
+        # A tool's "success" status alone does not authorize arbitrary claims.
+        # Every row must cite one search receipt previously sanitized by the
+        # same source projector, and every visible cell must be verbatim from
+        # that receipt. This also rejects unverified LLM-created summaries.
+        sources = ChatRuntime._verified_search_presentation(
+            request, decision, plan, result
+        )
+        if sources is None:
+            return None
+        verified = {
+            entry["url"]: entry
+            for entry in sources["data"]["results"]
+        }
+        columns = {column["key"] for column in candidate["data"]["columns"]}
+        if "source_url" not in columns:
+            return None
+        for row in candidate["data"]["rows"]:
+            url = row["source_url"]
+            if not isinstance(url, str) or url not in verified:
+                return None
+            source = verified[url]
+            values = {source["url"], source["snippet"]}
+            if source.get("title") is not None:
+                values.add(source["title"])
+            if source.get("published_at") is not None:
+                values.add(source["published_at"])
+            if any(value is not None and value not in values for value in row.values()):
+                return None
+        return candidate
 
     @staticmethod
     def _verified_search_presentation(request, decision, plan, result):
