@@ -93,6 +93,17 @@ def verify(base_url: str) -> None:
     ):
         raise ValueError("Canonical backend configuration and database are not ready")
 
+    # A healthy generic readiness path does not prove the installation-state
+    # ingress needed by login/setup is reachable. Production has shown this
+    # exact read route timing out independently of the frontend build.
+    first_run_code, first_run = _probe_json(
+        opener, base + "/api/auth/first-run", headers, endpoint="First-run"
+    )
+    if first_run_code != 200 or first_run.get("first_run_required") is not False:
+        raise ValueError(
+            "Canonical first-run state is unavailable or installation is incomplete"
+        )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify Karen production backend proxy connectivity")

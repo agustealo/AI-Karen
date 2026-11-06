@@ -7,6 +7,7 @@ CHECK = Path(__file__).resolve().parents[2] / "scripts/ci/verify_backend_target.
 def test_preflight_checks_canonical_auth_proxy_without_secrets() -> None:
     text = CHECK.read_text(encoding="utf-8")
     assert '"/api/auth/session"' in text
+    assert '"/api/auth/first-run"' in text
     assert '"BACKEND_TARGET_NOT_CONFIGURED"' in text
     assert 'if code in (502, 503)' in text
     assert 'code not in (200, 401, 403)' in text
@@ -97,6 +98,7 @@ def _probe_fixture(ready: tuple[int, object]) -> _ProbeOpener:
     return _ProbeOpener({
         "/api/auth/session": (401, {"detail": "Authentication required"}),
         "/api/health": ready,
+        "/api/auth/first-run": (200, {"first_run_required": False}),
     })
 
 
@@ -107,14 +109,14 @@ def test_readiness_probe_requires_canonical_database_and_config(monkeypatch) -> 
     monkeypatch.setattr(module, "build_opener", lambda *_: probe)
 
     module.verify("https://release.example")
-    assert probe.visited == ["/api/auth/session", "/api/health"]
+    assert probe.visited == ["/api/auth/session", "/api/health", "/api/auth/first-run"]
     assert all(
         all("vercel-protection-bypass" not in name.lower() for name in headers)
         for headers in probe.forwarded_headers
     )
 
 
-def test_deployment_bypass_is_forwarded_only_to_the_two_verification_paths(
+def test_deployment_bypass_is_forwarded_only_to_the_three_verification_paths(
     monkeypatch,
 ) -> None:
     module = _load_preflight()
@@ -123,7 +125,7 @@ def test_deployment_bypass_is_forwarded_only_to_the_two_verification_paths(
     monkeypatch.setattr(module, "build_opener", lambda *_: probe)
 
     module.verify("https://release.example")
-    assert probe.visited == ["/api/auth/session", "/api/health"]
+    assert probe.visited == ["/api/auth/session", "/api/health", "/api/auth/first-run"]
     assert all(
         headers.get("X-vercel-protection-bypass") == "approved-secret"
         for headers in probe.forwarded_headers
@@ -221,3 +223,45 @@ def test_release_preflight_source_uses_only_authoritative_health_projection() ->
     assert 'ready.get("backend_ready") is not True' in source
     assert 'ready.get("status") != "ok"' in source
     assert "build_opener(NoRedirects())" in source
+
+
+def test_first_run_probe_must_prove_initialized_bootstrap_state(monkeypatch) -> None:
+    import pytest
+
+    module = _load_preflight()
+    monkeypatch.delenv("VERCEL_AUTOMATION_BYPASS_SECRET", raising=False)
+    rejected_states = [
+        (502, {"error_code": "BACKEND_UPSTREAM_UNAVAILABLE"}),
+        (503, {"detail": "Bootstrap storage unavailable"}),
+        (200, {"first_run_required": True}),
+        (200, {"first_run_required": 0}),
+        (200, {"first_run_required": "false"}),
+        (200, {"ready": True}),
+        (401, {"detail": "Authentication required"}),
+        (200, None),
+    ]
+    for response in rejected_states:
+        probe = _ProbeOpener({
+            "/api/auth/session": (401, {"detail": "Authentication required"}),
+            "/api/health": (200, {"status": "ok", "backend_ready": True}),
+            "/api/auth/first-run": response,
+        })
+        monkeypatch.setattr(module, "build_opener", lambda *_: probe)
+        with pytest.raises(ValueError, match="(?:First-run|first-run)") as error:
+            module.verify("https://release.example")
+        assert probe.visited == [
+            "/api/auth/session", "/api/health", "/api/auth/first-run"
+        ]
+        assert "Bootstrap storage unavailable" not in str(error.value)
+
+
+def test_auth_and_readiness_must_pass_before_first_run_probe(monkeypatch) -> None:
+    import pytest
+
+    module = _load_preflight()
+    monkeypatch.delenv("VERCEL_AUTOMATION_BYPASS_SECRET", raising=False)
+    probe = _probe_fixture((200, {"status": "ok", "backend_ready": False}))
+    monkeypatch.setattr(module, "build_opener", lambda *_: probe)
+    with pytest.raises(ValueError, match="database are not ready"):
+        module.verify("https://release.example")
+    assert probe.visited == ["/api/auth/session", "/api/health"]
