@@ -11,7 +11,8 @@ describe("canonical CopilotKit conversation intelligence restoration", () => {
     const rail = source("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx");
     const history = source("src/components/chat/copilotkit/KarenCopilotHistoryGate.tsx");
 
-    expect(shell).toContain("<KarenCopilotHistoryGate conversationId={conversationId}>");
+    expect(shell).toContain("<KarenCopilotHistoryGate conversationId={conversationId}");
+    expect(shell).toContain("onStartNewConversation={onStartNewConversation}");
     expect(shell).toContain("<KarenCopilotVerifiedRail />");
     expect(shell.match(/<KarenCopilotVerifiedRail \/>/g)).toHaveLength(1);
     expect(rail).toContain("useKarenLatestVerifiedExecution()");
