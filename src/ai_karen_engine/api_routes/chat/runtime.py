@@ -14,7 +14,7 @@ import time
 import uuid
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -851,6 +851,7 @@ async def get_ag_ui_run_observed_events(
 async def get_ag_ui_owned_history(
     thread_id: str,
     user: Dict[str, Any] = Depends(bypass_user_context_func),
+    view: Literal["full", "text_continuation"] = "full",
 ):
     """Governed, non-executing completed-run replay from canonical storage.
 
@@ -908,6 +909,7 @@ async def get_ag_ui_owned_history(
         history = project_owned_history(
             snapshot, attestations=attestations,
             observed_activity=observed_activity,
+            text_continuation=view == "text_continuation",
         )
     except UnreplayableHistory as exc:
         # Keep the public response fail-closed and generic. An internal,
@@ -920,6 +922,7 @@ async def get_ag_ui_owned_history(
                 "correlation_id": correlation_id,
                 "reason_code": reason_code,
                 "failure_class": "governed_history_replay",
+                "projection_view": view,
             },
         )
         # A truncated/oversized history is an incomplete backend projection;

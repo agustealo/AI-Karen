@@ -48,11 +48,13 @@ async function readKarenGovernedHistory(
   headers: Record<string, string>,
   principal: KarenVerifiedPrincipal,
   threadId: string,
+  textContinuation = false,
 ): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(
-      baseUrl + "/api/chat/ag-ui/threads/" + threadId + "/history",
+      baseUrl + "/api/chat/ag-ui/threads/" + threadId + "/history" +
+        (textContinuation ? "?view=text_continuation" : ""),
       { method: "GET", headers, redirect: "manual", cache: "no-store", signal: request.signal },
     );
   } catch {
@@ -91,7 +93,15 @@ async function readKarenGovernedHistory(
   }
   if (!Array.isArray(data.messages) || data.messages.length > MAX_MESSAGES ||
       !Array.isArray(data.replayEvents) || data.replayEvents.length > MAX_MESSAGES * 108 ||
-      data.response_source !== "persisted_history" || data.replay_only !== true) {
+      data.response_source !== "persisted_history" || data.replay_only !== true ||
+      (textContinuation && (
+        data.continuation_authorized !== true || data.text_only !== true ||
+        !Number.isInteger(data.omitted_rich_message_count) ||
+        (data.omitted_rich_message_count as number) < 0 ||
+        (data.omitted_rich_message_count as number) > MAX_MESSAGES ||
+        data.replayEvents.length !== 0
+      )) ||
+      (!textContinuation && data.continuation_authorized === true)) {
     return failure("Invalid governed conversation history", 502);
   }
   const allowedRoles = new Set(["user", "assistant"]);
@@ -129,7 +139,13 @@ async function readKarenGovernedHistory(
     replayEvents.push({ type: "CUSTOM", name: e.name, value: e.value, messageId: e.messageId });
   }
   return NextResponse.json(
-    { threadId, messages, replayEvents },
+    textContinuation
+      ? {
+        threadId, messages, replayEvents: [],
+        text_only: true, continuation_authorized: true,
+        omitted_rich_message_count: data.omitted_rich_message_count,
+      }
+      : { threadId, messages, replayEvents },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }
@@ -148,9 +164,15 @@ export async function readKarenOwnedThreadMessages(
   governedHistory = false,
   readOnlyTranscript = false,
   transcriptOffset = 0,
+  textContinuation = false,
 ): Promise<Response> {
+  if (textContinuation && !governedHistory) {
+    return failure("Attested text continuation unavailable", 404);
+  }
   if (governedHistory && !readOnlyTranscript) {
-    return readKarenGovernedHistory(request, baseUrl, headers, principal, threadId);
+    return readKarenGovernedHistory(
+      request, baseUrl, headers, principal, threadId, textContinuation,
+    );
   }
   let response: Response;
   try {
