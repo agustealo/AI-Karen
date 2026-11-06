@@ -101,7 +101,8 @@ async function readKarenGovernedHistory(
         (data.omitted_rich_message_count as number) > MAX_MESSAGES ||
         data.replayEvents.length !== 0 ||
         typeof data.history_window_has_older !== "boolean" ||
-        data.history_window_message_limit !== 500
+        data.history_window_message_limit !== 500 ||
+        (data.history_window_has_older === true && data.messages.length !== 500)
       )) ||
       (!textContinuation && data.continuation_authorized === true)) {
     return failure("Invalid governed conversation history", 502);
