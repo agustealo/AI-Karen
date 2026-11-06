@@ -82,7 +82,7 @@ jobs:
               exit 1
             fi
             if ! git diff --unified=0 "origin/${{ github.base_ref }}...HEAD" -- "$ledger" |
-                 grep '^+' | grep -v '^+++' | grep -Eq 'KCON-[0-9]{3}'; then
+                 awk '/^\+[^+]/ && /KCON-[0-9][0-9][0-9]/ {found=1} END {exit !found}'; then
               echo "::error::$ledger must update at least one affected KCON task or its progress evidence."
               exit 1
             fi
