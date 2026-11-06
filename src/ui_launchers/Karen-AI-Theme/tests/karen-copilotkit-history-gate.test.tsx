@@ -29,6 +29,7 @@ import {
   karenScopedAgentId,
   toCopilotTextMessages,
   formatRecoveredConversationText,
+  validatedKarenTextContinuation,
 } from "@/components/chat/copilotkit/KarenCopilotHistoryGate";
 import { KarenCopilotAssistantMessage, parseKarenVerifiedHistory } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
 
@@ -279,6 +280,138 @@ describe("CopilotKit canonical conversation hydration", () => {
     );
   });
 
+
+  it("requires an explicit click and backend attestation before resuming the same owned SDK thread", async () => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("unsupported rich"), { status: 409 }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        omitted_entries: 0, page_offset: 0, has_more: false, next_offset: null,
+        conversation_updated_at: "2026-11-05T22:00:00Z",
+        messages: [{ id: "user1", role: "user", content: "Earlier project" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, text_only: true, continuation_authorized: true,
+        omitted_rich_message_count: 1, replayEvents: [],
+        messages: [
+          { id: "user1", role: "user", content: "Earlier project" },
+          { id: "answer1", role: "assistant", content: "Verified historical response" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, text_only: true, continuation_authorized: true,
+        omitted_rich_message_count: 2, replayEvents: [],
+        messages: [
+          { id: "user1", role: "user", content: "Earlier project" },
+          { id: "answer1", role: "assistant", content: "Verified historical response" },
+          { id: "user2", role: "user", content: "New question" },
+          { id: "answer2", role: "assistant", content: "New committed response" },
+        ],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByTestId("karen-read-only-transcript")).toBeTruthy());
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.subscribe).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Continue original conversation with verified text only",
+    }));
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(screen.getByTestId("karen-text-continuation-banner").textContent)
+      .toContain("Older cards, citations, attachments and tool activity were");
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      3, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=continuation",
+    );
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
+      { id: "user1", role: "user", content: "Earlier project" },
+      { id: "answer1", role: "assistant", content: "Verified historical response" },
+    ]);
+    expect(backend.agent.subscribe).toHaveBeenCalledTimes(1);
+    await act(async () => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(backend.agent.setMessages).toHaveBeenCalledTimes(2));
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      4, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=continuation",
+    );
+    expect(backend.agent.setMessages).toHaveBeenLastCalledWith([
+      { id: "user1", role: "user", content: "Earlier project" },
+      { id: "answer1", role: "assistant", content: "Verified historical response" },
+      { id: "user2", role: "user", content: "New question" },
+      { id: "answer2", role: "assistant", content: "New committed response" },
+    ]);
+  });
+
+  it.each([
+    { continuation_authorized: false, text_only: true, replayEvents: [] },
+    { continuation_authorized: true, text_only: false, replayEvents: [] },
+    { continuation_authorized: true, text_only: true,
+      replayEvents: [{ type: "CUSTOM", name: "untrusted", value: {} }] },
+  ])("refuses unverified continuation grants and preserves a separate read-only transcript", async (overrides) => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("unsupported rich"), { status: 409 }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        omitted_entries: 0, page_offset: 0, has_more: false, next_offset: null,
+        conversation_updated_at: "2026-11-05T22:00:00Z",
+        messages: [{ id: "u1", role: "user", content: "Original transcript" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, omitted_rich_message_count: 1,
+        messages: [{ id: "a1", role: "assistant", content: "Must not hydrate" }],
+        ...overrides,
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        omitted_entries: 0, page_offset: 0, has_more: false, next_offset: null,
+        conversation_updated_at: "2026-11-05T22:00:00Z",
+        messages: [{ id: "u1", role: "user", content: "Original transcript" }],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByText("Original transcript")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", {
+      name: "Continue original conversation with verified text only",
+    }));
+    await waitFor(() => expect(screen.getByTestId("karen-text-continuation-status").textContent)
+      .toContain("could not authorize"));
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.subscribe).not.toHaveBeenCalled();
+    expect(screen.getByText("Original transcript")).toBeTruthy();
+    expect(screen.queryByText("Must not hydrate")).toBeNull();
+  });
+
+  it("never offers SDK continuation while only one page of a longer thread is displayed", async () => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("history overflow"), { status: 502 }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        omitted_entries: 0, page_offset: 0, has_more: true,
+        next_offset: 500, conversation_updated_at: "2026-11-05T22:00:00Z",
+        messages: [{ id: "u1", role: "user", content: "First saved page" }],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByText("First saved page")).toBeTruthy());
+    expect(screen.queryByRole("button", {
+      name: "Continue original conversation with verified text only",
+    })).toBeNull();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+  });
+
+  it("validates the text-only continuation grant before ever touching CopilotKit messages", () => {
+    const valid = {
+      threadId: CONVERSATION_A, text_only: true,
+      continuation_authorized: true,
+      omitted_rich_message_count: 1, replayEvents: [],
+      messages: [{ id: "saved-answer", role: "assistant", content: "Canonical saved answer" }],
+    };
+    expect(validatedKarenTextContinuation(valid, CONVERSATION_A))
+      .toEqual([{ id: "saved-answer", role: "assistant", content: "Canonical saved answer" }]);
+    expect(() => validatedKarenTextContinuation({
+      ...valid, threadId: CONVERSATION_B,
+    }, CONVERSATION_A)).toThrow("not authorized");
+    expect(() => validatedKarenTextContinuation({
+      ...valid, omitted_rich_message_count: 501,
+    }, CONVERSATION_A)).toThrow("not authorized");
+  });
 
   it("formats authorized recovery text literally without invented tool or rich metadata", () => {
     expect(formatRecoveredConversationText([
