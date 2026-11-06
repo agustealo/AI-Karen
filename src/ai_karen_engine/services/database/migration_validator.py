@@ -92,23 +92,41 @@ class MigrationValidator:
         try:
             applied = await self._applied_versions()
         except Exception as exc:
-            logger.warning("Unable to read Supabase migration history: %s", exc)
+            logger.warning("Unable to read Supabase migration history (%s)", type(exc).__name__)
             return MigrationValidationReport(
                 timestamp=datetime.now(timezone.utc),
                 overall_status=MigrationStatus.UNKNOWN,
                 latest_version=latest,
-                errors=[str(exc)],
+                errors=["Supabase migration history unavailable"],
             )
 
         applied_set = set(applied)
+        available_set = set(available)
         pending = [version for version in available if version not in applied_set]
-        status = MigrationStatus.PENDING if pending else MigrationStatus.UP_TO_DATE
+        unexpected = sorted(applied_set - available_set)
+        duplicate_history = len(applied) != len(applied_set)
+        errors: List[str] = []
+        if unexpected:
+            errors.append("Database contains migrations absent from the canonical release")
+        if duplicate_history:
+            errors.append("Supabase migration history contains duplicate versions")
+
+        # A newer or inconsistent database is not equivalent to a valid
+        # canonical migration prefix. Do not certify rollout on this state.
+        status = (
+            MigrationStatus.FAILED
+            if errors
+            else MigrationStatus.PENDING
+            if pending
+            else MigrationStatus.UP_TO_DATE
+        )
         return MigrationValidationReport(
             timestamp=datetime.now(timezone.utc),
             overall_status=status,
             latest_version=latest,
             applied_versions=applied,
             pending_versions=pending,
+            errors=errors,
         )
 
     async def get_state(self) -> dict:
