@@ -40,7 +40,7 @@ def _execution(
                 "columns": [
                     {"key": "name", "label": "Name"},
                     {"key": "fact", "label": "Fact"},
-                    {"key": "source_url", "label": "Source"},
+                    {"key": "source_url", "label": "Source URL"},
                 ],
                 "rows": [{"name": "Reported A", "fact": "Reported B",
                          "source_url": "https://example.org/facts"}],
@@ -85,6 +85,26 @@ def test_authorized_first_turn_table_projection_and_surface_collection():
     {"attempts": [{"type": "tool", "id": "web_search", "status": "failed"}]},
     {"attempts": [{"type": "plugin", "id": "web_search", "status": "success"}]},
     {"payload": {"presentation": {"component_type": "data.table"}}},
+    {"payload": {"structured_table": {
+        "title": "Official guaranteed prices",
+        "columns": [
+            {"key": "name", "label": "Price: $1,000,000"},
+            {"key": "fact", "label": "Fact"},
+            {"key": "source_url", "label": "Source URL"},
+        ],
+        "rows": [{"name": "Reported A", "fact": "Reported B",
+                  "source_url": "https://example.org/facts"}],
+    }}},
+    {"payload": {"structured_table": {
+        "columns": [
+            {"key": "name", "label": "Name"},
+            {"key": "fact", "label": "Fact"},
+            {"key": "source_url", "label": "Source URL"},
+        ],
+        "rows": [{"name": "Reported B", "fact": "Reported A",
+                  "source_url": "https://example.org/facts"}],
+    }}},
+
     {"sources": []},
     {"sources": [{"url": "https://example.org/else",
                   "title": "Reported A", "snippet": "Reported B"}]},
@@ -93,7 +113,7 @@ def test_authorized_first_turn_table_projection_and_surface_collection():
     {"payload": {"structured_table": {
         "columns": [{"key": "name", "label": "Name"},
                     {"key": "fact", "label": "Fact"},
-                    {"key": "source_url", "label": "Source"}],
+                    {"key": "source_url", "label": "Source URL"}],
         "rows": [{"name": "Invented", "fact": "Reported B",
                   "source_url": "https://example.org/facts"}],
     }}},
@@ -154,7 +174,7 @@ def test_table_cannot_combine_facts_from_distinct_receipts():
             "columns": [
                 {"key": "name", "label": "Name"},
                 {"key": "fact", "label": "Fact"},
-                {"key": "source_url", "label": "Source"},
+                {"key": "source_url", "label": "Source URL"},
             ],
             "rows": [{"name": "A", "fact": "B fact",
                       "source_url": "https://example.org/a"}],
@@ -280,3 +300,29 @@ def test_explicit_table_utf16_excerpt_bounds_preserve_source_prefix():
     excerpt = table["data"]["rows"][0]["source_excerpt"]
     assert excerpt == "🔎" * 120
     assert result.sources[0]["snippet"].startswith(excerpt)
+
+
+def test_untrusted_source_title_is_not_presented_as_a_factual_claim():
+    request, decision, plan, result = _execution()
+    result.payload["structured_table"]["title"] = "Guaranteed best product on Earth"
+    surface = ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    )
+    assert surface is not None
+    assert surface["data"]["title"] == "Verified search source excerpts"
+
+
+def test_source_title_must_not_be_misrepresented_as_an_excerpt():
+    request, decision, plan, result = _execution(
+        payload={"structured_table": {
+            "columns": [
+                {"key": "source_excerpt", "label": "Source excerpt"},
+                {"key": "source_url", "label": "Source URL"},
+            ],
+            "rows": [{"source_excerpt": "Reported A",
+                      "source_url": "https://example.org/facts"}],
+        }}
+    )
+    assert ChatRuntime._verified_source_table_presentation(
+        request, decision, plan, result
+    ) is None
