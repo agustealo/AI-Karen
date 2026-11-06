@@ -47,7 +47,7 @@ function isPublicSourceUrl(value: unknown): value is string {
     const parsed = new URL(value);
     const host = parsed.hostname.toLowerCase();
     if (!["http:", "https:"].includes(parsed.protocol) ||
-        parsed.username || parsed.password || parsed.port === "0" ||
+        parsed.username || parsed.password || parsed.port === "0" || parsed.hash ||
         !/^[a-z0-9.-]+$/.test(host)) return false;
     // Mirror the backend's DNS-only rule. Reject numeric hosts and URL
     // parser aliases for loopback/private network IP addresses.

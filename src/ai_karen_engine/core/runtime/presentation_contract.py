@@ -174,6 +174,8 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
                 # notation that Python and browser URL parsers may interpret
                 # differently (hex, octal, shortened, or IPv6 addresses).
                 # Public IP links are intentionally omitted from UI.
+                if parsed.fragment:
+                    return None
                 labels = host.split(".")
                 if (
                     len(labels) < 2

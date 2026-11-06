@@ -401,4 +401,6 @@ Merge / rollout / rollback:
 
 | 2026-11-05 | `main@07be5297` | #668 merged protected signed-in first-prompt news/current movie acceptance specs and stable workflow-boundary tests without adding a renderer or runtime; seven supported presentation types remain source-governed | KCON-730, KCON-750 | Main Quality, Chat Burn, frontend build, deployment contract green at #668 head; Vercel deployment rate-limited; live deployed browser NOT_RUN |
 
+| 2026-11-05 | `fix/kcon710-presentation-parity-20261105` | Candidate: add strict URL fragment parity for source links to canonical Python and React validators, preserving one registry and attested search results | KCON-710, KCON-730 | Exact-head CI pending, no browser/deployment proof; general table/comparison primitives still missing |
+
 **Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.

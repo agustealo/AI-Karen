@@ -284,3 +284,15 @@ def test_date_observation_is_calendar_valid_and_evidence_bound():
     assert validate_presentation({
         **base, "data": {"formatted": "2026-10-29", "timezone": 3}
     }) is None
+
+
+def test_search_source_url_rejects_fragments_for_backend_ui_parity():
+    base = {
+        "schema_version": 1,
+        "presentation_id": "search-1",
+        "component_type": "search.results",
+        "evidence_ref": "source-receipt-1",
+        "data": {"results": [{"url": "https://example.com/story", "snippet": "Reported event"}]},
+    }
+    assert validate_presentation(base) is not None
+    assert validate_presentation({**base, "data": {"results": [{"url": "https://example.com/story#section", "snippet": "Reported event"}]}}) is None
