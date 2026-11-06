@@ -247,9 +247,14 @@ export function KarenCopilotHistoryGate({
             if (cancelled || restoreQueued) continue;
             const status = error && typeof error === "object" && "status" in error
               ? (error as { status?: unknown }).status : undefined;
-            const replayUnsupported = status === 409 || (
-              error instanceof Error && /^Unsupported verified /.test(error.message)
-            );
+            // A 502 may mean the bounded full replay exceeds 500 messages;
+            // 503 can mean the governed event journal is unavailable. Neither
+            // authorizes an SDK replay, but an INDEPENDENT owner-verified text
+            // projection can still be shown read-only. Never recover 401/404.
+            const replayUnsupported = status === 409 || status === 502 ||
+              status === 503 || (
+                error instanceof Error && /^Unsupported verified /.test(error.message)
+              );
             if (replayUnsupported) {
               // A fresh authenticated request to the canonical owned snapshot
               // is the only authority for text recovery. Never reuse an
