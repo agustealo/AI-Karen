@@ -246,7 +246,7 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
                   {row[column.key] === null
                     ? <span className="text-muted-foreground">Not provided</span>
                     : column.key === "source_url" && isPublicSourceUrl(row[column.key])
-                      ? <a href={row[column.key]} target="_blank" rel="noopener noreferrer"
+                      ? <a href={row[column.key] ?? undefined} target="_blank" rel="noopener noreferrer"
                           className="break-all underline underline-offset-2"
                           aria-label="Open verified source in a new tab">{row[column.key]}</a>
                       : row[column.key]}
