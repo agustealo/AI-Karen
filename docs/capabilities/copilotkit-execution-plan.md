@@ -80,7 +80,7 @@ Definitions: **TAKE** = adopt native CopilotKit behavior/hooks/UI where availabl
 |---|---|---|---|---|
 | Chat shell, transcript, toolbar | `CopilotChatView`, native assistant/user message slots | One dashboard mount, Karen UX tokens | SOURCE_ONLY native view mounted; preserve | KCON-110 |
 | High-level `CopilotChat` | Built-in agent wire-up, pending, clear, suggestions | No initial inference; verified identity/draft | GAP: not mounted; evaluate, do not force | KCON-120 |
-| Streaming and stop UI | SDK stream/stop controls | AG-UI validated transport, durable exact-run cancel | SOURCE_ONLY current controlled view | KCON-130, 320 |
+| Streaming and stop UI | SDK stream/stop controls | AG-UI validated transport, durable exact-run cancel | SOURCE_ONLY current controlled view | KCON-130, KCON-604 |
 | Composer, input, keyboard | Native input, send/stop/selection/toolbar slots | Durable draft, CAS conflicts, user-driven send, shared workspace | SOURCE_ONLY custom controller | KCON-140 |
 | Conversation threads/drawer | `useThreads` and native drawer if adapter can consume canonical history | `SessionProvider` / DB identity, RLS, CRUD | SOURCE_ONLY session/history controls; native sync unproven | KCON-150 |
 | Saved replay | SDK agent messages/UI slots | Owner-verified canonical history, complete run attestation | SOURCE_ONLY strict gate and text-only recovery | KCON-160 |
@@ -134,7 +134,7 @@ Definitions: **TAKE** = adopt native CopilotKit behavior/hooks/UI where availabl
 | Citations/source list | Native component slots | Authorized citations, same source ID replay, safe URL handling | SOURCE_ONLY legacy components; integrated proof pending | KCON-750 |
 | Exports/print/share/download | Native UI hooks only for display/navigation | Permissioned artifact store, content rights, destination limits | GAP/UNVERIFIED | KCON-760 |
 | Error/degraded/slow network | SDK error/empty/loading surfaces | Honest no-model fallbacks, actual runtime receipts, no fake answers | SOURCE_ONLY partial guards | KCON-770 |
-| Rollout, telemetry, test, retire | No SDK replacement for release authority | Exact SHA, real model/DB/browser burn, human signoff | NOT_DONE | KCON-800, 950 |
+| Rollout, telemetry, test, retire | No SDK replacement for release authority | Exact SHA, real model/DB/browser burn, human signoff | NOT_DONE | KCON-920, KCON-950 |
 
 **Upstream feature ≠ installed/usable Karen feature.** Check exports, type signatures, behavior and licensing against the *locked* `1.79.1` dependencies before any migration. In particular, CopilotKit's high-level `CopilotChat` can invoke an initial agent run on mount. Do not mount it against unhydrated persistent history. It is permissible for the **final** architecture to keep native `CopilotChatView` when necessary to preserve verified no-inference boot, provided all equivalent native v2 interactions are integrated through supported slots/hooks. Do not make a component-name swap a success metric.
 
