@@ -49,6 +49,10 @@ jobs:
         run: python -m pip install --upgrade pip pytest
       - name: Prove production database baseline contract
         run: pytest tests/architecture/test_production_database_baseline_contract.py -q
+      - name: Prove live migration-history validation fails closed
+        env:
+          PYTHONPATH: src
+        run: pytest tests/services/database/test_migration_validator.py -q
       - name: Prove Identity Vault tenant contract
         run: pytest tests/architecture/test_identity_vault_tenant_contract.py -q
       - name: Prove recovery contract remains intact
