@@ -364,19 +364,19 @@ describe("CopilotKit canonical conversation hydration", () => {
       .mockRejectedValueOnce(Object.assign(new Error("rich content unsupported"), { status: 409 }))
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, read_only: true, text_only: true,
-        snapshot_revision: revision, page_offset: 0, has_more: true,
+        conversation_updated_at: revision, page_offset: 0, has_more: true,
         next_offset: 500, omitted_entries: 2,
         messages: [{ id: "first", role: "user", content: "Beginning of conversation" }],
       })
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, read_only: true, text_only: true,
-        snapshot_revision: revision, page_offset: 500, has_more: false,
+        conversation_updated_at: revision, page_offset: 500, has_more: false,
         next_offset: null, omitted_entries: 0,
         messages: [{ id: "last", role: "assistant", content: "After 500 entries" }],
       })
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, read_only: true, text_only: true,
-        snapshot_revision: revision, page_offset: 0, has_more: true,
+        conversation_updated_at: revision, page_offset: 0, has_more: true,
         next_offset: 500, omitted_entries: 2,
         messages: [{ id: "first", role: "user", content: "Beginning of conversation" }],
       });
@@ -406,13 +406,13 @@ describe("CopilotKit canonical conversation hydration", () => {
       .mockRejectedValueOnce(Object.assign(new Error("rich content unsupported"), { status: 409 }))
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, read_only: true, text_only: true,
-        snapshot_revision: "revision-1", page_offset: 0, has_more: true,
+        conversation_updated_at: "revision-1", page_offset: 0, has_more: true,
         next_offset: 500, omitted_entries: 0,
         messages: [{ id: "a1", role: "assistant", content: "Safe first page" }],
       })
       .mockResolvedValueOnce({
         threadId: CONVERSATION_A, read_only: true, text_only: true,
-        snapshot_revision: "revision-2", page_offset: 500, has_more: false,
+        conversation_updated_at: "revision-2", page_offset: 500, has_more: false,
         next_offset: null, omitted_entries: 0,
         messages: [{ id: "a2", role: "assistant", content: "Changed conversation" }],
       });
