@@ -512,7 +512,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         expect(["https:", "http:"]).toContain(parsed.protocol);
         expect(parsed.username).toBe("");
         expect(parsed.password).toBe("");
-        expect(parsed.hostname).not.toMatch(/^(?:localhost|127\\.|10\\.|192\\.168\\.)/);
+        expect(parsed.hostname).not.toMatch(/^(?:localhost|127\.|10\.|192\.168\.)/);
       }
       await expect(visibleCard.locator("button")).toHaveCount(0);
     } else {
