@@ -2713,6 +2713,7 @@ class ChatRuntime:
             part = (
                 ChatRuntime._verified_planner_presentation(decision, plan, result)
                 or ChatRuntime._verified_weather_presentation(request, decision, plan, result)
+                or ChatRuntime._verified_source_table_presentation(request, decision, plan, result)
                 or ChatRuntime._verified_search_presentation(request, decision, plan, result)
             )
             part = validate_presentation(part)
@@ -2773,6 +2774,67 @@ class ChatRuntime:
             and attempt.get("status") == "success"
             for attempt in (result.attempts if isinstance(result.attempts, list) else [])
         )
+
+    @staticmethod
+    def _verified_source_table_presentation(request, decision, plan, result):
+        """Project structured table data only from an executed, allowed source.
+
+        Authorization and successful execution are proved by the existing
+        direct-source receipt gate. A model-authored table or frontend payload
+        cannot satisfy that gate. The resulting envelope uses runtime-owned
+        provenance, never source-supplied IDs or presentation metadata.
+        """
+        if (
+            decision.intent != "search.general"
+            or not ChatRuntime._verified_direct_source_receipt(plan, result)
+        ):
+            return None
+        payload = result.payload if isinstance(result.payload, dict) else {}
+        data = payload.get("structured_table")
+        if not isinstance(data, dict):
+            return None
+        from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+        candidate = validate_presentation({
+            "schema_version": 1,
+            "presentation_id": f"table-{request.context.request_id}",
+            "component_type": "data.table",
+            "data": data,
+            "evidence_ref": f"{request.context.request_id}:{result.source_id}",
+            "correlation_id": request.context.correlation_id,
+        })
+        if candidate is None:
+            return None
+
+        # A tool's "success" status alone does not authorize arbitrary claims.
+        # Every row must cite one search receipt previously sanitized by the
+        # same source projector, and every visible cell must be verbatim from
+        # that receipt. This also rejects unverified LLM-created summaries.
+        sources = ChatRuntime._verified_search_presentation(
+            request, decision, plan, result
+        )
+        if sources is None:
+            return None
+        verified = {
+            entry["url"]: entry
+            for entry in sources["data"]["results"]
+        }
+        columns = {column["key"] for column in candidate["data"]["columns"]}
+        if "source_url" not in columns:
+            return None
+        for row in candidate["data"]["rows"]:
+            url = row["source_url"]
+            if not isinstance(url, str) or url not in verified:
+                return None
+            source = verified[url]
+            values = {source["url"], source["snippet"]}
+            if source.get("title") is not None:
+                values.add(source["title"])
+            if source.get("published_at") is not None:
+                values.add(source["published_at"])
+            if any(value is not None and value not in values for value in row.values()):
+                return None
+        return candidate
 
     @staticmethod
     def _verified_search_presentation(request, decision, plan, result):

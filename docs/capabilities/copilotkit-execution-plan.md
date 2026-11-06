@@ -38,7 +38,7 @@
 | Runtime | `ChatRuntime` authority; CORTEX and RuntimePolicy decide; direct, reasoning, normal, graph paths in source |
 | Medusa/Deep Agents | agent coordination source exists; `deepagents_research_enabled` defaults false; real agentic journey unverified |
 | Persona | saved selector/snapshot source exists; default prompt projects tone, verbosity, language; purpose specialization is not proven |
-| Presentation | seven admitted types on current main: weather observation/comparison, time, date, planner tasks, composition, and verified `search.results`; no authenticated browser signoff |
+| Presentation | eight admitted types on current main: weather observation/comparison, time, date, planner tasks, composition, verified `search.results`, and read-only `data.table`; source schema/renderer passing CI, but no authenticated browser signoff or verified live table producer |
 | Known recent work | #661–#665 merged for recovery/native transport; #666 merged governed search/current-movie presentation, with green source CI. **No authenticated production browser attestation inferred** |
 | Search/movie work | PR [#659](https://github.com/agustealo/AI-Karen/pull/659) CLOSED as superseded by merged [#666](https://github.com/agustealo/AI-Karen/pull/666); do not merge the old draft or restore its stale history/CI changes |
 | CI | Main Quality Gate, Chat System Burn, Presentation Contract and existing targeted/e2e tests exist; latest deploy/browser success **not established by this source audit** |
@@ -403,6 +403,6 @@ Merge / rollout / rollback:
 
 | 2026-11-06 | `main@538ad60b` | PR #670 merged aligned backend/browser source-link validation; 23/23 exact-head checks passed, no renderer or provider changes | KCON-710, KCON-730 | Live authenticated browser NOT_RUN; generic table/comparison still missing from deployed main |
 
-| 2026-11-06 | `feat/kcon710-readonly-data-table-20261106` | Candidate: add bounded read-only `data.table` to canonical Python validator, React registry, and existing composition; no new source authority, arbitrary HTML or actions | KCON-710, KCON-730 | Backend/frontend tests and exact-head CI PENDING; live runtime source projection, first-prompt browser, reload and release proof NOT_RUN |
+| 2026-11-06 | `main@ecdd2720` | PR #671 merged bounded read-only `data.table` in canonical Python/React presentation registry and existing composition. Exact-head 22/22 checks passed. | KCON-710, KCON-730 | Real source producer, deployed first-prompt browser, replay and release signoff NOT_RUN |
 
-**Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.
+| 2026-11-06 | `feat/kcon710-source-attested-table-projection-20261106` / PR #672 | Main-based candidate: source-authorized `structured_table` projection through existing ChatRuntime receipt gate, with per-row URL and verbatim source-field attestation; no model/UI-authored data authority | KCON-710, KCON-730 | Source tests and exact-head CI PENDING; source tools emitting table data and deployed first-prompt browser signoff NOT_RUN |\n\n**Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.
