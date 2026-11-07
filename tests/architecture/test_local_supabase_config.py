@@ -81,8 +81,9 @@ def test_unknown_stack_cannot_claim_canonical_supabase(module, bad):
 def test_docker_compose_uses_explicit_operator_configuration_not_fixed_passwords():
     content = COMPOSE.read_text(encoding="utf-8")
     for key in ("DATABASE_URL", "POSTGRES_URL", "AUTH_DATABASE_URL",
-                "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"):
+                "DB_HOST", "DB_PORT", "DB_USER", "DB_NAME"):
         assert key + ': "' + chr(36) + '{' + key + ':?' in content
+    assert 'DB_PASSWORD: "' + chr(36) + '{DATABASE_PASSWORD:?' in content
     assert "postgresql://postgres:postgres@host.docker.internal:54322/postgres" not in content
     launcher = (ROOT / "scripts/dev/start_docker_services.sh").read_text(encoding="utf-8")
     assert "docker compose -f docker-compose.yml config --format json" in launcher
