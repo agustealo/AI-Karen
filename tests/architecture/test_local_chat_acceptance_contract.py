@@ -74,3 +74,17 @@ def test_first_prompt_rich_presentation_replay_is_bound_to_original_assistant() 
     assert 'if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource))' in source
     assert 'if (receipts.length > 1) return false;' in source
     assert 'event.messageId === reply.id' in source
+
+
+def test_first_presentation_is_visible_before_history_poll_or_replay() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    # A history-only UI cannot pass the initial send assertion.
+    start = source.rindex('await composer.fill(prompt);')
+    sent = source.index('await composer.press("Enter");', start)
+    visible = source.index('const visibleCard = shell.getByTestId(scenario.testId);', sent)
+    displayed = source.index('await expect(visibleCard).toBeVisible();', visible)
+    history = source.index('/api/copilotkit/threads/${conversationId}/messages', sent)
+    reload = source.index('await page.reload();', history)
+    assert sent < visible < displayed < history < reload
+    assert source.count('const visibleCard = shell.getByTestId(scenario.testId);') == 1
+    assert 'The first prompt must render a live card before transcript inspection' in source

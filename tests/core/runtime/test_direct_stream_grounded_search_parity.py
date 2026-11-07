@@ -113,3 +113,71 @@ async def test_canonical_composer_does_not_attempt_generation_on_failed_tool():
     assert meta["actual_model"] is None
     assert meta["degraded_mode"] is True
     synthesize.assert_not_called()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verified", [True, False])
+async def test_live_direct_stream_presents_only_valid_authorized_surface_before_completion(
+    verified,
+):
+    """The same bounded envelope reaches stream and persistence metadata."""
+    runtime = object.__new__(ChatRuntime)
+    request = SimpleNamespace(
+        context=SimpleNamespace(
+            correlation_id="corr-live", request_id="req-live",
+            tenant_id="tenant", user_id="user",
+        ),
+        messages=[{"role": "user", "content": "Weather now"}],
+    )
+    decision = SimpleNamespace(intent="search.weather", cognitive_context=None)
+    result = DirectCapabilityResult(
+        handled=True, success=True, text="Verified observation",
+        source="tool", source_id="weather_tool",
+    )
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "weather-req-live",
+        "component_type": "weather.observation",
+        "evidence_ref": "req-live:weather_tool",
+        "correlation_id": "corr-live",
+        "data": {
+            "location": "Detroit",
+            "temperature_f": 61.0 if verified else 900.0,
+        },
+    }
+    metadata = {}
+    executor = SimpleNamespace(execute=AsyncMock(return_value=result))
+    with patch(
+        "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+        return_value=executor,
+    ), patch.object(
+        runtime, "_collect_authorized_surface_parts",
+        return_value=[envelope],
+    ), patch.object(
+        runtime, "_pending_clarification_from_result", return_value=None,
+    ), patch.object(
+        runtime, "_synthesize_search_evidence",
+        new_callable=AsyncMock, return_value=None,
+    ) as synthesis:
+        chunks = [
+            chunk async for chunk in runtime._run_direct_capability_stream(
+                request, decision, object(), object(), metadata,
+            )
+        ]
+    synthesis.assert_awaited_once()
+    assert chunks[0].type == "content"
+    assert chunks[0].content == "Verified observation"
+    assert chunks[0].metadata["response_source"] == "tool"
+    if verified:
+        assert [chunk.type for chunk in chunks] == ["content", "presentation"]
+        assert chunks[1].metadata["presentation_verified"] is True
+        assert chunks[1].metadata["presentation"]["presentation_id"] == envelope["presentation_id"]
+        assert chunks[1].metadata["presentation"]["correlation_id"] == "corr-live"
+        assert (
+            chunks[1].metadata["presentation"]
+            == metadata["structured_content"]["presentation"]
+        )
+    else:
+        # Invalid tool envelopes must not become apparently verified UI events.
+        assert [chunk.type for chunk in chunks] == ["content"]
