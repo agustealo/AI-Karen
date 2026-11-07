@@ -428,15 +428,17 @@ services:
       KARI_SKIP_AUTO_INIT: "false"
       ALLOW_PUBLIC_COPILOT: "${ALLOW_PUBLIC_COPILOT:-false}"
 
-      # Canonical database via Supabase PostgreSQL
-      DATABASE_URL: "postgresql://postgres:postgres@host.docker.internal:54322/postgres"
-      POSTGRES_URL: "postgresql+asyncpg://postgres:postgres@host.docker.internal:54322/postgres"
-      AUTH_DATABASE_URL: "postgresql+asyncpg://postgres:postgres@host.docker.internal:54322/postgres"
-      DB_HOST: "host.docker.internal"
-      DB_PORT: "54322"
-      DB_USER: "postgres"
-      DB_PASSWORD: "postgres"
-      DB_NAME: "postgres"
+      # Canonical database: explicit operator-owned Supabase connection.
+      # The local startup preflight validates one effective identity across
+      # synchronous, async and legacy DB_* settings before any containers start.
+      DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the reachable canonical Supabase PostgreSQL URL in .env}"
+      POSTGRES_URL: "${POSTGRES_URL:?Set POSTGRES_URL to its asyncpg equivalent in .env}"
+      AUTH_DATABASE_URL: "${AUTH_DATABASE_URL:?Set AUTH_DATABASE_URL to the same asyncpg database in .env}"
+      DB_HOST: "${DB_HOST:?Set DB_HOST to the canonical PostgreSQL host reachable from Docker}"
+      DB_PORT: "${DB_PORT:?Set DB_PORT to the canonical PostgreSQL port}"
+      DB_USER: "${DB_USER:?Set DB_USER to the canonical PostgreSQL user}"
+      DB_PASSWORD: "${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env for the canonical PostgreSQL identity}"
+      DB_NAME: "${DB_NAME:?Set DB_NAME to the canonical PostgreSQL database}"
       # Enable/disable database services (set to false for faster development)
       KARI_ENABLE_DUCKDB: "true"  # DuckDB for local analytics
       
