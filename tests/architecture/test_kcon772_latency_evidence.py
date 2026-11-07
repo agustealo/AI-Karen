@@ -148,3 +148,37 @@ def test_kcon772_rejects_attachment_path_escape(tmp_path):
 def test_kcon772_rejects_lowered_sample_requirement(tmp_path):
     with pytest.raises(analyzer.EvidenceError, match="at_least_ten"):
         analyzer.analyze(_report([]), tmp_path, min_samples=1)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("specs", "invalid_playwright_specs"),
+        ("tests", "invalid_playwright_tests"),
+        ("results", "invalid_playwright_results"),
+        ("attachments", "invalid_playwright_attachments"),
+    ],
+)
+def test_kcon772_malformed_report_shape_fails_closed(tmp_path, mutation, expected):
+    report = _report([_result(1, 11.0)])
+    suite = report["suites"][0]
+    if mutation == "specs":
+        suite["specs"] = None
+    elif mutation == "tests":
+        suite["specs"][0]["tests"] = None
+    elif mutation == "results":
+        suite["specs"][0]["tests"][0]["results"] = None
+    else:
+        suite["specs"][0]["tests"][0]["results"][0]["attachments"] = None
+    with pytest.raises(analyzer.EvidenceError, match=expected):
+        analyzer.analyze(report, tmp_path)
+
+
+def test_kcon772_oversized_duration_fails_closed(tmp_path):
+    report = _report([_result(1, 10.0)])
+    sample = report["suites"][0]["specs"][0]["tests"][0]["results"][0]
+    payload = json.loads(base64.b64decode(sample["attachments"][0]["body"]))
+    payload["duration_ms"] = 10 ** 1000
+    sample["attachments"][0] = _attach("kcon766-first-prompt-visible-timing", payload)
+    with pytest.raises(analyzer.EvidenceError, match="duration_nonfinite_or_negative"):
+        analyzer.analyze(report, tmp_path)
