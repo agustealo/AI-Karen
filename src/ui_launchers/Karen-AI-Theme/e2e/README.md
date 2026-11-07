@@ -35,6 +35,50 @@ npm run report
 
 `KAREN_BASE_URL` defaults to `http://localhost:8010` when omitted.
 
+## Real local CopilotKit first-turn and replay acceptance
+
+The existing `copilotkit-consumer-boot.spec.ts` now supports a **local-only**
+opt-in using the same authenticated, no-mock assertions as the release suite.
+This is a real running-stack proof, not the stubbed first-run UI contract.
+
+Start local Supabase and apply canonical migrations using the repository's
+supported Supabase workflow, then start the existing local Compose services
+with `bash scripts/dev/start_docker_services.sh`. Finish the actual first-run
+owner setup, configure a healthy model in Karen's canonical provider registry,
+and use a dedicated authorized local test account. Do not add fixture secrets
+or login bypasses to source control.
+
+From `src/ui_launchers/Karen-AI-Theme/e2e`:
+
+```bash
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+npx playwright test copilotkit-consumer-boot.spec.ts --project=chromium
+```
+
+Set `KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` as local shell environment
+variables before running. An authorized `KAREN_E2E_AUTH_STATE` may be used
+instead; keep any storage-state file private and outside version control.
+Local mode refuses non-loopback hosts, non-HTTP origins, URL credentials,
+paths, query strings and mixed release/local mode. Its backend check must
+return `backend_ready: true` from the real same-origin API before it signs in.
+It tests one genuine first prompt, backend model execution provenance,
+time/weather/search/movie presentation on first send, persisted history and
+reload/replay. External data and actual provider availability can cause real
+failures; the suite must not replace them with scripted output.
+
+The **release** invocation remains separate:
+`KAREN_CHAT_BOOT_ACCEPTANCE=1` with a reviewed HTTPS deployment,
+`KAREN_CHAT_BOOT_REVISION` equal to the exact 40-character commit, and
+approved credentials. Local mode skips only the deployment-SHA assertion
+because a development server may not expose a deployed revision. It does not
+skip API readiness, identity, real model execution, saved receipts or replay.
+Both modes disable traces, screenshots and videos to avoid credential and
+conversation capture. A green source gate is never substituted for a real
+local browser run.
+
 ## Authentication rules
 
 Do not add repository-wide default usernames or passwords to browser tests. A fresh KAREN installation creates its owner through the canonical first-run flow. Tests that need a real authenticated installation must receive credentials through the specific trusted harness that owns that environment.
