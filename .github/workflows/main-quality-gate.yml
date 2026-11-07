@@ -196,6 +196,8 @@ jobs:
           pytest tests/architecture/test_local_supabase_config.py -q
           pytest tests/architecture/test_local_runtime_status.py -q
           pytest tests/architecture/test_local_chat_acceptance_contract.py -q
+          # KCON-772 only accepts verified, non-duplicate real browser timing artifacts.
+          pytest tests/architecture/test_kcon772_latency_evidence.py -q
           pytest tests/architecture/test_local_approved_login_contract.py -q
           # Production /ready must actively check canonical Redis connectivity,
           # accept only secured targets, and match the frontend health contract.
