@@ -1,28 +1,49 @@
 import { expect, type Page } from "@playwright/test";
 
 /**
- * One approved-origin sign-in for real protected CopilotKit browser suites.
- * Credentials are supplied only by sanitized, reviewed-main acceptance jobs.
- * Never log credentials, follow arbitrary redirects or persist browser state.
+ * Shared origin-locked sign-in for real CopilotKit browser acceptance.
+ *
+ * Default: an approved HTTPS release origin. Only the explicitly opted-in
+ * local consumer acceptance suite can request loopback HTTP. This function
+ * never intercepts responses, skips authentication, or persists credentials.
  */
 export async function signInApprovedKaren(
-  page: Page, email: string, password: string,
-) {
+  page: Page,
+  email: string,
+  password: string,
+  options: Readonly<{ allowLocalLoopback?: boolean }> = {},
+): Promise<void> {
   const configured = process.env.KAREN_BASE_URL;
   if (!configured || !email || !password) {
     throw new Error("Approved live authentication is not configured");
   }
+
   let approved: URL;
   try {
     approved = new URL(configured);
   } catch {
-    throw new Error("Approved deployment origin is malformed");
+    throw new Error("Approved authentication origin is malformed");
   }
-  if (approved.protocol !== "https:" || approved.username || approved.password ||
-      approved.port || approved.pathname !== "/" || approved.search || approved.hash) {
-    throw new Error("Only a clean approved HTTPS origin can accept credentials");
+
+  const localAllowed = options.allowLocalLoopback === true &&
+    process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1" &&
+    process.env.KAREN_CHAT_BOOT_ACCEPTANCE !== "1";
+  const cleanOrigin = !approved.username && !approved.password &&
+    approved.pathname === "/" && !approved.search && !approved.hash;
+  const approvedLocal = localAllowed &&
+    approved.protocol === "http:" &&
+    ["127.0.0.1", "localhost"].includes(approved.hostname) &&
+    approved.port !== "";
+  const approvedRelease = approved.protocol === "https:" &&
+    approved.port === "";
+  if (!cleanOrigin || !(approvedLocal || approvedRelease)) {
+    throw new Error("Only an approved HTTPS origin or explicit local loopback may accept credentials");
   }
-  await page.goto("/login");
+
+  // Bind navigation to the approved origin rather than an independently
+  // configured Playwright base URL, then prove the browser stayed on-origin
+  // before filling either credential.
+  await page.goto(new URL("/login", approved).toString());
   expect(new URL(page.url()).origin).toBe(approved.origin);
   await page.getByRole("textbox", { name: "Email" }).fill(email);
   await page.getByLabel("Password").fill(password);
