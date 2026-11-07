@@ -3667,6 +3667,7 @@ class ChatRuntime:
             "provider_attempt_timings": list(
                 (result.metadata or {}).get("engine_attempt_timings") or []
             ),
+            "provider_first_delta_ms": (result.metadata or {}).get("provider_first_delta_ms"),
             "usage": dict((result.metadata or {}).get("usage") or {}),
             "finish_reason": (result.metadata or {}).get("finish_reason"),
             "output_truncated": (result.metadata or {}).get("output_truncated") is True,
@@ -4602,6 +4603,7 @@ class ChatRuntime:
             "failure_category": self._map_failure_category(provider_meta),
             "provider_attempts": provider_meta.get("provider_attempts", []),
             "provider_attempt_timings": provider_meta.get("provider_attempt_timings", []),
+            "provider_first_delta_ms": provider_meta.get("provider_first_delta_ms"),
             "used_fallback": provider_meta.get("used_fallback", False)
             or provider_meta.get("fallback_level", 0) > 0,
             "degraded_mode": degraded,
