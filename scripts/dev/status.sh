@@ -2,8 +2,8 @@
 # Read-only local runtime status. No credentials, guessed models, or hidden fallbacks.
 set -euo pipefail
 
-API_ORIGIN="\${KAREN_LOCAL_API_ORIGIN:-http://127.0.0.1:8000}"
-WEB_ORIGIN="\${KAREN_LOCAL_WEB_ORIGIN:-http://127.0.0.1:8010}"
+API_ORIGIN="${KAREN_LOCAL_API_ORIGIN:-http://127.0.0.1:8000}"
+WEB_ORIGIN="${KAREN_LOCAL_WEB_ORIGIN:-http://127.0.0.1:8010}"
 
 require_loopback_origin() {
   if [[ ! "$1" =~ ^http://(127[.]0[.]0[.]1|localhost):([1-9][0-9]{0,4})$ ]]; then
