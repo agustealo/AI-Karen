@@ -30,7 +30,7 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
     docker.write_text(
         '#!/bin/sh\nprintf "docker %s\\n" "$*" >> "$KAREN_TEST_EVENTS"\n'
         'case " $* " in *" config --quiet "*) exit "$KAREN_TEST_CONFIG_EXIT";;\n' +
-        '  *" config --format json "*) printf \'%s\\\\n\' \'{"services":{"redis":{},"web":{},"api":{"environment":{"DATABASE_URL":"postgresql://test:pass@host.docker.internal:54322/postgres","POSTGRES_URL":"postgresql+asyncpg://test:pass@host.docker.internal:54322/postgres","AUTH_DATABASE_URL":"postgresql+asyncpg://test:pass@host.docker.internal:54322/postgres","DB_HOST":"host.docker.internal","DB_PORT":"54322","DB_USER":"test","DB_PASSWORD":"pass","DB_NAME":"postgres"}}}}\';; esac\n'
+        '  *" config --format json "*) printf \'%s\' \'{"services":{"redis":{},"web":{},"api":{"environment":{"DATABASE_URL":"postgresql://test:pass@host.docker.internal:54322/postgres","POSTGRES_URL":"postgresql+asyncpg://test:pass@host.docker.internal:54322/postgres","AUTH_DATABASE_URL":"postgresql+asyncpg://test:pass@host.docker.internal:54322/postgres","DB_HOST":"host.docker.internal","DB_PORT":"54322","DB_USER":"test","DB_PASSWORD":"pass","DB_NAME":"postgres"}}}}\';; esac\n'
         'exit 0\n', encoding="utf-8",
     )
     curl = bin_dir / "curl"
