@@ -18,6 +18,7 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
     script = root / "scripts/dev/start_docker_services.sh"
     script.parent.mkdir(parents=True)
     shutil.copy2(LAUNCHER, script)
+    shutil.copy2(ROOT / "scripts/dev/verify_local_db_config.py", script.parent / "verify_local_db_config.py")
     (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     if with_env:
         (root / ".env").write_text("REDIS_PASSWORD=provided-by-operator\n", encoding="utf-8")
@@ -28,7 +29,8 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
     docker = bin_dir / "docker"
     docker.write_text(
         '#!/bin/sh\nprintf "docker %s\\n" "$*" >> "$KAREN_TEST_EVENTS"\n'
-        'case " $* " in *" config --quiet "*) exit "$KAREN_TEST_CONFIG_EXIT";; esac\n'
+        'case " $* " in *" config --quiet "*) exit "$KAREN_TEST_CONFIG_EXIT";;\n' +
+        '  *" config --format json "*) printf \'%s\\\\n\' \'{"services":{"redis":{},"web":{},"api":{"environment":{"DATABASE_URL":"postgresql://test:pass@host.docker.internal:54322/postgres","POSTGRES_URL":"postgresql+asyncpg://test:pass@host.docker.internal:54322/postgres","AUTH_DATABASE_URL":"postgresql+asyncpg://test:pass@host.docker.internal:54322/postgres","DB_HOST":"host.docker.internal","DB_PORT":"54322","DB_USER":"test","DB_PASSWORD":"pass","DB_NAME":"postgres"}}}}\';; esac\n'
         'exit 0\n', encoding="utf-8",
     )
     curl = bin_dir / "curl"
@@ -56,8 +58,9 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
 def test_launch_is_nondestructive_and_uses_only_canonical_services(tmp_path: Path) -> None:
     result, calls = _invoke(tmp_path)
     assert result.returncode == 0, result.stderr
-    assert calls[:3] == [
+    assert calls[:4] == [
         "docker compose -f docker-compose.yml config --quiet",
+        "docker compose -f docker-compose.yml config --format json",
         "docker compose -f docker-compose.yml up -d --wait redis",
         "docker compose -f docker-compose.yml up -d --wait api web",
     ]
@@ -90,3 +93,4 @@ def test_launcher_contains_no_embedded_secret_values_or_destructive_actions() ->
     assert "export POSTGRES_PASSWORD=" not in source
     assert "KARI_AUTH_BYPASS" not in source
     assert "--wait api web" in source
+    assert "verify_local_db_config.py" in source
