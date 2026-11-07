@@ -450,9 +450,17 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await composer.fill(prompt);
     await composer.press("Enter");
 
-    // Read the authoritative completed history: the presentation must be a
-    // verified CUSTOM event bound to the immediate assistant reply, not a
-    // free-floating client widget, inferred intent, or unsaved stream fragment.
+    // A replay-only implementation must not pass first-turn acceptance.
+    // Require the live CopilotKit view to render its verified surface before
+    // this test requests the persisted transcript or reloads the thread.
+    // This verifies first-send delivery, not subsecond streaming latency.
+    const visibleCard = shell.getByTestId(scenario.testId);
+    await expect(visibleCard, "The first prompt must render a live card before transcript inspection")
+      .toHaveCount(1, { timeout: 30_000 });
+    await expect(visibleCard).toBeVisible();
+
+    // Now independently verify that the same card was durably saved to the
+    // exact assistant reply, not inferred client-side or fetched from replay.
     let savedAnswer = "";
     let savedAssistantId = "";
     let savedPresentationId = "";
@@ -534,10 +542,6 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       message: "First prompt must persist one backend-attested rich surface attached to its assistant reply",
     }).toBe(true);
 
-    const visibleCard = shell.getByTestId(scenario.testId);
-    await expect(visibleCard, "The actual first prompt must render generated UI without a second send")
-      .toHaveCount(1, { timeout: 30_000 });
-    await expect(visibleCard).toBeVisible();
     const firstCardText = (await visibleCard.innerText()).trim();
     let originalSourceUrls: string[] = [];
     if (scenario.label === "time") {
