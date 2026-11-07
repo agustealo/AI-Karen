@@ -13,11 +13,13 @@ LAUNCHER = ROOT / "scripts/dev/start_docker_services.sh"
 
 
 def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0,
-            with_env: bool = True) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+            with_env: bool = True, first_run_payload: str = '{"first_run_required":false}',
+            web_status: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     root = tmp_path / "checkout"
     script = root / "scripts/dev/start_docker_services.sh"
     script.parent.mkdir(parents=True)
     shutil.copy2(LAUNCHER, script)
+    shutil.copy2(ROOT / "scripts/dev/status.sh", script.parent / "status.sh")
     shutil.copy2(ROOT / "scripts/dev/verify_local_db_config.py", script.parent / "verify_local_db_config.py")
     (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     if with_env:
@@ -36,7 +38,10 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
     curl = bin_dir / "curl"
     curl.write_text(
         '#!/bin/sh\nprintf "curl %s\\n" "$*" >> "$KAREN_TEST_EVENTS"\n'
-        'case " $* " in *"/api/auth/first-run"*) exit "$KAREN_TEST_FIRST_RUN_EXIT";; esac\n'
+        'case " $* " in\n'
+        '  *"/api/auth/first-run"*) [ "$KAREN_TEST_FIRST_RUN_EXIT" = 0 ] || exit "$KAREN_TEST_FIRST_RUN_EXIT"; printf "%s" "$KAREN_TEST_FIRST_RUN_PAYLOAD"; exit 0;;\n'
+        '  *"8010/"*) exit "$KAREN_TEST_WEB_EXIT";;\n'
+        'esac\n'
         'exit 0\n', encoding="utf-8",
     )
     docker.chmod(0o755)
@@ -47,6 +52,10 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
         "KAREN_TEST_EVENTS": str(events),
         "KAREN_TEST_CONFIG_EXIT": str(config_status),
         "KAREN_TEST_FIRST_RUN_EXIT": str(first_run_status),
+        "KAREN_TEST_FIRST_RUN_PAYLOAD": first_run_payload,
+        "KAREN_TEST_WEB_EXIT": str(web_status),
+        "KAREN_LOCAL_API_ORIGIN": "http://127.0.0.1:8000",
+        "KAREN_LOCAL_WEB_ORIGIN": "http://127.0.0.1:8010",
     }
     result = subprocess.run(
         ["bash", str(script)], cwd=tmp_path, env=env,
@@ -64,9 +73,10 @@ def test_launch_is_nondestructive_and_uses_only_canonical_services(tmp_path: Pat
         "docker compose -f docker-compose.yml up -d --wait redis",
         "docker compose -f docker-compose.yml up -d --wait api web",
     ]
-    assert len([x for x in calls if x.startswith("curl ")]) == 2
+    assert len([x for x in calls if x.startswith("curl ")]) == 3
     assert not any("down" in x or "postgres" in x or "minio" in x for x in calls)
-    assert "authenticated chat" in result.stdout
+    assert "CopilotKit first turn/replay: UNVERIFIED" in result.stdout
+    assert "First-run state: CONFIGURED" in result.stdout
 
 
 @pytest.mark.parametrize("with_env,config_status", [(False, 0), (True, 1)])
@@ -81,7 +91,7 @@ def test_failure_occurs_before_stack_mutation(
 def test_failed_first_run_is_not_reported_as_success(tmp_path: Path) -> None:
     result, calls = _invoke(tmp_path, first_run_status=22)
     assert result.returncode != 0
-    assert "First-run state unavailable" in result.stderr
+    assert "Local runtime is not ready" in result.stderr
     assert len([x for x in calls if x.startswith("curl ")]) == 2
 
 
@@ -94,3 +104,33 @@ def test_launcher_contains_no_embedded_secret_values_or_destructive_actions() ->
     assert "KARI_AUTH_BYPASS" not in source
     assert "--wait api web" in source
     assert "verify_local_db_config.py" in source
+    assert "bash scripts/dev/status.sh" in source
+    assert "curl --fail" not in source
+
+
+@pytest.mark.parametrize("payload", [
+    '{}', '{"first_run_required":"false"}', 'not-json', '[]',
+])
+def test_invalid_first_run_contract_never_claims_booted_runtime(
+    tmp_path: Path, payload: str,
+) -> None:
+    result, calls = _invoke(tmp_path, first_run_payload=payload)
+    assert result.returncode != 0
+    assert "First-run state: UNAVAILABLE" in result.stdout
+    assert "Local Compose ingress validated" not in result.stdout
+    assert len([x for x in calls if x.startswith("curl ")]) == 2
+
+
+def test_missing_web_ingress_fails_launcher_after_valid_api(tmp_path: Path) -> None:
+    result, calls = _invoke(tmp_path, web_status=22)
+    assert result.returncode != 0
+    assert "Web ingress: UNAVAILABLE" in result.stdout
+    assert "Local runtime is not ready" in result.stderr
+    assert len([x for x in calls if x.startswith("curl ")]) == 3
+
+
+def test_first_run_setup_needed_is_reported_not_automatically_completed(tmp_path: Path) -> None:
+    result, _ = _invoke(tmp_path, first_run_payload='{"first_run_required":true}')
+    assert result.returncode == 0
+    assert "First-run state: BOOTSTRAP_REQUIRED" in result.stdout
+    assert "Model generation: UNVERIFIED" in result.stdout
