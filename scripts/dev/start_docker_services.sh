@@ -13,6 +13,7 @@ fail() {
 
 command -v docker >/dev/null 2>&1 || fail 'Docker is required.'
 command -v curl >/dev/null 2>&1 || fail 'curl is required for local API liveness.'
+command -v python3 >/dev/null 2>&1 || fail 'Python 3 is required for canonical local database identity validation.'
 [[ -f .env ]] || fail 'Missing .env. Configure the canonical local runtime environment.'
 [[ -f .env.local ]] || fail 'Missing .env.local, required by the existing Compose web service.'
 
@@ -20,6 +21,11 @@ command -v curl >/dev/null 2>&1 || fail 'curl is required for local API liveness
 # canonical external/local Supabase service, never a shadow Compose database.
 # Validate first: do not stop a healthy stack to discover configuration errors.
 docker compose -f docker-compose.yml config --quiet || fail 'Compose configuration is invalid.'
+# Validate only the final resolved Compose API environment, never parse .env
+# independently or echo connection strings or passwords into the logs.
+docker compose -f docker-compose.yml config --format json \
+  | python3 scripts/dev/verify_local_db_config.py \
+  || fail 'Canonical Supabase connection configuration failed validation.'
 
 printf 'Starting local Redis, API, and web through canonical Compose services.\n'
 docker compose -f docker-compose.yml up -d --wait redis
