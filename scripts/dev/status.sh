@@ -6,15 +6,15 @@ API_ORIGIN="\${KAREN_LOCAL_API_ORIGIN:-http://127.0.0.1:8000}"
 WEB_ORIGIN="\${KAREN_LOCAL_WEB_ORIGIN:-http://127.0.0.1:8010}"
 
 require_loopback_origin() {
-  case "$1" in
-    http://127.0.0.1:*|http://localhost:*) ;;
-    *) printf 'ERROR: Status probes must use an explicit local HTTP origin.\n' >&2; exit 2 ;;
-  esac
-  case "$1" in
-    *'/'*'/'*|*'@'*|*'?'*|*'#'*)
-      printf 'ERROR: Status origin cannot contain credentials, path or query.\n' >&2
-      exit 2 ;;
-  esac
+  if [[ ! "$1" =~ ^http://(127[.]0[.]0[.]1|localhost):([1-9][0-9]{0,4})$ ]]; then
+    printf 'ERROR: Status probes require a loopback HTTP origin with no path or credentials.\n' >&2
+    exit 2
+  fi
+  local port="${BASH_REMATCH[2]}"
+  if (( 10#$port > 65535 )); then
+    printf 'ERROR: Status probe port is invalid.\n' >&2
+    exit 2
+  fi
 }
 
 require_loopback_origin "$API_ORIGIN"
