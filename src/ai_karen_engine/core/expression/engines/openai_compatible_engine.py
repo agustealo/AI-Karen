@@ -60,6 +60,9 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             model = None
 
         attempt_started = time.perf_counter()
+        # First provider delta is only observable for native streamed results.
+        # It includes provider setup/queueing and is not an isolated load time.
+        provider_first_delta_ms: float | None = None
         try:
             if task.token_sink is not None and endpoint.supports_streaming:
                 # The same registered/authorized provider is used for both
@@ -75,6 +78,10 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     timeout_ms=task.timeout_ms,
                 ):
                     if part.kind == "delta" and part.delta:
+                        if provider_first_delta_ms is None:
+                            provider_first_delta_ms = (
+                                time.perf_counter() - attempt_started
+                            ) * 1000.0
                         task.stream_started = True
                         await task.token_sink(part.delta)
                     elif part.kind == "complete":
@@ -191,6 +198,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             "usage": provider_usage,
             "finish_reason": execution.finish_reason,
             "output_truncated": execution.finish_reason == "length",
+            "provider_first_delta_ms": provider_first_delta_ms,
         }
 
         return ExpressionResult(
