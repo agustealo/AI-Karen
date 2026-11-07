@@ -448,6 +448,9 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     });
 
     await composer.fill(prompt);
+    // Start the clock immediately before the user's submit action. This is
+    // browser-observed test latency, not server TTFT or actual paint timing.
+    const submitStartedAt = await page.evaluate(() => performance.now());
     await composer.press("Enter");
 
     // A replay-only implementation must not pass first-turn acceptance.
@@ -458,6 +461,23 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(visibleCard, "The first prompt must render a live card before transcript inspection")
       .toHaveCount(1, { timeout: 30_000 });
     await expect(visibleCard).toBeVisible();
+    const visibleAssertedAt = await page.evaluate(() => performance.now());
+    const submitToVisibleAssertionMs = visibleAssertedAt - submitStartedAt;
+    expect(Number.isFinite(submitToVisibleAssertionMs)).toBe(true);
+    expect(submitToVisibleAssertionMs).toBeGreaterThanOrEqual(0);
+    // Report a measured observation, never a made-up performance pass/fail
+    // threshold. This interval also includes Playwright and assertion delay.
+    await test.info().attach("kcon766-first-prompt-visible-timing", {
+      body: JSON.stringify({
+        schema_version: 1,
+        scenario: scenario.label,
+        metric: "submit_to_visible_assertion_ms",
+        duration_ms: submitToVisibleAssertionMs,
+        clock: "browser_performance_now",
+        observation: "post_assertion_not_first_paint",
+      }),
+      contentType: "application/json",
+    });
 
     // Now independently verify that the same card was durably saved to the
     // exact assistant reply, not inferred client-side or fetched from replay.

@@ -88,3 +88,21 @@ def test_first_presentation_is_visible_before_history_poll_or_replay() -> None:
     assert sent < visible < displayed < history < reload
     assert source.count('const visibleCard = shell.getByTestId(scenario.testId);') == 1
     assert 'The first prompt must render a live card before transcript inspection' in source
+
+
+def test_kcon766_first_prompt_browser_timing_is_observed_before_history() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    start = source.index("    // Observe the actual SDK send. A retry")
+    end = source.index("    // Now independently verify", start)
+    first_prompt = source[start:end]
+    clock_start = first_prompt.index("const submitStartedAt = await page.evaluate(() => performance.now());")
+    submit = first_prompt.index('await composer.press("Enter");')
+    visible = first_prompt.index("await expect(visibleCard).toBeVisible();")
+    clock_end = first_prompt.index("const visibleAssertedAt = await page.evaluate(() => performance.now());")
+    attach = first_prompt.index('await test.info().attach("kcon766-first-prompt-visible-timing"')
+    assert clock_start < submit < visible < clock_end < attach
+    assert '"submit_to_visible_assertion_ms"' in first_prompt
+    assert '"post_assertion_not_first_paint"' in first_prompt
+    assert "expect(submitToVisibleAssertionMs).toBeGreaterThanOrEqual(0)" in first_prompt
+    assert "toBeLessThan(" not in first_prompt
+    assert "/api/copilotkit/threads/" not in first_prompt
