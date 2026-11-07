@@ -187,14 +187,15 @@ async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
     .toBe(expectedRevision);
 }
 
+test.use({
+  storageState: authState || { cookies: [], origins: [] },
+  trace: "off",
+  screenshot: "off",
+  video: "off",
+});
+
 test.describe("canonical consumer chat cold-load acceptance", () => {
   test.skip(!enabled, "Set KAREN_LOCAL_CHAT_ACCEPTANCE=1 or KAREN_CHAT_BOOT_ACCEPTANCE=1 for real backend/browser proof");
-  test.use({
-    storageState: authState || { cookies: [], origins: [] },
-    trace: "off",
-    screenshot: "off",
-    video: "off",
-  });
 
   test("persists a real user message and a real assistant reply", async ({ page }) => {
     test.setTimeout(180_000);
