@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "scripts/dev/start_docker_services.sh"
+JSON_BACKEND_READY = '{"status":"ok","backend_ready":true}'
 
 
 def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0,
@@ -40,6 +41,7 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
         '#!/bin/sh\nprintf "curl %s\\n" "$*" >> "$KAREN_TEST_EVENTS"\n'
         'case " $* " in\n'
         '  *"/api/auth/first-run"*) [ "$KAREN_TEST_FIRST_RUN_EXIT" = 0 ] || exit "$KAREN_TEST_FIRST_RUN_EXIT"; printf "%s" "$KAREN_TEST_FIRST_RUN_PAYLOAD"; exit 0;;\n'
+        '  *"/api/health"*) printf "%s" "$KAREN_TEST_BACKEND_PAYLOAD"; exit 0;;\n'
         '  *"8010/"*) exit "$KAREN_TEST_WEB_EXIT";;\n'
         'esac\n'
         'exit 0\n', encoding="utf-8",
@@ -54,6 +56,7 @@ def _invoke(tmp_path: Path, *, config_status: int = 0, first_run_status: int = 0
         "KAREN_TEST_FIRST_RUN_EXIT": str(first_run_status),
         "KAREN_TEST_FIRST_RUN_PAYLOAD": first_run_payload,
         "KAREN_TEST_WEB_EXIT": str(web_status),
+        "KAREN_TEST_BACKEND_PAYLOAD": JSON_BACKEND_READY,
         "KAREN_LOCAL_API_ORIGIN": "http://127.0.0.1:8000",
         "KAREN_LOCAL_WEB_ORIGIN": "http://127.0.0.1:8010",
     }
@@ -73,10 +76,11 @@ def test_launch_is_nondestructive_and_uses_only_canonical_services(tmp_path: Pat
         "docker compose -f docker-compose.yml up -d --wait redis",
         "docker compose -f docker-compose.yml up -d --wait api web",
     ]
-    assert len([x for x in calls if x.startswith("curl ")]) == 3
+    assert len([x for x in calls if x.startswith("curl ")]) == 4
     assert not any("down" in x or "postgres" in x or "minio" in x for x in calls)
     assert "CopilotKit first turn/replay: UNVERIFIED" in result.stdout
     assert "First-run state: CONFIGURED" in result.stdout
+    assert "Canonical backend readiness: VERIFIED" in result.stdout
 
 
 @pytest.mark.parametrize("with_env,config_status", [(False, 0), (True, 1)])
@@ -126,7 +130,7 @@ def test_missing_web_ingress_fails_launcher_after_valid_api(tmp_path: Path) -> N
     assert result.returncode != 0
     assert "Web ingress: UNAVAILABLE" in result.stdout
     assert "Local runtime is not ready" in result.stderr
-    assert len([x for x in calls if x.startswith("curl ")]) == 3
+    assert len([x for x in calls if x.startswith("curl ")]) == 4
 
 
 def test_first_run_setup_needed_is_reported_not_automatically_completed(tmp_path: Path) -> None:
