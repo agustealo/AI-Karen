@@ -4604,6 +4604,8 @@ class ChatRuntime:
             "degradation_reason": degradation_reason,
             "mode": "graph" if decision.is_graph_required else "normal",
             "latency_ms": latency_ms,
+            "request_to_first_content_ms": provider_meta.get("request_to_first_content_ms"),
+            "request_to_first_presentation_ms": provider_meta.get("request_to_first_presentation_ms"),
             "memory_recall_count": memory_recall_meta.get(
                 "memory_recall_count",
                 0,
