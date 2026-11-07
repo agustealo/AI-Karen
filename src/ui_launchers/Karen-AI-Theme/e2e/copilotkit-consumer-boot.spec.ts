@@ -484,6 +484,8 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     let savedAnswer = "";
     let savedAssistantId = "";
     let savedPresentationId = "";
+    let savedCorrelationId = "";
+    let hasModelExecutionReceipt = false;
     await expect.poll(async () => {
       const { ok, body } = await readAuthorizedSameOriginJson(
         page, `/api/copilotkit/threads/${conversationId}/messages`,
@@ -555,12 +557,37 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       savedAnswer = reply.content;
       savedAssistantId = reply.id;
       savedPresentationId = presentation.presentation_id;
+      savedCorrelationId = presentation.correlation_id;
+      hasModelExecutionReceipt = receipts.length === 1;
       return true;
     }, {
       timeout: 120_000,
       intervals: [500, 1000, 2000],
       message: "First prompt must persist one backend-attested rich surface attached to its assistant reply",
     }).toBe(true);
+
+    // Link the earlier browser-clock observation to the exact canonical
+    // assistant/presentation pair using only bounded, server-attested IDs.
+    // Persisted history is consulted only AFTER first-send visibility.
+    expect(savedCorrelationId.length).toBeGreaterThan(0);
+    expect(savedCorrelationId.length).toBeLessThanOrEqual(128);
+    expect(savedCorrelationId).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(savedPresentationId.length).toBeGreaterThan(0);
+    expect(savedPresentationId.length).toBeLessThanOrEqual(128);
+    await test.info().attach("kcon767-correlated-first-prompt-timing", {
+      body: JSON.stringify({
+        schema_version: 1,
+        scenario: scenario.label,
+        metric: "submit_to_visible_assertion_ms",
+        duration_ms: submitToVisibleAssertionMs,
+        observation: "post_assertion_not_first_paint",
+        correlation_id: savedCorrelationId,
+        assistant_message_id: savedAssistantId,
+        presentation_id: savedPresentationId,
+        model_execution_receipt_present: hasModelExecutionReceipt,
+      }),
+      contentType: "application/json",
+    });
 
     const firstCardText = (await visibleCard.innerText()).trim();
     let originalSourceUrls: string[] = [];
