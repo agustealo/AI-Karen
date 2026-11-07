@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 from typing import Any
 
 from ai_karen_engine.server.client_identity import configure_client_identity
@@ -145,3 +150,36 @@ def test_production_and_smoke_contracts_require_explicit_public_scheme() -> None
     )
     assert "WEB_PUBLIC_SCHEME=CHANGE_ME_HTTP_OR_HTTPS" in env_example
     assert "-e WEB_PUBLIC_SCHEME=http" in first_boot
+
+
+@pytest.mark.parametrize("scheme", [None, "", "ftp", "https,http"])
+def test_web_ingress_rejects_missing_or_invalid_scheme_before_next_import(scheme) -> None:
+    """A bad scheme must terminate immediately even without installed Next.js."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js unavailable; production Docker first-boot gate remains required")
+    env = os.environ.copy()
+    if scheme is None:
+        env.pop("WEB_PUBLIC_SCHEME", None)
+    else:
+        env["WEB_PUBLIC_SCHEME"] = scheme
+    result = subprocess.run(
+        [node, str(WEB_INGRESS)],
+        cwd=WEB_INGRESS.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=8,
+    )
+    assert result.returncode != 0
+    assert 'WEB_PUBLIC_SCHEME must be explicitly configured as "http" or "https"' in result.stderr
+
+
+def test_web_ingress_validates_scheme_before_initializing_nextjs() -> None:
+    source = _read(WEB_INGRESS)
+    validation = source.index("publicScheme !== 'http' && publicScheme !== 'https'")
+    framework_import = source.index("await import('next')")
+    listener = source.index("server.listen(")
+    assert validation < framework_import < listener
+    assert "import next from 'next'" not in source
