@@ -133,22 +133,61 @@ async function expectRealCopilotKitStyles(page: Page): Promise<void> {
  * /api/deployment-revision. This test fails closed if that is unavailable.
  * Never attach authenticated traces, screenshots or videos to public CI.
  */
-const enabled = process.env.KAREN_CHAT_BOOT_ACCEPTANCE === "1";
+const releaseMode = process.env.KAREN_CHAT_BOOT_ACCEPTANCE === "1";
+const localMode = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
+const enabled = releaseMode || localMode;
 const authState = process.env.KAREN_E2E_AUTH_STATE;
 const expectedRevision = process.env.KAREN_CHAT_BOOT_REVISION;
 const approvedUrl = process.env.KAREN_BASE_URL;
 const approvedEmail = process.env.KAREN_UX_EMAIL;
 const approvedPassword = process.env.KAREN_UX_PASSWORD;
 
-if (enabled && (!(authState || (approvedEmail && approvedPassword)) || !approvedUrl || !expectedRevision ||
-  !/^[0-9a-f]{40}$/i.test(expectedRevision))) {
-  throw new Error(
-    "Chat boot acceptance requires KAREN_BASE_URL, exact KAREN_CHAT_BOOT_REVISION and either KAREN_E2E_AUTH_STATE or approved login credentials",
+if (releaseMode && localMode) {
+  throw new Error("Local and release chat boot acceptance cannot run in the same invocation");
+}
+
+if (enabled) {
+  if (!(authState || (approvedEmail && approvedPassword)) || !approvedUrl) {
+    throw new Error("Chat boot acceptance requires an explicit target and approved authentication");
+  }
+  let target: URL;
+  try {
+    target = new URL(approvedUrl);
+  } catch {
+    throw new Error("Chat boot acceptance requires a valid target origin");
+  }
+  if (target.username || target.password || target.pathname !== "/" ||
+      target.search || target.hash || !target.port ||
+      (localMode && (
+        target.protocol !== "http:" ||
+        !["localhost", "127.0.0.1"].includes(target.hostname)
+      )) ||
+      (releaseMode && (
+        target.protocol !== "https:" ||
+        !expectedRevision || !/^[0-9a-f]{40}$/i.test(expectedRevision)
+      ))) {
+    throw new Error("Chat boot acceptance target, revision or execution mode is invalid");
+  }
+}
+
+async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
+  // Local dev builds may not expose an attested deployment revision. Release
+  // acceptance always requires the exact reviewed SHA and cannot skip it.
+  if (!releaseMode) return;
+  const response = await page.context().request.get(
+    new URL("/api/deployment-revision", target).toString(),
+    { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
   );
+  expect(response.status()).toBe(200);
+  const body: unknown = await response.json();
+  expect(body).toBeTruthy();
+  const revision = body as Record<string, unknown>;
+  expect(revision.revision ?? revision.sha ?? revision.commit_sha ?? revision.git_sha)
+    .toBe(expectedRevision);
 }
 
 test.describe("canonical consumer chat cold-load acceptance", () => {
-  test.skip(!enabled, "Set KAREN_CHAT_BOOT_ACCEPTANCE=1 for real-release proof");
+  test.skip(!enabled, "Set KAREN_LOCAL_CHAT_ACCEPTANCE=1 or KAREN_CHAT_BOOT_ACCEPTANCE=1 for real backend/browser proof");
   test.use({
     storageState: authState || { cookies: [], origins: [] },
     trace: "off",
@@ -184,10 +223,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         browserErrors.push("Disabled CopilotKit inspector requested a browser chunk");
       }
     });
-    const revisionResponse = await page.context().request.get(new URL("/api/deployment-revision", target).toString());
-    expect(revisionResponse.ok(), "The deployed revision must be available").toBe(true);
-    const revision: unknown = await revisionResponse.json();
-    expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
+    await requireReviewedRevision(page, target);
     await requireLiveCanonicalBackend(page, target);
 
     if (!authState) {
@@ -346,12 +382,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
   test(`one first ${scenario.label} prompt renders backend-attested UI immediately and after reload`, async ({ page }) => {
     test.setTimeout(240_000);
     const target = new URL(approvedUrl!);
-    const revisionResponse = await page.context().request.get(
-      new URL("/api/deployment-revision", target).toString(),
-    );
-    expect(revisionResponse.ok(), "First-prompt acceptance requires a deployed revision").toBe(true);
-    const revision: unknown = await revisionResponse.json();
-    expect((revision as Record<string, unknown>).revision).toBe(expectedRevision);
+    await requireReviewedRevision(page, target);
     await requireLiveCanonicalBackend(page, target);
 
     if (!authState) {
@@ -588,13 +619,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page }) => {
     test.setTimeout(120_000);
     const target = new URL(approvedUrl!);
-    const revisionResponse = await page.context().request.get(new URL("/api/deployment-revision", target).toString());
-    expect(revisionResponse.ok(), "Exact deployed revision endpoint must be available").toBe(true);
-    const revisionPayload: unknown = await revisionResponse.json();
-    expect(revisionPayload, "Revision endpoint must return an object").toBeTruthy();
-    const revision = revisionPayload as Record<string, unknown>;
-    const servedSha = revision.revision ?? revision.sha ?? revision.commit_sha ?? revision.git_sha;
-    expect(servedSha, "The deployed revision must equal the reviewed Git commit").toBe(expectedRevision);
+    await requireReviewedRevision(page, target);
     await requireLiveCanonicalBackend(page, target);
 
     const failures: string[] = [];
