@@ -130,7 +130,7 @@ async def test_live_direct_stream_presents_only_valid_authorized_surface_before_
         ),
         messages=[{"role": "user", "content": "Weather now"}],
     )
-    decision = SimpleNamespace(intent="search.weather")
+    decision = SimpleNamespace(intent="search.weather", cognitive_context=None)
     result = DirectCapabilityResult(
         handled=True, success=True, text="Verified observation",
         source="tool", source_id="weather_tool",
