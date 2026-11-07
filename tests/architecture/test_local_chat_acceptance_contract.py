@@ -49,3 +49,14 @@ def test_local_reuses_real_first_turn_model_persistence_and_replay_proof() -> No
     assert 'video: "off"' in source
     assert 'page.route(' not in source
     assert 'route.fulfill(' not in source
+
+
+def test_real_first_turn_requires_generative_response_source_not_metadata_only() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    assert 'const required = ["actual_provider", "actual_model", "response_source"] as const;' in source
+    assert 'const responseSource = (metadata.response_source as string).trim().toLowerCase();' in source
+    assert '/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource)' in source
+    assert 'return metadata.response_source !== "persisted_history";' not in source
+    assert 'item.messageId === matching[0].id' in source
+    assert 'matching.length !== 1' in source
+    assert 'receipts.length !== 1' in source
