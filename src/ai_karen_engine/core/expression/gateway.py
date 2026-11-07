@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import Any
 
 from .circuit_breakers import ExpressionCircuitBreakers
@@ -204,6 +205,9 @@ class ExpressionGateway:
 
         last_error: str | None = None
         skipped_engines: list[dict[str, Any]] = []
+        # Monotonic measurements of actual selected engine calls only. This is
+        # not provider cold-start time: engines may initialize internally.
+        attempt_timings: list[dict[str, Any]] = []
         # A provider may fail and allow another eligible engine only until
         # the first delta has reached the consumer. After that, the response
         # belongs to one model and must end as an explicit incomplete stream.
@@ -290,6 +294,9 @@ class ExpressionGateway:
                 ),
             )
 
+            attempt_started = time.perf_counter()
+            attempt_recorded = False
+            attempt_outcome = "exception"
             try:
                 result = await engine.generate(task)
                 # Generated text can contain private user facts or tool evidence.
@@ -313,10 +320,19 @@ class ExpressionGateway:
                     # canonical health catalog. Do not mark the selected alias
                     # healthy merely because an engine was configured.
                     self._observe_verified_model_success(result)
+                    observed_attempt_ms = (time.perf_counter() - attempt_started) * 1000.0
+                    attempt_timings.append({
+                        "engine_id": engine_id,
+                        "fallback_level": level,
+                        "duration_ms": observed_attempt_ms,
+                        "outcome": "verified_model",
+                    })
+                    attempt_recorded = True
                     result.metadata = {
                         **(result.metadata or {}),
                         "fallback_level": level,
                         "skipped_engines": skipped_engines,
+                        "engine_attempt_timings": list(attempt_timings),
                     }
                     emit_expression_event(
                         "expression.engine.request.completed",
@@ -327,6 +343,7 @@ class ExpressionGateway:
                             provider=result.provider,
                             model=result.model,
                             latency_ms=result.latency_ms,
+                            gateway_attempt_ms=observed_attempt_ms,
                             degraded=result.degraded,
                             fallback_level=level,
                         ),
@@ -360,6 +377,7 @@ class ExpressionGateway:
                 skipped_engines.append(
                     {"engine_id": engine_id, "reason": reason}
                 )
+                attempt_outcome = "invalid_output"
                 last_error = reason
             except Exception as exc:
                 self.circuits.mark_failure(f"expression.engine.{engine_id}")
@@ -405,6 +423,24 @@ class ExpressionGateway:
                     }
                 )
             finally:
+                if not attempt_recorded:
+                    observed_attempt_ms = (time.perf_counter() - attempt_started) * 1000.0
+                    attempt_timings.append({
+                        "engine_id": engine_id,
+                        "fallback_level": level,
+                        "duration_ms": observed_attempt_ms,
+                        "outcome": attempt_outcome,
+                    })
+                    emit_expression_event(
+                        "expression.engine.attempt.observed",
+                        self._event_payload(
+                            task,
+                            engine_id=engine_id,
+                            fallback_level=level,
+                            gateway_attempt_ms=observed_attempt_ms,
+                            outcome=attempt_outcome,
+                        ),
+                    )
                 task.preferred_provider = original_provider
                 task.preferred_model = original_model
 
