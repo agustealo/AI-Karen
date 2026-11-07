@@ -31,19 +31,11 @@ printf 'Starting local Redis, API, and web through canonical Compose services.\n
 docker compose -f docker-compose.yml up -d --wait redis
 docker compose -f docker-compose.yml up -d --wait api web
 
-# Container health alone is insufficient to claim the API is reachable from
-# the host. Do not disclose response bodies or auth/session information.
-if ! curl --fail --silent --show-error --max-time 10 --output /dev/null \
-  'http://127.0.0.1:8000/health/live'; then
-  fail 'API liveness failed; inspect docker compose logs api and database connectivity.'
+# The existing read-only status owner validates API liveness, the typed
+# canonical first-run state and web ingress. Reuse it rather than treating any
+# first-run HTTP 200 as proof of a valid bootstrap contract.
+if ! bash scripts/dev/status.sh; then
+  fail 'Local runtime is not ready; inspect Compose logs, canonical Supabase migrations and first-run state.'
 fi
 
-printf 'Local API liveness passed. Checking canonical first-run state.\n'
-if ! curl --fail --silent --show-error --max-time 10 --output /dev/null \
-  'http://127.0.0.1:8000/api/auth/first-run'; then
-  fail 'First-run state unavailable. Check canonical Supabase migrations and AuthService logs; do not create runtime tables.'
-fi
-
-printf 'Local Compose services are running and API first-run ingress is reachable.\n'
-printf 'Frontend: http://localhost:8010 | API: http://localhost:8000\n'
-printf 'This does not prove model generation, authenticated chat, replay, or browser acceptance.\n'
+printf 'Local Compose ingress validated. This is not a model, chat or replay acceptance receipt.\n'
