@@ -194,6 +194,7 @@ jobs:
           # or report readiness without canonical first-run ingress.
           pytest tests/architecture/test_local_compose_launcher.py -q
           pytest tests/architecture/test_local_supabase_config.py -q
+          pytest tests/architecture/test_local_runtime_status.py -q
           # Production /ready must actively check canonical Redis connectivity,
           # accept only secured targets, and match the frontend health contract.
           pytest tests/architecture/test_operational_health_authority.py -q
