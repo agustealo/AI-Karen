@@ -756,6 +756,10 @@ class ChatRuntime:
     async def execute_stream(
         self, request: ChatExecutionRequest
     ) -> AsyncIterator[ChatStreamChunk]:
+        # Monotonic, end-to-end runtime timing starts before any awaited gate,
+        # persona, history, CORTEX, or provider work. This is runtime ingress,
+        # not an unobserved browser/network ingress or browser paint timestamp.
+        ingress_started = time.perf_counter()
         ctx = request.context
         sequence = 0
         request_id = ctx.request_id or str(uuid.uuid4())
@@ -1054,6 +1058,8 @@ class ChatRuntime:
     
         verified_presentations: list[dict[str, Any]] = []
         presentation_replay_incomplete = False
+        first_content_latency_ms: float | None = None
+        first_presentation_latency_ms: float | None = None
         try:
             async for chunk in gen:
                 if chunk.type == ChatStreamEventType.PRESENTATION:
@@ -1073,7 +1079,15 @@ class ChatRuntime:
                         presentation_replay_incomplete = True
                     else:
                         verified_presentations.append(validated)
+                        if first_presentation_latency_ms is None:
+                            first_presentation_latency_ms = (
+                                time.perf_counter() - ingress_started
+                            ) * 1000.0
                 if chunk.type == "content":
+                    if chunk.content and first_content_latency_ms is None:
+                        first_content_latency_ms = (
+                            time.perf_counter() - ingress_started
+                        ) * 1000.0
                     streamed_text += chunk.content
                 if chunk.type == ChatStreamEventType.ERROR:
                     stream_error_emitted = True
@@ -1301,6 +1315,22 @@ class ChatRuntime:
                 )
                 sequence += 1
 
+        # Ingress-relative milestones are complementary to the existing
+        # provider-relative first-token metric, not replacements for it.
+        if first_content_latency_ms is not None:
+            provider_meta["request_to_first_content_ms"] = first_content_latency_ms
+            runtime_spans.append({
+                "name": "request_to_first_content",
+                "duration_ms": first_content_latency_ms,
+                "source": "runtime_observed",
+            })
+        if first_presentation_latency_ms is not None:
+            provider_meta["request_to_first_presentation_ms"] = first_presentation_latency_ms
+            runtime_spans.append({
+                "name": "request_to_first_presentation",
+                "duration_ms": first_presentation_latency_ms,
+                "source": "runtime_observed",
+            })
         provider_meta["execution_spans"] = [
             *runtime_spans,
             *list(provider_meta.get("execution_spans") or []),
@@ -1378,7 +1408,6 @@ class ChatRuntime:
             "rejected",
         }
 
-        latency_ms = (time.time() - stream_start) * 1000.0
         # A provider may emit text and subsequently emit a stream error.
         # A partial answer is not a successful outcome for adaptive learning.
         success = (
@@ -1417,6 +1446,15 @@ class ChatRuntime:
             provider_meta=provider_meta,
         )
 
+        # Completion includes preprocessing, model/tool execution, memory and
+        # transcript persistence, and trajectory/outcome bookkeeping. Never
+        # publish a zero first-content or first-presentation value when absent.
+        latency_ms = (time.perf_counter() - ingress_started) * 1000.0
+        provider_meta["execution_spans"].append({
+            "name": "request_to_runtime_completion",
+            "duration_ms": latency_ms,
+            "source": "runtime_observed",
+        })
         terminal_metadata = self._build_stream_terminal_metadata(
             request,
             decision,
