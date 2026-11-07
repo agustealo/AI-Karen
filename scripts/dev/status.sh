@@ -58,6 +58,9 @@ if curl --fail --silent --max-time 8 --output /dev/null "$WEB_ORIGIN/"; then
   printf 'Web ingress: REACHABLE (not a signed-in chat proof)\n'
 else
   printf 'Web ingress: UNAVAILABLE\n'
+  printf 'Model generation: UNVERIFIED (requires real provider execution and receipt)\n'
+  printf 'CopilotKit first turn/replay: UNVERIFIED (requires signed-in browser acceptance)\n'
+  exit 1
 fi
 
 printf 'Model generation: UNVERIFIED (requires real provider execution and receipt)\n'
