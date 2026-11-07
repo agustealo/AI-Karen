@@ -179,7 +179,15 @@ def test_copilotkit_login_checks_approved_origin_before_password() -> None:
     assertion = "expect(new URL(page.url()).origin).toBe(approved.origin);"
     assert source.count(assertion) == 2
     assert source.index(assertion) < source.index('page.getByLabel("Password").fill(password)')
-    assert 'approved.protocol !== "https:"' in source
+    assert 'approved.protocol === "https:"' in source
+    assert 'process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1"' in source
+    assert 'process.env.KAREN_CHAT_BOOT_ACCEPTANCE !== "1"' in source
+    assert 'options.allowLocalLoopback === true' in source
+    assert 'approved.protocol === "http:"' in source
+    assert '["127.0.0.1", "localhost"].includes(approved.hostname)' in source
+    assert 'approved.port !== ""' in source
+    assert '!approved.username && !approved.password' in source
+    assert 'page.goto(new URL("/login", approved).toString())' in source
     for suite in (
         "karen-copilotkit-protocol-acceptance.spec.ts",
         "karen-copilotkit-native-acceptance.spec.ts",

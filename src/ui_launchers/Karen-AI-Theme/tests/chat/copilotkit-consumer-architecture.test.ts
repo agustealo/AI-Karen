@@ -87,7 +87,7 @@ describe("canonical CopilotKit chat ownership", () => {
     // new time/weather acceptance must increase coverage without weakening auth.
     const preflights = [...liveBrowser.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
       .map(match => match.index!);
-    const signIns = [...liveBrowser.matchAll(/await signInApprovedKaren\(page, approvedEmail!, approvedPassword!\);/g)]
+    const signIns = [...liveBrowser.matchAll(/await signInApprovedKaren\(page, approvedEmail!, approvedPassword!, \{ allowLocalLoopback: localMode \}\);/g)]
       .map(match => match.index!);
     expect(preflights.length).toBeGreaterThanOrEqual(2);
     expect(preflights).toHaveLength(signIns.length);
