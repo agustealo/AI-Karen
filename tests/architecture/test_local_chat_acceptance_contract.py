@@ -60,3 +60,17 @@ def test_real_first_turn_requires_generative_response_source_not_metadata_only()
     assert 'item.messageId === matching[0].id' in source
     assert 'matching.length !== 1' in source
     assert 'receipts.length !== 1' in source
+
+
+def test_first_prompt_rich_presentation_replay_is_bound_to_original_assistant() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    assert 'let savedAssistantId = "";' in source
+    assert "savedAssistantId = reply.id;" in source
+    assert 'event.messageId === savedAssistantId' in source
+    assert 'event.value?.presentation_id === savedPresentationId' in source
+    assert 'expect(matchingPresentations, "The exact presentation must replay once on its original assistant turn")' in source
+    assert 'expect(replaySnapshot.threadId).toBe(conversationId)' in source
+    assert 'savedEvents.some(event =>' not in source
+    assert 'if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource))' in source
+    assert 'if (receipts.length > 1) return false;' in source
+    assert 'event.messageId === reply.id' in source
