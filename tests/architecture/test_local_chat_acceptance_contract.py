@@ -79,7 +79,7 @@ def test_first_prompt_rich_presentation_replay_is_bound_to_original_assistant() 
 def test_first_presentation_is_visible_before_history_poll_or_replay() -> None:
     source = SPEC.read_text(encoding="utf-8")
     # A history-only UI cannot pass the initial send assertion.
-    start = source.index('await composer.fill(prompt);')
+    start = source.rindex('await composer.fill(prompt);')
     sent = source.index('await composer.press("Enter");', start)
     visible = source.index('const visibleCard = shell.getByTestId(scenario.testId);', sent)
     displayed = source.index('await expect(visibleCard).toBeVisible();', visible)
