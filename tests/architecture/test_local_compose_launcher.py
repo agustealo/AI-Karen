@@ -130,7 +130,7 @@ def test_missing_web_ingress_fails_launcher_after_valid_api(tmp_path: Path) -> N
     assert result.returncode != 0
     assert "Web ingress: UNAVAILABLE" in result.stdout
     assert "Local runtime is not ready" in result.stderr
-    assert len([x for x in calls if x.startswith("curl ")]) == 4
+    assert len([x for x in calls if x.startswith("curl ")]) == 3
 
 
 def test_first_run_setup_needed_is_reported_not_automatically_completed(tmp_path: Path) -> None:
