@@ -139,9 +139,16 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
         ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/copilotkit-consumer-boot.spec.ts"
     ).read_text(encoding="utf-8")
     assert 'from "./fixtures/verified-search-deployment"' in consumer_source
-    assert consumer_source.count(
-        'page.context().request.get(new URL("/api/deployment-revision", target).toString())'
-    ) == 2
+    # Release SHA verification is centralized instead of duplicated at each
+    # invocation; every release scenario still invokes the same exact check.
+    assert 'async function requireReviewedRevision(page: Page, target: URL)' in consumer_source
+    assert 'if (!releaseMode) return;' in consumer_source
+    assert 'target.protocol !== "https:" || target.port !== ""' in consumer_source
+    assert '/^[0-9a-f]{40}$/i.test(expectedRevision)' in consumer_source
+    assert 'new URL("/api/deployment-revision", target)' in consumer_source
+    assert consumer_source.count("await requireReviewedRevision(page, target)") == 3
+    assert 'if (releaseMode && localMode)' in consumer_source
+    assert '["localhost", "127.0.0.1"].includes(target.hostname)' in consumer_source
     assert "async ({ page, request })" not in consumer_source
     assert "persist-credentials: true" not in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_PREVIEW_ENABLED" not in job
