@@ -63,6 +63,30 @@ else
   exit 1
 fi
 
+# The same Next.js endpoint required by the authenticated browser suite
+# verifies canonical API configuration and PostgreSQL-backed readiness.
+# HTTP success, text/html, or malformed JSON must never substitute for the
+# backend's typed readiness evidence. No response bodies are logged.
+if ! (
+  curl --fail --silent --max-time 8 "$WEB_ORIGIN/api/health" |
+  python3 -c '
+import json
+import sys
+try:
+    payload = json.load(sys.stdin)
+    if not isinstance(payload, dict) or payload != {"status": "ok", "backend_ready": True}:
+        raise ValueError("unexpected readiness contract")
+except (ValueError, UnicodeError):
+    sys.exit(1)
+'
+); then
+  printf 'Canonical backend readiness: UNAVAILABLE (configuration/database not attested)\n'
+  printf 'Model generation: UNVERIFIED (requires real provider execution and receipt)\n'
+  printf 'CopilotKit first turn/replay: UNVERIFIED (requires signed-in browser acceptance)\n'
+  exit 1
+fi
+printf 'Canonical backend readiness: VERIFIED (configuration/database only)\n'
+
 printf 'Model generation: UNVERIFIED (requires real provider execution and receipt)\n'
 printf 'CopilotKit first turn/replay: UNVERIFIED (requires signed-in browser acceptance)\n'
 
