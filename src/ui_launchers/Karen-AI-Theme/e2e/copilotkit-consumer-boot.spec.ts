@@ -157,13 +157,14 @@ if (enabled) {
     throw new Error("Chat boot acceptance requires a valid target origin");
   }
   if (target.username || target.password || target.pathname !== "/" ||
-      target.search || target.hash || !target.port ||
+      target.search || target.hash ||
       (localMode && (
+        !target.port ||
         target.protocol !== "http:" ||
         !["localhost", "127.0.0.1"].includes(target.hostname)
       )) ||
       (releaseMode && (
-        target.protocol !== "https:" ||
+        target.protocol !== "https:" || target.port !== "" ||
         !expectedRevision || !/^[0-9a-f]{40}$/i.test(expectedRevision)
       ))) {
     throw new Error("Chat boot acceptance target, revision or execution mode is invalid");
