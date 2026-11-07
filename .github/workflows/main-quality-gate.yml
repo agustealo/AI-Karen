@@ -190,6 +190,9 @@ jobs:
           # Read-only migration inspection must fail closed on unknown/duplicate history.
           pytest tests/services/database/test_migration_validator.py -q
           pytest tests/architecture/test_render_beta_blueprint_contract.py -q
+          # Local startup must not inject credentials, tear down services,
+          # or report readiness without canonical first-run ingress.
+          pytest tests/architecture/test_local_compose_launcher.py -q
           # Production /ready must actively check canonical Redis connectivity,
           # accept only secured targets, and match the frontend health contract.
           pytest tests/architecture/test_operational_health_authority.py -q
