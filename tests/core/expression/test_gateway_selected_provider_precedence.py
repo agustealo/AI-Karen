@@ -233,3 +233,108 @@ async def test_health_monitor_fault_never_changes_valid_model_answer(monkeypatch
     with patch("ai_karen_engine.core.expression.gateway.get_engine", return_value=Engine()):
         result = await ExpressionGateway(settings).generate(task)
     assert result.text == "A genuine generated response remains available."
+
+
+@pytest.mark.asyncio
+async def test_kcon768_verified_engine_attempt_timing_survives_fallback_without_faking_cold_start():
+    settings = ExpressionSettings(active_engine="local", engine_fallback_order=["cloud"])
+    settings.engines["local"] = EngineConfig(
+        enabled=True, type="builtin_provider_engine", fallback_eligible=True,
+    )
+    settings.engines["cloud"] = EngineConfig(
+        enabled=True, type="builtin_provider_engine",
+    )
+    observed = []
+
+    class FailingEngine:
+        async def generate(self, task):
+            raise RuntimeError("engine temporarily unavailable")
+
+    class ValidEngine:
+        async def generate(self, task):
+            return ExpressionResult(
+                task_id=task.task_id,
+                text="Verified generated response.",
+                provider="ollama",
+                model="configured-runtime-model",
+                engine_id="cloud",
+                engine_mode="remote",
+                runtime_engine="openai_compatible",
+                response_source="model",
+                attempts=[],
+                skipped=[],
+                latency_ms=12.0,
+            )
+
+    task = ExpressionTask(
+        task_id="kcon768-fallback",
+        kind="chat", messages=[{"role": "user", "content": "hello"}],
+        response_mode="text", required_capabilities=[], forbidden_capabilities=[],
+    )
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: (
+            FailingEngine() if engine_id == "local" else ValidEngine()
+        ),
+    ), patch(
+        "ai_karen_engine.core.expression.gateway.emit_expression_event",
+        side_effect=lambda name, payload: observed.append((name, payload)),
+    ):
+        result = await ExpressionGateway(settings).generate(task)
+
+    attempts = result.metadata["engine_attempt_timings"]
+    assert [(item["engine_id"], item["fallback_level"], item["outcome"])
+            for item in attempts] == [
+        ("local", 0, "exception"),
+        ("cloud", 1, "verified_model"),
+    ]
+    assert all(isinstance(item["duration_ms"], float)
+               and item["duration_ms"] >= 0 for item in attempts)
+    assert all("cold_start" not in item and "warm_start" not in item
+               for item in attempts)
+    assert result.metadata["fallback_level"] == 1
+    assert any(name == "expression.engine.request.completed" and
+               isinstance(payload["gateway_attempt_ms"], float)
+               for name, payload in observed)
+    assert any(name == "expression.engine.attempt.observed" and
+               payload["outcome"] == "exception"
+               for name, payload in observed)
+
+
+@pytest.mark.asyncio
+async def test_kcon768_invalid_output_attempt_is_distinct_from_verified_model():
+    settings = ExpressionSettings(active_engine="local", engine_fallback_order=["cloud"])
+    settings.engines["local"] = EngineConfig(
+        enabled=True, type="builtin_provider_engine", fallback_eligible=True,
+    )
+    settings.engines["cloud"] = EngineConfig(
+        enabled=True, type="builtin_provider_engine",
+    )
+
+    class Engine:
+        def __init__(self, valid):
+            self.valid = valid
+
+        async def generate(self, task):
+            return ExpressionResult(
+                task_id=task.task_id,
+                text="Valid generated content." if self.valid else "",
+                provider="ollama" if self.valid else None,
+                model="test-model" if self.valid else None,
+                engine_id="cloud" if self.valid else "local",
+                engine_mode="local",
+                runtime_engine="ollama",
+                response_source="model" if self.valid else "model_unavailable",
+                attempts=[], skipped=[], latency_ms=1.0,
+            )
+
+    task = ExpressionTask(
+        task_id="kcon768-invalid", kind="chat", messages=[],
+        response_mode="text", required_capabilities=[], forbidden_capabilities=[],
+    )
+    with patch("ai_karen_engine.core.expression.gateway.get_engine",
+               side_effect=lambda engine_id, _: Engine(engine_id == "cloud")):
+        result = await ExpressionGateway(settings).generate(task)
+    attempts = result.metadata["engine_attempt_timings"]
+    assert [a["outcome"] for a in attempts] == ["invalid_output", "verified_model"]
+    assert all(a["duration_ms"] >= 0 for a in attempts)
