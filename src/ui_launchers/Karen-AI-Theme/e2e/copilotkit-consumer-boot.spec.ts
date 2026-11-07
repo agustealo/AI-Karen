@@ -454,6 +454,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     // verified CUSTOM event bound to the immediate assistant reply, not a
     // free-floating client widget, inferred intent, or unsaved stream fragment.
     let savedAnswer = "";
+    let savedAssistantId = "";
     let savedPresentationId = "";
     await expect.poll(async () => {
       const { ok, body } = await readAuthorizedSameOriginJson(
@@ -516,8 +517,15 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
           ["unknown", "none", "unavailable"].includes(
             (model[key] as string).trim().toLowerCase()
           ))) return false;
+        // An observed model receipt must attest generation, not a tool,
+        // static fallback or stale memory response with populated attribution.
+        const responseSource = (model.response_source as string).trim().toLowerCase();
+        if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource)) {
+          return false;
+        }
       }
       savedAnswer = reply.content;
+      savedAssistantId = reply.id;
       savedPresentationId = presentation.presentation_id;
       return true;
     }, {
@@ -611,13 +619,25 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       page, `/api/copilotkit/threads/${conversationId}/messages`,
     );
     expect(ok).toBe(true);
-    const savedEvents = (body as { replayEvents: Array<{
-      type: string; name: string; value: { presentation_id?: string };
-    }> }).replayEvents;
-    expect(savedEvents.some(event =>
+    expect(body && typeof body === "object" && !Array.isArray(body)).toBe(true);
+    const replaySnapshot = body as Record<string, unknown>;
+    expect(replaySnapshot.threadId).toBe(conversationId);
+    expect(Array.isArray(replaySnapshot.replayEvents)).toBe(true);
+    const savedEvents = replaySnapshot.replayEvents as Array<{
+      type?: unknown; name?: unknown; messageId?: unknown;
+      value?: { presentation_id?: unknown };
+    }>;
+    const matchingPresentations = savedEvents.filter(event =>
       event.type === "CUSTOM" &&
       event.name === "karen.presentation.v1" &&
-      event.value?.presentation_id === savedPresentationId)).toBe(true);
+      event.messageId === savedAssistantId &&
+      event.value?.presentation_id === savedPresentationId);
+    expect(matchingPresentations, "The exact presentation must replay once on its original assistant turn")
+      .toHaveLength(1);
+    expect(savedEvents.filter(event =>
+      event.type === "CUSTOM" &&
+      event.name === "karen.presentation.v1" &&
+      event.value?.presentation_id === savedPresentationId)).toHaveLength(1);
     expect(observedRunRequests).toHaveLength(1);
     expect(browserErrors).toEqual([]);
   });
