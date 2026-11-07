@@ -36,13 +36,22 @@ def _walk_test_results(nodes: Any) -> Iterator[Mapping[str, Any]]:
     for node in nodes:
         if not isinstance(node, dict):
             raise EvidenceError("invalid_playwright_suite")
-        for spec in node.get("specs", []):
+        specs = node.get("specs", [])
+        if not isinstance(specs, list):
+            raise EvidenceError("invalid_playwright_specs")
+        for spec in specs:
             if not isinstance(spec, dict):
                 raise EvidenceError("invalid_playwright_spec")
-            for test in spec.get("tests", []):
+            tests = spec.get("tests", [])
+            if not isinstance(tests, list):
+                raise EvidenceError("invalid_playwright_tests")
+            for test in tests:
                 if not isinstance(test, dict):
                     raise EvidenceError("invalid_playwright_test")
-                for result in test.get("results", []):
+                results = test.get("results", [])
+                if not isinstance(results, list):
+                    raise EvidenceError("invalid_playwright_results")
+                for result in results:
                     if not isinstance(result, dict):
                         raise EvidenceError("invalid_playwright_result")
                     yield result
@@ -50,9 +59,12 @@ def _walk_test_results(nodes: Any) -> Iterator[Mapping[str, Any]]:
 
 
 def _attachment(result: Mapping[str, Any], name: str, root: Path) -> dict[str, Any] | None:
+    attachments = result.get("attachments", [])
+    if not isinstance(attachments, list):
+        raise EvidenceError("invalid_playwright_attachments")
     matches = [
         attachment
-        for attachment in result.get("attachments", [])
+        for attachment in attachments
         if isinstance(attachment, dict) and attachment.get("name") == name
     ]
     if len(matches) > 1:
@@ -93,9 +105,13 @@ def _duration(payload: Mapping[str, Any]) -> float:
     value = payload.get("duration_ms")
     if isinstance(value, bool) or not isinstance(value, (float, int)):
         raise EvidenceError("duration_missing_or_invalid")
-    if not math.isfinite(value) or value < 0:
+    try:
+        measured = float(value)
+    except OverflowError as exc:
+        raise EvidenceError("duration_nonfinite_or_negative") from exc
+    if not math.isfinite(measured) or measured < 0:
         raise EvidenceError("duration_nonfinite_or_negative")
-    return float(value)
+    return measured
 
 
 def _validated_sample(
@@ -205,7 +221,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     rendered = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.output:
-        args.output.write_text(rendered, encoding="utf-8")
+        try:
+            args.output.write_text(rendered, encoding="utf-8")
+        except OSError:
+            print(json.dumps({"status": "rejected", "reason": "output_unavailable"}), file=sys.stderr)
+            return 2
     else:
         print(rendered, end="")
     return 0 if summary["status"] == "sufficient_observations" else 2
