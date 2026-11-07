@@ -93,7 +93,7 @@ def test_unreachable_api_does_not_guess_first_run_or_model(tmp_path: Path):
 
 def test_web_downtime_does_not_fabricate_chat_or_hide_api_state(tmp_path: Path):
     result, _ = _run(tmp_path, web_live=False)
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert "Web ingress: UNAVAILABLE" in result.stdout
     assert "First-run state: CONFIGURED" in result.stdout
     assert "CopilotKit first turn/replay: UNVERIFIED" in result.stdout
