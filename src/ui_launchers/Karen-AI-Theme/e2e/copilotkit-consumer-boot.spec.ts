@@ -229,7 +229,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await requireLiveCanonicalBackend(page, target);
 
     if (!authState) {
-      await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!, { allowLocalLoopback: localMode });
     }
     await page.goto(new URL("/dashboard", target).toString());
     const shell = page.getByTestId("karen-copilot-consumer-chat");
@@ -388,7 +388,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await requireLiveCanonicalBackend(page, target);
 
     if (!authState) {
-      await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!, { allowLocalLoopback: localMode });
     }
     await page.goto(new URL("/dashboard", target).toString());
 
@@ -653,7 +653,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     });
 
     if (!authState) {
-      await signInApprovedKaren(page, approvedEmail!, approvedPassword!);
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!, { allowLocalLoopback: localMode });
     }
 
     let initialConversationId: string | null = null;
