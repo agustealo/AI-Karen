@@ -979,3 +979,79 @@ async def test_stream_completion_exposes_safe_projection_targets_not_raw_receipt
         {"target": "memory_graph", "success_count": 0, "failure_count": 1},
     ]
     assert "private-never-expose" not in str(terminal)
+
+
+@pytest.mark.asyncio
+async def test_kcon765_stream_receipt_measures_ingress_to_first_content_and_completion():
+    """The canonical receipt includes preprocessing time, not just model execution."""
+    runtime, _ = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def fake_stream(*args, **kwargs):
+        yield ChatStreamChunk(type="content", content="", correlation_id="corr-1")
+        yield ChatStreamChunk(type="content", content="Measured", correlation_id="corr-1")
+
+    chunks = await _collect_stream(runtime, request, decision, plan, fake_stream)
+    receipt = chunks[-1].metadata
+    first = receipt["request_to_first_content_ms"]
+    assert isinstance(first, float)
+    assert first >= 0.0
+    assert receipt["request_to_first_presentation_ms"] is None
+    assert receipt["latency_ms"] >= first
+    assert receipt["correlation_id"] == "corr-1"
+    assert receipt["request_id"] == "req-1"
+    spans = receipt["consumer_insights"]
+    assert spans is not None
+
+
+@pytest.mark.asyncio
+async def test_kcon765_first_verified_presentation_is_timed_but_unverified_is_not():
+    runtime, _ = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def fake_stream(*args, **kwargs):
+        yield ChatStreamChunk(type="content", content="Measured", correlation_id="corr-1")
+        yield ChatStreamChunk(
+            type="presentation", content="", correlation_id="corr-1",
+            metadata={"presentation_verified": False, "presentation": {"unsafe": True}},
+        )
+        yield ChatStreamChunk(
+            type="presentation", content="", correlation_id="corr-1",
+            metadata={"presentation_verified": True, "presentation": {"safe": True}},
+        )
+
+    validated = {"presentation_id": "verified-one", "component_type": "time.current"}
+    with patch(
+        "ai_karen_engine.core.runtime.presentation_contract.validate_presentation",
+        return_value=validated,
+    ):
+        chunks = await _collect_stream(runtime, request, decision, plan, fake_stream)
+
+    receipt = chunks[-1].metadata
+    assert isinstance(receipt["request_to_first_content_ms"], float)
+    assert isinstance(receipt["request_to_first_presentation_ms"], float)
+    assert receipt["request_to_first_presentation_ms"] >= receipt["request_to_first_content_ms"]
+    assert receipt["latency_ms"] >= receipt["request_to_first_presentation_ms"]
+
+
+@pytest.mark.asyncio
+async def test_kcon765_failed_stream_does_not_invent_first_content_or_presentation():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def fake_stream(*args, **kwargs):
+        yield ChatStreamChunk(type="error", content="unavailable", correlation_id="corr-1")
+
+    chunks = await _collect_stream(runtime, request, decision, plan, fake_stream)
+    receipt = chunks[-1].metadata
+    assert receipt["status"] == "error"
+    assert receipt["request_to_first_content_ms"] is None
+    assert receipt["request_to_first_presentation_ms"] is None
+    assert receipt["latency_ms"] >= 0
+    assert gateway.calls == []
