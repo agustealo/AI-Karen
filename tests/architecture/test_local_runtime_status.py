@@ -14,7 +14,9 @@ STATUS = ROOT / "scripts/dev/status.sh"
 
 def _run(tmp_path: Path, *, first_run: str = '{"first_run_required":false}',
          api_live: bool = True, first_run_ok: bool = True,
-         web_live: bool = True, api_origin: str | None = None) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+         web_live: bool = True, api_origin: str | None = None,
+         backend_payload: str = '{"status":"ok","backend_ready":true}',
+         backend_ok: bool = True) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     root = tmp_path / "local"
     root.mkdir()
     script = root / "status.sh"
@@ -30,6 +32,8 @@ def _run(tmp_path: Path, *, first_run: str = '{"first_run_required":false}',
         ' *"/health/live"*) [ "$KAREN_TEST_API_LIVE" = 1 ]; exit $?;;\n'
         ' *"/api/auth/first-run"*) [ "$KAREN_TEST_FIRST_RUN_OK" = 1 ] || exit 22;'
         ' printf "%s" "$KAREN_TEST_FIRST_RUN_JSON"; exit 0;;\n'
+        ' *"/api/health"*) [ "$KAREN_TEST_BACKEND_OK" = 1 ] || exit 22;'
+        ' printf "%s" "$KAREN_TEST_BACKEND_JSON"; exit 0;;\n'
         ' *"8010/"*) [ "$KAREN_TEST_WEB_LIVE" = 1 ]; exit $?;;\n'
         ' *) exit 22;;\n'
         'esac\n',
@@ -44,6 +48,8 @@ def _run(tmp_path: Path, *, first_run: str = '{"first_run_required":false}',
         "KAREN_TEST_FIRST_RUN_OK": "1" if first_run_ok else "0",
         "KAREN_TEST_WEB_LIVE": "1" if web_live else "0",
         "KAREN_TEST_FIRST_RUN_JSON": first_run,
+        "KAREN_TEST_BACKEND_JSON": backend_payload,
+        "KAREN_TEST_BACKEND_OK": "1" if backend_ok else "0",
     }
     if api_origin is not None:
         env["KAREN_LOCAL_API_ORIGIN"] = api_origin
@@ -65,9 +71,10 @@ def test_status_uses_canonical_boolean_first_run_state(tmp_path: Path, response:
     result, events = _run(tmp_path, first_run=response)
     assert result.returncode == 0, result.stderr
     assert f"First-run state: {expected}" in result.stdout
+    assert "Canonical backend readiness: VERIFIED" in result.stdout
     assert "Model generation: UNVERIFIED" in result.stdout
     assert "CopilotKit first turn/replay: UNVERIFIED" in result.stdout
-    assert len(events) == 3
+    assert len(events) == 4
     assert all("Authorization" not in entry for entry in events)
 
 
@@ -119,3 +126,32 @@ def test_status_has_no_fake_model_or_outdated_commands():
     assert '"/health/live"' not in text or "/health/live" in text
     assert "first_run_required" in text
 
+
+
+@pytest.mark.parametrize("payload", [
+    '{"status":"initializing","backend_ready":false}',
+    '{"status":"ok","backend_ready":"true"}',
+    '{"status":"ok"}',
+    '{"backend_ready":true}',
+    '{"status":"ok","backend_ready":true,"unknown":"untrusted"}',
+    "not-json",
+    "[]",
+])
+def test_unverified_canonical_backend_fails_status(
+    tmp_path: Path, payload: str,
+) -> None:
+    result, events = _run(tmp_path, backend_payload=payload)
+    assert result.returncode == 1
+    assert "First-run state: CONFIGURED" in result.stdout
+    assert "Web ingress: REACHABLE" in result.stdout
+    assert "Canonical backend readiness: UNAVAILABLE" in result.stdout
+    assert "Model generation: UNVERIFIED" in result.stdout
+    assert len(events) == 4
+
+
+def test_unreachable_consumer_backend_fails_without_response_leak(tmp_path: Path) -> None:
+    result, events = _run(tmp_path, backend_ok=False)
+    assert result.returncode == 1
+    assert "Canonical backend readiness: UNAVAILABLE" in result.stdout
+    assert "CopilotKit first turn/replay: UNVERIFIED" in result.stdout
+    assert len(events) == 4
