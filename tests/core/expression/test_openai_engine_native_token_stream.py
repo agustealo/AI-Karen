@@ -151,8 +151,18 @@ async def test_unverified_stream_failure_reason_never_contains_exception_secrets
 @pytest.mark.asyncio
 async def test_kcon769_non_streaming_provider_has_no_invented_first_delta(monkeypatch):
     _patch_registry(monkeypatch)
-    endpoint = _endpoint()
-    endpoint.supports_streaming = False
+    from dataclasses import replace
+
+    endpoint = replace(_endpoint(), supports_streaming=False)
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.provider_registry_service.get_provider_registry_service",
+        lambda: SimpleNamespace(
+            get_provider_endpoint=lambda provider: (
+                endpoint if provider == "ollama-local" else None
+            ),
+            canonicalize_provider_id=lambda value: value,
+        ),
+    )
 
     async def nonstream(selected, *, messages, model, max_tokens, temperature):
         return ProviderExecutionResult(
