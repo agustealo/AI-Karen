@@ -71,7 +71,12 @@ async function expectVerifiedExecutionReceipt(
         ["unknown", "none", "unavailable"].includes((metadata[key] as string).trim().toLowerCase()))) {
       return false;
     }
-    return metadata.response_source !== "persisted_history";
+    // A persisted assistant turn and a populated provider/model do not prove
+    // model execution if the response itself came from memory, a tool, a
+    // canned fallback, or replay. Require a generative provenance category.
+    // This is provider-agnostic and accepts local, remote and fallback models.
+    const responseSource = (metadata.response_source as string).trim().toLowerCase();
+    return /(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource);
   }, {
     timeout: 30_000,
     intervals: [500, 1000, 2000],
