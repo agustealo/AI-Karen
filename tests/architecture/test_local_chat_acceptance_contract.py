@@ -106,3 +106,24 @@ def test_kcon766_first_prompt_browser_timing_is_observed_before_history() -> Non
     assert "expect(submitToVisibleAssertionMs).toBeGreaterThanOrEqual(0)" in first_prompt
     assert "toBeLessThan(" not in first_prompt
     assert "/api/copilotkit/threads/" not in first_prompt
+
+
+def test_kcon767_browser_metric_is_linked_to_verified_presentation_not_untrusted_text() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    scenario = source.index("    // Observe the actual SDK send. A retry")
+    visible = source.index("await expect(visibleCard).toBeVisible();", scenario)
+    history = source.index("/api/copilotkit/threads/${conversationId}/messages", visible)
+    verified = source.index("savedCorrelationId = presentation.correlation_id;", history)
+    linked = source.index('await test.info().attach("kcon767-correlated-first-prompt-timing"', verified)
+    reload = source.index("await page.reload();", linked)
+    assert visible < history < verified < linked < reload
+    segment = source[verified:linked + 800]
+    assert "correlation_id: savedCorrelationId" in segment
+    assert "assistant_message_id: savedAssistantId" in segment
+    assert "presentation_id: savedPresentationId" in segment
+    assert "duration_ms: submitToVisibleAssertionMs" in segment
+    assert "savedCorrelationId.length).toBeLessThanOrEqual(128)" in segment
+    assert "savedPresentationId.length).toBeLessThanOrEqual(128)" in segment
+    assert "model_execution_receipt_present: hasModelExecutionReceipt" in segment
+    assert "access_token" not in segment
+    assert "prompt:" not in segment
