@@ -384,6 +384,11 @@ async def _sse(runtime_request: ChatExecutionRequest):
             if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
                 terminal_seen = True
             yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
+            if terminal_seen:
+                # The first terminal event is final. A malformed upstream
+                # stream must not turn ERROR into a later COMPLETE or append
+                # content after completion. Runtime still owns the outcome.
+                break
     except Exception as exc:
         logger.exception(
             "Chat SSE runtime failed",
