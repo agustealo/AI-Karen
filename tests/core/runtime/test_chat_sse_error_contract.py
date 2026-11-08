@@ -167,3 +167,49 @@ async def test_runtime_complete_cannot_be_followed_by_more_content_or_second_ter
     assert [part["type"] for part in payloads] == ["content", "complete"]
     assert payloads[0]["content"] == "Verified answer"
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_terminal", "late_terminal"),
+    [
+        ("error", "complete"),
+        ("complete", "error"),
+        ("error", "error"),
+        ("complete", "complete"),
+    ],
+)
+async def test_first_terminal_is_final(first_terminal, late_terminal):
+    """KCON-770/03: no post-terminal payload or second DONE can escape."""
+    async def contradictory(_request):
+        yield ChatStreamChunk(
+            type="content", content="Before terminal",
+            correlation_id="correlation-1",
+        )
+        yield ChatStreamChunk(
+            type=first_terminal, content="First terminal",
+            correlation_id="correlation-1",
+            metadata={"error_code": "MODEL_UNAVAILABLE"} if first_terminal == "error" else {},
+        )
+        yield ChatStreamChunk(
+            type="content", content="Forbidden late content",
+            correlation_id="correlation-1",
+        )
+        yield ChatStreamChunk(
+            type=late_terminal, content="Forbidden second terminal",
+            correlation_id="correlation-1",
+        )
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=contradictory),
+    ):
+        chunks = [item async for item in _sse(_request())]
+
+    assert chunks.count("data: [DONE]\\n\\n") == 1
+    assert chunks[-1] == "data: [DONE]\\n\\n"
+    payloads = [json.loads(part[6:]) for part in chunks if part.startswith("data: {")]
+    assert [part["type"] for part in payloads] == ["content", first_terminal]
+    assert payloads[0]["content"] == "Before terminal"
+    assert payloads[1]["content"] == "First terminal"
+    assert all("Forbidden" not in part for part in chunks)
