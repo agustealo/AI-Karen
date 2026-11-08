@@ -112,3 +112,58 @@ async def test_explicit_upstream_error_does_not_create_duplicate_terminal_error(
     assert [part["type"] for part in payloads] == ["error"]
     assert payloads[0]["metadata"]["error_code"] == "MODEL_UNAVAILABLE"
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_runtime_error_cannot_be_overwritten_by_late_complete():
+    async def contradictory(_request):
+        yield ChatStreamChunk(
+            type="error", content="Model unavailable",
+            correlation_id="correlation-1",
+            metadata={"error_code": "MODEL_UNAVAILABLE"},
+        )
+        yield ChatStreamChunk(
+            type="complete", content="", correlation_id="correlation-1",
+        )
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=contradictory),
+    ):
+        chunks = [item async for item in _sse(_request())]
+
+    payloads = [json.loads(item[6:]) for item in chunks[1:-1]]
+    assert [part["type"] for part in payloads] == ["error"]
+    assert payloads[0]["metadata"]["error_code"] == "MODEL_UNAVAILABLE"
+    assert chunks[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_runtime_complete_cannot_be_followed_by_more_content_or_second_terminal():
+    async def contradictory(_request):
+        yield ChatStreamChunk(
+            type="content", content="Verified answer",
+            correlation_id="correlation-1",
+        )
+        yield ChatStreamChunk(
+            type="complete", content="", correlation_id="correlation-1",
+        )
+        yield ChatStreamChunk(
+            type="content", content="Unverified late text",
+            correlation_id="correlation-1",
+        )
+        yield ChatStreamChunk(
+            type="error", content="Late failure",
+            correlation_id="correlation-1",
+        )
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=contradictory),
+    ):
+        chunks = [item async for item in _sse(_request())]
+
+    payloads = [json.loads(item[6:]) for item in chunks[1:-1]]
+    assert [part["type"] for part in payloads] == ["content", "complete"]
+    assert payloads[0]["content"] == "Verified answer"
+    assert chunks[-1] == "data: [DONE]\n\n"
