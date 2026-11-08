@@ -643,6 +643,40 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.runAgent).not.toHaveBeenCalled();
   });
 
+  it("shows an honest failure when SDK reports RUN_ERROR without rejecting runAgent", () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "real-run-1" },
+    }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    act(() => sdk.lifecycle?.onRunFailed());
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Karen could not complete the request. Check the conversation history.",
+    );
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.agent.messages).toHaveLength(2);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "real-run-2" },
+    }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("does not turn a run's pending cancellation into a fabricated model failure", async () => {
+    sdk.agent.isRunning = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "stop-run-1" },
+    }));
+    act(() => input().onStop());
+    await waitFor(() => expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmation is still pending"));
+    act(() => sdk.lifecycle?.onRunFailed());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("karen-copilot-stop-status").textContent)
+      .toContain("confirmation is still pending");
+  });
+
   it("reports a rejected model run but never fabricates an assistant completion", async () => {
     sdk.runAgent.mockRejectedValueOnce(new Error("private provider details"));
     render(<KarenCopilotControlledChat conversationId={THREAD} />);

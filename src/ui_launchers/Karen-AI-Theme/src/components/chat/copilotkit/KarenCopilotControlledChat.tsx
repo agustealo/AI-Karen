@@ -123,9 +123,21 @@ export function KarenCopilotControlledChat({
         lastStopRunId.current = null;
         setStopStatus(null);
         setCheckableRunId(null);
+        setError(null);
       },
       onRunFinalized: () => { activeRunId.current = null; },
-      onRunFailed: () => { activeRunId.current = null; },
+      onRunFailed: () => {
+        const failedRunId = activeRunId.current;
+        activeRunId.current = null;
+        // Only the authenticated SDK run lifecycle may establish a failed run.
+        // A failed stream need not reject runAgent(), so never silently hide it.
+        // Keep a pending/confirmed stop distinct from a failed model execution.
+        if (mounted.current && failedRunId &&
+            pendingStopId.current !== failedRunId &&
+            lastStopRunId.current !== failedRunId) {
+          setError("Karen could not complete the request. Check the conversation history.");
+        }
+      },
     });
     return () => {
       runGeneration.current += 1;
