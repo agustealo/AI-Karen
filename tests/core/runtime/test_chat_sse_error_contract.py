@@ -206,8 +206,8 @@ async def test_first_terminal_is_final(first_terminal, late_terminal):
     ):
         chunks = [item async for item in _sse(_request())]
 
-    assert chunks.count("data: [DONE]\\n\\n") == 1
-    assert chunks[-1] == "data: [DONE]\\n\\n"
+    assert chunks.count("data: [DONE]\n\n") == 1
+    assert chunks[-1] == "data: [DONE]\n\n"
     payloads = [json.loads(part[6:]) for part in chunks if part.startswith("data: {")]
     assert [part["type"] for part in payloads] == ["content", first_terminal]
     assert payloads[0]["content"] == "Before terminal"
