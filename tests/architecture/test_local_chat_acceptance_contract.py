@@ -139,7 +139,7 @@ def test_kcon774_local_latency_command_reuses_authenticated_six_scenario_suite()
     assert command.startswith("playwright test e2e/copilotkit-consumer-boot.spec.ts")
     assert "--config=e2e/playwright.config.ts" in command
     assert "--project=chromium" in command
-    assert '--grep=\\"one first\\"' in command
+    assert '--grep="one first"' in command
     assert "--repeat-each=10" in command
     assert "--workers=1" in command
     assert "&& python ../../../scripts/analyze_karen_latency.py test-results.json" in command
