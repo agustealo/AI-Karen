@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({
   views: [] as Array<Record<string, unknown>>,
+  draftWrites: [] as string[],
   agent: {
     messages: [] as Array<{ id: string; role: string; content: string }>,
     isRunning: false,
@@ -57,6 +58,7 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
       draft,
       setText: (value: string) => {
         if (value.length > 65536) return;
+        sdk.draftWrites.push(value);
         text.current = value;
         setDraft(value);
       },
@@ -86,6 +88,7 @@ const THREAD = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 
 beforeEach(() => {
   sdk.views.length = 0;
+  sdk.draftWrites.length = 0;
   sdk.useAgentOptions.length = 0;
   sdk.isReady = true;
   sdk.draftSynced = true;
@@ -675,6 +678,42 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByTestId("karen-copilot-stop-status").textContent)
       .toContain("confirmation is still pending");
+  });
+
+  it("never re-queues already accepted input as a draft when SDK run fails", async () => {
+    sdk.runAgent.mockRejectedValueOnce(new Error("private provider details"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("An already queued question");
+      input().onSubmitMessage("An already queued question");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("Check the conversation history before retrying"));
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.draftWrites).toEqual(["An already queued question"]);
+    expect(screen.queryByTestId("karen-copilot-failed-submission")).toBeNull();
+    expect(screen.getByRole("alert").textContent).not.toContain("private");
+  });
+
+  it("preserves newer composer edits after a rejected run without restoring queued content", async () => {
+    let rejectRun!: (reason: Error) => void;
+    sdk.runAgent.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+      rejectRun = reject;
+    }));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("First queued message");
+      input().onSubmitMessage("First queued message");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    act(() => input().onChange("A newer unsent edit"));
+    await act(async () => rejectRun(new Error("private runtime detail")));
+    expect(input().value).toBe("A newer unsent edit");
+    expect(sdk.draftWrites).toEqual(["First queued message", "A newer unsent edit"]);
+    expect(screen.getByRole("alert").textContent)
+      .toContain("Check the conversation history before retrying");
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
   });
 
   it("reports a rejected model run but never fabricates an assistant completion", async () => {

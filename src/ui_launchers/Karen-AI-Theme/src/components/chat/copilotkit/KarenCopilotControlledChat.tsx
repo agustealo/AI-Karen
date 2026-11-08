@@ -198,8 +198,13 @@ export function KarenCopilotControlledChat({
           await copilotkit.runAgent({ agent });
         } catch {
           if (mounted.current) {
-            if (!readDraftText()) setDraftText(text);
-            setError("Karen could not complete the request. Check the conversation history.");
+            // addMessage already accepted this user turn. The SDK may have
+            // transmitted or persisted it before the run failed, so putting
+            // the same text back in the composer would invite an accidental
+            // duplicate submission. Only pre-queue failures restore drafts.
+            // Newer edits remain untouched; the user must inspect canonical
+            // history before choosing whether to send again.
+            setError("Karen could not complete the request. Check the conversation history before retrying.");
           }
         }
       } finally {
