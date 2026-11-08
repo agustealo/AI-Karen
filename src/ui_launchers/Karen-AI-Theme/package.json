@@ -19,7 +19,7 @@
     "ci:forbid-mocks": "bash tools/check-no-prod-mocks.sh",
     "test:e2e:planner": "playwright test e2e/planner-presentation-replay.spec.ts --config=e2e/playwright.config.ts --project=chromium",
     "test:e2e:search-release": "playwright test e2e/intelligent-search-replay.spec.ts --config=e2e/playwright.config.ts --project=chromium",
-    "test:e2e:latency-local": "KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0 playwright test e2e/copilotkit-consumer-boot.spec.ts --config=e2e/playwright.config.ts --project=chromium --grep=\"one first\" --repeat-each=10 --workers=1 && python ../../../scripts/analyze_karen_latency.py test-results.json"
+    "test:e2e:latency-local": "KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0 playwright test e2e/copilotkit-consumer-boot.spec.ts --config=e2e/playwright.config.ts --project=chromium --grep=\"one first\" --repeat-each=10 --workers=1 && python ../../../scripts/analyze_karen_latency.py test-results.json --require-scenarios='time,weather,search,news,current movies,current movie source table'"
   },
   "dependencies": {
     "@hookform/resolvers": "^4.1.3",
