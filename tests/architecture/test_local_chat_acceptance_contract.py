@@ -136,7 +136,10 @@ def test_kcon774_local_latency_command_reuses_authenticated_six_scenario_suite()
     root = SPEC.parents[1]
     package = json.loads((root / "package.json").read_text(encoding="utf-8"))
     command = package["scripts"]["test:e2e:latency-local"]
-    assert command.startswith("playwright test e2e/copilotkit-consumer-boot.spec.ts")
+    assert command.startswith(
+        "KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0 "
+        "playwright test e2e/copilotkit-consumer-boot.spec.ts"
+    )
     assert "--config=e2e/playwright.config.ts" in command
     assert "--project=chromium" in command
     assert '--grep="one first"' in command
