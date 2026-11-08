@@ -146,6 +146,7 @@ def test_kcon774_local_latency_command_reuses_authenticated_six_scenario_suite()
     assert "--repeat-each=10" in command
     assert "--workers=1" in command
     assert "&& python ../../../scripts/analyze_karen_latency.py test-results.json" in command
+    assert "--require-scenarios='time,weather,search,news,current movies,current movie source table'" in command
     assert "--reporter=" not in command  # Preserve configured JSON output.
     assert "--update-snapshots" not in command
     assert 'test.skip(!enabled,' in SPEC.read_text(encoding="utf-8")
