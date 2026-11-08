@@ -137,6 +137,7 @@ def test_kcon774_local_latency_command_reuses_authenticated_six_scenario_suite()
     package = json.loads((root / "package.json").read_text(encoding="utf-8"))
     command = package["scripts"]["test:e2e:latency-local"]
     assert command.startswith(
+        "KAREN_LOCAL_LATENCY_BENCHMARK=1 "
         "KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0 "
         "playwright test e2e/copilotkit-consumer-boot.spec.ts"
     )
@@ -163,3 +164,16 @@ def test_kcon774_raw_authenticated_browser_reports_are_ignored() -> None:
     assert "/test-results/" in ignore
     assert "/playwright-report/" in ignore
     assert "/e2e/test-results.json" in ignore
+
+
+def test_kcon776_benchmark_has_zero_retries_and_runs_headless_on_local_machine() -> None:
+    """A local benchmark cannot turn a failing real attempt into a passing sample."""
+    config = (SPEC.parent / "playwright.config.ts").read_text(encoding="utf-8")
+    assert "const localBenchmark = process.env.KAREN_LOCAL_LATENCY_BENCHMARK === '1';" in config
+    assert "retries: localBenchmark ? 0 : process.env.CI ? 2 : 0," in config
+    assert "headless: localBenchmark || !!process.env.CI," in config
+    assert "workers: 1," in config
+    assert "['json', { outputFile: 'test-results.json' }]" in config
+    assert "KAREN_LOCAL_LATENCY_BENCHMARK=1" in (
+        __import__("json").loads((SPEC.parents[1] / "package.json").read_text(encoding="utf-8"))
+    )["scripts"]["test:e2e:latency-local"]
