@@ -6,6 +6,10 @@ import { defineConfig, devices } from '@playwright/test';
  * Provider/runtime truth is owned by dedicated backend and runtime gates.
  * Trusted real-product presentation capture uses playwright.showcase.config.ts.
  */
+// This mode runs the existing approved local-only acceptance test repeatedly.
+// Never hide intermittent failures with CI retries or require a desktop display.
+const localBenchmark = process.env.KAREN_LOCAL_LATENCY_BENCHMARK === '1';
+
 export default defineConfig({
   testDir: './',
   testMatch: '**/*.spec.ts',
@@ -18,7 +22,7 @@ export default defineConfig({
 
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: localBenchmark ? 0 : process.env.CI ? 2 : 0,
   workers: 1,
 
   reporter: [
@@ -29,7 +33,7 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.KAREN_BASE_URL || 'http://localhost:8010',
-    headless: !!process.env.CI,
+    headless: localBenchmark || !!process.env.CI,
     viewport: { width: 1280, height: 720 },
     screenshot: process.env.KAREN_UX_IDENTITY_REPLAY === 'true' || process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ? 'off' : 'only-on-failure',
     // Opt in only on an approved sanitized test installation. Full-session
