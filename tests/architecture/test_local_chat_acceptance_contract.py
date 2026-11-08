@@ -127,3 +127,38 @@ def test_kcon767_browser_metric_is_linked_to_verified_presentation_not_untrusted
     assert "model_execution_receipt_present: hasModelExecutionReceipt" in segment
     assert "access_token" not in segment
     assert "prompt:" not in segment
+
+
+def test_kcon774_local_latency_command_reuses_authenticated_six_scenario_suite() -> None:
+    """Real local benchmark reuses the canonical browser harness and analyzer."""
+    import json
+
+    root = SPEC.parents[1]
+    package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    command = package["scripts"]["test:e2e:latency-local"]
+    assert command.startswith(
+        "KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0 "
+        "playwright test e2e/copilotkit-consumer-boot.spec.ts"
+    )
+    assert "--config=e2e/playwright.config.ts" in command
+    assert "--project=chromium" in command
+    assert '--grep="one first"' in command
+    assert "--repeat-each=10" in command
+    assert "--workers=1" in command
+    assert "&& python ../../../scripts/analyze_karen_latency.py test-results.json" in command
+    assert "--reporter=" not in command  # Preserve configured JSON output.
+    assert "--update-snapshots" not in command
+    assert 'test.skip(!enabled,' in SPEC.read_text(encoding="utf-8")
+    assert 'const localMode = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";' in SPEC.read_text(encoding="utf-8")
+    assert 'trace: "off"' in SPEC.read_text(encoding="utf-8")
+    assert 'screenshot: "off"' in SPEC.read_text(encoding="utf-8")
+    assert 'video: "off"' in SPEC.read_text(encoding="utf-8")
+
+
+def test_kcon774_raw_authenticated_browser_reports_are_ignored() -> None:
+    root = SPEC.parents[1]
+    ignore = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "/test-results.json" in ignore
+    assert "/test-results/" in ignore
+    assert "/playwright-report/" in ignore
+    assert "/e2e/test-results.json" in ignore
