@@ -1,5 +1,4 @@
 import http from 'node:http';
-import next from 'next';
 
 const hostname = process.env.WEB_HOST || '0.0.0.0';
 const port = Number.parseInt(process.env.PORT || '8010', 10);
@@ -22,6 +21,12 @@ function normalizeRemoteAddress(value) {
   const zoneIndex = raw.indexOf('%');
   return zoneIndex >= 0 ? raw.slice(0, zoneIndex) : raw;
 }
+
+// Validate production ingress configuration before importing Next.js. An ESM
+// static import runs before these checks and may create live handles that keep
+// a misconfigured production process alive despite the thrown configuration
+// error. Fail closed before any framework initialization or listener exists.
+const { default: next } = await import('next');
 
 const app = next({ dev: false, hostname, port });
 const handle = app.getRequestHandler();
