@@ -182,3 +182,71 @@ def test_kcon772_oversized_duration_fails_closed(tmp_path):
     sample["attachments"][0] = _attach("kcon766-first-prompt-visible-timing", payload)
     with pytest.raises(analyzer.EvidenceError, match="duration_nonfinite_or_negative"):
         analyzer.analyze(report, tmp_path)
+
+
+def test_kcon775_one_scenario_cannot_impersonate_complete_six_scenario_run(tmp_path):
+    required = (
+        "time", "weather", "search", "news",
+        "current movies", "current movie source table",
+    )
+    report = _report([_result(i, float(i * 10)) for i in range(1, 11)])
+    summary = analyzer.analyze(report, tmp_path, required_scenarios=required)
+    assert summary["status"] == "insufficient_evidence"
+    assert summary["groups"][0]["status"] == "sufficient"
+    assert summary["missing_scenarios"] == [
+        "current movie source table", "current movies", "news", "search", "time",
+    ]
+    assert summary["required_scenarios"] == list(required)
+
+
+def test_kcon775_rejects_unexpected_or_duplicate_scenario_requirements(tmp_path):
+    report = _report([_result(i, float(i)) for i in range(10)])
+    with pytest.raises(analyzer.EvidenceError, match="unexpected_benchmark_scenario"):
+        analyzer.analyze(report, tmp_path, required_scenarios=("time",))
+    with pytest.raises(analyzer.EvidenceError, match="invalid_required_scenarios"):
+        analyzer.analyze(report, tmp_path, required_scenarios=("weather", "weather"))
+    with pytest.raises(analyzer.EvidenceError, match="invalid_required_scenarios"):
+        analyzer.analyze(report, tmp_path, required_scenarios=("",))
+
+
+def test_kcon775_cli_rejects_missing_required_scenarios_even_with_ten_valid_results(tmp_path):
+    report = _report([_result(i, float(i)) for i in range(10)])
+    path = tmp_path / "playwright.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    run = subprocess.run(
+        [
+            sys.executable, str(SCRIPT), str(path),
+            "--require-scenarios=time,weather,search,news,current movies,current movie source table",
+        ],
+        check=False, capture_output=True, text=True,
+    )
+    assert run.returncode == 2
+    parsed = json.loads(run.stdout)
+    assert parsed["status"] == "insufficient_evidence"
+    assert "weather" not in parsed["missing_scenarios"]
+    assert len(parsed["missing_scenarios"]) == 5
+
+
+def test_kcon775_complete_scenario_set_publishes_percentiles(tmp_path):
+    required = (
+        "time", "weather", "search", "news",
+        "current movies", "current movie source table",
+    )
+    results = []
+    for index, scenario in enumerate(required):
+        for sample in range(10):
+            item = _result(index * 10 + sample, float(sample + 1))
+            for attachment in item["attachments"]:
+                payload = json.loads(base64.b64decode(attachment["body"]))
+                payload["scenario"] = scenario
+                attachment["body"] = base64.b64encode(
+                    json.dumps(payload).encode()
+                ).decode("ascii")
+            results.append(item)
+    summary = analyzer.analyze(_report(results), tmp_path, required_scenarios=required)
+    assert summary["status"] == "sufficient_observations"
+    assert summary["missing_scenarios"] == []
+    assert len(summary["groups"]) == 6
+    assert all(group["sample_count"] == 10 for group in summary["groups"])
+    assert all(group["p50_ms"] == 5.0 for group in summary["groups"])
+    assert all(group["p95_ms"] == 10.0 for group in summary["groups"])
