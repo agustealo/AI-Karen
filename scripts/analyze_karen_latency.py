@@ -151,10 +151,22 @@ def _nearest_rank(values: Sequence[float], percentile: int) -> float:
     return round(sorted(values)[index], 2)
 
 
-def analyze(report: Mapping[str, Any], root: Path, min_samples: int = 10) -> dict[str, Any]:
+def analyze(
+    report: Mapping[str, Any],
+    root: Path,
+    min_samples: int = 10,
+    required_scenarios: Sequence[str] = (),
+) -> dict[str, Any]:
     """Return sanitized summaries; no prompts, content, or IDs leave this function."""
     if min_samples < 10:
         raise EvidenceError("minimum_sample_count_must_be_at_least_ten")
+    required = tuple(required_scenarios)
+    if len(required) != len(set(required)) or any(
+        not isinstance(item, str)
+        or not re.fullmatch(r"[a-zA-Z0-9 _-]{1,64}", item)
+        for item in required
+    ):
+        raise EvidenceError("invalid_required_scenarios")
     groups: dict[tuple[str, str], list[float]] = defaultdict(list)
     identities: set[tuple[str, str, str]] = set()
     for result in _walk_test_results(report.get("suites", [])):
@@ -167,6 +179,8 @@ def analyze(report: Mapping[str, Any], root: Path, min_samples: int = 10) -> dic
         if result.get("status") != "passed":
             raise EvidenceError("failed_or_incomplete_benchmark_run")
         scenario, origin, duration, identity = _validated_sample(first, second)
+        if required and scenario not in required:
+            raise EvidenceError("unexpected_benchmark_scenario")
         if identity in identities:
             raise EvidenceError("duplicate_correlated_execution")
         identities.add(identity)
@@ -182,7 +196,10 @@ def analyze(report: Mapping[str, Any], root: Path, min_samples: int = 10) -> dic
             "p50_ms": _nearest_rank(samples, 50) if sufficient else None,
             "p95_ms": _nearest_rank(samples, 95) if sufficient else None,
         })
-    complete = bool(summary) and all(x["status"] == "sufficient" for x in summary)
+    observed_scenarios = {scenario for scenario, _origin in groups}
+    missing_scenarios = sorted(set(required) - observed_scenarios)
+    complete = (bool(summary) and not missing_scenarios and
+                all(x["status"] == "sufficient" for x in summary))
     return {
         "schema_version": 1,
         "metric": METRIC,
@@ -190,6 +207,8 @@ def analyze(report: Mapping[str, Any], root: Path, min_samples: int = 10) -> dic
         "cohort": "cold_warm_unclassified",
         "percentile_method": "nearest_rank",
         "required_samples_per_group": min_samples,
+        "required_scenarios": list(required),
+        "missing_scenarios": missing_scenarios,
         "status": "sufficient_observations" if complete else "insufficient_evidence",
         "groups": summary,
         "limitations": [
@@ -204,6 +223,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("playwright_json", type=Path, help="Actual Playwright JSON reporter file")
     parser.add_argument("--min-samples", type=int, default=10)
+    parser.add_argument(
+        "--require-scenarios",
+        help="Comma-separated complete set of expected first-prompt scenarios",
+    )
     parser.add_argument("--output", type=Path, help="Write sanitized JSON report to this file")
     args = parser.parse_args(argv)
     try:
@@ -213,7 +236,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = json.loads(source.read_text(encoding="utf-8"))
         if not isinstance(report, dict):
             raise EvidenceError("playwright_report_not_object")
-        summary = analyze(report, source.parent, args.min_samples)
+        scenarios = ()
+        if args.require_scenarios is not None:
+            scenarios = tuple(item.strip() for item in args.require_scenarios.split(","))
+        summary = analyze(report, source.parent, args.min_samples, scenarios)
     except (EvidenceError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         # Never echo source contents, paths, or potentially sensitive exceptions.
         reason = str(exc) if isinstance(exc, EvidenceError) else "invalid_report"
