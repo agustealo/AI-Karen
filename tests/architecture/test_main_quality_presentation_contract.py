@@ -52,3 +52,47 @@ def test_main_quality_backend_fetches_full_history_for_provenance() -> None:
 
     assert "uses: actions/checkout@v4" in backend
     assert "fetch-depth: 0" in backend
+
+
+def test_kcon770_all_backend_fault_owners_execute_in_canonical_main_gate() -> None:
+    """A green gate must execute the merged fault tests, not just list them in a handoff."""
+    workflow = MAIN_QUALITY_WORKFLOW.read_text(encoding="utf-8")
+    backend = workflow.split("  backend-quality:", 1)[1].split("  frontend-quality:", 1)[0]
+    authority = backend.split("      - name: Runtime evidence authority proofs", 1)[1].split(
+        "      - name: Governed history and explicit continuation proofs", 1
+    )[0]
+    expected = (
+        "tests/core/runtime/test_chat_runtime_stream_contract.py",
+        "tests/core/runtime/test_chat_sse_error_contract.py",
+        "tests/core/runtime/test_presentation_contract.py",
+        "tests/core/runtime/test_authorized_time_tool_fallback.py",
+    )
+    for path in expected:
+        assert f"pytest {path}" in authority
+        assert (REPOSITORY_ROOT / path).is_file()
+    assert "test_empty_model_output_is_not_success" in authority
+    assert "test_partial_content_then_error_never_persists_failed_assistant_turn" in authority
+    assert "test_execute_stream_transcript_failure_is_separate_from_memory_truth" in authority
+
+    personalization = backend.split("      - name: Personalization authority proofs", 1)[1].split(
+        "      - name: Memory recall, STM closure, and tenant security proofs", 1
+    )[0]
+    assert "pytest tests/services/test_persona_save_fail_closed.py -q" in personalization
+    assert (
+        REPOSITORY_ROOT / "tests/services/test_persona_save_fail_closed.py"
+    ).is_file()
+
+    # The existing frontend-quality job runs the canonical Vitest suite, which
+    # includes controlled-chat cases 01/02 and renderer cases 05/06.
+    frontend = workflow.split("  frontend-quality:", 1)[1].split(
+        "  deployment-contract:", 1
+    )[0]
+    assert "npx vitest run --passWithNoTests" in frontend
+    assert (
+        REPOSITORY_ROOT
+        / "src/ui_launchers/Karen-AI-Theme/tests/karen-copilotkit-controlled-chat.test.tsx"
+    ).is_file()
+    assert (
+        REPOSITORY_ROOT
+        / "src/ui_launchers/Karen-AI-Theme/tests/chat/KarenPresentationRegistry.test.tsx"
+    ).is_file()

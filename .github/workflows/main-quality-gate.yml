@@ -247,6 +247,11 @@ jobs:
           pytest tests/core/runtime/test_search_results_capability_routing.py -q
           pytest tests/core/runtime/test_verified_weather_presentation.py -q
           pytest tests/core/runtime/test_ag_ui_event_projection.py -q
+          # KCON-770: execute existing fault matrix owners, not documentation alone.
+          pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k "test_empty_model_output_is_not_success or test_partial_content_then_error_never_persists_failed_assistant_turn or test_execute_stream_transcript_failure_is_separate_from_memory_truth" -q
+          pytest tests/core/runtime/test_chat_sse_error_contract.py -q
+          pytest tests/core/runtime/test_presentation_contract.py -q
+          pytest tests/core/runtime/test_authorized_time_tool_fallback.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
           pytest tests/core/intelligence/test_reward_progress.py -q
           pytest tests/services/test_reward_progress.py -q
@@ -290,6 +295,7 @@ jobs:
           pytest tests/core/personalization/test_personalization.py -q
           pytest tests/unit/core/personalization/test_preference_resolution_scope_contract.py -q
           pytest tests/services/test_persona_style_analysis_contract.py -q
+          pytest tests/services/test_persona_save_fail_closed.py -q
 
       - name: Memory recall, STM closure, and tenant security proofs
         run: |
