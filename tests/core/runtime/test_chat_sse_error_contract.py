@@ -213,3 +213,27 @@ async def test_first_terminal_is_final(first_terminal, late_terminal):
     assert payloads[0]["content"] == "Before terminal"
     assert payloads[1]["content"] == "First terminal"
     assert all("Forbidden" not in part for part in chunks)
+
+
+@pytest.mark.asyncio
+async def test_partial_stream_disconnect_is_not_complete():
+    """A broken upstream after content must remain an error, not a success."""
+    async def disconnects(_request):
+        yield ChatStreamChunk(
+            type="content", content="Incomplete answer",
+            correlation_id="correlation-1",
+        )
+        raise ConnectionError("private upstream disconnect")
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=disconnects),
+    ):
+        chunks = [item async for item in _sse(_request())]
+
+    events = [json.loads(item[6:]) for item in chunks[1:-1]]
+    assert [event["type"] for event in events] == ["content", "error"]
+    assert events[-1]["metadata"]["error_code"] == "CHAT_STREAM_RUNTIME_EXCEPTION"
+    assert events[-1]["metadata"]["correlation_id"] == "correlation-1"
+    assert "private upstream disconnect" not in str(events)
+    assert chunks[-1] == "data: [DONE]\n\n"

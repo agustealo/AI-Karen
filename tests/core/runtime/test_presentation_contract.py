@@ -362,3 +362,34 @@ def test_table_cell_length_uses_browser_utf16_code_units():
     assert validate_presentation(base) is not None
     base["data"]["rows"][0]["fact"] = "🔎" * 121
     assert validate_presentation(base) is None
+
+
+def test_missing_image_does_not_claim_rendered_media():
+    """No image renderer is registered: a missing image is not evidence."""
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "image-missing",
+        "component_type": "image.display",
+        "evidence_ref": "request-1:missing-image",
+        "data": {"url": None, "alt": "Unverified image"},
+    }
+    assert validate_presentation(envelope) is None
+    assert validate_presentation({
+        **envelope, "data": {"url": "https://example.org/unverified.png"},
+    }) is None
+
+
+def test_unsupported_presentation_is_not_success():
+    """An unregistered component cannot enter the runtime presentation path."""
+    envelope = {
+        "schema_version": 1,
+        "presentation_id": "unsupported-card",
+        "component_type": "card.arbitrary",
+        "evidence_ref": "request-1:unsupported",
+        "data": {"title": "Unverified success", "action": "execute"},
+    }
+    assert validate_presentation(envelope) is None
+    assert validate_presentation({
+        **envelope, "component_type": "unsafe.html",
+        "data": {"html": "<script>alert(1)</script>"},
+    }) is None
