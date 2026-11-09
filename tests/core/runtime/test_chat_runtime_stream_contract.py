@@ -782,6 +782,39 @@ async def test_status_only_stream_is_explicit_failure_not_successful_empty_answe
     assert gateway.calls == []
 
 
+
+@pytest.mark.asyncio
+async def test_empty_model_output_is_not_success():
+    """KCON-770/04: zero model text is a retryable failure, never a saved answer."""
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def empty_model_stream(*args, **kwargs):
+        if False:
+            yield ChatStreamChunk(type="content", content="unreachable")
+
+    chunks = await _collect_stream(
+        runtime, request, decision, plan, empty_model_stream,
+    )
+    errors = [chunk for chunk in chunks if chunk.type == ChatStreamEventType.ERROR]
+    completes = [chunk for chunk in chunks if chunk.type == ChatStreamEventType.COMPLETE]
+    assert len(errors) == 1
+    assert errors[0].metadata["error_code"] == "CHAT_EMPTY_STREAM"
+    assert errors[0].metadata["error_type"] == "EmptyGeneration"
+    assert "no assistant response" in errors[0].content.lower()
+    assert len(completes) == 1
+    assert completes[0].metadata["status"] == "error"
+    assert completes[0].metadata["transcript_persistence_status"] == "skipped"
+    assert completes[0].metadata["transcript_persisted_count"] == 0
+    assert not any(
+        chunk.type == ChatStreamEventType.CONTENT and chunk.content.strip()
+        for chunk in chunks
+    )
+    assert gateway.calls == []
+
+
 @pytest.mark.asyncio
 async def test_upstream_stream_error_is_not_replaced_with_second_empty_error():
     runtime, gateway = _make_runtime()
