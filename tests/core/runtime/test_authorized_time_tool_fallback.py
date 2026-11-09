@@ -12,6 +12,68 @@ from ai_karen_engine.core.runtime.direct_capability_executor import DirectCapabi
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest, ChatExecutionContext
 
 
+
+@pytest.mark.asyncio
+async def test_unavailable_tool_does_not_fabricate_answer():
+    """KCON-770/09: unavailable governed observation cannot become success."""
+    context = ChatExecutionContext(
+        user_id="11111111-1111-1111-1111-111111111111",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        session_id="time-test", request_id="req-unavailable",
+        correlation_id="corr-unavailable",
+        roles=["user"], permissions=["user"],
+    )
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": "What time is it?"}],
+        context=context, metadata={"timezone": "America/Detroit"},
+    )
+    plan = AuthorizedExecutionPlan(
+        execution_id="exec-unavailable", policy_decision_id="policy-unavailable",
+        authorized_user_id=context.user_id,
+        authorized_tenant_id=context.tenant_id,
+        authorized_session_id=context.session_id,
+        topology=ExecutionTopology.DIRECT,
+        allowed_capabilities=["time_query"],
+        allowed_plugins=[],
+        allowed_tools=["time_tool"],
+        budget=ExecutionBudget(
+            max_duration_ms=30000, max_model_calls=1, max_tool_calls=2,
+        ),
+    )
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    decision = SimpleNamespace(
+        intent="time.current", is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    service = SimpleNamespace(execute_tool=AsyncMock(
+        return_value=SimpleNamespace(
+            success=False,
+            result={"status": "unavailable", "error": "provider_unavailable"},
+            error="provider_unavailable",
+        )
+    ))
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_tool_service",
+        return_value=service,
+    ), patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.ActionExecutionGate.authorize",
+        new_callable=AsyncMock, return_value=True,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=request, decision=decision, plan=plan, meter=meter,
+        )
+
+    assert result.handled is True
+    assert result.success is False
+    assert result.degraded is True
+    assert result.source == "capability_unavailable"
+    assert result.payload["status"] == "unavailable"
+    assert not any(attempt["status"] == "success" for attempt in result.attempts)
+    assert all(value not in result.text for value in ("8:30", "current time is"))
+    assert service.execute_tool.await_count == 1
+
+
 @pytest.mark.asyncio
 async def test_time_uses_only_authorized_tool_if_plugin_unavailable():
     context = ChatExecutionContext(
