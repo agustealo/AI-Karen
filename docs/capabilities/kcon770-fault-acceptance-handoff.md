@@ -1,6 +1,6 @@
 # KCON-770 nine-case fault acceptance: implementation contract
 
-Status: PROPOSED / NOT_RUN. This is a development handoff, **not** evidence that any of the nine scenarios passed. Keep KCON-770 unchecked.
+Status: SOURCE TESTS MERGED / AUTHENTICATED BROWSER NOT_RUN (2026-11-09). PRs #710–#713 landed executable cases 01–09; this does **not** constitute signed-in browser acceptance or real failure screenshots. Keep KCON-770 unchecked. The canonical Main Quality Gate now explicitly invokes existing runtime/presentation/tool/persistence owners; frontend Vitest covers controlled chat and presentation components.
 
 ## Existing owners
 
@@ -24,11 +24,11 @@ Status: PROPOSED / NOT_RUN. This is a development handoff, **not** evidence that
 | 08 persistence failure | canonical conversation persistence | visible save failure, no false saved/history receipt, no cross-thread recovery | `test_persistence_failure_is_visible` |
 | 09 unavailable tool | governed tool execution | honest unavailable result, no invented observation or provider success | `test_unavailable_tool_does_not_fabricate_answer` |
 
-Implement these names in the nearest **existing** owner, using parametrization where appropriate. Cases 01–03 already have partial source tests from PRs #706–#708: extend rather than duplicate. Browser scenario must use real authenticated backend and an operator-controlled fault mechanism that is already authorized in the runtime. Never inject failures by intercepting network requests in the release proof, editing production data, or bypassing RBAC.
+The executable source tests for 01–09 now exist in the nearest **existing** owners. Case 08 specifically tests fail-closed **persona preference persistence**, not an end-to-end failed conversation transcript write; do not silently generalize that result into a chat persistence acceptance claim. Cases 01–03 also reuse the earlier #706–#708 source fixes. Browser scenario must use real authenticated backend and an operator-controlled fault mechanism that is already authorized in the runtime. Never inject failures by intercepting network requests in the release proof, editing production data, or bypassing RBAC.
 
 ## CI and browser evidence contract
 
-Extend `main-quality-gate.yml` existing **Runtime evidence authority proofs** with the relevant runtime tests, and the existing **frontend-quality** test command with controlled-chat unit tests; do not add a second workflow or duplicate runner. Main Quality Gate proves source behavior only. The real signed-in failure scenario belongs to the existing opt-in Playwright suite, not an unauthenticated mocked CI browser.
+`main-quality-gate.yml` now executes the relevant backend runtime, presentation, time-tool, SSE and persona-persistence tests in its existing jobs; the existing `frontend-quality` job runs the controlled-chat and presentation Vitest tests. Do not add a second workflow or duplicate runner. Main Quality Gate proves source behavior only. The real signed-in failure scenario belongs to the existing opt-in Playwright suite, not an unauthenticated mocked CI browser.
 
 1. Deploy the exact reviewed PR/head revision to an approved environment; record full 40-character SHA and target origin. Require release HTTPS, no URL credentials, and the existing `/api/deployment-revision` equality check.
 2. Require canonical `/api/health` to return `{ "status": "ok", "backend_ready": true }` before sending credentials. Use approved `KAREN_E2E_AUTH_STATE` or `KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD`; never log or commit them.
