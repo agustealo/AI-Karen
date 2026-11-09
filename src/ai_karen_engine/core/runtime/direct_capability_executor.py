@@ -822,6 +822,7 @@ class DirectCapabilityExecutor:
             source_id=target_label,
             error=reason,
             payload={
+                "status": "unavailable",
                 "required_capability": capability_label,
                 "target": target_label,
                 "next_action": next_action,
