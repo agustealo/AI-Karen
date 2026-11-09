@@ -283,3 +283,33 @@ describe("data table UTF-16 cell parity", () => {
     } })).toBeNull();
   });
 });
+
+
+describe("KCON-770 unsupported media and presentation faults", () => {
+  it("test_missing_image_does_not_claim_rendered_media", () => {
+    const missing = {
+      ...valid, presentation_id: "image-missing",
+      component_type: "image.display", data: { url: null, alt: "Unverified" },
+    };
+    expect(parseKarenPresentation(missing)).toBeNull();
+    expect(presentationFromStructuredContent({ presentation: missing })).toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={missing} />);
+    expect(html).toContain("Structured presentation unavailable");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("Unverified</");
+  });
+
+  it("test_unsupported_presentation_is_not_success", () => {
+    const unsupported = {
+      ...valid, presentation_id: "unknown-card",
+      component_type: "card.arbitrary",
+      data: { title: "Unverified success", action: "execute" },
+    };
+    expect(parseKarenPresentation(unsupported)).toBeNull();
+    expect(presentationFromStructuredContent({ presentation: unsupported })).toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={unsupported} />);
+    expect(html).toContain("Structured presentation unavailable");
+    expect(html).not.toContain("Unverified success");
+    expect(html).not.toContain("<button");
+  });
+});
