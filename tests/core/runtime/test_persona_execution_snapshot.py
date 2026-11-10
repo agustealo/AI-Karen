@@ -385,3 +385,127 @@ async def test_stream_persona_scope_denial_emits_error_and_terminal_without_mode
     assert chunks[-1].metadata["requires_new_conversation"] is True
     assert chunks[-1].metadata["actual_model"] is None
     runtime._decide.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kcon771_persona_changes_cannot_grant_runtime_tool_or_memory_permissions():
+    """ExecutionPlan and action gate use only the same RuntimePolicy decision."""
+    from ai_karen_engine.core.runtime.contracts import ActionExecutionGate
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(
+        policy_decision_id="policy-approved-1",
+        required_capabilities=["weather.read"],
+        tool_requirements=["weather.query"],
+        plugin_candidates=["weather-observer"],
+        memory_write_allowed=False,
+        memory_scope="session",
+        policy_constraints={
+            "allowed_tools": ["weather.query"],
+            "allowed_plugins": ["weather-observer"],
+            "allowed_agents": [],
+        },
+    )
+    snapshots = (
+        PersonaExecutionSnapshot(
+            user_id="u1", tenant_id="t1", status="none",
+        ),
+        PersonaExecutionSnapshot(
+            user_id="u1", tenant_id="t1", status="ready",
+            persona_id="friendly", selection_revision=3,
+            tone="friendly", verbosity="brief",
+        ),
+        PersonaExecutionSnapshot(
+            user_id="u1", tenant_id="t1", status="ready",
+            persona_id="privileged-sounding", selection_revision=4,
+            tone="technical", verbosity="detailed",
+            memory_filter_required=True,
+        ),
+    )
+    signatures = []
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    for snapshot in snapshots:
+        request = _request()
+        request.persona_snapshot = snapshot
+        request.metadata.update({
+            "persona": {
+                "permissions": ["admin"],
+                "provider": "external",
+                "tools": ["admin.delete"],
+                "memory_write": True,
+            },
+            "allowed_capabilities": ["admin.delete", "memory.write"],
+        })
+        plan = runtime._build_authorized_plan(request, decision)
+        assert plan.matches_execution_scope(
+            user_id="u1", tenant_id="t1", session_id="s1",
+            policy_decision_id="policy-approved-1",
+        )
+        assert not plan.matches_execution_scope(
+            user_id="u1", tenant_id="other-tenant", session_id="s1",
+        )
+        assert not plan.matches_execution_scope(
+            user_id="u1", tenant_id="t1", session_id="other-session",
+        )
+        assert not plan.matches_execution_scope(
+            user_id="u1", tenant_id="t1", session_id="s1",
+            policy_decision_id="foreign-policy",
+        )
+        assert await ActionExecutionGate.authorize(plan, "weather.query")
+        assert await ActionExecutionGate.authorize(plan, "weather.read")
+        assert not await ActionExecutionGate.authorize(plan, "admin.delete")
+        assert not await ActionExecutionGate.authorize(plan, "memory.write")
+        assert not await ActionExecutionGate.authorize(plan, "external.provider")
+        signatures.append((
+            plan.policy_decision_id,
+            plan.authorized_user_id,
+            plan.authorized_tenant_id,
+            plan.authorized_session_id,
+            plan.allowed_capabilities,
+            plan.allowed_tools,
+            plan.allowed_plugins,
+            plan.allowed_agents,
+            plan.memory_scope,
+            plan.provider_constraints,
+        ))
+    assert signatures[0] == signatures[1] == signatures[2]
+
+
+@pytest.mark.asyncio
+async def test_kcon771_persona_cannot_revoke_policy_grants_or_override_model_request():
+    """Switching style cannot narrow authorized actions or reroute the model."""
+    from ai_karen_engine.core.runtime.contracts import ActionExecutionGate
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(
+        policy_decision_id="policy-granted",
+        required_capabilities=["memory.write"],
+        tool_requirements=["planner.read"],
+        memory_write_allowed=True,
+        memory_scope="user",
+        policy_constraints={"allowed_tools": ["planner.read"]},
+    )
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    plans = []
+    for persona_id, tone in (("friendly", "friendly"), ("strict", "professional")):
+        request = _request()
+        request.preferred_provider = "configured-local"
+        request.preferred_model = "chosen-model"
+        request.persona_snapshot = PersonaExecutionSnapshot(
+            user_id="u1", tenant_id="t1", status="ready",
+            persona_id=persona_id, tone=tone,
+        )
+        request.metadata["provider"] = "forged-external"
+        plan = runtime._build_authorized_plan(request, decision)
+        assert await ActionExecutionGate.authorize(plan, "memory.write")
+        assert await ActionExecutionGate.authorize(plan, "planner.read")
+        assert not await ActionExecutionGate.authorize(plan, "admin.delete")
+        assert request.preferred_provider == "configured-local"
+        assert request.preferred_model == "chosen-model"
+        plans.append((
+            plan.allowed_capabilities,
+            plan.allowed_tools,
+            plan.memory_scope,
+            plan.provider_constraints,
+        ))
+    assert plans[0] == plans[1]
