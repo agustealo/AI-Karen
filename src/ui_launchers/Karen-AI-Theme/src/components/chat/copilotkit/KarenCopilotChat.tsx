@@ -110,7 +110,7 @@ export function KarenCopilotChat({
               <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
               <div data-testid="karen-copilot-persona-footer"
                 className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
-                <KarenPersonaSelector />
+                <KarenPersonaSelector onStartNewConversation={onStartNewConversation} />
               </div>
             </div>
             <KarenCopilotVerifiedRail />
