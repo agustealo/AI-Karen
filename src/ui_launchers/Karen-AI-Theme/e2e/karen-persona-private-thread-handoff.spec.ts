@@ -219,3 +219,193 @@ test("persona switch offers a real CopilotKit conversation without hidden infere
     }
   }
 });
+
+
+/**
+ * Source-only until explicitly run on a reviewed deployment. Compare two
+ * real model turns carrying identical user-supplied evidence, not mock output
+ * or a replay-only UI. A model may paraphrase, but must preserve both facts.
+ * No screenshots, private answers, tokens or credentials are attached to CI.
+ */
+test("two authenticated personas preserve the same user evidence and verified model receipts", async ({ page }) => {
+  test.skip(
+    process.env.KAREN_KCON771_INVARIANCE_ACCEPTANCE !== "1",
+    "Requires a reviewed deployment, dedicated sanitized account and two active personas",
+  );
+  if (!email || !password) {
+    throw new Error("Two-persona acceptance requires approved sanitized credentials");
+  }
+  test.setTimeout(9 * 60_000);
+  const target = await requireReviewedBackend(page);
+  await signInApprovedKaren(page, email, password);
+  await page.goto(new URL("/dashboard", target).toString(), { waitUntil: "domcontentloaded" });
+
+  const shell = page.getByTestId("karen-copilot-consumer-chat");
+  const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
+  if (!(await shell.isVisible().catch(() => false)) &&
+      await launch.isVisible().catch(() => false)) {
+    await launch.click();
+  }
+  await expect(shell).toBeVisible({ timeout: 30_000 });
+  await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+
+  const preferencesUrl = "/api/personas/preferences/me";
+  const beforeResult = await authorizedApi(page, preferencesUrl);
+  expect(beforeResult.status).toBe(200);
+  const before = beforeResult.body as SavedPreferences;
+  assertPreference(before);
+  const catalogResult = await authorizedApi(page, "/api/personas/");
+  expect(catalogResult.status).toBe(200);
+  const catalog = catalogResult.body as Array<{ id: string; is_active: boolean }>;
+  expect(Array.isArray(catalog)).toBe(true);
+  const alternative = catalog.find(item => item && item.is_active &&
+    typeof item.id === "string" && item.id.length > 0 &&
+    item.id !== before.active_persona_id);
+  expect(alternative, "Two-persona proof requires a distinct, active persona")
+    .toBeDefined();
+  if (!alternative) return;
+
+  const sampleId = "KCON771-" + Date.now().toString(36).toUpperCase();
+  const evidencePrompt =
+    `Use only the two facts in this user message. The verified sample ID is ${sampleId}; ` +
+    "the verified measurement is 42.5 units. State the ID and measurement exactly, " +
+    "without adding any other measurements.";
+  const actualReceipts: Array<{ provider: string; model: string; source: string }> = [];
+  let selectionChanged = false;
+
+  try {
+    for (const desiredPersona of [before.active_persona_id, alternative.id]) {
+      const selector = shell.getByRole("combobox", { name: "Active Karen persona" });
+      await expect(selector).toHaveValue(
+        desiredPersona === alternative.id ? before.active_persona_id ?? "" : desiredPersona ?? "",
+      );
+
+      let conversationId: string | null = null;
+      if (desiredPersona !== before.active_persona_id) {
+        const savedResponse = page.waitForResponse(response =>
+          response.request().method() === "PUT" &&
+          new URL(response.url()).pathname === preferencesUrl,
+          { timeout: 20_000 },
+        );
+        await selector.selectOption(desiredPersona ?? "");
+        const receiptResponse = await savedResponse;
+        expect(receiptResponse.status()).toBe(200);
+        const persisted = await receiptResponse.json() as SavedPreferences;
+        expect(persisted.active_persona_id).toBe(desiredPersona);
+        expect(persisted.revision).toBe(before.revision + 1);
+        selectionChanged = true;
+        const start = shell.getByRole("button", {
+          name: "Start new conversation for selected persona",
+        });
+        await expect(start).toBeVisible();
+        const initialId = await shell.getAttribute("data-conversation-id");
+        await start.click();
+        await expect.poll(async () => {
+          const next = await shell.getAttribute("data-conversation-id");
+          return next && next !== initialId ? next : null;
+        }, { timeout: 30_000 }).not.toBeNull();
+        conversationId = await shell.getAttribute("data-conversation-id");
+      } else {
+        const initialId = await shell.getAttribute("data-conversation-id");
+        await shell.getByRole("button", { name: "New conversation" }).click();
+        await expect.poll(async () => {
+          const next = await shell.getAttribute("data-conversation-id");
+          return next && next !== initialId ? next : null;
+        }, { timeout: 30_000 }).not.toBeNull();
+        conversationId = await shell.getAttribute("data-conversation-id");
+      }
+      expect(conversationId).toMatch(UUID);
+      await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+
+      const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+      await expect(composer).toBeVisible();
+      const outbound: string[] = [];
+      const onRequest = (request: { method(): string; url(): string }): void => {
+        if (request.method() !== "POST") return;
+        const path = new URL(request.url()).pathname;
+        if (path === "/api/copilotkit/agent/default/run" ||
+            path === "/api/chat/ag-ui" || path === "/api/chat/stream") {
+          outbound.push(path);
+        }
+      };
+      page.on("request", onRequest);
+      try {
+        await composer.fill(evidencePrompt);
+        await composer.press("Enter");
+        await expect.poll(async () => {
+          const result = await authorizedApi(
+            page, `/api/copilotkit/threads/${conversationId}/messages`,
+          );
+          if (result.status !== 200 || !result.body ||
+              typeof result.body !== "object") return false;
+          const transcript = result.body as Record<string, unknown>;
+          if (transcript.threadId !== conversationId ||
+              !Array.isArray(transcript.messages) ||
+              !Array.isArray(transcript.replayEvents)) return false;
+          const messages = transcript.messages as Array<Record<string, unknown>>;
+          const positions = messages.flatMap((item, index) =>
+            item.role === "user" && item.content === evidencePrompt ? [index] : []);
+          if (positions.length !== 1) return false;
+          const answer = messages[positions[0] + 1];
+          if (!answer || answer.role !== "assistant" ||
+              typeof answer.id !== "string" ||
+              typeof answer.content !== "string" || !answer.content.trim()) return false;
+          const receipts = (transcript.replayEvents as Array<Record<string, unknown>>)
+            .filter(event => event.type === "CUSTOM" &&
+              event.name === "karen.execution_receipt.v1" &&
+              event.messageId === answer.id);
+          if (receipts.length !== 1 || !receipts[0].value ||
+              typeof receipts[0].value !== "object") return false;
+          const receipt = receipts[0].value as Record<string, unknown>;
+          if (!["actual_provider", "actual_model", "response_source"].every(key =>
+            typeof receipt[key] === "string" &&
+            (receipt[key] as string).trim().length > 0 &&
+            !["none", "unknown", "unavailable"].includes(
+              (receipt[key] as string).trim().toLowerCase(),
+            ))) return false;
+          if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/i.test(
+            receipt.response_source as string,
+          )) return false;
+          // A nonempty reply is not enough. Both supplied facts must survive.
+          if (!answer.content.includes(sampleId) ||
+              !answer.content.includes("42.5")) return false;
+          actualReceipts.push({
+            provider: receipt.actual_provider as string,
+            model: receipt.actual_model as string,
+            source: receipt.response_source as string,
+          });
+          return true;
+        }, {
+          timeout: 120_000, intervals: [1000, 2000, 3000],
+          message: "One real backend-saved answer must preserve both facts and carry a model receipt",
+        }).toBe(true);
+      } finally {
+        page.off("request", onRequest);
+      }
+      expect(outbound, "Each persona must submit exactly one canonical model request")
+        .toHaveLength(1);
+    }
+    expect(actualReceipts).toHaveLength(2);
+    // Fallback routing may legitimately differ. Never claim identical models
+    // merely because the styles differ; each receipt must attest its executor.
+    expect(actualReceipts.every(r => Boolean(r.provider && r.model && r.source))).toBe(true);
+  } finally {
+    if (selectionChanged) {
+      const latestResult = await authorizedApi(page, preferencesUrl);
+      expect(latestResult.status).toBe(200);
+      const latest = latestResult.body as SavedPreferences;
+      expect(latest.active_persona_id, "Never overwrite a concurrent persona update")
+        .toBe(alternative.id);
+      const restore = await authorizedApi(page, preferencesUrl, "PUT", {
+        active_persona_id: before.active_persona_id,
+        expected_revision: latest.revision,
+      });
+      expect(restore.status).toBe(200);
+      const restored = restore.body as SavedPreferences;
+      expect(restored.active_persona_id).toBe(before.active_persona_id);
+      expect(restored.revision).toBe(latest.revision + 1);
+    }
+    // These conversations contain real evidence and model output. Do not
+    // silently delete them, even from an approved sanitized account.
+  }
+});
