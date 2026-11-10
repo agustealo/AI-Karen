@@ -141,6 +141,11 @@ async function expectRealCopilotKitStyles(page: Page): Promise<void> {
 const releaseMode = process.env.KAREN_CHAT_BOOT_ACCEPTANCE === "1";
 const localMode = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
 const enabled = releaseMode || localMode;
+const kcon770FaultAcceptance = process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1";
+if (kcon770FaultAcceptance && (!enabled ||
+    !process.env.KAREN_KCON770_FAILURE_PROMPT?.trim())) {
+  throw new Error("KCON-770 failure acceptance needs approved browser mode and an operator-controlled failure prompt");
+}
 const authState = process.env.KAREN_E2E_AUTH_STATE;
 const expectedRevision = process.env.KAREN_CHAT_BOOT_REVISION;
 const approvedUrl = process.env.KAREN_BASE_URL;
@@ -763,4 +768,113 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       expect(failures, "No chunk fetch errors or uncaught page exceptions are permitted").toEqual([]);
     }
   });
+  // KCON-770: operator-authorized runtime failure only. This test never
+  // manufactures a response or overrides network requests in Playwright.
+  // Run only against a controlled backend configured to fail this exact prompt.
+  test("authorized backend failure stays honest after authenticated reload", async ({ page }, testInfo) => {
+    test.skip(!kcon770FaultAcceptance, "Explicitly authorize KCON-770 runtime fault acceptance");
+    test.setTimeout(180_000);
+    const target = new URL(approvedUrl!);
+    await requireReviewedRevision(page, target);
+    await requireLiveCanonicalBackend(page, target);
+
+    if (!authState) {
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!, { allowLocalLoopback: localMode });
+    }
+    await page.goto(new URL("/dashboard", target).toString());
+    const shell = page.getByTestId("karen-copilot-consumer-chat");
+    const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await shell.isVisible().catch(() => false)) &&
+        await launch.isVisible().catch(() => false)) {
+      await launch.click();
+    }
+    await expect(shell).toBeVisible({ timeout: 30_000 });
+    await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+
+    const previousId = await shell.getAttribute("data-conversation-id");
+    await shell.getByRole("button", { name: "New conversation" }).click();
+    await expect.poll(async () => {
+      const next = await shell.getAttribute("data-conversation-id");
+      return next && next !== previousId ? next : null;
+    }, { timeout: 30_000 }).not.toBeNull();
+    const conversationId = await shell.getAttribute("data-conversation-id");
+    expect(conversationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+
+    const prompt = process.env.KAREN_KCON770_FAILURE_PROMPT!;
+    const runRequests: string[] = [];
+    page.on("request", request => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (
+        path === "/api/copilotkit/agent/default/run" ||
+        path === "/api/chat/ag-ui" ||
+        path === "/api/chat/stream"
+      )) runRequests.push(path);
+    });
+    const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+    await expect(composer).toBeVisible();
+    await composer.fill(prompt);
+    await composer.press("Enter");
+
+    const alert = shell.getByRole("alert").filter({
+      hasText: "Karen could not complete the request",
+    });
+    await expect(alert, "An actual SDK/backend failure must be visible").toBeVisible({
+      timeout: 120_000,
+    });
+    expect(runRequests, "Failure must not retry the submitted turn automatically").toHaveLength(1);
+    await expect(shell.getByTestId("karen-copilot-assistant-message")).toHaveCount(0);
+    await expect(composer, "Accepted failure must not silently restore and resend the draft")
+      .toHaveValue("");
+
+    // Only the cropped generic alert is eligible for a private local screenshot.
+    // Authenticated page traces, videos and full-page captures remain disabled.
+    if (process.env.KAREN_KCON770_PRIVATE_EVIDENCE === "1") {
+      expect(process.env.CI, "Private error screenshot must never run in hosted CI").not.toBe("true");
+      await alert.screenshot({ path: testInfo.outputPath("kcon770-generic-error.png") });
+    }
+
+    const assertNoFalseSuccess = async (): Promise<void> => {
+      const result = await readAuthorizedSameOriginJson(
+        page, `/api/copilotkit/threads/${conversationId}/messages`,
+      );
+      expect(result.ok, "Canonical authorized replay must be readable").toBe(true);
+      const history = result.body as {
+        threadId?: string;
+        messages?: Array<{ role?: string; content?: string }>;
+        replayEvents?: Array<{ type?: string; name?: string; messageId?: string }>;
+      };
+      expect(history.threadId).toBe(conversationId);
+      expect(Array.isArray(history.messages)).toBe(true);
+      const messages = history.messages ?? [];
+      expect(messages.filter(item => item.role === "user" && item.content === prompt).length)
+        .toBeLessThanOrEqual(1);
+      expect(messages.filter(item => item.role === "assistant"),
+        "A failed new thread cannot persist a successful assistant answer").toHaveLength(0);
+      expect((history.replayEvents ?? []).filter(item =>
+        item.type === "CUSTOM" && item.name === "karen.execution_receipt.v1"),
+      "Failed run must not acquire a completed assistant receipt").toHaveLength(0);
+    };
+    await expect.poll(async () => {
+      const response = await readAuthorizedSameOriginJson(
+        page, `/api/copilotkit/threads/${conversationId}/messages`,
+      );
+      return response.ok;
+    }, { timeout: 30_000 }).toBe(true);
+    await assertNoFalseSuccess();
+
+    await page.reload();
+    const restored = page.getByTestId("karen-copilot-consumer-chat");
+    const reopen = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await restored.isVisible().catch(() => false)) &&
+        await reopen.isVisible().catch(() => false)) {
+      await reopen.click();
+    }
+    await expect(restored).toHaveAttribute("data-conversation-id", conversationId!);
+    await expect(restored.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+    await expect(restored.getByTestId("karen-copilot-assistant-message")).toHaveCount(0);
+    await assertNoFalseSuccess();
+  });
+
 });
