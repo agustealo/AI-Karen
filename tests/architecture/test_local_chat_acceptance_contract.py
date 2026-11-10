@@ -30,7 +30,7 @@ def test_release_requires_https_and_reviewed_commit() -> None:
     assert 'if (!releaseMode) return;' in source
     assert 'new URL("/api/deployment-revision", target)' in source
     assert "await requireReviewedRevision(page, target)" in source
-    assert source.count("await requireReviewedRevision(page, target)") == 3
+    assert source.count("await requireReviewedRevision(page, target)") == 4
 
 
 def test_local_reuses_real_first_turn_model_persistence_and_replay_proof() -> None:
@@ -79,7 +79,7 @@ def test_first_prompt_rich_presentation_replay_is_bound_to_original_assistant() 
 def test_first_presentation_is_visible_before_history_poll_or_replay() -> None:
     source = SPEC.read_text(encoding="utf-8")
     # A history-only UI cannot pass the initial send assertion.
-    start = source.rindex('await composer.fill(prompt);')
+    start = source.index('await composer.fill(prompt);', source.index('// Observe the actual SDK send. A retry'))
     sent = source.index('await composer.press("Enter");', start)
     visible = source.index('const visibleCard = shell.getByTestId(scenario.testId);', sent)
     displayed = source.index('await expect(visibleCard).toBeVisible();', visible)
@@ -177,3 +177,22 @@ def test_kcon776_benchmark_has_zero_retries_and_runs_headless_on_local_machine()
     assert "KAREN_LOCAL_LATENCY_BENCHMARK=1" in (
         __import__("json").loads((SPEC.parents[1] / "package.json").read_text(encoding="utf-8"))
     )["scripts"]["test:e2e:latency-local"]
+
+
+def test_kcon770_failure_acceptance_requires_operator_fault_and_private_evidence() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    assert 'process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1"' in source
+    assert 'process.env.KAREN_KCON770_FAILURE_PROMPT?.trim()' in source
+    assert 'test.skip(!kcon770FaultAcceptance' in source
+    assert 'authorized backend failure stays honest after authenticated reload' in source
+    assert 'await requireReviewedRevision(page, target)' in source
+    assert 'await requireLiveCanonicalBackend(page, target)' in source
+    assert 'await signInApprovedKaren(page,' in source
+    assert 'expect(runRequests, "Failure must not retry the submitted turn automatically").toHaveLength(1)' in source
+    assert 'await assertNoFalseSuccess()' in source
+    assert 'await page.reload()' in source
+    assert 'process.env.KAREN_KCON770_PRIVATE_EVIDENCE === "1"' in source
+    assert 'expect(process.env.CI, "Private error screenshot must never run in hosted CI").not.toBe("true")' in source
+    assert 'await alert.screenshot({' in source
+    assert 'page.route(' not in source
+    assert 'route.fulfill(' not in source
