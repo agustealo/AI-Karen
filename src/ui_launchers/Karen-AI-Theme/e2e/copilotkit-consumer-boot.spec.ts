@@ -771,8 +771,8 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
   // KCON-770: operator-authorized runtime failure only. This test never
   // manufactures a response or overrides network requests in Playwright.
   // Run only against a controlled backend configured to fail this exact prompt.
-  test.skip(!kcon770FaultAcceptance, "Explicitly authorize KCON-770 runtime fault acceptance");
   test("authorized backend failure stays honest after authenticated reload", async ({ page }, testInfo) => {
+    test.skip(!kcon770FaultAcceptance, "Explicitly authorize KCON-770 runtime fault acceptance");
     test.setTimeout(180_000);
     const target = new URL(approvedUrl!);
     await requireReviewedRevision(page, target);
