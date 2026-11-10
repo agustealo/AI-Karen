@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sdk = vi.hoisted(() => ({
   provider: [] as Array<Record<string, unknown>>,
   controlled: [] as Array<Record<string, unknown>>,
+  persona: [] as Array<Record<string, unknown>>,
   providerMounts: 0,
   providerUnmounts: 0,
   auth: {
@@ -33,7 +34,10 @@ vi.mock("@copilotkit/react-core/v2", () => ({
 }));
 
 vi.mock("@/components/chat/KarenPersonaSelector", () => ({
-  KarenPersonaSelector: () => <div data-testid="backend-governed-persona" />,
+  KarenPersonaSelector: (props: Record<string, unknown>) => {
+    sdk.persona.push(props);
+    return <div data-testid="backend-governed-persona" />;
+  },
 }));
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedRail", () => ({
@@ -61,6 +65,7 @@ const CONVERSATION = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 beforeEach(() => {
   sdk.provider.length = 0;
   sdk.controlled.length = 0;
+  sdk.persona.length = 0;
   sdk.providerMounts = 0;
   sdk.providerUnmounts = 0;
   sdk.auth.user = {
@@ -87,6 +92,23 @@ describe("Karen CopilotKit chat compatibility shell", () => {
     expect(sdk.provider[0].runtimeUrl).toBe("/api/copilotkit");
     expect(sdk.provider[0].enableInspector).toBe(false);
     expect(sdk.provider[0].properties).toBeUndefined();
+  });
+
+  it("forwards only the canonical session handoff to the persona footer", async () => {
+    const startNewConversation = vi.fn().mockResolvedValue(undefined);
+    render(<KarenCopilotChat conversationId={CONVERSATION}
+      onStartNewConversation={startNewConversation} />);
+    expect(sdk.persona).toHaveLength(1);
+    expect(sdk.persona[0].onStartNewConversation).toBe(startNewConversation);
+    expect(startNewConversation).not.toHaveBeenCalled();
+    await (sdk.persona[0].onStartNewConversation as () => Promise<void>)();
+    expect(startNewConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invent a new-conversation authority when the callback is unavailable", () => {
+    render(<KarenCopilotChat conversationId={CONVERSATION} />);
+    expect(sdk.persona).toHaveLength(1);
+    expect(sdk.persona[0].onStartNewConversation).toBeUndefined();
   });
 
   it("uses the pinned native outbound messageFilter without truncating the visible SDK transcript", () => {
