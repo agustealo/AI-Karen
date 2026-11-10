@@ -46,7 +46,7 @@ def test_credential_entry_requires_verified_origin_before_and_after_login() -> N
 def test_local_http_permission_is_not_given_to_other_consumer_suites() -> None:
     source = CHAT.read_text(encoding="utf-8")
     optin = "signInApprovedKaren(page, approvedEmail!, approvedPassword!, { allowLocalLoopback: localMode })"
-    assert source.count(optin) == 3
+    assert source.count(optin) == 4
     assert 'const localMode = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1"' in source
     assert 'if (releaseMode && localMode)' in source
     assert 'await requireLiveCanonicalBackend(page, target)' in source
