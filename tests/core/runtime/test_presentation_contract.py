@@ -393,3 +393,112 @@ def test_unsupported_presentation_is_not_success():
         **envelope, "component_type": "unsafe.html",
         "data": {"html": "<script>alert(1)</script>"},
     }) is None
+
+
+def test_kcon771_layout_changes_only_order_not_authorized_facts_or_sources():
+    """Different presentation layouts may not change verified facts or references."""
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+
+    parts = [
+        {
+            "schema_version": 1,
+            "presentation_id": "clock",
+            "component_type": "time.observation",
+            "evidence_ref": "tenant-a:clock",
+            "data": {
+                "formatted": "10:15 AM", "timezone": "America/Detroit",
+                "private_token": "must-never-project",
+            },
+        },
+        {
+            "schema_version": 1,
+            "presentation_id": "weather",
+            "component_type": "weather.observation",
+            "evidence_ref": "tenant-a:weather",
+            "data": {
+                "location": "Detroit", "temperature_f": 60.3,
+                "source_url": "https://weather.example.com/report",
+                "secret_token": "must-never-project",
+            },
+        },
+    ]
+    common = dict(
+        presentation_id="combined",
+        evidence_ref="tenant-a:bundle",
+        authorized_parts=parts,
+        authorized_evidence_refs=["tenant-a:clock", "tenant-a:weather"],
+        correlation_id="correlation-verified",
+    )
+    outputs = [
+        compose_authorized_surface(
+            **common,
+            proposed_layout={"layout": layout, "part_ids": order},
+        )
+        for layout, order in (
+            ("stack", ["clock", "weather"]),
+            ("grid", ["weather", "clock"]),
+        )
+    ]
+    assert all(output is not None for output in outputs)
+    expected = {
+        part["presentation_id"]: validate_presentation(part)
+        for part in parts
+    }
+    for output in outputs:
+        assert output is not None
+        assert output["evidence_ref"] == "tenant-a:bundle"
+        assert output["correlation_id"] == "correlation-verified"
+        assert {
+            item["presentation_id"]: item for item in output["data"]["items"]
+        } == expected
+        assert set(output["data"]["evidence_refs"]) == {
+            "tenant-a:clock", "tenant-a:weather",
+        }
+        assert "must-never-project" not in str(output)
+    assert [item["presentation_id"] for item in outputs[0]["data"]["items"]] == [
+        "clock", "weather",
+    ]
+    assert [item["presentation_id"] for item in outputs[1]["data"]["items"]] == [
+        "weather", "clock",
+    ]
+
+
+def test_kcon771_layout_proposals_cannot_expand_evidence_or_execution_authority():
+    """Untrusted layout requests cannot modify values, add tools, or reach other tenants."""
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+
+    verified = {
+        "schema_version": 1,
+        "presentation_id": "clock",
+        "component_type": "time.observation",
+        "evidence_ref": "tenant-a:clock",
+        "data": {"formatted": "10:15 AM", "timezone": "America/Detroit"},
+    }
+    common = dict(
+        presentation_id="combined",
+        evidence_ref="tenant-a:bundle",
+        authorized_parts=[verified],
+        authorized_evidence_refs=["tenant-a:clock"],
+    )
+    disallowed = [
+        {"layout": "grid", "part_ids": ["clock"], "persona": "admin"},
+        {"layout": "grid", "part_ids": ["clock"], "data": {"formatted": "4:00 PM"}},
+        {"layout": "grid", "part_ids": ["clock"], "actions": ["delete-user"]},
+        {"layout": "grid", "part_ids": ["clock", "tenant-b:private"]},
+        {"layout": "grid", "part_ids": ["clock", "clock"]},
+        {"layout": "iframe", "part_ids": ["clock"]},
+    ]
+    for plan in disallowed:
+        assert compose_authorized_surface(**common, proposed_layout=plan) is None
+
+    foreign = {**verified, "evidence_ref": "tenant-b:clock"}
+    assert compose_authorized_surface(
+        **{**common, "authorized_parts": [foreign]},
+        proposed_layout={"layout": "stack", "part_ids": ["clock"]},
+    ) is None
+    assert compose_authorized_surface(
+        **{**common, "authorized_parts": [
+            {**verified, "component_type": "surface.composition"},
+        ]},
+        proposed_layout={"layout": "stack", "part_ids": ["clock"]},
+    ) is None
