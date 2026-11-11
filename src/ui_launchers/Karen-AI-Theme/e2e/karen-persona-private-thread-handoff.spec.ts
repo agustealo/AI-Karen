@@ -258,12 +258,21 @@ test("two authenticated personas preserve the same user evidence and verified mo
   expect(catalogResult.status).toBe(200);
   const catalog = catalogResult.body as Array<{ id: string; is_active: boolean }>;
   expect(Array.isArray(catalog)).toBe(true);
+  // Default Karen is not a second named persona. This source acceptance
+  // requires two genuinely different active persona identities, rather than
+  // silently comparing one named persona against a missing selection.
+  const originalPersona = catalog.find(item => item && item.is_active &&
+    typeof item.id === "string" && item.id === before.active_persona_id);
+  expect(originalPersona, "Two-persona proof requires a named active starting persona")
+    .toBeDefined();
   const alternative = catalog.find(item => item && item.is_active &&
     typeof item.id === "string" && item.id.length > 0 &&
     item.id !== before.active_persona_id);
-  expect(alternative, "Two-persona proof requires a distinct, active persona")
+  expect(alternative, "Two-persona proof requires a second named active persona")
     .toBeDefined();
-  if (!alternative) return;
+  if (!originalPersona || !alternative) {
+    throw new Error("A sanitized account with two active named personas is required");
+  }
 
   const sampleId = "KCON771-" + Date.now().toString(36).toUpperCase();
   const evidencePrompt =
@@ -316,10 +325,21 @@ test("two authenticated personas preserve the same user evidence and verified mo
       }
       expect(conversationId).toMatch(UUID);
       await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+      // Re-read the backend immediately before each inference. A selector
+      // value or a successful PUT response alone cannot prove current persona.
+      const confirmedSelection = await authorizedApi(page, preferencesUrl);
+      expect(confirmedSelection.status).toBe(200);
+      const effectivePreferences = confirmedSelection.body as SavedPreferences;
+      expect(effectivePreferences.active_persona_id).toBe(desiredPersona);
+      expect(effectivePreferences.revision).toBe(
+        desiredPersona === before.active_persona_id ? before.revision : before.revision + 1,
+      );
 
       const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
       await expect(composer).toBeVisible();
       const outbound: string[] = [];
+      let persistedAnswer = "";
+      let persistedAssistantId = "";
       const onRequest = (request: { method(): string; url(): string }): void => {
         if (request.method() !== "POST") return;
         const path = new URL(request.url()).pathname;
@@ -369,6 +389,8 @@ test("two authenticated personas preserve the same user evidence and verified mo
           // A nonempty reply is not enough. Both supplied facts must survive.
           if (!answer.content.includes(sampleId) ||
               !answer.content.includes("42.5")) return false;
+          persistedAnswer = answer.content;
+          persistedAssistantId = answer.id;
           actualReceipts.push({
             provider: receipt.actual_provider as string,
             model: receipt.actual_model as string,
@@ -379,10 +401,57 @@ test("two authenticated personas preserve the same user evidence and verified mo
           timeout: 120_000, intervals: [1000, 2000, 3000],
           message: "One real backend-saved answer must preserve both facts and carry a model receipt",
         }).toBe(true);
+        expect(persistedAnswer).toContain(sampleId);
+        expect(persistedAnswer).toContain("42.5");
+        await expect(
+          shell.getByTestId("karen-copilot-assistant-message")
+            .filter({ hasText: persistedAnswer }).last(),
+          "The actual model answer must render live before consulting replay",
+        ).toBeVisible({ timeout: 30_000 });
+
+        // Reload must not rerun the prompt or fabricate a replacement answer.
+        // Both the browser surface and the backend receipt must still refer
+        // to the exact original persisted assistant turn after cold reload.
+        await page.reload();
+        const restoredShell = page.getByTestId("karen-copilot-consumer-chat");
+        const reopen = page.getByRole("button", { name: "Ask Karen", exact: true });
+        if (!(await restoredShell.isVisible().catch(() => false)) &&
+            await reopen.isVisible().catch(() => false)) {
+          await reopen.click();
+        }
+        await expect(restoredShell).toHaveAttribute(
+          "data-conversation-id", conversationId!, { timeout: 30_000 },
+        );
+        await expect(
+          restoredShell.getByTestId("karen-copilot-assistant-message")
+            .filter({ hasText: persistedAnswer }).last(),
+          "Reload must display the same persisted model answer",
+        ).toBeVisible({ timeout: 30_000 });
+        const restoredResult = await authorizedApi(
+          page, `/api/copilotkit/threads/${conversationId}/messages`,
+        );
+        expect(restoredResult.status).toBe(200);
+        const restoredTranscript = restoredResult.body as {
+          threadId: string;
+          messages: Array<{ id: string; role: string; content: string }>;
+          replayEvents: Array<{ type: string; name: string; messageId: string; value: unknown }>;
+        };
+        expect(restoredTranscript.threadId).toBe(conversationId);
+        const savedTurns = restoredTranscript.messages.filter(message =>
+          message.id === persistedAssistantId && message.role === "assistant" &&
+          message.content === persistedAnswer);
+        expect(savedTurns, "Cold reload must preserve exactly the same saved assistant turn")
+          .toHaveLength(1);
+        expect(restoredTranscript.replayEvents.filter(event =>
+          event.type === "CUSTOM" &&
+          event.name === "karen.execution_receipt.v1" &&
+          event.messageId === persistedAssistantId),
+        "Cold reload must preserve exactly one receipt for the original assistant turn")
+          .toHaveLength(1);
       } finally {
         page.off("request", onRequest);
       }
-      expect(outbound, "Each persona must submit exactly one canonical model request")
+      expect(outbound, "Send and reload must not invoke more than one model execution")
         .toHaveLength(1);
     }
     expect(actualReceipts).toHaveLength(2);
