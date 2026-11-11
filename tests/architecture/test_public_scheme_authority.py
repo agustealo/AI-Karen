@@ -152,7 +152,7 @@ def test_production_and_smoke_contracts_require_explicit_public_scheme() -> None
     assert "-e WEB_PUBLIC_SCHEME=http" in first_boot
 
 
-@pytest.mark.parametrize("scheme", [None, "", "ftp", "https,http"])
+@pytest.mark.parametrize("scheme", [None, "", "ftp", "https,http", "https://", "http://", "h2"])
 def test_web_ingress_rejects_missing_or_invalid_scheme_before_next_import(scheme) -> None:
     """A bad scheme must terminate immediately even without installed Next.js."""
     node = shutil.which("node")
@@ -183,3 +183,29 @@ def test_web_ingress_validates_scheme_before_initializing_nextjs() -> None:
     listener = source.index("server.listen(")
     assert validation < framework_import < listener
     assert "import next from 'next'" not in source
+
+
+def test_production_image_scheme_smoke_rejects_malformed_values_not_just_missing() -> None:
+    """Built image proof must fail closed for every invalid ingress configuration."""
+    workflow = _read(FIRST_BOOT_WORKFLOW)
+    title = "      - name: Prove web ingress rejects missing or malformed public scheme"
+    assert workflow.count(title) == 1
+    step = workflow.split(title, 1)[1].split(
+        "\n      - name: Execute real production first boot", 1
+    )[0]
+
+    assert 'for case_name in missing empty unsupported comma_list url_form; do' in step
+    assert 'missing) ;;' in step
+    assert 'empty) scheme_env=(-e WEB_PUBLIC_SCHEME=) ;;' in step
+    assert 'unsupported) scheme_env=(-e WEB_PUBLIC_SCHEME=ftp) ;;' in step
+    assert 'comma_list) scheme_env=(-e WEB_PUBLIC_SCHEME=https,http) ;;' in step
+    assert 'url_form) scheme_env=(-e WEB_PUBLIC_SCHEME=https://) ;;' in step
+    assert 'timeout 15s docker run --rm "${scheme_env[@]}" ai-karen-web:beta' in step
+    assert 'if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then' in step
+    assert 'grep -Fq \'WEB_PUBLIC_SCHEME must be explicitly configured as "http" or "https"\'' in step
+    assert 'trap \'rm -rf "$log_dir"\' EXIT' in step
+    assert "-e WEB_PUBLIC_SCHEME=http" in workflow
+    # Do not replace the production-image check with an untrusted source-only
+    # mock or an HTTP liveness check that passes after misconfigured startup.
+    assert "docker run --rm" in step
+    assert "node --eval" not in step
