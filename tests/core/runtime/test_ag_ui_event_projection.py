@@ -632,6 +632,8 @@ def test_complete_emits_allowlisted_execution_receipt_before_terminal():
         fallback_level=1,
         degraded_mode=True,
         degradation_reason="requested_unavailable",
+        persona_id="persona-verified",
+        persona_selection_revision=12,
         secret="never-expose",
         provider_attempts=[{"api_key": "never-expose"}],
     ))
@@ -642,6 +644,8 @@ def test_complete_emits_allowlisted_execution_receipt_before_terminal():
     assert receipt["actual_model"] == "fallback-model"
     assert receipt["fallback_level"] == 1
     assert receipt["degraded_mode"] is True
+    assert receipt["persona_id"] == "persona-verified"
+    assert receipt["persona_selection_revision"] == 12
     assert "never-expose" not in str(events)
 
 
@@ -694,3 +698,35 @@ def test_time_capability_projects_attested_card_without_inventing_model_receipt(
     completed = projection.project(chunk("complete", **metadata))
     assert completed == [{"type": "RUN_FINISHED", "threadId": "thread", "runId": "run"}]
     assert "karen.execution_receipt.v1" not in str(events + completed)
+
+
+@pytest.mark.parametrize(
+    ("persona_id", "revision"),
+    [
+        ("", 2),
+        ("p" * 129, 2),
+        ("valid", -1),
+        ("valid", True),
+        ("valid", "2"),
+        ("valid", 2**53),
+        ({"client": "forgery"}, 2),
+    ],
+)
+def test_persona_execution_receipt_rejects_unbounded_or_untyped_identity(
+    persona_id, revision,
+):
+    p = AGUIEventProjection(thread_id="thread", run_id="run")
+    p.begin()
+    events = p.project(chunk(
+        "complete",
+        actual_provider="vllm",
+        actual_model="observed-model",
+        response_source="model",
+        persona_id=persona_id,
+        persona_selection_revision=revision,
+        secret="never-expose",
+    ))
+    receipt = events[0]["value"]
+    assert "persona_id" not in receipt
+    assert "persona_selection_revision" not in receipt
+    assert "never-expose" not in str(events)

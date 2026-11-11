@@ -509,3 +509,44 @@ async def test_kcon771_persona_cannot_revoke_policy_grants_or_override_model_req
             plan.provider_constraints,
         ))
     assert plans[0] == plans[1]
+
+
+def test_terminal_receipt_uses_only_frozen_in_scope_persona_selection():
+    """Never infer execution persona from client request metadata or saved UI."""
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    request = _request()
+    decision = SimpleNamespace(
+        intent="chat.general", is_graph_required=False, intent_confidence=1.0,
+    )
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="ready",
+        persona_id="server-persona", selection_revision=9,
+    )
+
+    def terminal():
+        return runtime._build_stream_terminal_metadata(
+            request, decision, {}, {}, {}, 12.0, "request-1", "response-1",
+        )
+
+    result = terminal()
+    assert result["persona_id"] == "server-persona"
+    assert result["persona_selection_revision"] == 9
+    assert result["persona_id"] != request.metadata["persona_id"]
+
+    # An internally reused snapshot with a different tenant must not become
+    # a release receipt even when its persona label is plausible.
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="other-tenant", status="ready",
+        persona_id="foreign-persona", selection_revision=10,
+    )
+    foreign = terminal()
+    assert foreign["persona_id"] is None
+    assert foreign["persona_selection_revision"] is None
+
+    request.persona_snapshot = PersonaExecutionSnapshot(
+        user_id="u1", tenant_id="t1", status="unavailable",
+        persona_id="unverified-persona", selection_revision=11,
+    )
+    unavailable = terminal()
+    assert unavailable["persona_id"] is None
+    assert unavailable["persona_selection_revision"] is None

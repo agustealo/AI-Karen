@@ -386,6 +386,13 @@ test("two authenticated personas preserve the same user evidence and verified mo
           if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/i.test(
             receipt.response_source as string,
           )) return false;
+          // A saved preference does not establish what persona the runtime
+          // actually admitted. Require the authenticated frozen snapshot in
+          // the receipt tied to this exact persisted assistant turn.
+          if (receipt.persona_id !== desiredPersona ||
+              receipt.persona_selection_revision !== effectivePreferences.revision) {
+            return false;
+          }
           // A nonempty reply is not enough. Both supplied facts must survive.
           if (!answer.content.includes(sampleId) ||
               !answer.content.includes("42.5")) return false;

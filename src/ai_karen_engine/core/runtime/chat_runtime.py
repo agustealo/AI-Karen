@@ -4573,7 +4573,25 @@ class ChatRuntime:
                 or "memory_persistence_failed"
             )
 
+        # Admission freezes the authenticated persona before prompt assembly.
+        # Expose only its bounded identity and revision as runtime evidence.
+        # Never infer the selection from UI preferences or client metadata.
+        snapshot = request.persona_snapshot
+        if (
+            snapshot is not None
+            and snapshot.status == "ready"
+            and snapshot.persona_id
+            and snapshot.matches(ctx)
+        ):
+            selected_persona_id = snapshot.persona_id
+            selected_persona_revision = snapshot.selection_revision
+        else:
+            selected_persona_id = None
+            selected_persona_revision = None
+
         return {
+            "persona_id": selected_persona_id,
+            "persona_selection_revision": selected_persona_revision,
             "correlation_id": ctx.correlation_id,
             "request_id": request_id,
             "response_id": response_id,

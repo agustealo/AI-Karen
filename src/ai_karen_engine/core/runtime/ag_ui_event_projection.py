@@ -338,6 +338,18 @@ class AGUIEventProjection:
                 value = meta.get(key)
                 if isinstance(value, str) and value.strip():
                     execution_receipt[key] = _text(value, limit)
+            # Server-owned frozen persona evidence, never client preferences.
+            # Export only a bounded identifier and the revision it was read at.
+            persona_id = meta.get("persona_id")
+            persona_revision = meta.get("persona_selection_revision")
+            if (
+                isinstance(persona_id, str)
+                and 0 < len(persona_id) <= 128
+                and type(persona_revision) is int
+                and 0 <= persona_revision <= 2**53 - 1
+            ):
+                execution_receipt["persona_id"] = persona_id
+                execution_receipt["persona_selection_revision"] = persona_revision
             if meta.get("degraded_mode") is True:
                 execution_receipt["degraded_mode"] = True
             fallback_level = meta.get("fallback_level")
