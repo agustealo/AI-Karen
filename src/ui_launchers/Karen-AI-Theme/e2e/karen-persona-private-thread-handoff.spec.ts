@@ -325,6 +325,15 @@ test("two authenticated personas preserve the same user evidence and verified mo
       }
       expect(conversationId).toMatch(UUID);
       await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+      // Re-read the backend immediately before each inference. A selector
+      // value or a successful PUT response alone cannot prove current persona.
+      const confirmedSelection = await authorizedApi(page, preferencesUrl);
+      expect(confirmedSelection.status).toBe(200);
+      const effectivePreferences = confirmedSelection.body as SavedPreferences;
+      expect(effectivePreferences.active_persona_id).toBe(desiredPersona);
+      expect(effectivePreferences.revision).toBe(
+        desiredPersona === before.active_persona_id ? before.revision : before.revision + 1,
+      );
 
       const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
       await expect(composer).toBeVisible();
