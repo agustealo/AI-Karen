@@ -30,7 +30,9 @@ class EvidenceError(ValueError):
     """Reject incomplete or non-correlatable release evidence."""
 
 
-def _walk_test_results(nodes: Any) -> Iterator[Mapping[str, Any]]:
+def _walk_test_results(
+    nodes: Any,
+) -> Iterator[tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]]:
     if not isinstance(nodes, list):
         raise EvidenceError("invalid_playwright_suites")
     for node in nodes:
@@ -54,7 +56,7 @@ def _walk_test_results(nodes: Any) -> Iterator[Mapping[str, Any]]:
                 for result in results:
                     if not isinstance(result, dict):
                         raise EvidenceError("invalid_playwright_result")
-                    yield result
+                    yield spec, test, result
         yield from _walk_test_results(node.get("suites", []))
 
 
@@ -169,7 +171,8 @@ def analyze(
         raise EvidenceError("invalid_required_scenarios")
     groups: dict[tuple[str, str], list[float]] = defaultdict(list)
     identities: set[tuple[str, str, str]] = set()
-    for result in _walk_test_results(report.get("suites", [])):
+    spec_ids: set[str] = set()
+    for spec, test, result in _walk_test_results(report.get("suites", [])):
         first = _attachment(result, FIRST_ATTACHMENT, root)
         second = _attachment(result, CORRELATED_ATTACHMENT, root)
         if first is None and second is None:
@@ -178,7 +181,32 @@ def analyze(
             raise EvidenceError("unpaired_first_prompt_evidence")
         if result.get("status") != "passed":
             raise EvidenceError("failed_or_incomplete_benchmark_run")
+        # Playwright stores each repeat-each execution under a unique spec ID
+        # and retries under a test's "results". Ten attempts at one flaky
+        # test are never ten independent browser/model samples.
+        if len(test["results"]) != 1:
+            raise EvidenceError("retried_or_multiple_benchmark_attempts")
+        retry = result.get("retry")
+        if isinstance(retry, bool) or not isinstance(retry, int) or retry != 0:
+            raise EvidenceError("retry_is_not_an_independent_execution")
+        if test.get("projectName") != "chromium" or test.get("expectedStatus") != "passed":
+            raise EvidenceError("unverified_benchmark_project_or_expectation")
         scenario, origin, duration, identity = _validated_sample(first, second)
+        # Playwright's JSON reporter exposes the unique test ID at the
+        # enclosing spec level, not repeatEachIndex. Playwright incorporates
+        # repeat-each iteration into that ID. Never invent or require a JSON
+        # field the real reporter does not emit.
+        spec_id = spec.get("id")
+        if not isinstance(spec_id, str) or not _SAFE_ID.fullmatch(spec_id):
+            raise EvidenceError("missing_or_invalid_benchmark_spec_id")
+        if spec.get("title") != (
+            f"one first {scenario} prompt renders backend-attested UI "
+            "immediately and after reload"
+        ):
+            raise EvidenceError("mismatched_first_prompt_spec")
+        if spec_id in spec_ids:
+            raise EvidenceError("duplicate_benchmark_spec_id")
+        spec_ids.add(spec_id)
         if required and scenario not in required:
             raise EvidenceError("unexpected_benchmark_scenario")
         if identity in identities:

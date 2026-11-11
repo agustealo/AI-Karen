@@ -46,6 +46,7 @@ def _result(index: int, duration: float, *, mode: str = "model") -> dict:
     }
     return {
         "status": "passed",
+        "retry": 0,
         "attachments": [
             _attach("kcon766-first-prompt-visible-timing", first),
             _attach("kcon767-correlated-first-prompt-timing", second),
@@ -53,10 +54,31 @@ def _result(index: int, duration: float, *, mode: str = "model") -> dict:
     }
 
 
-def _report(results: list[dict]) -> dict:
+def _report(
+    results: list[dict], *, scenarios: list[str] | None = None
+) -> dict:
+    # Match the actual Playwright JSON reporter: each repeat-each execution
+    # creates its own spec with a distinct ID, and a test with one result.
+    # The JSON reporter does not expose the runtime repeatEachIndex field.
+    labels = scenarios if scenarios is not None else ["weather"] * len(results)
+    assert len(labels) == len(results)
     return {
         "suites": [
-            {"specs": [{"tests": [{"results": results}]}], "suites": []}
+            {"specs": [
+                {
+                    "id": f"first-prompt-{index}",
+                    "title": (
+                        f"one first {scenario} prompt renders backend-attested UI "
+                        "immediately and after reload"
+                    ),
+                    "tests": [{
+                        "projectName": "chromium",
+                        "expectedStatus": "passed",
+                        "results": [result],
+                    }],
+                }
+                for index, (result, scenario) in enumerate(zip(results, labels))
+            ], "suites": []}
         ],
     }
 
@@ -243,10 +265,75 @@ def test_kcon775_complete_scenario_set_publishes_percentiles(tmp_path):
                     json.dumps(payload).encode()
                 ).decode("ascii")
             results.append(item)
-    summary = analyzer.analyze(_report(results), tmp_path, required_scenarios=required)
+    summary = analyzer.analyze(
+        _report(results, scenarios=[label for label in required for _ in range(10)]),
+        tmp_path, required_scenarios=required,
+    )
     assert summary["status"] == "sufficient_observations"
     assert summary["missing_scenarios"] == []
     assert len(summary["groups"]) == 6
     assert all(group["sample_count"] == 10 for group in summary["groups"])
     assert all(group["p50_ms"] == 5.0 for group in summary["groups"])
     assert all(group["p95_ms"] == 10.0 for group in summary["groups"])
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        ("retry", "retry_is_not_an_independent_execution"),
+        ("missing_retry", "retry_is_not_an_independent_execution"),
+        ("bool_retry", "retry_is_not_an_independent_execution"),
+        ("multiple_results", "retried_or_multiple_benchmark_attempts"),
+        ("duplicate_spec_id", "duplicate_benchmark_spec_id"),
+        ("missing_spec_id", "missing_or_invalid_benchmark_spec_id"),
+        ("negative_spec_id", "missing_or_invalid_benchmark_spec_id"),
+        ("bool_spec_id", "missing_or_invalid_benchmark_spec_id"),
+        ("wrong_spec_title", "mismatched_first_prompt_spec"),
+        ("wrong_project", "unverified_benchmark_project_or_expectation"),
+        ("expected_failure", "unverified_benchmark_project_or_expectation"),
+    ],
+)
+def test_kcon772_rejects_retry_masking_and_non_independent_repeats(
+    tmp_path, mutation, expected_error
+):
+    # A unique correlation/assistant/presentation ID is not proof of an
+    # independent Playwright execution; verified spec IDs and retry records
+    # must identify genuinely separate repeat-each iterations.
+    report = _report([_result(1, 10.0), _result(2, 20.0)])
+    specs = report["suites"][0]["specs"]
+    first = specs[0]["tests"][0]
+    second = specs[1]["tests"][0]
+    if mutation == "retry":
+        first["results"][0]["retry"] = 1
+    elif mutation == "missing_retry":
+        del first["results"][0]["retry"]
+    elif mutation == "bool_retry":
+        first["results"][0]["retry"] = False
+    elif mutation == "multiple_results":
+        first["results"].append(_result(3, 30.0))
+    elif mutation == "duplicate_spec_id":
+        specs[1]["id"] = specs[0]["id"]
+    elif mutation == "missing_spec_id":
+        del specs[0]["id"]
+    elif mutation == "negative_spec_id":
+        specs[0]["id"] = -1
+    elif mutation == "bool_spec_id":
+        specs[0]["id"] = True
+    elif mutation == "wrong_spec_title":
+        specs[0]["title"] = "a different test with copied measurements"
+    elif mutation == "wrong_project":
+        first["projectName"] = "firefox"
+    elif mutation == "expected_failure":
+        first["expectedStatus"] = "failed"
+    with pytest.raises(analyzer.EvidenceError, match=expected_error):
+        analyzer.analyze(report, tmp_path)
+
+
+def test_kcon772_ten_attempts_of_one_test_cannot_publish_percentiles(tmp_path):
+    attempts = [_result(index, float(index + 1)) for index in range(10)]
+    report = _report([attempts[0]])
+    report["suites"][0]["specs"][0]["tests"][0]["results"] = attempts
+    with pytest.raises(
+        analyzer.EvidenceError, match="retried_or_multiple_benchmark_attempts"
+    ):
+        analyzer.analyze(report, tmp_path)
