@@ -46,6 +46,7 @@ def _result(index: int, duration: float, *, mode: str = "model") -> dict:
     }
     return {
         "status": "passed",
+        "retry": 0,
         "attachments": [
             _attach("kcon766-first-prompt-visible-timing", first),
             _attach("kcon767-correlated-first-prompt-timing", second),
@@ -54,9 +55,19 @@ def _result(index: int, duration: float, *, mode: str = "model") -> dict:
 
 
 def _report(results: list[dict]) -> dict:
+    # Match Playwright JSON reporter: each repeat-each iteration is a
+    # separate test record. Retry attempts live inside one test's results.
     return {
         "suites": [
-            {"specs": [{"tests": [{"results": results}]}], "suites": []}
+            {"specs": [{"tests": [
+                {
+                    "projectName": "chromium",
+                    "expectedStatus": "passed",
+                    "repeatEachIndex": index,
+                    "results": [result],
+                }
+                for index, result in enumerate(results)
+            ]}], "suites": []}
         ],
     }
 
@@ -250,3 +261,62 @@ def test_kcon775_complete_scenario_set_publishes_percentiles(tmp_path):
     assert all(group["sample_count"] == 10 for group in summary["groups"])
     assert all(group["p50_ms"] == 5.0 for group in summary["groups"])
     assert all(group["p95_ms"] == 10.0 for group in summary["groups"])
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        ("retry", "retry_is_not_an_independent_execution"),
+        ("missing_retry", "retry_is_not_an_independent_execution"),
+        ("bool_retry", "retry_is_not_an_independent_execution"),
+        ("multiple_results", "retried_or_multiple_benchmark_attempts"),
+        ("duplicate_repetition", "duplicate_benchmark_repetition"),
+        ("missing_repetition", "missing_or_invalid_benchmark_repetition"),
+        ("negative_repetition", "missing_or_invalid_benchmark_repetition"),
+        ("bool_repetition", "missing_or_invalid_benchmark_repetition"),
+        ("wrong_project", "unverified_benchmark_project_or_expectation"),
+        ("expected_failure", "unverified_benchmark_project_or_expectation"),
+    ],
+)
+def test_kcon772_rejects_retry_masking_and_non_independent_repeats(
+    tmp_path, mutation, expected_error
+):
+    # A unique correlation/assistant/presentation ID is not proof of an
+    # independent Playwright browser execution; retry and repeat metadata
+    # must identify genuine separately scheduled repeat-each iterations.
+    report = _report([_result(1, 10.0), _result(2, 20.0)])
+    tests = report["suites"][0]["specs"][0]["tests"]
+    first = tests[0]
+    second = tests[1]
+    if mutation == "retry":
+        first["results"][0]["retry"] = 1
+    elif mutation == "missing_retry":
+        del first["results"][0]["retry"]
+    elif mutation == "bool_retry":
+        first["results"][0]["retry"] = False
+    elif mutation == "multiple_results":
+        first["results"].append(_result(3, 30.0))
+    elif mutation == "duplicate_repetition":
+        second["repeatEachIndex"] = first["repeatEachIndex"]
+    elif mutation == "missing_repetition":
+        del first["repeatEachIndex"]
+    elif mutation == "negative_repetition":
+        first["repeatEachIndex"] = -1
+    elif mutation == "bool_repetition":
+        first["repeatEachIndex"] = True
+    elif mutation == "wrong_project":
+        first["projectName"] = "firefox"
+    elif mutation == "expected_failure":
+        first["expectedStatus"] = "failed"
+    with pytest.raises(analyzer.EvidenceError, match=expected_error):
+        analyzer.analyze(report, tmp_path)
+
+
+def test_kcon772_ten_attempts_of_one_test_cannot_publish_percentiles(tmp_path):
+    attempts = [_result(index, float(index + 1)) for index in range(10)]
+    report = _report([attempts[0]])
+    report["suites"][0]["specs"][0]["tests"][0]["results"] = attempts
+    with pytest.raises(
+        analyzer.EvidenceError, match="retried_or_multiple_benchmark_attempts"
+    ):
+        analyzer.analyze(report, tmp_path)
