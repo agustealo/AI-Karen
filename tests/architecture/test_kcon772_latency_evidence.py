@@ -54,20 +54,31 @@ def _result(index: int, duration: float, *, mode: str = "model") -> dict:
     }
 
 
-def _report(results: list[dict]) -> dict:
-    # Match Playwright JSON reporter: each repeat-each iteration is a
-    # separate test record. Retry attempts live inside one test's results.
+def _report(
+    results: list[dict], *, scenarios: list[str] | None = None
+) -> dict:
+    # Match the actual Playwright JSON reporter: each repeat-each execution
+    # creates its own spec with a distinct ID, and a test with one result.
+    # The JSON reporter does not expose the runtime repeatEachIndex field.
+    labels = scenarios if scenarios is not None else ["weather"] * len(results)
+    assert len(labels) == len(results)
     return {
         "suites": [
-            {"specs": [{"tests": [
+            {"specs": [
                 {
-                    "projectName": "chromium",
-                    "expectedStatus": "passed",
-                    "repeatEachIndex": index,
-                    "results": [result],
+                    "id": f"first-prompt-{index}",
+                    "title": (
+                        f"one first {scenario} prompt renders backend-attested UI "
+                        "immediately and after reload"
+                    ),
+                    "tests": [{
+                        "projectName": "chromium",
+                        "expectedStatus": "passed",
+                        "results": [result],
+                    }],
                 }
-                for index, result in enumerate(results)
-            ]}], "suites": []}
+                for index, (result, scenario) in enumerate(zip(results, labels))
+            ], "suites": []}
         ],
     }
 
@@ -254,7 +265,10 @@ def test_kcon775_complete_scenario_set_publishes_percentiles(tmp_path):
                     json.dumps(payload).encode()
                 ).decode("ascii")
             results.append(item)
-    summary = analyzer.analyze(_report(results), tmp_path, required_scenarios=required)
+    summary = analyzer.analyze(
+        _report(results, scenarios=[label for label in required for _ in range(10)]),
+        tmp_path, required_scenarios=required,
+    )
     assert summary["status"] == "sufficient_observations"
     assert summary["missing_scenarios"] == []
     assert len(summary["groups"]) == 6
@@ -270,10 +284,11 @@ def test_kcon775_complete_scenario_set_publishes_percentiles(tmp_path):
         ("missing_retry", "retry_is_not_an_independent_execution"),
         ("bool_retry", "retry_is_not_an_independent_execution"),
         ("multiple_results", "retried_or_multiple_benchmark_attempts"),
-        ("duplicate_repetition", "duplicate_benchmark_repetition"),
-        ("missing_repetition", "missing_or_invalid_benchmark_repetition"),
-        ("negative_repetition", "missing_or_invalid_benchmark_repetition"),
-        ("bool_repetition", "missing_or_invalid_benchmark_repetition"),
+        ("duplicate_spec_id", "duplicate_benchmark_spec_id"),
+        ("missing_spec_id", "missing_or_invalid_benchmark_spec_id"),
+        ("negative_spec_id", "missing_or_invalid_benchmark_spec_id"),
+        ("bool_spec_id", "missing_or_invalid_benchmark_spec_id"),
+        ("wrong_spec_title", "mismatched_first_prompt_spec"),
         ("wrong_project", "unverified_benchmark_project_or_expectation"),
         ("expected_failure", "unverified_benchmark_project_or_expectation"),
     ],
@@ -282,12 +297,12 @@ def test_kcon772_rejects_retry_masking_and_non_independent_repeats(
     tmp_path, mutation, expected_error
 ):
     # A unique correlation/assistant/presentation ID is not proof of an
-    # independent Playwright browser execution; retry and repeat metadata
-    # must identify genuine separately scheduled repeat-each iterations.
+    # independent Playwright execution; verified spec IDs and retry records
+    # must identify genuinely separate repeat-each iterations.
     report = _report([_result(1, 10.0), _result(2, 20.0)])
-    tests = report["suites"][0]["specs"][0]["tests"]
-    first = tests[0]
-    second = tests[1]
+    specs = report["suites"][0]["specs"]
+    first = specs[0]["tests"][0]
+    second = specs[1]["tests"][0]
     if mutation == "retry":
         first["results"][0]["retry"] = 1
     elif mutation == "missing_retry":
@@ -296,14 +311,16 @@ def test_kcon772_rejects_retry_masking_and_non_independent_repeats(
         first["results"][0]["retry"] = False
     elif mutation == "multiple_results":
         first["results"].append(_result(3, 30.0))
-    elif mutation == "duplicate_repetition":
-        second["repeatEachIndex"] = first["repeatEachIndex"]
-    elif mutation == "missing_repetition":
-        del first["repeatEachIndex"]
-    elif mutation == "negative_repetition":
-        first["repeatEachIndex"] = -1
-    elif mutation == "bool_repetition":
-        first["repeatEachIndex"] = True
+    elif mutation == "duplicate_spec_id":
+        specs[1]["id"] = specs[0]["id"]
+    elif mutation == "missing_spec_id":
+        del specs[0]["id"]
+    elif mutation == "negative_spec_id":
+        specs[0]["id"] = -1
+    elif mutation == "bool_spec_id":
+        specs[0]["id"] = True
+    elif mutation == "wrong_spec_title":
+        specs[0]["title"] = "a different test with copied measurements"
     elif mutation == "wrong_project":
         first["projectName"] = "firefox"
     elif mutation == "expected_failure":
