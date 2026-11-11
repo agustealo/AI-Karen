@@ -4577,17 +4577,17 @@ class ChatRuntime:
         # Expose only its bounded identity and revision as runtime evidence.
         # Never infer the selection from UI preferences or client metadata.
         snapshot = request.persona_snapshot
-        selected_persona_id = (
-            snapshot.persona_id
-            if snapshot is not None
+        if (
+            snapshot is not None
             and snapshot.status == "ready"
             and snapshot.persona_id
             and snapshot.matches(ctx)
-            else None
-        )
-        selected_persona_revision = (
-            snapshot.selection_revision if selected_persona_id is not None else None
-        )
+        ):
+            selected_persona_id = snapshot.persona_id
+            selected_persona_revision = snapshot.selection_revision
+        else:
+            selected_persona_id = None
+            selected_persona_revision = None
 
         return {
             "persona_id": selected_persona_id,
