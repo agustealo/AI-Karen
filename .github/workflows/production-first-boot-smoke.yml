@@ -122,21 +122,41 @@ jobs:
             printf '%s image ID: %s\n' "$service" "$image_id" >> "$GITHUB_STEP_SUMMARY"
           done
 
-      - name: Prove web ingress rejects missing public scheme
+      - name: Prove web ingress rejects missing or malformed public scheme
         shell: bash
         run: |
           set -euo pipefail
-          log=/tmp/ai-karen-web-missing-scheme.log
-          set +e
-          timeout 15s docker run --rm ai-karen-web:beta >"$log" 2>&1
-          status=$?
-          set -e
-          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
-            cat "$log" >&2 || true
-            echo "Production web image did not fail closed without WEB_PUBLIC_SCHEME" >&2
-            exit 1
-          fi
-          grep -q 'WEB_PUBLIC_SCHEME must be explicitly configured as "http" or "https"' "$log"
+          log_dir="$(mktemp -d)"
+          trap 'rm -rf "$log_dir"' EXIT
+
+          # Exercise the exact built production image, never a source mock.
+          # The container must exit before Next.js or a listener can run.
+          for case_name in missing empty unsupported comma_list url_form; do
+            scheme_env=()
+            case "$case_name" in
+              missing) ;;
+              empty) scheme_env=(-e WEB_PUBLIC_SCHEME=) ;;
+              unsupported) scheme_env=(-e WEB_PUBLIC_SCHEME=ftp) ;;
+              comma_list) scheme_env=(-e WEB_PUBLIC_SCHEME=https,http) ;;
+              url_form) scheme_env=(-e WEB_PUBLIC_SCHEME=https://) ;;
+              *) echo "::error::Unexpected ingress scheme case" >&2; exit 1 ;;
+            esac
+
+            log="$log_dir/$case_name.log"
+            set +e
+            timeout 15s docker run --rm "${scheme_env[@]}" ai-karen-web:beta >"$log" 2>&1
+            status=$?
+            set -e
+
+            if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+              echo "::error::Production web image did not reject $case_name scheme" >&2
+              exit 1
+            fi
+            if ! grep -Fq 'WEB_PUBLIC_SCHEME must be explicitly configured as "http" or "https"' "$log"; then
+              echo "::error::Production web image rejected $case_name without validated ingress error" >&2
+              exit 1
+            fi
+          done
 
       - name: Execute real production first boot
         env:
