@@ -16,6 +16,7 @@ on:
           - copilotkit-native
           - copilotkit-native-stop
           - copilotkit-consumer
+          - copilotkit-persona
       target_sha:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
@@ -236,14 +237,14 @@ jobs:
   # consumer suite includes multiple first-turn live source/reload checks;
   # leave enough job time for all scenarios without changing test deadlines.
   authenticated-copilotkit-protocol:
-    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-persona') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_COPILOTKIT_ACCEPTANCE_URL }}
       KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}
-      KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer') && 'true' || 'false' }}
+      KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-persona') && 'true' || 'false' }}
       KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && vars.KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED || 'false' }}
       KAREN_COPILOTKIT_LIVE_STOP_REQUIRED: ${{ inputs.scenario == 'copilotkit-native-stop' && 'true' || 'false' }}
       KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID: ${{ vars.KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID }}
@@ -304,7 +305,9 @@ jobs:
           test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved CopilotKit protocol deployment URL"; exit 1; }
           test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing acceptance identity"; exit 1; }
           test -n "$KAREN_UX_PASSWORD" || { echo "::error::Missing acceptance credential"; exit 1; }
-          test -n "$KAREN_HISTORY_CONVERSATION_ID" || { echo "::error::Missing approved conversation"; exit 1; }
+          if test "${{ inputs.scenario }}" != "copilotkit-persona"; then
+            test -n "$KAREN_HISTORY_CONVERSATION_ID" || { echo "::error::Missing approved conversation"; exit 1; }
+          fi
           if test "${{ inputs.scenario }}" = "copilotkit-protocol"; then
             test -n "$KAREN_COPILOTKIT_OBSERVED_RUN_ID" || { echo "::error::Missing observed run ID"; exit 1; }
           fi
@@ -411,6 +414,26 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright test e2e/copilotkit-consumer-boot.spec.ts \
+            --config=e2e/playwright.config.ts --project=chromium \
+            --reporter=list --retries=0
+
+      # Explicitly dispatched, approved sanitized-principal proof. The test
+      # changes saved persona preferences and sends two genuine model turns.
+      # Never include this in read-only, general CI, or ordinary consumer runs.
+      - name: Prove two real personas preserve facts, live reply and durable model receipt
+        if: inputs.scenario == 'copilotkit-persona'
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          KAREN_KCON771_INVARIANCE_ACCEPTANCE: "1"
+          KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test "$KAREN_KCON771_INVARIANCE_ACCEPTANCE" = "1"
+          npx playwright test e2e/karen-persona-private-thread-handoff.spec.ts \
+            --grep 'two authenticated personas preserve the same user evidence and verified model receipts' \
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
