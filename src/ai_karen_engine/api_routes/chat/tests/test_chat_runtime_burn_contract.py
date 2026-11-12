@@ -159,6 +159,7 @@ def test_nonstream_persists_when_write_allowed_without_recall() -> None:
         ("already_persisted", ChatExecutionStatus.OK, True),
         ("failed", ChatExecutionStatus.ERROR, False),
         ("rejected", ChatExecutionStatus.ERROR, False),
+        ("skipped", ChatExecutionStatus.ERROR, False),
     ],
 )
 def test_nonstream_transcript_write_status_is_authoritative(
@@ -166,7 +167,7 @@ def test_nonstream_transcript_write_status_is_authoritative(
     expected_status: ChatExecutionStatus,
     successful: bool,
 ) -> None:
-    """One generated answer is not a completed chat if its transcript cannot save."""
+    """A generated answer cannot succeed without a confirmed durable transcript."""
     async def run() -> None:
         runtime = _runtime(_decision(), _Gateway())
         write = TranscriptPersistenceResult(
