@@ -234,6 +234,8 @@ def test_kcon770_real_failure_browser_dispatch_is_protected_and_not_skippable() 
     assert "if: inputs.scenario == 'copilotkit-failure'" in step
     assert 'KAREN_CHAT_BOOT_ACCEPTANCE: "1"' in step
     assert 'KAREN_KCON770_FAULT_ACCEPTANCE: "1"' in step
+    assert 'KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE: "1"' in step
+    assert 'test "$KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE" = "1"' in step
     assert 'KAREN_KCON770_PRIVATE_EVIDENCE: "0"' in step
     assert "KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}" in step
     assert "secrets.KAREN_KCON770_FAILURE_PROMPT" in step
@@ -257,12 +259,26 @@ def test_kcon770_real_failure_browser_dispatch_is_protected_and_not_skippable() 
     assert "upload-artifact" not in job
     assert 'const kcon770FaultAcceptance = process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1";' in source
     assert "Explicitly authorize KCON-770 runtime fault acceptance" in source
+    assert 'const kcon770TranscriptFaultAcceptance = process.env.KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE === "1";' in source
+    assert 'if (kcon770TranscriptFaultAcceptance && !kcon770FaultAcceptance)' in source
+    assert "async function expectObservedTranscriptPersistenceFailure(" in source
+    assert 'code: "CHAT_TRANSCRIPT_NOT_PERSISTED"' in source
+    assert 'runStatus: "failed"' in source
+    assert 'journalTerminalObserved: true' in source
+    assert '"observed_event_journal"' in source
+    assert "/api/copilotkit/agent/default/runs/" in source
+    assert "/api/copilotkit/threads/" in source
     assert 'process.env.CI, "Private error screenshot must never run in hosted CI"' in source
     test_body = source.split(
         'test("authorized backend failure stays honest after authenticated reload"', 1
     )[1]
     assert "page.route(" not in test_body
     assert "route.fulfill(" not in test_body
+    assert 'request.postDataJSON()' in test_body
+    assert 'expectObservedTranscriptPersistenceFailure(page, conversationId!, observedRunIds[0]);' in test_body
+    assert test_body.count(
+        'await expectObservedTranscriptPersistenceFailure(page, conversationId!, observedRunIds[0]);'
+    ) == 2
 
 
 def test_kcon771_persona_browser_dispatch_is_protected_and_not_a_silent_skip() -> None:
