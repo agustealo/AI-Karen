@@ -82,6 +82,8 @@ class SpacyAnalyzer:
         self._processing_times: list[float] = []
         self._error_count = 0
         self._last_error: str | None = None
+        self._model_source = "unavailable"
+        self._local_pipeline_incompatible = False
         self._initialize()
 
     @staticmethod
@@ -102,6 +104,7 @@ class SpacyAnalyzer:
     def _initialize(self) -> None:
         if not SPACY_AVAILABLE:
             logger.warning("spaCy not available, using fallback mode")
+            self._last_error = "spacy_dependency_unavailable"
             self.fallback_mode = True
             return
 
@@ -124,12 +127,15 @@ class SpacyAnalyzer:
                     )
                     if self._pipeline_compatible(candidate.meta):
                         self.nlp = candidate
+                        self._model_source = "local"
                         logger.info("Loaded compatible local spaCy model")
                     else:
+                        self._local_pipeline_incompatible = True
                         logger.warning(
                             "Skipping local spaCy pipeline with incompatible loaded metadata"
                         )
                 else:
+                    self._local_pipeline_incompatible = True
                     logger.warning(
                         "Skipping local spaCy pipeline incompatible with installed runtime"
                     )
@@ -146,7 +152,7 @@ class SpacyAnalyzer:
                 self.nlp = spacy.load(
                     self.config.model_name, disable=self.config.disabled_components
                 )
-            except (OSError, ValueError, OverflowError) as exc:
+            except (OSError, ValueError, OverflowError, TypeError) as exc:
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 self._error_count += 1
                 logger.warning("spaCy model initialization failed: %s", type(exc).__name__)
@@ -174,6 +180,8 @@ class SpacyAnalyzer:
                 self._last_error = "incompatible_spacy_pipeline"
                 self._error_count += 1
                 self.nlp = None
+            elif self.nlp is not None:
+                self._model_source = "packaged"
 
             # Preserve existing model assets. A stale bind-mounted directory
             # must never be overwritten by startup repair.
@@ -190,6 +198,21 @@ class SpacyAnalyzer:
 
         if self.nlp is None:
             self.fallback_mode = True
+            logger.warning(
+                "spaCy analyzer unavailable; using declared fallback",
+                extra={
+                    "model_source": self._model_source,
+                    "incompatible_local_pipeline": self._local_pipeline_incompatible,
+                },
+            )
+        else:
+            logger.info(
+                "spaCy analyzer ready with verified pipeline",
+                extra={
+                    "model_source": self._model_source,
+                    "incompatible_local_pipeline": self._local_pipeline_incompatible,
+                },
+            )
 
     async def parse(self, text: str) -> ParsedMessage:
         if not text or not text.strip():
@@ -320,6 +343,8 @@ class SpacyAnalyzer:
             return {
                 "status": status,
                 "model_loaded": self.nlp is not None,
+                "model_source": self._model_source,
+                "incompatible_local_pipeline": self._local_pipeline_incompatible,
                 "fallback_mode": self.fallback_mode,
                 "cache_size": len(self.cache),
                 "cache_hit_rate": cache_hit_rate,
