@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -224,7 +224,7 @@ async def test_nonstream_http_unsaved_answer_returns_sanitized_503(monkeypatch) 
         ),
     )
     backend = SimpleNamespace(execute=AsyncMock(return_value=failure))
-    logger = SimpleNamespace(log_event=AsyncMock(), log_error=AsyncMock())
+    logger = MagicMock()
     monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: backend)
     monkeypatch.setattr(chat_ingress, "get_structured_logger", lambda: logger)
 
