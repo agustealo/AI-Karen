@@ -311,7 +311,15 @@ class AGUIEventProjection:
             # Runtime completion can carry failed transcript persistence.
             # Never project a generated but unsaved answer as a successful SDK
             # run or attach a fabricated saved execution receipt.
-            if meta.get("transcript_persistence_status") in ("failed", "rejected"):
+            # Only the canonical transcript owner can confirm durability.
+            # Legacy test envelopes may omit this metadata entirely; when a
+            # status is explicitly present, all non-durable outcomes must
+            # fail closed (including "skipped" and unknown statuses).
+            persistence_status = meta.get("transcript_persistence_status")
+            if (
+                persistence_status is not None
+                and persistence_status not in ("persisted", "already_persisted")
+            ):
                 self._terminal = True
                 return self._finish_message() + [{
                     "type": "RUN_ERROR",
