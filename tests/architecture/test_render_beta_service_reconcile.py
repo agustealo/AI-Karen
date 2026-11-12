@@ -317,6 +317,11 @@ def test_unsafe_manifest_is_never_accepted(module, tmp_path):
         source.replace("    autoDeployTrigger: off", "    autoDeployTrigger: commit"),
         source.replace("    healthCheckPath: /health/live", "    healthCheckPath: /admin"),
         source.replace(REPO, "https://attacker.invalid/project"),
+        # A valid GitHub URL is still unauthorized if it names another owner
+        # or repository; syntax alone is not sufficient release authority.
+        source.replace(REPO, "https://attacker/AI-Karen"),
+        source.replace(REPO, "https://github.com/other-owner/AI-Karen"),
+        source.replace(REPO, "https://github.com/agustealo/AI-Karen-fork"),
     ):
         path = tmp_path / "unsafe.yaml"
         path.write_text(unsafe, encoding="utf-8")
