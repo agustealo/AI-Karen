@@ -67,6 +67,7 @@ def _report(
             {"specs": [
                 {
                     "id": f"first-prompt-{index}",
+                    "ok": True,
                     "title": (
                         f"one first {scenario} prompt renders backend-attested UI "
                         "immediately and after reload"
@@ -74,6 +75,7 @@ def _report(
                     "tests": [{
                         "projectName": "chromium",
                         "expectedStatus": "passed",
+                        "status": "expected",
                         "results": [result],
                     }],
                 }
@@ -81,6 +83,30 @@ def _report(
             ], "suites": []}
         ],
     }
+
+
+REQUIRED_SCENARIOS = (
+    "time", "weather", "search", "news",
+    "current movies", "current movie source table",
+)
+
+
+def _complete_required_report() -> dict:
+    """Test-only Playwright JSON inventory for six complete scenario cohorts."""
+    results: list[dict] = []
+    scenarios: list[str] = []
+    for index, scenario in enumerate(REQUIRED_SCENARIOS):
+        for sample in range(10):
+            item = _result(index * 10 + sample, float(sample + 1))
+            for attachment in item["attachments"]:
+                payload = json.loads(base64.b64decode(attachment["body"]))
+                payload["scenario"] = scenario
+                attachment["body"] = base64.b64encode(
+                    json.dumps(payload).encode()
+                ).decode("ascii")
+            results.append(item)
+            scenarios.append(scenario)
+    return _report(results, scenarios=scenarios)
 
 
 def test_kcon772_nearest_rank_percentiles_require_ten_distinct_executions(tmp_path):
@@ -207,10 +233,7 @@ def test_kcon772_oversized_duration_fails_closed(tmp_path):
 
 
 def test_kcon775_one_scenario_cannot_impersonate_complete_six_scenario_run(tmp_path):
-    required = (
-        "time", "weather", "search", "news",
-        "current movies", "current movie source table",
-    )
+    required = REQUIRED_SCENARIOS
     report = _report([_result(i, float(i * 10)) for i in range(1, 11)])
     summary = analyzer.analyze(report, tmp_path, required_scenarios=required)
     assert summary["status"] == "insufficient_evidence"
@@ -250,24 +273,8 @@ def test_kcon775_cli_rejects_missing_required_scenarios_even_with_ten_valid_resu
 
 
 def test_kcon775_complete_scenario_set_publishes_percentiles(tmp_path):
-    required = (
-        "time", "weather", "search", "news",
-        "current movies", "current movie source table",
-    )
-    results = []
-    for index, scenario in enumerate(required):
-        for sample in range(10):
-            item = _result(index * 10 + sample, float(sample + 1))
-            for attachment in item["attachments"]:
-                payload = json.loads(base64.b64decode(attachment["body"]))
-                payload["scenario"] = scenario
-                attachment["body"] = base64.b64encode(
-                    json.dumps(payload).encode()
-                ).decode("ascii")
-            results.append(item)
     summary = analyzer.analyze(
-        _report(results, scenarios=[label for label in required for _ in range(10)]),
-        tmp_path, required_scenarios=required,
+        _complete_required_report(), tmp_path, required_scenarios=REQUIRED_SCENARIOS,
     )
     assert summary["status"] == "sufficient_observations"
     assert summary["missing_scenarios"] == []
@@ -337,3 +344,81 @@ def test_kcon772_ten_attempts_of_one_test_cannot_publish_percentiles(tmp_path):
         analyzer.EvidenceError, match="retried_or_multiple_benchmark_attempts"
     ):
         analyzer.analyze(report, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        ("missing_attachments", "required_benchmark_sample_missing"),
+        ("failed_without_attachments", "unverified_required_benchmark_spec"),
+        ("skipped_without_attachments", "unverified_required_benchmark_spec"),
+        ("unknown_without_attachments", "unexpected_benchmark_spec"),
+        ("no_test", "incomplete_required_benchmark_spec"),
+        ("two_tests", "incomplete_required_benchmark_spec"),
+        ("no_result", "incomplete_required_benchmark_execution"),
+        ("two_results", "incomplete_required_benchmark_execution"),
+        ("unexpected_outcome", "unverified_required_benchmark_outcome"),
+        ("missing_outcome", "unverified_required_benchmark_outcome"),
+        ("failed_spec", "unverified_required_benchmark_spec"),
+    ],
+)
+def test_kcon775_full_scenario_evidence_cannot_hide_unmeasured_executions(
+    tmp_path, mutation, expected_error
+):
+    # All six scenarios already have 10 valid unique samples. A hidden failed,
+    # skipped, unrecognized or unmeasured execution must never be ignored and
+    # leave a false "sufficient" release-ready percentile report.
+    report = _complete_required_report()
+    specs = report["suites"][0]["specs"]
+    first = specs[0]
+    test = first["tests"][0]
+    result = test["results"][0]
+
+    if mutation == "missing_attachments":
+        result["attachments"] = []
+    elif mutation in {"failed_without_attachments", "skipped_without_attachments"}:
+        first["ok"] = False
+        test["status"] = "unexpected" if mutation.startswith("failed") else "skipped"
+        result["status"] = "failed" if mutation.startswith("failed") else "skipped"
+        result["attachments"] = []
+    elif mutation == "unknown_without_attachments":
+        first["title"] = "one first unauthorized prompt renders backend-attested UI immediately and after reload"
+        result["attachments"] = []
+    elif mutation == "no_test":
+        first["tests"] = []
+    elif mutation == "two_tests":
+        first["tests"].append(dict(test))
+    elif mutation == "no_result":
+        test["results"] = []
+    elif mutation == "two_results":
+        test["results"].append(dict(result))
+    elif mutation == "unexpected_outcome":
+        test["status"] = "flaky"
+    elif mutation == "missing_outcome":
+        del test["status"]
+    elif mutation == "failed_spec":
+        first["ok"] = False
+
+    with pytest.raises(analyzer.EvidenceError, match=expected_error):
+        analyzer.analyze(report, tmp_path, required_scenarios=REQUIRED_SCENARIOS)
+
+
+def test_kcon775_missing_evidence_remains_skippable_only_without_required_coverage(tmp_path):
+    # Preserve the analyzer's generic read-only behavior: unmeasured unrelated
+    # tests may appear in a generic report, but not in the explicit six-scenario
+    # local benchmark that claims complete execution coverage.
+    report = _report([_result(i, float(i + 1)) for i in range(10)])
+    report["suites"][0]["specs"][0]["tests"][0]["results"][0]["attachments"] = []
+    summary = analyzer.analyze(report, tmp_path)
+    assert summary["status"] == "insufficient_evidence"
+    assert summary["groups"][0]["sample_count"] == 9
+
+
+def test_kcon775_reporter_test_title_must_match_measured_scenario(tmp_path):
+    report = _complete_required_report()
+    spec = report["suites"][0]["specs"][0]
+    spec["title"] = (
+        "one first weather prompt renders backend-attested UI immediately and after reload"
+    )
+    with pytest.raises(analyzer.EvidenceError, match="mismatched_first_prompt_spec"):
+        analyzer.analyze(report, tmp_path, required_scenarios=REQUIRED_SCENARIOS)
