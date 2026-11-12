@@ -3,7 +3,7 @@
 > **SINGLE LIVING CHECKLIST — KEEP THIS FILE CURRENT WITH EVERY RELEVANT PR.**
 >
 > **Status:** ACTIVE ENGINEERING PLAN; **consumer release NOT VERIFIED**.  
-> **As-of/source baseline:** 2026-11-12, verified `main@590dea2a2c2330d914cd83af7e9fb9720c2b0034` (#747 merged), all seven exact-main check-runs completed SUCCESS. Vercel production deployment `dpl_2dqzAm4wT6Z3pQucNWMKycf8ZPnU` reports READY at this exact SHA. The canonical Render API still tracks the October 31 feature branch with no health path and three recorded failed deployments; approved Render recovery and signed-in consumer acceptance remain NOT_RUN.  
+> **As-of/source baseline:** 2026-11-12, verified `main@590dea2a2c2330d914cd83af7e9fb9720c2b0034` (#747 merged), all seven exact-main check-runs completed SUCCESS. Last confirmed Vercel production deployment `dpl_2dqzAm4wT6Z3pQucNWMKycf8ZPnU` reports READY at prior `main@5d2c8231279041ec309e5af1c99f2d384c0440a2`; Vercel deployment parity at the newer main SHA remains NOT_VERIFIED. The canonical Render API still tracks the October 31 feature branch with no health path and three recorded failed deployments; approved Render recovery and signed-in consumer acceptance remain NOT_RUN.  
 > **Document owner:** Karen architecture / consumer experience maintainers. **Execution owners:** the existing domain owners below.  
 > **Scope:** first-class CopilotKit chat, Persona Studio, agentic tasks, AG-UI, model/prompt/context/memory, native tool/suggestion/approval UX, history, generated presentation, MCP/skills/sandbox, channels, resilience, telemetry, security, accessibility, CI, and removal of replaced logic.
 >
