@@ -31,7 +31,7 @@ class EvidenceError(ValueError):
 
 
 def _walk_test_results(
-    nodes: Any,
+    nodes: Any, *, require_complete: bool = False,
 ) -> Iterator[tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]]:
     if not isinstance(nodes, list):
         raise EvidenceError("invalid_playwright_suites")
@@ -47,17 +47,23 @@ def _walk_test_results(
             tests = spec.get("tests", [])
             if not isinstance(tests, list):
                 raise EvidenceError("invalid_playwright_tests")
+            if require_complete and len(tests) != 1:
+                raise EvidenceError("incomplete_required_benchmark_spec")
             for test in tests:
                 if not isinstance(test, dict):
                     raise EvidenceError("invalid_playwright_test")
                 results = test.get("results", [])
                 if not isinstance(results, list):
                     raise EvidenceError("invalid_playwright_results")
+                if require_complete and len(results) != 1:
+                    raise EvidenceError("incomplete_required_benchmark_execution")
                 for result in results:
                     if not isinstance(result, dict):
                         raise EvidenceError("invalid_playwright_result")
                     yield spec, test, result
-        yield from _walk_test_results(node.get("suites", []))
+        yield from _walk_test_results(
+            node.get("suites", []), require_complete=require_complete
+        )
 
 
 def _attachment(result: Mapping[str, Any], name: str, root: Path) -> dict[str, Any] | None:
@@ -172,10 +178,31 @@ def analyze(
     groups: dict[tuple[str, str], list[float]] = defaultdict(list)
     identities: set[tuple[str, str, str]] = set()
     spec_ids: set[str] = set()
-    for spec, test, result in _walk_test_results(report.get("suites", [])):
+    # The six-scenario local runner emits only the selected first-prompt
+    # executions. In required mode the full reporter inventory is evidence:
+    # failed/skipped/no-attachment tests cannot disappear from the denominator.
+    required_titles = {
+        f"one first {scenario} prompt renders backend-attested UI "
+        "immediately and after reload"
+        for scenario in required
+    }
+    for spec, test, result in _walk_test_results(
+        report.get("suites", []), require_complete=bool(required)
+    ):
+        if required:
+            if spec.get("title") not in required_titles:
+                raise EvidenceError("unexpected_benchmark_spec")
+            if spec.get("ok") is not True:
+                raise EvidenceError("unverified_required_benchmark_spec")
+            if test.get("status") != "expected":
+                raise EvidenceError("unverified_required_benchmark_outcome")
+            if result.get("status") != "passed":
+                raise EvidenceError("failed_or_incomplete_benchmark_run")
         first = _attachment(result, FIRST_ATTACHMENT, root)
         second = _attachment(result, CORRELATED_ATTACHMENT, root)
         if first is None and second is None:
+            if required:
+                raise EvidenceError("required_benchmark_sample_missing")
             continue
         if first is None or second is None:
             raise EvidenceError("unpaired_first_prompt_evidence")
