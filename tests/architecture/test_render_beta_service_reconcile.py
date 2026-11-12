@@ -113,6 +113,57 @@ def test_inspect_is_read_only_and_fails_on_legacy_branch(module, manifest):
     assert [request.method for request in fake.calls] == ["GET"]
 
 
+@pytest.mark.parametrize(
+    "changes, expected",
+    [
+        (
+            {},
+            {"drift:branch", "drift:health_check"},
+        ),
+        (
+            {
+                "branch": "main",
+                "autoDeployTrigger": "checksPass",
+                "serviceDetails": {"healthCheckPath": "/health/live"},
+            },
+            {"drift:auto_deploy"},
+        ),
+        (
+            {
+                "branch": "feature/private-branch",
+                "autoDeployTrigger": "checksPass",
+                "serviceDetails": {"healthCheckPath": "/private-health"},
+            },
+            {"drift:branch", "drift:auto_deploy", "drift:health_check"},
+        ),
+    ],
+)
+def test_inspect_reports_only_safe_drift_categories_without_writes(
+    module, manifest, changes, expected,
+):
+    fake = FakeRender(current_service(**changes))
+    client = module.RenderClient("test-secret-token", opener=fake)
+    with pytest.raises(module.ReconcileError, match="differs") as error:
+        module.reconcile(
+            client=client,
+            service_id=SERVICE,
+            workspace_id=WORKSPACE,
+            manifest=manifest,
+            mode="inspect",
+        )
+
+    message = str(error.value)
+    assert all(field in message for field in expected)
+    assert {part for part in (
+        "drift:branch", "drift:auto_deploy", "drift:health_check",
+    ) if part in message} == expected
+    assert "no changes applied" in message
+    for sensitive in ("test-secret-token", "private-branch", "/private-health",
+                      "checksPass", "feat/chat-consumer-conversation-management"):
+        assert sensitive not in message
+    assert [request.method for request in fake.calls] == ["GET"]
+
+
 def test_apply_updates_existing_service_and_rechecks_without_deploy(module, manifest):
     fake = FakeRender(current_service())
     client = module.RenderClient("test-token", opener=fake)
