@@ -20,7 +20,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 API_ORIGIN = "https://api.render.com"
 SERVICE_ID_PATTERN = re.compile(r"^srv-[a-z0-9]+$")
 WORKSPACE_ID_PATTERN = re.compile(r"^tea-[a-z0-9]+$")
-REPO_PATTERN = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+REVIEWED_REPOSITORY = "https://github.com/agustealo/AI-Karen"
 MAX_RESPONSE_BYTES = 65536
 
 
@@ -66,10 +66,10 @@ class Manifest:
             manifest.branch != "main"
             or manifest.auto_deploy_trigger != "off"
             or manifest.health_check_path != "/health/live"
-            or not REPO_PATTERN.fullmatch(manifest.repo)
+            or manifest.repo != REVIEWED_REPOSITORY
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", manifest.name)
         ):
-            raise ReconcileError("Blueprint must use reviewed main, manual deploy, HTTP liveness and a canonical GitHub repo")
+            raise ReconcileError("Blueprint must use reviewed main, manual deploy, HTTP liveness and reviewed AI-Karen repository")
         return manifest
 
 
