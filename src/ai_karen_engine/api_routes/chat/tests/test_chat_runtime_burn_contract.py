@@ -16,6 +16,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
     ChatRuntimeMetadata,
 )
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import TranscriptPersistenceResult
 from ai_karen_engine.core.runtime.composition import RuntimeComposition
 from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
@@ -147,6 +148,56 @@ def test_nonstream_persists_when_write_allowed_without_recall() -> None:
             result = await runtime.execute(_request())
         assert result.answer == "ok"
         runtime._persist_memory.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("persistence_status", "expected_status", "successful"),
+    [
+        ("persisted", ChatExecutionStatus.OK, True),
+        ("already_persisted", ChatExecutionStatus.OK, True),
+        ("failed", ChatExecutionStatus.ERROR, False),
+        ("rejected", ChatExecutionStatus.ERROR, False),
+    ],
+)
+def test_nonstream_transcript_write_status_is_authoritative(
+    persistence_status: str,
+    expected_status: ChatExecutionStatus,
+    successful: bool,
+) -> None:
+    """One generated answer is not a completed chat if its transcript cannot save."""
+    async def run() -> None:
+        runtime = _runtime(_decision(), _Gateway())
+        write = TranscriptPersistenceResult(
+            status=persistence_status,
+            conversation_id="conversation-1",
+            persisted_messages=2 if persistence_status == "persisted" else 0,
+            reason="private-db-detail" if not successful else None,
+        )
+        runtime._persist_transcript = AsyncMock(return_value=write)
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_NoGateControlPlane()),
+        ):
+            result = await runtime.execute(_request())
+        assert result.answer == "ok"
+        assert result.status is expected_status
+        assert result.metadata.extra["transcript_persistence_status"] == persistence_status
+        assert result.metadata.degraded_mode is (not successful)
+        if successful:
+            assert result.metadata.extra.get("error_code") != "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+        else:
+            assert result.metadata.extra["error_code"] == "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+            assert result.metadata.degraded_mode is True
+        recorded = runtime._record_execution_outcome.await_args.kwargs
+        assert recorded["success"] is successful
+        assert recorded["transcript_meta"]["transcript_persistence_status"] == persistence_status
+        if not successful:
+            assert recorded["provider_meta"]["error_code"] == "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+        else:
+            assert "error_code" not in recorded["provider_meta"]
+        runtime._persist_transcript.assert_awaited_once()
 
     asyncio.run(run())
 
