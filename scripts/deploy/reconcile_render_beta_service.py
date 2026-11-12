@@ -229,15 +229,25 @@ def reconcile(
     # Validate the existing HTTP service shape before deciding on source drift.
     # A branch mismatch must never short-circuit a malformed health configuration.
     existing_health_path = _health_check_path(current)
-    drift = (
-        current.get("branch") != manifest.branch
-        or _trigger(current) != manifest.auto_deploy_trigger
-        or existing_health_path != manifest.health_check_path
-    )
-    if not drift:
+    # Report only stable configuration categories. Never include the live
+    # branch, HTTP target, credential, resource metadata or upstream JSON.
+    drift_fields = [
+        name
+        for name, differs in (
+            ("branch", current.get("branch") != manifest.branch),
+            ("auto_deploy", _trigger(current) != manifest.auto_deploy_trigger),
+            ("health_check", existing_health_path != manifest.health_check_path),
+        )
+        if differs
+    ]
+    if not drift_fields:
         return "Existing Render beta API already matches reviewed Git source, HTTP liveness and manual deployment policy. No deployment triggered."
     if mode == "inspect":
-        raise ReconcileError("Existing Render beta API source or HTTP liveness differs from reviewed Blueprint; no changes applied")
+        raise ReconcileError(
+            "Existing Render beta API differs from reviewed Blueprint ("
+            + ", ".join(f"drift:{name}" for name in drift_fields)
+            + "); no changes applied"
+        )
     # Update only source branch, manual-deploy policy and the declared HTTP
     # liveness path. Secrets, datastores, plans and deploys are untouched.
     client.patch_source(service_id, manifest)
