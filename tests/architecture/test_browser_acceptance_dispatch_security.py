@@ -71,11 +71,12 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "          - copilotkit-native" in workflow
     assert "          - copilotkit-native-stop" in workflow
     assert "          - copilotkit-consumer" in workflow
+    assert "          - copilotkit-failure" in workflow
     assert "          - copilotkit-persona" in workflow
     job = workflow.split("  authenticated-copilotkit-protocol:", 1)[1].split(
         "\n  docker-provenance-before:", 1
     )[0]
-    assert "if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-persona') && github.ref == 'refs/heads/main'" in job
+    assert "if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-failure' || inputs.scenario == 'copilotkit-persona') && github.ref == 'refs/heads/main'" in job
     assert "environment: karen-sanitized-browser-acceptance" in job
     assert "ref: ${{ inputs.target_sha }}" in job
     assert "persist-credentials: false" in job
@@ -86,7 +87,7 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "e2e/karen-copilotkit-protocol-acceptance.spec.ts" in job
     assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}" in job
-    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-persona') && 'true' || 'false' }}" in job
+    assert "KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-failure' || inputs.scenario == 'copilotkit-persona') && 'true' || 'false' }}" in job
     assert "if: inputs.scenario == 'copilotkit-native'" in job
     assert "if: inputs.scenario == 'copilotkit-protocol'" in job
     assert 'KAREN_COPILOTKIT_OBSERVED_RUN_ID: ${{ vars.KAREN_COPILOTKIT_OBSERVED_RUN_ID }}' in job
@@ -208,6 +209,62 @@ def test_verified_deployment_access_is_shared_without_general_secret_headers() -
     assert "'x-vercel-protection-bypass': bypassSecret" in source
 
 
+
+def test_kcon770_real_failure_browser_dispatch_is_protected_and_not_skippable() -> None:
+    """Never confuse source-green fault tests with an operator-approved real failure."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    source = (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/copilotkit-consumer-boot.spec.ts"
+    ).read_text(encoding="utf-8")
+    job = workflow.split("  authenticated-copilotkit-protocol:", 1)[1].split(
+        "\n  docker-provenance-before:", 1
+    )[0]
+
+    assert "          - copilotkit-failure" in workflow
+    assert "environment: karen-sanitized-browser-acceptance" in job
+    assert "ref: ${{ inputs.target_sha }}" in job
+    assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
+    assert 'test "$TARGET_SHA" = "$actual_sha"' in job
+    assert "python ../../../scripts/ci/verify_backend_target.py" in job
+    assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
+    assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
+
+    title = "Prove KCON-770 authenticated backend failure and truthful reload"
+    step = job.split("      - name: " + title, 1)[1].split("\n      - name:", 1)[0]
+    assert "if: inputs.scenario == 'copilotkit-failure'" in step
+    assert 'KAREN_CHAT_BOOT_ACCEPTANCE: "1"' in step
+    assert 'KAREN_KCON770_FAULT_ACCEPTANCE: "1"' in step
+    assert 'KAREN_KCON770_PRIVATE_EVIDENCE: "0"' in step
+    assert "KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}" in step
+    assert "secrets.KAREN_KCON770_FAILURE_PROMPT" in step
+    assert 'test -n "${KAREN_KCON770_FAILURE_PROMPT//[[:space:]]/}"' in step
+    assert "e2e/copilotkit-consumer-boot.spec.ts" in step
+    assert "--grep 'authorized backend failure stays honest after authenticated reload'" in step
+    assert "--project=chromium" in step
+    assert "--retries=0" in step
+    for protected in (
+        "secrets.KAREN_UX_EMAIL",
+        "secrets.KAREN_UX_PASSWORD",
+        "secrets.VERCEL_AUTOMATION_BYPASS_SECRET",
+    ):
+        assert protected in step
+    for install in ("Install pinned dependencies", "Install Chromium and system dependencies"):
+        setup = job.split("      - name: " + install, 1)[1].split("\n      - ", 1)[0]
+        assert "KAREN_KCON770_FAILURE_PROMPT" not in setup
+        assert "secrets.KAREN_UX_EMAIL" not in setup
+        assert "secrets.KAREN_UX_PASSWORD" not in setup
+        assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in setup
+    assert "upload-artifact" not in job
+    assert 'const kcon770FaultAcceptance = process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1";' in source
+    assert "Explicitly authorize KCON-770 runtime fault acceptance" in source
+    assert 'process.env.CI, "Private error screenshot must never run in hosted CI"' in source
+    test_body = source.split(
+        'test("authorized backend failure stays honest after authenticated reload"', 1
+    )[1]
+    assert "page.route(" not in test_body
+    assert "route.fulfill(" not in test_body
+
+
 def test_kcon771_persona_browser_dispatch_is_protected_and_not_a_silent_skip() -> None:
     """One explicitly selected scenario executes real-model proof on reviewed main."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -227,7 +284,7 @@ def test_kcon771_persona_browser_dispatch_is_protected_and_not_a_silent_skip() -
     assert "python ../../../scripts/ci/verify_backend_target.py" in job
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
-    assert 'if test "${{ inputs.scenario }}" != "copilotkit-persona"; then' in job
+    assert 'if test "${{ inputs.scenario }}" != "copilotkit-persona" && test "${{ inputs.scenario }}" != "copilotkit-failure"; then' in job
     assert 'test -n "$KAREN_HISTORY_CONVERSATION_ID"' in job
 
     title = "Prove two real personas preserve facts, live reply and durable model receipt"
