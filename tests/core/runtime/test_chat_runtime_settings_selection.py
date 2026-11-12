@@ -363,7 +363,7 @@ def test_empty_nonstream_answer_fails_before_persistence_and_success_recording()
     guard = source.index('if not isinstance(text, str) or not text.strip():')
     persistence = source.index('transcript_result = await self._persist_transcript(', guard)
     transcript_failure = source.index(
-        'transcript_failed = transcript_result.status in {"failed", "rejected"}',
+        "transcript_failed = not transcript_result.success",
         persistence,
     )
     recorded_outcome = source.index("success=not transcript_failed,", transcript_failure)
