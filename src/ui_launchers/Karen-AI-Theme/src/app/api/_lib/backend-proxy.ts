@@ -133,6 +133,18 @@ function backendTargetScope(baseUrl: string): string {
   }
 }
 
+/**
+ * Fetch may reject with a DOMException that does not inherit from Error in
+ * the active JS realm (including jsdom). Recognize only the standard abort
+ * class, never arbitrary message text or untrusted error details.
+ */
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error ||
+    (typeof DOMException !== 'undefined' && error instanceof DOMException)
+  ) && error.name === 'AbortError';
+}
+
 function safeCauseCode(error: unknown): string {
   if (!(error instanceof Error)) return 'UNKNOWN';
   const cause = (error as Error & { cause?: unknown }).cause;
@@ -431,7 +443,7 @@ export async function proxyToBackend(
     // failure contract, and emit a bounded, non-sensitive attribution.
     const abortOrigin = init.signal?.aborted === true
       ? 'proxy_deadline'
-      : error instanceof Error && error.name === 'AbortError'
+      : isAbortError(error)
         ? 'upstream_or_transport'
         : 'not_aborted';
     // Some fetch/TLS errors embed the full upstream URL, including secrets.
@@ -439,7 +451,9 @@ export async function proxyToBackend(
     console.error('[BackendProxy] canonical_upstream_unavailable', {
       method: request.method,
       upstream_path: upstreamPath,
-      error_type: error instanceof Error ? error.name : 'UnknownError',
+      error_type: isAbortError(error)
+        ? 'AbortError'
+        : error instanceof Error ? error.name : 'UnknownError',
       cause_code: safeCauseCode(error),
       abort_origin: abortOrigin,
       timeout_ms: timeoutMs,
