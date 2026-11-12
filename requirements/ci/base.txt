@@ -4,3 +4,4 @@ pytest-asyncio
 pytest-timeout
 pydantic
 pydantic-settings
+packaging==25.0
