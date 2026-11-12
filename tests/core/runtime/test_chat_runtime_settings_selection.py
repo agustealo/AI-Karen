@@ -362,12 +362,19 @@ def test_empty_nonstream_answer_fails_before_persistence_and_success_recording()
     source = inspect.getsource(ChatRuntime.execute)
     guard = source.index('if not isinstance(text, str) or not text.strip():')
     persistence = source.index('transcript_result = await self._persist_transcript(', guard)
-    success = source.index('success=True,', guard)
-    assert guard < persistence < success
+    transcript_failure = source.index(
+        'transcript_failed = transcript_result.status in {"failed", "rejected"}',
+        persistence,
+    )
+    recorded_outcome = source.index("success=not transcript_failed,", transcript_failure)
+    assert guard < persistence < transcript_failure < recorded_outcome
     rejection = source[guard:persistence]
     assert 'status=ChatExecutionStatus.ERROR' in rejection
     assert '"CHAT_EMPTY_RESPONSE"' in rejection
     assert 'success=False' in rejection
+    # Neither an empty model answer nor a failed transcript write may acquire
+    # an unconditional successful execution outcome.
+    assert "success=True," not in source[persistence:recorded_outcome]
 
 
 def test_http_chat_converts_runtime_errors_to_failure_status() -> None:
