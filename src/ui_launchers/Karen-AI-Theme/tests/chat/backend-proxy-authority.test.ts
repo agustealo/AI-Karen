@@ -22,6 +22,7 @@ function request(method: string, path = "/api/conversations") {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   globalThis.fetch = nativeFetch;
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -57,6 +58,107 @@ describe("single canonical backend proxy authority", () => {
     expect(serialized).not.toContain("backend-host.example");
     expect(serialized).not.toContain("secrets");
     expect((await result.text())).not.toContain("backend-host.example");
+  });
+
+  it("attributes an actual proxy deadline without leaking backend details or retrying a POST", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("NEXT_PUBLIC_API_PROXY_TIMEOUT_MS", "25");
+    vi.resetModules();
+    const { proxyToBackend: configuredProxy } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    const logs = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchSpy = vi.fn().mockImplementation(
+      (_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Internal diagnostic backend URL", "AbortError"));
+        }, { once: true });
+      }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const pending = configuredProxy(request("POST"), "/api/auth/first-run", {
+      retryAttempts: 3,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    const result = await pending;
+    expect(result.status).toBe(502);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(logs).toHaveBeenCalledWith(
+      "[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({
+        error_type: "AbortError",
+        abort_origin: "proxy_deadline",
+        timeout_ms: 25,
+      }),
+    );
+    const logged = JSON.stringify(logs.mock.calls);
+    expect(logged).not.toContain("Internal diagnostic");
+    expect(await result.json()).toMatchObject({
+      error_code: "BACKEND_UPSTREAM_UNAVAILABLE",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not mislabel an upstream AbortError as a proxy timeout", async () => {
+    const logs = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchSpy = vi.fn().mockRejectedValue(
+      new DOMException("Private backend details", "AbortError"),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const result = await proxyToBackend(request("GET"), "/api/auth/first-run", {
+      retryAttempts: 1,
+    });
+    expect(result.status).toBe(502);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(logs).toHaveBeenCalledWith(
+      "[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({
+        error_type: "AbortError",
+        abort_origin: "upstream_or_transport",
+      }),
+    );
+    expect(JSON.stringify(logs.mock.calls)).not.toContain("Private backend details");
+  });
+
+  it("ends the original redirect timer and attributes the active upstream deadline", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("NEXT_PUBLIC_API_PROXY_TIMEOUT_MS", "35");
+    vi.resetModules();
+    const { proxyToBackend: configuredProxy } = await import(
+      "@/app/api/_lib/backend-proxy"
+    );
+    const logs = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(new Response(null, {
+        status: 307,
+        headers: { location: "/ready" },
+      }))
+      .mockImplementationOnce((_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Redirect timeout", "AbortError"));
+          }, { once: true });
+        }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const pending = configuredProxy(request("GET"), "/api/auth/first-run", {
+      retryAttempts: 1,
+    });
+    await vi.advanceTimersByTimeAsync(40);
+    const result = await pending;
+    expect(result.status).toBe(502);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(new URL(fetchSpy.mock.calls[1][0]).pathname).toBe("/ready");
+    expect(logs).toHaveBeenCalledWith(
+      "[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({
+        error_type: "AbortError",
+        abort_origin: "proxy_deadline",
+        timeout_ms: 35,
+      }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([
