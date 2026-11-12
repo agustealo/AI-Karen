@@ -212,6 +212,10 @@ def inspect(
 
     service = client.get(service_id)
     verify_identity(service, service_id=service_id, workspace_id=workspace_id, manifest=manifest)
+    # Validate deployment policy before fetching environment or datastore
+    # inventories, so malformed modern metadata fails closed at the first
+    # read-only service boundary.
+    deployment_trigger = _trigger(service)
     details = service.get("serviceDetails")
     if not isinstance(details, dict) or not isinstance(details.get("region"), str):
         raise ReconcileError("Existing Render service runtime metadata is incomplete")
@@ -246,7 +250,7 @@ def inspect(
     # Reuse the same fail-closed deployment-policy interpretation as the
     # protected source reconciliation owner. Explicit malformed modern
     # values cannot be masked by a legacy autoDeploy=no field.
-    if _trigger(service) != manifest.auto_deploy_trigger:
+    if deployment_trigger != manifest.auto_deploy_trigger:
         failures.add("drift:auto_deploy")
     if details.get("healthCheckPath") != manifest.health_check_path:
         failures.add("drift:health_check")
