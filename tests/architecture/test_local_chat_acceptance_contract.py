@@ -192,8 +192,8 @@ def test_kcon774_local_latency_runner_disables_sensitive_recordings_by_default()
     assert "process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ||" in config
     assert "process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true';" in config
     assert "screenshot: privateBrowserRun ? 'off' : 'only-on-failure'," in config
-    assert "video: privateBrowserRun\\n      ? 'off'" in config
-    assert "trace: privateBrowserRun\\n      ? 'off'" in config
+    assert "video: privateBrowserRun\n      ? 'off'" in config
+    assert "trace: privateBrowserRun\n      ? 'off'" in config
     assert "process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'" in config
     assert "retries: localBenchmark ? 0 : process.env.CI ? 2 : 0," in config
     assert "headless: localBenchmark || !!process.env.CI," in config
