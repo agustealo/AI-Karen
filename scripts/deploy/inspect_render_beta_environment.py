@@ -24,6 +24,7 @@ from reconcile_render_beta_service import (
     SERVICE_ID_PATTERN,
     WORKSPACE_ID_PATTERN,
     verify_identity,
+    _trigger,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -242,7 +243,10 @@ def inspect(
 
     if service.get("branch") != manifest.branch:
         failures.add("drift:branch")
-    if service.get("autoDeployTrigger") != "off" and service.get("autoDeploy") != "no":
+    # Reuse the same fail-closed deployment-policy interpretation as the
+    # protected source reconciliation owner. Explicit malformed modern
+    # values cannot be masked by a legacy autoDeploy=no field.
+    if _trigger(service) != manifest.auto_deploy_trigger:
         failures.add("drift:auto_deploy")
     if details.get("healthCheckPath") != manifest.health_check_path:
         failures.add("drift:health_check")
