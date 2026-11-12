@@ -194,6 +194,12 @@ jobs:
           # or report readiness without canonical first-run ingress.
           pytest tests/architecture/test_local_compose_launcher.py -q
           pytest tests/architecture/test_local_supabase_config.py -q
+          # Legacy platform keys remain usable while operators migrate their .env.
+          pytest tests/integrations/test_supabase_current_environment.py -q
+          # Startup must accurately report packaged spaCy recovery vs fallback.
+          # These tests mock the optional spaCy dependency but exercise real
+          # PEP 440 version constraints and the canonical analyzer itself.
+          pytest tests/core/intelligence/test_spacy_model_load_fail_closed.py -q
           pytest tests/architecture/test_local_runtime_status.py -q
           pytest tests/architecture/test_local_chat_acceptance_contract.py -q
           # KCON-772 only accepts verified, non-duplicate real browser timing artifacts.
