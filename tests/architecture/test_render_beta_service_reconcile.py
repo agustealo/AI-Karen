@@ -248,6 +248,29 @@ def test_apply_requires_verified_post_patch_result(module, manifest):
     assert [r.method for r in fake.calls] == ["GET", "PATCH", "GET"]
 
 
+@pytest.mark.parametrize("trigger", ["", "unknown", "manual", False, 0, {}, []])
+@pytest.mark.parametrize("mode", ["inspect", "apply"])
+def test_explicit_invalid_render_trigger_never_falls_back_to_legacy_off(
+    module, manifest, trigger, mode,
+):
+    """Explicit malformed modern policy is not evidence of manual deploy."""
+    service = current_service(
+        branch="main",
+        autoDeployTrigger=trigger,
+        autoDeploy="no",
+        serviceDetails={"healthCheckPath": "/health/live"},
+    )
+    fake = FakeRender(service)
+    client = module.RenderClient("test-secret-token", opener=fake)
+    with pytest.raises(module.ReconcileError, match="auto-deploy state cannot be verified") as error:
+        module.reconcile(
+            client=client, service_id=SERVICE, workspace_id=WORKSPACE,
+            manifest=manifest, mode=mode,
+        )
+    assert "test-secret-token" not in str(error.value)
+    assert [request.method for request in fake.calls] == ["GET"]
+
+
 def test_inspect_understands_legacy_off_without_unwanted_patch(module, manifest):
     service = current_service(
         branch="main", autoDeployTrigger=None, autoDeploy="no",
