@@ -52,13 +52,16 @@ def safe_env(m):
 
 class FakeClient:
     def __init__(self, env, *, branch="main", health="/health/live",
-                 links=None, owner=WORKSPACE, durable_postgres=False):
+                 links=None, owner=WORKSPACE, durable_postgres=False,
+                 trigger="off", legacy_auto_deploy=None):
         self.env = env
         self.branch = branch
         self.health = health
         self.links = links or []
         self.owner = owner
         self.durable_postgres = durable_postgres
+        self.trigger = trigger
+        self.legacy_auto_deploy = legacy_auto_deploy
         self.calls = []
 
     def get(self, service_id):
@@ -66,7 +69,8 @@ class FakeClient:
         return {
             "id": SERVICE, "ownerId": WORKSPACE, "name": "ai-karen-beta-api",
             "repo": "https://github.com/agustealo/AI-Karen",
-            "type": "web_service", "branch": self.branch, "autoDeployTrigger": "off",
+            "type": "web_service", "branch": self.branch,
+            "autoDeployTrigger": self.trigger, "autoDeploy": self.legacy_auto_deploy,
             "serviceDetails": {
                 "region": "ohio", "healthCheckPath": self.health, "plan": "free",
             },
@@ -144,6 +148,32 @@ def test_valid_existing_resources_and_env_are_read_only_and_secret_free(m):
     assert "production_persistence:postgres_expiration_present" in result.advisories
     assert {call[0] for call in client.calls} == {"GET"}
     assert "testpassword" not in repr(result)
+
+
+@pytest.mark.parametrize("trigger", ["", "unknown", "manual", False, 0, {}, []])
+def test_environment_inspector_rejects_malformed_modern_deploy_policy(m, trigger):
+    """Legacy manual-deploy cannot mask malformed current Render metadata."""
+    client = FakeClient(safe_env(m), trigger=trigger, legacy_auto_deploy="no")
+    with pytest.raises(m.ReconcileError, match="auto-deploy state cannot be verified"):
+        inspect(m, client)
+    assert client.calls == [("GET", "service", SERVICE)]
+
+
+@pytest.mark.parametrize("trigger", ["commit", "checksPass"])
+def test_environment_inspector_reports_modern_trigger_drift_even_with_legacy_off(m, trigger):
+    client = FakeClient(safe_env(m), trigger=trigger, legacy_auto_deploy="no")
+    report = inspect(m, client)
+    assert not report.ready
+    assert "drift:auto_deploy" in report.failures
+    assert {call[0] for call in client.calls} == {"GET"}
+
+
+def test_environment_inspector_accepts_absent_modern_trigger_with_legacy_off(m):
+    client = FakeClient(safe_env(m), trigger=None, legacy_auto_deploy="no")
+    report = inspect(m, client)
+    assert report.ready
+    assert "drift:auto_deploy" not in report.failures
+    assert {call[0] for call in client.calls} == {"GET"}
 
 
 def test_governed_history_readiness_is_explicit_and_never_inferred(m):
