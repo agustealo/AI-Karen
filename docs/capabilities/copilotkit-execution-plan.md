@@ -3,7 +3,7 @@
 > **SINGLE LIVING CHECKLIST — KEEP THIS FILE CURRENT WITH EVERY RELEVANT PR.**
 >
 > **Status:** ACTIVE ENGINEERING PLAN; **consumer release NOT VERIFIED**.  
-> **As-of/source baseline:** 2026-11-12, verified live `main@87cd000af74bbb794f61eb81a3ed629f235c4216` (#744 merged). All six exact-main GitHub check-runs completed SUCCESS (`main-quality-gate`, `frontend-quality`, `deployment-contract`, `backend-quality`, `classifier-burn`, `production-deployment-contract`). Vercel production deployment `dpl_6ig5692Z2PumymmjbErHPmRzF3UE` is READY at this exact SHA. Render's canonical API has no successful deployment; backend readiness and signed-in browser acceptance remain unverified.  
+> **As-of/source baseline:** 2026-11-12, verified `main@5d2c8231279041ec309e5af1c99f2d384c0440a2` (#746 merged), all seven exact-main check-runs completed SUCCESS. Vercel production deployment `dpl_2dqzAm4wT6Z3pQucNWMKycf8ZPnU` reports READY at this exact SHA. The canonical Render API still tracks the October 31 feature branch with no health path and three recorded failed deployments; approved Render recovery and signed-in consumer acceptance remain NOT_RUN.  
 > **Document owner:** Karen architecture / consumer experience maintainers. **Execution owners:** the existing domain owners below.  
 > **Scope:** first-class CopilotKit chat, Persona Studio, agentic tasks, AG-UI, model/prompt/context/memory, native tool/suggestion/approval UX, history, generated presentation, MCP/skills/sandbox, channels, resilience, telemetry, security, accessibility, CI, and removal of replaced logic.
 >
@@ -32,7 +32,7 @@
 
 | Tracking field | Current evidence |
 |---|---|
-| Canonical baseline | Live `main@87cd000af74bbb794f61eb81a3ed629f235c4216`, 2026-11-12: 6/6 completed successful exact-main GitHub checks after #744; production Vercel `dpl_6ig5692Z2PumymmjbErHPmRzF3UE` READY at same SHA. Backend startup/health, migration 43, durable history and signed-in browser NOT_VERIFIED/NOT_RUN |
+| Canonical baseline | Live `main@5d2c8231279041ec309e5af1c99f2d384c0440a2`, 2026-11-12: post-merge GitHub CI 7/7 SUCCESS, production Vercel `dpl_2dqzAm4wT6Z3pQucNWMKycf8ZPnU` READY at same SHA. Protected Render reconciliation NOT_RUN; backend health, migration 43, durable history and signed-in browser NOT_VERIFIED |
 | Native React view | `@copilotkit/react-core@1.79.1` declared; `CopilotKitProvider` + `CopilotChatView` mounted in source |
 | High-level chat | `CopilotChat` **not mounted**; automatic initial `runAgent` conflicts with trusted history boot |
 | Chat controller | Karen-controlled submit/draft/stop; uses SDK `copilotkit.runAgent({ agent })` correctly |
@@ -43,8 +43,8 @@
 | Presentation | Eight validated types on main, including `data.table`. #671 added Python/React schema and renderer; #672 authorized runtime projection; #673 produces source-attested search-excerpt tables for explicit first-turn prompts; #674 restricts labels and field mappings. Source merged/CI proven; live browser first-send/reload **NOT_RUN**; comparative facts, recipes and steps still missing |
 | Known recent work | #706–#715 source fault coverage; #735–#739 protected transcript-fault and persistence controls; #742 production browser target attestation; #743 canonical proxy abort classification; #744 Render secret scope. Source and CI merged, not consumer acceptance |
 | Search/movie work | PR [#659](https://github.com/agustealo/AI-Karen/pull/659) CLOSED as superseded by merged [#666](https://github.com/agustealo/AI-Karen/pull/666); do not merge the old draft or restore its stale history/CI changes |
-| CI | Six GitHub checks on exact `main@87cd000af74bbb794f61eb81a3ed629f235c4216` completed SUCCESS, including backend/frontend and deployment contract. Protected Render `inspect`/`apply` execution and approved CopilotKit browser acceptance remain unverified |
-| Production and release | Vercel production frontend READY at exact main SHA. Existing Render `ai-karen-beta-api` is not suspended but tracks `feat/chat-consumer-conversation-management-20261031`, auto deploy off, health path unset; all three November 1 builds succeeded and deployments failed after process exit 1. Existing Render PostgreSQL v16 is available on expiring free plan (expires 2026-12-01); external SQL is blocked by the private IP allowlist, so migration 43 is NOT_VERIFIED. Existing Redis is available with persistence off. No successful API health or signed-in consumer request demonstrated. **NO CONSUMER SIGNOFF** |
+| CI | Latest exact `main@5d2c8231279041ec309e5af1c99f2d384c0440a2` post-merge 7/7 SUCCESS (main-quality-gate, backend-quality, frontend-quality, classifier-burn, deployment-contract, production-deployment-contract, production-database-baseline-contract). Protected Render recovery and real browser acceptance NOT_RUN |
+| Production and release | Production Vercel READY at exact `main@5d2c8231279041ec309e5af1c99f2d384c0440a2`; Render canonical API still points to the October 31 feature branch, has no configured health path, auto-deploy off, and three post-build exit-1 failures. Existing PostgreSQL is available/free with 2026-12-01 expiration; migration 43 remains unverified due denied external DB access. Redis is available/nonpersistent; authentic API health and KCON-770 signed-in browser proof NOT_RUN. **NO CONSUMER SIGNOFF** |
 
 
 ### Reconciled engineering status and remaining proof (2026-11-12)
@@ -591,6 +591,8 @@ Merge / rollout / rollback:
 
 | 2026-11-12 | `main@87cd000af74bbb794f61eb81a3ed629f235c4216` | Read-only Render reconciliation evidence: API stale branch, no health-check path, three post-build exit-1 failures; available free PostgreSQL expires 2026-12-01, Redis persistence off; migration 43 SQL check blocked by external IP allowlist. Existing protected Render workflow and browser gate remain NOT_RUN; no direct service mutation, database allowlist change or invented success. | KCON-770, KCON-930 | OPERATIONAL_BLOCKER_CONFIRMED; SOURCE_CI_GREEN; BROWSER_NOT_RUN |
 
-| 2026-11-12 | `fix/kcon770-consumer-journal-preflight-20261112` | Candidate: require operator-enabled observed-event journal alongside existing AG-UI bridge and durable runs in protected Render `inspect-consumer`; four negative cases in canonical preflight owner. No infrastructure, migration or browser attestation. | KCON-770, KCON-242, KCON-930 | SOURCE_CANDIDATE; CI PENDING; LIVE_BACKEND_NOT_VERIFIED; BROWSER_NOT_RUN |
+| 2026-11-12 | `main@5d2c8231279041ec309e5af1c99f2d384c0440a2` | PR #746 merged: protected `inspect-consumer` now requires observed-event journal along with AG-UI bridge and durable runs, verified with four negative cases. Exact-main CI 7/7 completed SUCCESS and Vercel production READY at matching SHA; no infrastructure changed. | KCON-770, KCON-242, KCON-930 | SOURCE_MERGED_POSTMERGE_GREEN; LIVE_BACKEND_NOT_VERIFIED; BROWSER_NOT_RUN |
+
+| 2026-11-12 | `fix/kcon930-render-inspect-drift-receipt-20261112` | Candidate: existing protected Render `inspect` preflight names safe `drift:branch`, `drift:auto_deploy`, and `drift:health_check` categories so the signed-off operator can review field-level drift without exposing values or applying changes; parametrized read-only regression coverage in canonical owner. | KCON-930, KCON-770 | SOURCE_CANDIDATE; exact-head CI PENDING; protected Render dispatch and backend/browser acceptance NOT_RUN |
 
 **Maintenance note:** append *one short changelog entry per merged slice*, update the existing task row and checklist, and remove resolved blockers. Do not append a competing implementation plan, repeat the full matrix in PR comments or quietly check boxes on the strength of green mocks.
