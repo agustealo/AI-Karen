@@ -91,9 +91,10 @@ async function expectObservedTranscriptPersistenceFailure(
   expect(reachedEnd, "A terminal transcript failure needs a complete bounded event journal").toBe(true);
   const terminals = observed.filter(event =>
     event.type === "RUN_ERROR" || event.type === "RUN_FINISHED");
-  expect(terminals, "The saved run must end in one genuine transcript failure").toEqual([{
-    type: "RUN_ERROR", code: "CHAT_TRANSCRIPT_NOT_PERSISTED",
-  }]);
+  expect(
+    terminals.map(event => ({ type: event.type, code: event.code })),
+    "The saved run must end in one genuine transcript failure",
+  ).toEqual([{ type: "RUN_ERROR", code: "CHAT_TRANSCRIPT_NOT_PERSISTED" }]);
   expect(observed.filter(event =>
     event.type === "CUSTOM" && event.name === "karen.execution_receipt.v1"),
   "An unsaved assistant turn cannot obtain a saved execution receipt").toHaveLength(0);
