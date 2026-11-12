@@ -349,6 +349,44 @@ jobs:
       - name: Run frontend unit tests
         run: npx vitest run --passWithNoTests
 
+      - name: Prove local latency suite selects exactly sixty headless first-prompt cases
+        shell: bash
+        env:
+          KAREN_LOCAL_LATENCY_BENCHMARK: "1"
+          KAREN_LOCAL_CHAT_ACCEPTANCE: "1"
+          KAREN_CHAT_BOOT_ACCEPTANCE: "0"
+          KAREN_BASE_URL: http://127.0.0.1:8010
+          # Listing collects zero browser or model responses; never use real
+          # operator credentials or produce authenticated artifacts in CI.
+          KAREN_UX_EMAIL: kcon776-list@example.invalid
+          KAREN_UX_PASSWORD: not-a-real-credential
+        run: |
+          set -euo pipefail
+          list_file="$(mktemp)"
+          trap 'rm -f "$list_file"' EXIT
+          npx playwright test e2e/copilotkit-consumer-boot.spec.ts \
+            --config=e2e/playwright.config.ts --project=chromium \
+            --grep="one first" --repeat-each=10 --workers=1 --list >"$list_file"
+          node - "$list_file" <<'NODE'
+          const fs = require("node:fs");
+          const output = fs.readFileSync(process.argv[2], "utf8");
+          const scenarios = [
+            "time", "weather", "search", "news",
+            "current movies", "current movie source table",
+          ];
+          const total = output.match(/Total:\s*(\d+)\s+tests?\s+in\s+(\d+)\s+files?/);
+          if (!total || Number(total[1]) !== 60 || Number(total[2]) !== 1) {
+            throw new Error("KCON-776 must select 60 first-prompt cases from one canonical spec");
+          }
+          for (const scenario of scenarios) {
+            const title = `one first ${scenario} prompt renders backend-attested UI immediately and after reload`;
+            const count = output.split(title).length - 1;
+            if (count !== 10) {
+              throw new Error(`KCON-776 ${scenario}: expected ten independent repeat-each cases, got ${count}`);
+            }
+          }
+          NODE
+
       - name: Build production frontend
         env:
           NODE_ENV: production
