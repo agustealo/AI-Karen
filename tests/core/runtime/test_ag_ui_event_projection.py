@@ -649,7 +649,9 @@ def test_complete_emits_allowlisted_execution_receipt_before_terminal():
     assert "never-expose" not in str(events)
 
 
-@pytest.mark.parametrize("persistence_status", ["failed", "rejected"])
+@pytest.mark.parametrize(
+    "persistence_status", ["failed", "rejected", "skipped", "unknown_write_status", 0],
+)
 def test_unsaved_transcript_is_run_error_not_success_or_model_receipt(
     persistence_status: str,
 ) -> None:
@@ -683,6 +685,22 @@ def test_unsaved_transcript_is_run_error_not_success_or_model_receipt(
     assert "karen.execution_receipt.v1" not in str(events)
     assert projection.terminal is True
     assert projection.project(chunk("complete", transcript_persistence_status="persisted")) == []
+    assert projection.fail_incomplete() == []
+
+
+@pytest.mark.parametrize("persistence_status", ["persisted", "already_persisted"])
+def test_confirmed_transcript_is_allowed_to_complete_without_fabricated_receipt(
+    persistence_status: str,
+) -> None:
+    """Only the canonical owner's confirmed statuses establish a durable turn."""
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    events = projection.project(chunk(
+        "complete", transcript_persistence_status=persistence_status,
+        actual_provider=None, actual_model=None, response_source="direct_capability",
+    ))
+    assert events == [{"type": "RUN_FINISHED", "threadId": "thread", "runId": "run"}]
+    assert projection.terminal is True
     assert projection.fail_incomplete() == []
 
 
