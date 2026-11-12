@@ -202,6 +202,64 @@ def test_nonstream_transcript_write_status_is_authoritative(
     asyncio.run(run())
 
 
+@pytest.mark.asyncio
+async def test_nonstream_http_unsaved_answer_returns_sanitized_503(monkeypatch) -> None:
+    """The existing HTTP ingress must honor canonical transcript failure."""
+    import json
+
+    from ai_karen_engine.api_routes.chat import runtime as chat_ingress
+
+    failure = ChatExecutionResult(
+        answer="Generated private answer must not be returned",
+        status=ChatExecutionStatus.ERROR,
+        metadata=ChatRuntimeMetadata(
+            correlation_id="case08-correlation",
+            degraded_mode=True,
+            degradation_reason="transcript_persistence_failed",
+            extra={
+                "transcript_persistence_status": "failed",
+                "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                "transcript_persistence_reason": "private-postgres-detail-never-expose",
+            },
+        ),
+    )
+    backend = SimpleNamespace(execute=AsyncMock(return_value=failure))
+    logger = SimpleNamespace(log_event=AsyncMock(), log_error=AsyncMock())
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: backend)
+    monkeypatch.setattr(chat_ingress, "get_structured_logger", lambda: logger)
+
+    result = await chat_ingress.create_chat_response(
+        request=chat_ingress.ChatRequest(
+            messages=[chat_ingress.ChatMessage(content="Is my reply saved?")],
+            session_id="case08-session",
+        ),
+        background_tasks=None,
+        http_request=SimpleNamespace(
+            headers={"X-Correlation-Id": "case08-correlation"},
+        ),
+        user={
+            "user_id": "11111111-1111-1111-1111-111111111111",
+            "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        },
+    )
+    assert result.status_code == 503
+    assert result.headers["x-correlation-id"] == "case08-correlation"
+    body = json.loads(result.body)
+    assert body == {
+        "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+        "message": "The chat runtime could not complete the response.",
+        "correlation_id": "case08-correlation",
+        "requires_retry": True,
+    }
+    assert "Generated private answer" not in str(body)
+    assert "private-postgres-detail-never-expose" not in str(body)
+    backend.execute.assert_awaited_once()
+    runtime_request = backend.execute.await_args.args[0]
+    assert runtime_request.context.tenant_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    assert runtime_request.context.user_id == "11111111-1111-1111-1111-111111111111"
+    assert runtime_request.metadata["transport"] == "http"
+
+
 def test_stream_persists_when_write_allowed_without_recall() -> None:
     async def run() -> None:
         runtime = _runtime(_decision(memory_write_allowed=True), _Gateway())
