@@ -246,7 +246,7 @@ def test_kcon775_one_scenario_cannot_impersonate_complete_six_scenario_run(tmp_p
 
 def test_kcon775_rejects_unexpected_or_duplicate_scenario_requirements(tmp_path):
     report = _report([_result(i, float(i)) for i in range(10)])
-    with pytest.raises(analyzer.EvidenceError, match="unexpected_benchmark_scenario"):
+    with pytest.raises(analyzer.EvidenceError, match="unexpected_benchmark_spec"):
         analyzer.analyze(report, tmp_path, required_scenarios=("time",))
     with pytest.raises(analyzer.EvidenceError, match="invalid_required_scenarios"):
         analyzer.analyze(report, tmp_path, required_scenarios=("weather", "weather"))
