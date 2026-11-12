@@ -255,7 +255,7 @@ def test_recovery_workflow_is_manual_pinned_and_uses_existing_identity():
     source = flow.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in source
     assert "environment: beta-release" in source
-    assert "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}" in source
+    assert source.count("RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}") == 2
     assert "RENDER_BETA_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID }}" in source
     assert "RENDER_BETA_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID }}" in source
     assert "github.ref == 'refs/heads/main'" in source
@@ -267,3 +267,37 @@ def test_recovery_workflow_is_manual_pinned_and_uses_existing_identity():
     assert "persist-credentials: false" in source
     assert "deploy/render/render.yaml" in source
     assert "autoDeployTrigger" not in source  # Source of truth stays in Blueprint.
+
+
+def test_render_api_key_is_scoped_only_to_authorized_network_steps():
+    """Setup and source provenance checks must never inherit the Render API token."""
+    flow = ROOT / ".github/workflows/render-beta-service-reconcile.yml"
+    source = flow.read_text(encoding="utf-8")
+    job = source.split("  reconcile-existing-beta-api:", 1)[1]
+    job_scope, steps = job.split("\n    steps:", 1)
+    binding = "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}"
+    assert binding not in job_scope
+    assert steps.count(binding) == 2
+    assert "environment: beta-release" in job_scope
+    assert 'test "$TARGET_SHA" = "$ACTUAL_MAIN"' in steps
+    first_network = steps.index("      - name: Reconcile only existing Render service Git source")
+    assert steps.index("      - name: Require approved main identity") < first_network
+    for title in (
+        "Check out reviewed main",
+        "Require approved main identity and existing service selectors",
+    ):
+        block = steps.split("      - name: " + title, 1)[1].split("\n      - ", 1)[0]
+        assert binding not in block
+        assert "$RENDER_API_KEY" not in block
+    setup_block = steps.split("      - uses: actions/setup-python@v5", 1)[1].split("\n      - ", 1)[0]
+    assert binding not in setup_block
+    for title in (
+        "Reconcile only existing Render service Git source",
+        "Inspect the existing beta environment and private datastore links",
+    ):
+        block = steps.split("      - name: " + title, 1)[1].split("\n      - ", 1)[0]
+        assert binding in block
+        assert 'test -n "$RENDER_API_KEY"' in block
+    assert "deploy/render/render.yaml" in steps
+    assert "actions/checkout@v4" in steps
+    assert "persist-credentials: false" in steps
