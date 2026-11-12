@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -516,6 +517,17 @@ async def test_execute_stream_transcript_failure_is_separate_from_memory_truth()
     assert meta["transcript_persistence_reason"] == "assistant_message_persistence_failed"
     assert meta["status"] == "degraded"
     assert meta["degradation_reason"] == "assistant_message_persistence_failed"
+
+    # The canonical runtime's failed transcript write must not be rewritten
+    # by the AG-UI transport into a successful, persisted assistant turn.
+    projection = AGUIEventProjection(thread_id=CONVERSATION_ID, run_id="run-failed-write")
+    projected = [projection.begin()]
+    for runtime_chunk in chunks:
+        projected.extend(projection.project(runtime_chunk))
+    assert [event["type"] for event in projected].count("RUN_ERROR") == 1
+    assert "RUN_FINISHED" not in [event["type"] for event in projected]
+    assert "karen.execution_receipt.v1" not in str(projected)
+    assert projected[-1]["code"] == "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
 
 
 @pytest.mark.asyncio

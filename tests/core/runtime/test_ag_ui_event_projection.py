@@ -649,6 +649,61 @@ def test_complete_emits_allowlisted_execution_receipt_before_terminal():
     assert "never-expose" not in str(events)
 
 
+@pytest.mark.parametrize("persistence_status", ["failed", "rejected"])
+def test_unsaved_transcript_is_run_error_not_success_or_model_receipt(
+    persistence_status: str,
+) -> None:
+    """Canonical transcript failure must win over generated model text."""
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    projection.project(chunk("content", "Generated but unsaved answer"))
+    events = projection.project(chunk(
+        "complete",
+        status="degraded",
+        transcript_persistence_status=persistence_status,
+        transcript_persistence_reason="private-db-error-never-expose",
+        actual_provider="local",
+        actual_model="verified-model",
+        response_source="model",
+        assistant_message_id="never-confirm-unsaved-id",
+        secret={"api_key": "never-expose"},
+    ))
+    assert [event["type"] for event in events] == ["TEXT_MESSAGE_END", "RUN_ERROR"]
+    assert events[-1] == {
+        "type": "RUN_ERROR",
+        "message": (
+            "The response could not be saved. Check verified "
+            "conversation history before retrying."
+        ),
+        "code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+    }
+    assert "private-db-error-never-expose" not in str(events)
+    assert "never-confirm-unsaved-id" not in str(events)
+    assert "never-expose" not in str(events)
+    assert "karen.execution_receipt.v1" not in str(events)
+    assert projection.terminal is True
+    assert projection.project(chunk("complete", transcript_persistence_status="persisted")) == []
+    assert projection.fail_incomplete() == []
+
+
+def test_degraded_memory_with_durable_transcript_remains_a_finished_run() -> None:
+    """A memory-only failure must not be mistaken for a failed chat write."""
+    projection = AGUIEventProjection(thread_id="thread", run_id="run")
+    projection.begin()
+    events = projection.project(chunk(
+        "complete",
+        status="degraded",
+        degraded_mode=True,
+        memory_persistence_status="failed",
+        transcript_persistence_status="persisted",
+        actual_provider="local",
+        actual_model="verified-model",
+        response_source="model",
+    ))
+    assert [event["type"] for event in events] == ["CUSTOM", "RUN_FINISHED"]
+    assert events[0]["name"] == "karen.execution_receipt.v1"
+
+
 def test_complete_without_verified_execution_identity_does_not_invent_receipt():
     p = AGUIEventProjection(thread_id="thread", run_id="run")
     p.begin()
