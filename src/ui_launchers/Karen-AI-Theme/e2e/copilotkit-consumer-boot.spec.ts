@@ -33,6 +33,73 @@ async function readAuthorizedSameOriginJson(
 }
 
 /**
+ * KCON-770 case 08: independently read the exact owned run's durable status
+ * and observed events. A generic SDK alert or unrelated backend failure does
+ * not prove transcript persistence failed. No provider calls or mutations.
+ */
+async function expectObservedTranscriptPersistenceFailure(
+  page: Page, conversationId: string, runId: string,
+): Promise<void> {
+  const statusResponse = await readAuthorizedSameOriginJson(
+    page, `/api/copilotkit/agent/default/runs/${conversationId}/${runId}/status`,
+  );
+  expect(statusResponse.ok, "Owned durable run status must be readable").toBe(true);
+  expect(statusResponse.body).toMatchObject({
+    status: "failed",
+    cancel_requested: false,
+    cancellation_confirmed: false,
+  });
+
+  const observed: Array<{ type?: string; name?: string; code?: string }> = [];
+  let cursor = 0;
+  let reachedEnd = false;
+  // Backend cursor is bounded at 2048 and returns <=100 events per page.
+  for (let pageIndex = 0; pageIndex < 21; pageIndex++) {
+    const result = await readAuthorizedSameOriginJson(
+      page,
+      `/api/copilotkit/threads/${conversationId}/runs/${runId}/events?after=${cursor}&limit=100`,
+    );
+    expect(result.ok, "Owned event journal must be available for case-08 proof").toBe(true);
+    expect(result.body).toMatchObject({
+      threadId: conversationId,
+      runId,
+      runStatus: "failed",
+      responseSource: "observed_event_journal",
+      terminalConfirmed: true,
+      journalTerminalObserved: true,
+      continuationAvailable: false,
+    });
+    const body = result.body as {
+      events: Array<{ seq: number; event: { type?: string; name?: string; code?: string } }>;
+      nextCursor: number;
+      hasMore: boolean;
+    };
+    expect(Array.isArray(body.events)).toBe(true);
+    expect(Number.isInteger(body.nextCursor)).toBe(true);
+    expect(typeof body.hasMore).toBe("boolean");
+    for (const entry of body.events) {
+      expect(entry.seq).toBeGreaterThan(cursor);
+      observed.push(entry.event);
+    }
+    if (!body.hasMore) {
+      reachedEnd = true;
+      break;
+    }
+    expect(body.nextCursor, "Observed cursor must advance before next page").toBeGreaterThan(cursor);
+    cursor = body.nextCursor;
+  }
+  expect(reachedEnd, "A terminal transcript failure needs a complete bounded event journal").toBe(true);
+  const terminals = observed.filter(event =>
+    event.type === "RUN_ERROR" || event.type === "RUN_FINISHED");
+  expect(terminals, "The saved run must end in one genuine transcript failure").toEqual([{
+    type: "RUN_ERROR", code: "CHAT_TRANSCRIPT_NOT_PERSISTED",
+  }]);
+  expect(observed.filter(event =>
+    event.type === "CUSTOM" && event.name === "karen.execution_receipt.v1"),
+  "An unsaved assistant turn cannot obtain a saved execution receipt").toHaveLength(0);
+}
+
+/**
  * Model text alone is insufficient release proof: backend-saved execution
  * provenance must be bound to the precise persisted assistant turn. The
  * thread gateway already verifies this snapshot before the SDK displays it.
@@ -142,6 +209,10 @@ const releaseMode = process.env.KAREN_CHAT_BOOT_ACCEPTANCE === "1";
 const localMode = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
 const enabled = releaseMode || localMode;
 const kcon770FaultAcceptance = process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1";
+const kcon770TranscriptFaultAcceptance = process.env.KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE === "1";
+if (kcon770TranscriptFaultAcceptance && !kcon770FaultAcceptance) {
+  throw new Error("Case-08 transcript fault proof requires the approved KCON-770 failure gate");
+}
 if (kcon770FaultAcceptance && (!enabled ||
     !process.env.KAREN_KCON770_FAILURE_PROMPT?.trim())) {
   throw new Error("KCON-770 failure acceptance needs approved browser mode and an operator-controlled failure prompt");
@@ -804,13 +875,33 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
 
     const prompt = process.env.KAREN_KCON770_FAILURE_PROMPT!;
     const runRequests: string[] = [];
+    const observedRunIds: string[] = [];
     page.on("request", request => {
       const path = new URL(request.url()).pathname;
       if (request.method() === "POST" && (
         path === "/api/copilotkit/agent/default/run" ||
         path === "/api/chat/ag-ui" ||
         path === "/api/chat/stream"
-      )) runRequests.push(path);
+      )) {
+        runRequests.push(path);
+        if (kcon770TranscriptFaultAcceptance &&
+            path === "/api/copilotkit/agent/default/run") {
+          // Read only the bounded run identifier. Never log or attach the
+          // submitted request, sanitized identity, credentials or prompt.
+          let submitted: unknown;
+          try {
+            submitted = request.postDataJSON();
+          } catch {
+            return;
+          }
+          if (submitted && typeof submitted === "object" && !Array.isArray(submitted)) {
+            const runId = (submitted as Record<string, unknown>).runId;
+            if (typeof runId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(runId)) {
+              observedRunIds.push(runId);
+            }
+          }
+        }
+      }
     });
     const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
     await expect(composer).toBeVisible();
@@ -824,6 +915,13 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       timeout: 120_000,
     });
     expect(runRequests, "Failure must not retry the submitted turn automatically").toHaveLength(1);
+    if (kcon770TranscriptFaultAcceptance) {
+      expect(runRequests, "Transcript proof requires the canonical CopilotKit run transport")
+        .toEqual(["/api/copilotkit/agent/default/run"]);
+      expect(observedRunIds, "The exact issued run ID must come from the observed SDK request")
+        .toHaveLength(1);
+      await expectObservedTranscriptPersistenceFailure(page, conversationId!, observedRunIds[0]);
+    }
     await expect(shell.getByTestId("karen-copilot-assistant-message")).toHaveCount(0);
     await expect(composer, "Accepted failure must not silently restore and resend the draft")
       .toHaveValue("");
@@ -875,6 +973,9 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expect(restored.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
     await expect(restored.getByTestId("karen-copilot-assistant-message")).toHaveCount(0);
     await assertNoFalseSuccess();
+    if (kcon770TranscriptFaultAcceptance) {
+      await expectObservedTranscriptPersistenceFailure(page, conversationId!, observedRunIds[0]);
+    }
   });
 
 });
