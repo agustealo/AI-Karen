@@ -210,6 +210,71 @@ def test_kcon774_local_latency_runner_disables_sensitive_recordings_by_default()
     assert "&& python ../../../scripts/analyze_karen_latency.py test-results.json" in runner
 
 
+
+def test_kcon776_ci_lists_real_six_by_ten_local_benchmark_without_credentials() -> None:
+    """Main Quality Gate must discover real Playwright cases, not just grep code."""
+    workflow = (ROOT / ".github/workflows/main-quality-gate.yml").read_text(
+        encoding="utf-8"
+    )
+    title = (
+        "      - name: Prove local latency suite selects exactly sixty "
+        "headless first-prompt cases"
+    )
+    assert workflow.count(title) == 1
+    frontend = workflow.split("  frontend-quality:", 1)[1].split(
+        "\n  deployment-contract:", 1
+    )[0]
+    assert frontend.index("Install frontend dependencies reproducibly") < frontend.index(
+        title.strip()
+    )
+    step = frontend.split(title, 1)[1].split(
+        "\n      - name: Build production frontend", 1
+    )[0]
+    for required in (
+        'KAREN_LOCAL_LATENCY_BENCHMARK: "1"',
+        'KAREN_LOCAL_CHAT_ACCEPTANCE: "1"',
+        'KAREN_CHAT_BOOT_ACCEPTANCE: "0"',
+        "KAREN_BASE_URL: http://127.0.0.1:8010",
+        "kcon776-list@example.invalid",
+        "npx playwright test e2e/copilotkit-consumer-boot.spec.ts",
+        "--config=e2e/playwright.config.ts --project=chromium",
+        '--grep="one first" --repeat-each=10 --workers=1 --list',
+        "Number(total[1]) !== 60",
+        "Number(total[2]) !== 1",
+        "if (count !== 10)",
+    ):
+        assert required in step
+    assert "secrets." not in step
+    assert "route.fulfill(" not in step
+    assert "KAREN_UX_PASSWORD: not-a-real-credential" in step
+    assert "test:e2e:latency-local" in (
+        __import__("json").loads(
+            (SPEC.parents[1] / "package.json").read_text(encoding="utf-8")
+        )["scripts"]
+    )
+
+
+def test_kcon776_vitest_checks_actual_resolved_local_and_normal_playwright_config() -> None:
+    fixture = (
+        SPEC.parents[1] / "tests/chat/KarenLocalLatencyPlaywrightConfig.test.ts"
+    ).read_text(encoding="utf-8")
+    for required in (
+        'await import("../../e2e/playwright.config")',
+        'loadBrowserConfig("local", true)',
+        'loadBrowserConfig("terminal")',
+        'loadBrowserConfig("ci")',
+        'expect(config.use?.headless).toBe(true)',
+        'expect(config.retries).toBe(0)',
+        'expect(config.workers).toBe(1)',
+        'expect(config.use?.video).toBe("off")',
+        'expect(config.use?.trace).toBe("off")',
+        'expect(config.use?.screenshot).toBe("off")',
+        'expect(config.retries).toBe(2)',
+        'expect(config.use?.headless).toBe(false)',
+    ):
+        assert required in fixture
+
+
 def test_kcon770_failure_acceptance_requires_operator_fault_and_private_evidence() -> None:
     source = SPEC.read_text(encoding="utf-8")
     assert 'process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1"' in source
