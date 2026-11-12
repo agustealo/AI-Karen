@@ -165,9 +165,11 @@ def test_governed_history_readiness_is_explicit_and_never_inferred(m):
     assert not disabled.ready
     for key in m.GOVERNED_HISTORY_REQUIRED:
         assert f"disabled:{key}" in disabled.failures
+    assert f"disabled:{m.AG_UI_EVENT_JOURNAL}" in disabled.failures
 
     for key in m.GOVERNED_HISTORY_REQUIRED:
         configured[key] = "true"
+    configured[m.AG_UI_EVENT_JOURNAL] = "true"
     enabled = m.inspect(
         client=FakeClient(configured, durable_postgres=True), service_id=SERVICE,
         workspace_id=WORKSPACE, postgres_id=POSTGRES, key_value_id=KV,
@@ -186,6 +188,7 @@ def test_consumer_history_requires_durable_nonexpiring_postgres(m, durable, expe
     configured = safe_env(m)
     for key in m.GOVERNED_HISTORY_REQUIRED:
         configured[key] = "true"
+    configured[m.AG_UI_EVENT_JOURNAL] = "true"
     client = FakeClient(configured, durable_postgres=durable)
     report = m.inspect(
         client=client, service_id=SERVICE, workspace_id=WORKSPACE,
@@ -200,6 +203,36 @@ def test_consumer_history_requires_durable_nonexpiring_postgres(m, durable, expe
     if not durable:
         assert "consumer_persistence:postgres_durable_plan_required" in report.failures
         assert "consumer_persistence:postgres_expiration_present" in report.failures
+
+
+@pytest.mark.parametrize("journal_value", (None, "", "false", "unexpected"))
+def test_consumer_release_cannot_pass_without_observed_event_journal(m, journal_value):
+    """The case-08 browser failure cannot be attested without the real journal."""
+    configured = safe_env(m)
+    for key in m.GOVERNED_HISTORY_REQUIRED:
+        configured[key] = "true"
+    if journal_value is not None:
+        configured[m.AG_UI_EVENT_JOURNAL] = journal_value
+
+    client = FakeClient(configured, durable_postgres=True)
+    report = m.inspect(
+        client=client, service_id=SERVICE, workspace_id=WORKSPACE,
+        postgres_id=POSTGRES, key_value_id=KV,
+        manifest=m.Manifest.read(m.BLUEPRINT),
+        blueprint=m.BLUEPRINT.read_text(encoding="utf-8"),
+        required_defaults=m.required_environment_defaults(m.SERVER_CONFIG),
+        require_governed_history=True,
+    )
+    assert not report.ready
+    assert f"disabled:{m.AG_UI_EVENT_JOURNAL}" in report.failures
+    assert not any(
+        failure.startswith("consumer_persistence:")
+        for failure in report.failures
+    )
+    assert {call[0] for call in client.calls} == {"GET"}
+
+    # The initial boot inventory intentionally has a separate, weaker bar.
+    assert inspect(m, FakeClient(configured, durable_postgres=True)).ready
 
 
 def test_event_journal_cannot_be_enabled_without_durable_history(m):
