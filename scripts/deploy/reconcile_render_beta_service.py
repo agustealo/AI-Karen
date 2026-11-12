@@ -86,9 +86,15 @@ def _health_check_path(service: dict[str, Any]) -> str:
 
 def _trigger(service: dict[str, Any]) -> str:
     trigger = service.get("autoDeployTrigger")
-    if trigger in {"off", "commit", "checksPass"}:
-        return trigger
-    # Render retains the legacy autoDeploy field on older services.
+    if trigger is not None:
+        if isinstance(trigger, str) and trigger in {"off", "commit", "checksPass"}:
+            return trigger
+        # An explicit but malformed modern setting cannot be excused by a
+        # legacy field. In particular, never mistake an unknown trigger for
+        # reviewed manual-deploy policy.
+        raise ReconcileError("Render service auto-deploy state cannot be verified")
+    # Render retains the legacy autoDeploy field on older services which do
+    # not report the modern trigger at all.
     legacy = service.get("autoDeploy")
     if legacy == "no":
         return "off"
