@@ -272,8 +272,11 @@ def inspect(
         env.get(key, "").strip().lower() == "true"
         for key in GOVERNED_HISTORY_REQUIRED
     )
-    if require_governed_history and not history_enabled:
-        for key in GOVERNED_HISTORY_REQUIRED:
+    if require_governed_history:
+        # Case-08 acceptance requires a durable, owner-scoped observed-event
+        # journal, not merely a successful AG-UI bridge and run ledger.
+        # Fail closed without modifying any operator-controlled feature flag.
+        for key in (*sorted(GOVERNED_HISTORY_REQUIRED), AG_UI_EVENT_JOURNAL):
             if env.get(key, "").strip().lower() != "true":
                 failures.add(f"disabled:{key}")
     if (env.get(AG_UI_EVENT_JOURNAL, "").strip().lower() == "true"
