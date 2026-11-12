@@ -67,9 +67,15 @@ jobs:
         if: env.MODE != 'inspect-env' && env.MODE != 'inspect-consumer'
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
           set -euo pipefail
+          # The initial checkout check is not enough: main can advance
+          # during setup. Recheck directly at each protected network boundary.
+          LIVE_MAIN="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$TARGET_SHA" = "$GITHUB_SHA" || { echo "::error::Reviewed dispatch SHA changed"; exit 1; }
+          test "$TARGET_SHA" = "$LIVE_MAIN" || { echo "::error::Main advanced before Render inspection or apply"; exit 1; }
           test -n "$RENDER_API_KEY" || { echo "::error::Protected Render API credential is missing"; exit 1; }
           python scripts/deploy/reconcile_render_beta_service.py \
             --service-id "$RENDER_BETA_SERVICE_ID" \
@@ -81,9 +87,15 @@ jobs:
         if: env.MODE == 'inspect-env' || env.MODE == 'inspect-consumer'
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
           set -euo pipefail
+          # The initial checkout check is not enough: main can advance
+          # during setup. Recheck directly at each protected network boundary.
+          LIVE_MAIN="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$TARGET_SHA" = "$GITHUB_SHA" || { echo "::error::Reviewed dispatch SHA changed"; exit 1; }
+          test "$TARGET_SHA" = "$LIVE_MAIN" || { echo "::error::Main advanced before Render inspection or apply"; exit 1; }
           test -n "$RENDER_API_KEY" || { echo "::error::Protected Render API credential is missing"; exit 1; }
           test -n "$RENDER_BETA_POSTGRES_ID" || { echo "::error::Existing Postgres ID is missing"; exit 1; }
           test -n "$RENDER_BETA_KEY_VALUE_ID" || { echo "::error::Existing Key Value ID is missing"; exit 1; }

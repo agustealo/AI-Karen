@@ -357,6 +357,11 @@ def test_render_api_key_is_scoped_only_to_authorized_network_steps():
     binding = "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}"
     assert binding not in job_scope
     assert steps.count(binding) == 2
+    # Each protected API step must independently verify the live main SHA
+    # after checkout/setup and before any Render credential use. A main move
+    # after the job's initial preflight cannot authorize a stale apply.
+    assert steps.count("LIVE_MAIN=\"$(gh api") == 2
+    assert steps.count('test "$TARGET_SHA" = "$LIVE_MAIN"') == 2
     assert "environment: beta-release" in job_scope
     assert 'test "$TARGET_SHA" = "$ACTUAL_MAIN"' in steps
     first_network = steps.index("      - name: Reconcile only existing Render service Git source")
@@ -376,7 +381,12 @@ def test_render_api_key_is_scoped_only_to_authorized_network_steps():
     ):
         block = steps.split("      - name: " + title, 1)[1].split("\n      - ", 1)[0]
         assert binding in block
+        assert "GH_TOKEN: ${{ github.token }}" in block
+        assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in block
+        assert 'test "$TARGET_SHA" = "$LIVE_MAIN"' in block
         assert 'test -n "$RENDER_API_KEY"' in block
+        assert block.index('test "$TARGET_SHA" = "$LIVE_MAIN"') < block.index('test -n "$RENDER_API_KEY"')
+        assert block.index('test "$TARGET_SHA" = "$LIVE_MAIN"') < block.index("python scripts/deploy/")
     assert "deploy/render/render.yaml" in steps
     assert "actions/checkout@v4" in steps
     assert "persist-credentials: false" in steps
