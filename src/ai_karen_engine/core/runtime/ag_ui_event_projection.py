@@ -308,6 +308,20 @@ class AGUIEventProjection:
             })]
 
         if kind == "complete":
+            # Runtime completion can carry failed transcript persistence.
+            # Never project a generated but unsaved answer as a successful SDK
+            # run or attach a fabricated saved execution receipt.
+            if meta.get("transcript_persistence_status") in ("failed", "rejected"):
+                self._terminal = True
+                return self._finish_message() + [{
+                    "type": "RUN_ERROR",
+                    "message": (
+                        "The response could not be saved. Check verified "
+                        "conversation history before retrying."
+                    ),
+                    "code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                }]
+
             # Explicit terminal receipt, not an unrestricted metadata dump.
             # Recall grounding requires a runtime-authorized evidence source.
             receipt: dict[str, Any] = {
