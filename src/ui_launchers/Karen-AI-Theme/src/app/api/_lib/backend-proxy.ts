@@ -387,14 +387,13 @@ export async function proxyToBackend(
         );
       }
 
-      const redirectInit = await buildInit(
-        request,
-        backendBaseUrl,
-        timeoutMs,
-        capturedBody,
-      );
-      upstream = await fetch(redirectUrl, redirectInit);
-      clearInitTimeout(redirectInit);
+      // A redirect starts a new upstream request with its own deadline.
+      // Clear the previous attempt first and retain the new deadline through
+      // response-body consumption; otherwise a redirected timeout could leak
+      // a timer and be incorrectly attributed to the original request.
+      clearInitTimeout(init);
+      init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody);
+      upstream = await fetch(redirectUrl, init);
     }
 
     // A redirect without a safe, completed target is not an API result.
@@ -426,6 +425,15 @@ export async function proxyToBackend(
   } catch (error) {
     clearInitTimeout(init);
 
+    // AbortError alone cannot distinguish our own deadline from an upstream
+    // or transport cancellation. The request signal is owned by buildInit
+    // and is aborted only by its deadline timer. Keep the original HTTP
+    // failure contract, and emit a bounded, non-sensitive attribution.
+    const abortOrigin = init.signal?.aborted === true
+      ? 'proxy_deadline'
+      : error instanceof Error && error.name === 'AbortError'
+        ? 'upstream_or_transport'
+        : 'not_aborted';
     // Some fetch/TLS errors embed the full upstream URL, including secrets.
     // Record structured error class only; never return or log raw causes.
     console.error('[BackendProxy] canonical_upstream_unavailable', {
@@ -433,6 +441,8 @@ export async function proxyToBackend(
       upstream_path: upstreamPath,
       error_type: error instanceof Error ? error.name : 'UnknownError',
       cause_code: safeCauseCode(error),
+      abort_origin: abortOrigin,
+      timeout_ms: timeoutMs,
       target_scope: backendTargetScope(backendBaseUrl),
       configuration_source: EXPLICIT_BACKEND_URL ? 'explicit' : 'default',
     });
