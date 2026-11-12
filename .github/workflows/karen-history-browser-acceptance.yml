@@ -418,8 +418,9 @@ jobs:
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
-      # KCON-770 is an explicit operator-authorized real backend failure test.
-      # Never inject a fault through Playwright or run with ordinary consumer CI.
+      # KCON-770 is an explicit operator-authorized real transcript-write fault.
+      # Do not accept a generic SDK/provider outage as case-08 evidence.
+      # Never inject a fault through Playwright or ordinary consumer CI.
       # Screenshots, traces, videos and failure prompts are not public artifacts.
       - name: Prove KCON-770 authenticated backend failure and truthful reload
         if: inputs.scenario == 'copilotkit-failure'
@@ -429,6 +430,7 @@ jobs:
           KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
           KAREN_CHAT_BOOT_ACCEPTANCE: "1"
           KAREN_KCON770_FAULT_ACCEPTANCE: "1"
+          KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE: "1"
           KAREN_KCON770_PRIVATE_EVIDENCE: "0"
           KAREN_KCON770_FAILURE_PROMPT: ${{ secrets.KAREN_KCON770_FAILURE_PROMPT }}
           KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}
@@ -436,6 +438,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$KAREN_KCON770_FAULT_ACCEPTANCE" = "1"
+          test "$KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE" = "1"
           test -n "${KAREN_KCON770_FAILURE_PROMPT//[[:space:]]/}" || {
             echo "::error::Operator-approved real backend failure prompt is required"
             exit 1
