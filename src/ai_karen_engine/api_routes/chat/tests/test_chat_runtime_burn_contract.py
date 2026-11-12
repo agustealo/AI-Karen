@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionStatus,
     ChatRuntimeMetadata,
 )
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import TranscriptPersistenceResult
 from ai_karen_engine.core.runtime.composition import RuntimeComposition
 from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
@@ -149,6 +150,115 @@ def test_nonstream_persists_when_write_allowed_without_recall() -> None:
         runtime._persist_memory.assert_awaited_once()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("persistence_status", "expected_status", "successful"),
+    [
+        ("persisted", ChatExecutionStatus.OK, True),
+        ("already_persisted", ChatExecutionStatus.OK, True),
+        ("failed", ChatExecutionStatus.ERROR, False),
+        ("rejected", ChatExecutionStatus.ERROR, False),
+        ("skipped", ChatExecutionStatus.ERROR, False),
+    ],
+)
+def test_nonstream_transcript_write_status_is_authoritative(
+    persistence_status: str,
+    expected_status: ChatExecutionStatus,
+    successful: bool,
+) -> None:
+    """A generated answer cannot succeed without a confirmed durable transcript."""
+    async def run() -> None:
+        runtime = _runtime(_decision(), _Gateway())
+        write = TranscriptPersistenceResult(
+            status=persistence_status,
+            conversation_id="conversation-1",
+            persisted_messages=2 if persistence_status == "persisted" else 0,
+            reason="private-db-detail" if not successful else None,
+        )
+        runtime._persist_transcript = AsyncMock(return_value=write)
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_chat_runtime_control_plane",
+            new=AsyncMock(return_value=_NoGateControlPlane()),
+        ):
+            result = await runtime.execute(_request())
+        assert result.answer == "ok"
+        assert result.status is expected_status
+        assert result.metadata.extra["transcript_persistence_status"] == persistence_status
+        assert result.metadata.degraded_mode is (not successful)
+        if successful:
+            assert result.metadata.extra.get("error_code") != "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+        else:
+            assert result.metadata.extra["error_code"] == "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+            assert result.metadata.degraded_mode is True
+        recorded = runtime._record_execution_outcome.await_args.kwargs
+        assert recorded["success"] is successful
+        assert recorded["transcript_meta"]["transcript_persistence_status"] == persistence_status
+        if not successful:
+            assert recorded["provider_meta"]["error_code"] == "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+        else:
+            assert "error_code" not in recorded["provider_meta"]
+        runtime._persist_transcript.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+@pytest.mark.asyncio
+async def test_nonstream_http_unsaved_answer_returns_sanitized_503(monkeypatch) -> None:
+    """The existing HTTP ingress must honor canonical transcript failure."""
+    import json
+
+    from ai_karen_engine.api_routes.chat import runtime as chat_ingress
+
+    failure = ChatExecutionResult(
+        answer="Generated private answer must not be returned",
+        status=ChatExecutionStatus.ERROR,
+        metadata=ChatRuntimeMetadata(
+            correlation_id="case08-correlation",
+            degraded_mode=True,
+            degradation_reason="transcript_persistence_failed",
+            extra={
+                "transcript_persistence_status": "failed",
+                "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                "transcript_persistence_reason": "private-postgres-detail-never-expose",
+            },
+        ),
+    )
+    backend = SimpleNamespace(execute=AsyncMock(return_value=failure))
+    logger = MagicMock()
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: backend)
+    monkeypatch.setattr(chat_ingress, "get_structured_logger", lambda: logger)
+
+    result = await chat_ingress.create_chat_response(
+        request=chat_ingress.ChatRequest(
+            messages=[chat_ingress.ChatMessage(content="Is my reply saved?")],
+            session_id="case08-session",
+        ),
+        background_tasks=None,
+        http_request=SimpleNamespace(
+            headers={"X-Correlation-Id": "case08-correlation"},
+        ),
+        user={
+            "user_id": "11111111-1111-1111-1111-111111111111",
+            "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        },
+    )
+    assert result.status_code == 503
+    assert result.headers["x-correlation-id"] == "case08-correlation"
+    body = json.loads(result.body)
+    assert body == {
+        "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+        "message": "The chat runtime could not complete the response.",
+        "correlation_id": "case08-correlation",
+        "requires_retry": True,
+    }
+    assert "Generated private answer" not in str(body)
+    assert "private-postgres-detail-never-expose" not in str(body)
+    backend.execute.assert_awaited_once()
+    runtime_request = backend.execute.await_args.args[0]
+    assert runtime_request.context.tenant_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    assert runtime_request.context.user_id == "11111111-1111-1111-1111-111111111111"
+    assert runtime_request.metadata["transport"] == "http"
 
 
 def test_stream_persists_when_write_allowed_without_recall() -> None:

@@ -693,7 +693,7 @@ class ChatRuntime:
             request, text, provider_meta, trajectory_id=trajectory.trajectory_id
         )
         provider_meta.update(transcript_result.to_metadata())
-        transcript_failed = transcript_result.status in {"failed", "rejected"}
+        transcript_failed = not transcript_result.success
         if transcript_failed:
             # Conversation durability is independent of successful inference.
             # A failed transcript write must never be presented as a saved turn.
@@ -702,6 +702,7 @@ class ChatRuntime:
                 provider_meta.get("degradation_reason")
                 or "transcript_persistence_failed"
             )
+            provider_meta["error_code"] = "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
 
         latency_ms = (time.time() - start) * 1000.0
         await self._record_trajectory_completion(
@@ -721,7 +722,8 @@ class ChatRuntime:
             start,
             meter,
             memory_recall_meta,
-            success=True,
+            success=not transcript_failed,
+            transcript_meta=transcript_result.to_metadata(),
             provider_meta=provider_meta,
         )
 
@@ -4224,6 +4226,12 @@ class ChatRuntime:
         if normalized.get("degradation_reason") and "all_execution_paths_failed" in str(
             normalized.get("degradation_reason")
         ):
+            status = ChatExecutionStatus.ERROR
+        # Generative success cannot turn an unsaved conversation into an
+        # OK/DEGRADED completed turn. HTTP ingress translates ERROR to 503.
+        if normalized.get("transcript_persistence_status") not in {
+            "persisted", "already_persisted",
+        }:
             status = ChatExecutionStatus.ERROR
 
         return ChatExecutionResult(
