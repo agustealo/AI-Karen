@@ -22,6 +22,14 @@ on:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
         required: false
+      deployment_target:
+        description: Independently verify this exact immutable Vercel preview or production deployment
+        type: choice
+        required: true
+        default: preview
+        options:
+          - preview
+          - production
 
 permissions:
   contents: read
@@ -106,6 +114,7 @@ jobs:
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_SEARCH_ACCEPTANCE_URL }}
+      KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
       KAREN_SEARCH_ACCEPTANCE_REQUIRED: "true"
       KAREN_E2E_CAPTURE_VIDEO: "false"
       CI: "true"
@@ -244,6 +253,7 @@ jobs:
     environment: karen-sanitized-browser-acceptance
     env:
       KAREN_BASE_URL: ${{ vars.KAREN_COPILOTKIT_ACCEPTANCE_URL }}
+      KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
       KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}
       KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: ${{ (inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-failure' || inputs.scenario == 'copilotkit-persona') && 'true' || 'false' }}
       KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED: ${{ inputs.scenario == 'copilotkit-native' && vars.KAREN_COPILOTKIT_PERSONA_MUTATION_REQUIRED || 'false' }}

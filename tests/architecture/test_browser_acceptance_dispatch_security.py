@@ -12,6 +12,10 @@ E2E_PATH = ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/karen-durable-history-res
 def test_default_branch_only_exposes_reviewed_history_scenario() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow
+    assert "      deployment_target:" in workflow
+    assert "        default: preview" in workflow
+    assert "          - preview" in workflow
+    assert "          - production" in workflow
     assert "  authenticated-history-restoration:" in workflow
     assert "if: inputs.scenario == 'history' && github.ref == 'refs/heads/main'" in workflow
     assert "persist-credentials: false" in workflow
@@ -29,6 +33,7 @@ def test_default_branch_only_exposes_reviewed_history_scenario() -> None:
     assert "if: inputs.scenario == 'search' && github.ref == 'refs/heads/main'" in job
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
+    assert "KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}" in job
     assert "ref: ${{ inputs.target_sha }}" in job
     assert "persist-credentials: false" in job
     assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
@@ -84,6 +89,7 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "gh api repos/${GITHUB_REPOSITORY}/branches/main" in job
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
+    assert "KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}" in job
     assert "e2e/karen-copilotkit-protocol-acceptance.spec.ts" in job
     assert "e2e/karen-copilotkit-native-acceptance.spec.ts" in job
     assert "KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED: ${{ inputs.scenario == 'copilotkit-protocol' && 'true' || 'false' }}" in job

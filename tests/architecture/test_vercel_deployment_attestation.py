@@ -1,4 +1,4 @@
-"""Fail-closed independent Vercel preview provenance acceptance contracts."""
+"""Fail-closed independent Vercel preview and approved production provenance contracts."""
 
 from __future__ import annotations
 
@@ -62,9 +62,12 @@ def metadata(**overrides):
     return values
 
 
-def verify(values, *, opener=None):
+def verify(values, *, opener=None, expected_target="preview"):
     client = opener or FakeOpener(FakeResponse(json.dumps(values).encode()))
-    result = verify_vercel_deployment(ORIGIN, SHA, PROJECT, TEAM, REPO, TOKEN, opener=client)
+    result = verify_vercel_deployment(
+        ORIGIN, SHA, PROJECT, TEAM, REPO, TOKEN,
+        opener=client, expected_target=expected_target,
+    )
     return result, client
 
 
@@ -77,6 +80,63 @@ def test_matching_platform_provenance_passes():
     assert "teamId=team_ab12" in client.request.full_url
     assert client.request.get_header("Authorization") == "Bearer " + TOKEN
     assert client.timeout == 20
+
+
+def test_production_requires_explicit_selection_and_reviewed_main_source():
+    values = metadata(
+        target="production",
+        meta={
+            "githubCommitSha": SHA,
+            "githubCommitRef": "main",
+            "githubOrg": "agustealo",
+            "githubRepo": "AI-Karen",
+        },
+    )
+    # Existing callers default to immutable previews and must fail closed.
+    with pytest.raises(RevisionVerificationError):
+        verify(values)
+    deployment_id, client = verify(values, expected_target="production")
+    assert deployment_id == "dpl_abc123"
+    assert client.request.get_header("Authorization") == "Bearer " + TOKEN
+
+
+@pytest.mark.parametrize("ref", ["feat/unreviewed", "master", "", None])
+def test_production_rejects_non_main_branch_even_when_commit_matches(ref):
+    values = metadata(
+        target="production",
+        meta={
+            "githubCommitSha": SHA,
+            "githubCommitRef": ref,
+            "githubOrg": "agustealo",
+            "githubRepo": "AI-Karen",
+        },
+    )
+    with pytest.raises(RevisionVerificationError):
+        verify(values, expected_target="production")
+
+
+@pytest.mark.parametrize("target", [None, "preview", "staging", "PRODUCTION"])
+def test_production_rejects_other_platform_targets(target):
+    values = metadata(
+        target=target,
+        meta={
+            "githubCommitSha": SHA,
+            "githubCommitRef": "main",
+            "githubOrg": "agustealo",
+            "githubRepo": "AI-Karen",
+        },
+    )
+    with pytest.raises(RevisionVerificationError):
+        verify(values, expected_target="production")
+
+
+@pytest.mark.parametrize("expected_target", ["", "staging", "PRODUCTION", "prod"])
+def test_unknown_expected_target_is_rejected_before_network(expected_target):
+    with pytest.raises(RevisionVerificationError, match="Unknown Vercel acceptance target"):
+        verify_vercel_deployment(
+            ORIGIN, SHA, PROJECT, TEAM, REPO, TOKEN,
+            expected_target=expected_target,
+        )
 
 
 @pytest.mark.parametrize("changes", [

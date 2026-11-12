@@ -1,8 +1,9 @@
-"""Independently attest an immutable Vercel preview before consumer browser acceptance.
+"""Independently attest an immutable Vercel deployment before consumer browser acceptance.
 
 Git metadata returned by Vercel is a separate trust boundary from the deployed
 application's own /api/deployment-revision claim. Both must match the reviewed
-PR head. Do not use this verifier for Docker/self-hosted release targets.
+source. Production acceptance additionally requires an explicit target choice
+and a main-branch Git deployment. Do not use for Docker/self-hosted targets.
 """
 
 from __future__ import annotations
@@ -39,12 +40,15 @@ def verify_vercel_deployment(
     token: str,
     *,
     opener: Any = None,
+    expected_target: str = "preview",
 ) -> str:
     """Verify READY state, immutable URL, project and exact Git provenance.
 
     Returns the independently reported deployment ID for traceable acceptance.
     Never include the authorization token in logs or errors.
     """
+    if expected_target not in ("preview", "production"):
+        raise RevisionVerificationError("Unknown Vercel acceptance target")
     if not SHA_PATTERN.fullmatch(expected_sha):
         raise RevisionVerificationError("Invalid reviewed Git revision")
     if not ID_PATTERN.fullmatch(project_id) or not project_id.startswith("prj_"):
@@ -109,6 +113,19 @@ def verify_vercel_deployment(
         state = secondary_state
     if secondary_state is not None and secondary_state != state:
         raise RevisionVerificationError("Vercel deployment state signals conflict")
+    # Preview is the legacy default and must never silently promote into
+    # production acceptance. An explicitly selected production deployment
+    # must originate from reviewed main as well as match its exact commit.
+    actual_target = payload.get("target")
+    target_valid = (
+        actual_target in (None, "preview")
+        if expected_target == "preview"
+        else (
+            actual_target == "production"
+            and isinstance(meta, dict)
+            and meta.get("githubCommitRef") == "main"
+        )
+    )
     if (
         not isinstance(deployment_id, str)
         or not re.fullmatch(r"dpl_[A-Za-z0-9]+", deployment_id)
@@ -116,14 +133,14 @@ def verify_vercel_deployment(
         or actual_project != project_id
         or payload.get("source") != "git"
         or state != "READY"
-        or payload.get("target") not in (None, "preview")
+        or not target_valid
         or not isinstance(meta, dict)
         or meta.get("githubCommitSha") != expected_sha
         or meta.get("githubOrg") != parts[0]
         or meta.get("githubRepo") != parts[1]
     ):
         raise RevisionVerificationError(
-            "Vercel deployment is not an exact READY preview of the reviewed Git source"
+            "Vercel deployment is not an exact READY deployment of the reviewed Git source"
         )
     return deployment_id
 
@@ -137,11 +154,12 @@ def main() -> int:
             os.environ.get("VERCEL_ORG_ID", ""),
             os.environ.get("GITHUB_REPOSITORY", ""),
             os.environ.get("VERCEL_TOKEN", ""),
+            expected_target=os.environ.get("KAREN_VERCEL_ACCEPTANCE_TARGET", "preview"),
         )
     except RevisionVerificationError as exc:
         LOGGER.error("Independent Vercel attestation failed: %s", exc)
         return 1
-    LOGGER.info("Verified READY Vercel preview deployment: %s", deployment_id)
+    LOGGER.info("Verified READY Vercel deployment: %s", deployment_id)
     return 0
 
 
