@@ -1018,4 +1018,106 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     }
   });
 
+  // KCON-490: real signed-in consumer first turn, not a mocked intent result.
+  // Missing time/zone/agent must trigger clarification, never a phantom cron.
+  test("KCON-490 Jamaica daily news request enters governed clarification without a false schedule", async ({ page }) => {
+    test.setTimeout(180_000);
+    const target = new URL(approvedUrl!);
+    await requireReviewedRevision(page, target);
+    await requireLiveCanonicalBackend(page, target);
+    if (!authState) {
+      await signInApprovedKaren(page, approvedEmail!, approvedPassword!, { allowLocalLoopback: localMode });
+    }
+    await page.goto(new URL("/dashboard", target).toString());
+
+    const shell = page.getByTestId("karen-copilot-consumer-chat");
+    const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await shell.isVisible().catch(() => false)) &&
+        await launch.isVisible().catch(() => false)) {
+      await launch.click();
+    }
+    await expect(shell).toBeVisible({ timeout: 30_000 });
+    await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+
+    // Never submit into an existing person's history or a preexisting task.
+    const previousId = await shell.getAttribute("data-conversation-id");
+    await shell.getByRole("button", { name: "New conversation" }).click();
+    await expect.poll(async () => {
+      const nextId = await shell.getAttribute("data-conversation-id");
+      return nextId && nextId !== previousId ? nextId : null;
+    }, { timeout: 30_000 }).not.toBeNull();
+    const conversationId = await shell.getAttribute("data-conversation-id");
+    expect(conversationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+
+    const prompt = "I need a task to get the latest news on Jamaica daily";
+    const runRequests: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (
+        path === "/api/copilotkit/agent/default/run" ||
+        path === "/api/chat/ag-ui" ||
+        path === "/api/chat/stream"
+      )) {
+        runRequests.push(path);
+      }
+    });
+    const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+    await expect(composer).toBeVisible();
+    await composer.fill(prompt);
+    await composer.press("Enter");
+
+    // UI first: history replay alone cannot pass first-send rendering.
+    const visibleClarification = shell.getByTestId("karen-copilot-assistant-message")
+      .filter({ hasText: "No task was scheduled" }).last();
+    await expect(
+      visibleClarification,
+      "An explicit recurring-task request must be clarified, not answered with generic news-app advice",
+    ).toBeVisible({ timeout: 120_000 });
+    await expect(visibleClarification).toContainText("registered agent ID");
+    expect(runRequests, "Exactly one governed chat execution is allowed").toHaveLength(1);
+
+    // Independently confirm the real canonical owned transcript and blank draft.
+    await expect.poll(async () => {
+      const { ok, body } = await readAuthorizedSameOriginJson(
+        page, `/api/conversations/${conversationId}`,
+      );
+      if (!ok || !body || typeof body !== "object") return false;
+      const messages = (body as { messages?: Array<{ role?: string; content?: string }> }).messages;
+      if (!Array.isArray(messages)) return false;
+      const sent = messages.filter(message => message.role === "user" && message.content === prompt);
+      const assistant = messages.filter(message => message.role === "assistant");
+      return sent.length === 1 && assistant.length === 1 &&
+        (assistant[0].content ?? "").includes("No task was scheduled") &&
+        (assistant[0].content ?? "").includes("registered agent ID");
+    }, {
+      timeout: 30_000,
+      message: "Owned history must contain one actual request and one typed scheduling clarification",
+    }).toBe(true);
+    await expect.poll(async () => {
+      const { ok, body } = await readAuthorizedSameOriginJson(
+        page, `/api/conversations/${conversationId}/draft`,
+      );
+      return ok && body !== null && typeof body === "object" &&
+        (body as { text?: unknown }).text === "";
+    }, {
+      timeout: 30_000,
+      message: "Successful first-send must clear only the canonical owned draft",
+    }).toBe(true);
+
+    await page.reload();
+    const restored = page.getByTestId("karen-copilot-consumer-chat");
+    const reopen = page.getByRole("button", { name: "Ask Karen", exact: true });
+    if (!(await restored.isVisible().catch(() => false)) &&
+        await reopen.isVisible().catch(() => false)) {
+      await reopen.click();
+    }
+    await expect(restored).toHaveAttribute("data-conversation-id", conversationId!);
+    await expect(restored.getByTestId("karen-copilot-assistant-message")
+      .filter({ hasText: "No task was scheduled" }).last()).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
 });
