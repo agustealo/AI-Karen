@@ -95,3 +95,34 @@ def test_automation_stats_route_is_registered_by_canonical_router_owner():
         'RouterSpec(automation_stats_router, "/api", ("automation-stats",))'
         in source
     )
+
+
+def test_cron_iana_wall_time_and_utc_claim_remain_separate():
+    migration = _read(
+        "supabase/migrations/20261113010000_49_automation_cron_timezone_identity.sql"
+    )
+    repository = _read(
+        "src/ai_karen_engine/persistence/repositories/automation_repository.py"
+    )
+    definitions = _read(
+        "src/ai_karen_engine/services/automation/definitions.py"
+    )
+    worker = _read("src/ai_karen_engine/api_routes/automation/cron.py")
+
+    assert "ADD COLUMN IF NOT EXISTS timezone_id text NOT NULL DEFAULT 'UTC'" in migration
+    assert "ADD COLUMN IF NOT EXISTS local_time time without time zone" in migration
+    assert "next_run_at timestamptz" in _read(
+        "supabase/migrations/20260923010000_16_automation_scheduler_authority.sql"
+    )
+    assert '"timezone_id": record.get("timezone_id") or "UTC"' in repository
+    assert '"local_time": record.get("local_time")' in repository
+    assert '"timestamp_utc": next_run.astimezone(timezone.utc)' in repository
+    assert 'ZoneInfo(raw)' in definitions
+    assert "fold=0" in definitions
+    assert "candidate.astimezone(zone).replace(tzinfo=None) != wall" in definitions
+    assert 'timezone_id=str(job.get("timezone_id") or "UTC")' in worker
+    assert 'timezone_id: str = Field("UTC"' in worker
+    # No location/geolocation pipeline may be a prerequisite for interpreting
+    # a caller's explicitly chosen scheduling timezone.
+    assert "resolve_location" not in definitions
+    assert "geolocat" not in definitions
