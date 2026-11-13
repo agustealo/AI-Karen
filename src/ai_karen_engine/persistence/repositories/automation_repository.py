@@ -692,7 +692,7 @@ class SqlAutomationRepository:
     ) -> Optional[Dict[str, Any]]:
         """Return creator-owned job, except deliberate tenant-wide legacy migration reads.
 
-        Only the migration owner can omit created_by. Interactive services must
+        The governed legacy migration may omit created_by. Interactive services must
         pass their independently authenticated user_id and never trust a client
         supplied creator field.
         """
@@ -703,7 +703,7 @@ class SqlAutomationRepository:
                     SELECT * FROM public.automation_jobs
                     WHERE job_id = :job_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
-                      AND (:created_by IS NULL OR created_by = CAST(:created_by AS uuid))
+                      AND (CAST(:created_by AS uuid) IS NULL OR created_by = CAST(:created_by AS uuid))
                     """
                 ),
                 {"job_id": job_id, "tenant_id": tenant_id, "created_by": created_by},
