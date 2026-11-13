@@ -758,9 +758,25 @@ async def test_dashboard_summary_sql_enforces_tenant_and_creator_on_every_query(
     )
     repo = SqlAutomationRepository()
     if kind == "task":
-        data = await repo.task_summary(TENANT, created_by=OWNER)
+        day_start = datetime(2026, 11, 13, 5, tzinfo=timezone.utc)
+        day_end = datetime(2026, 11, 14, 5, tzinfo=timezone.utc)
+        data = await repo.task_summary(
+            TENANT, created_by=OWNER,
+            day_start_utc=day_start, day_end_utc=day_end,
+        )
         assert data["total_definitions"] == 3
+        assert data["tasks_run_today"] == 1
         assert len(session.executed) == 1
+        sql, params = session.executed[0]
+        assert "sum(run_count)" not in sql
+        assert "FROM public.outcome_records AS evidence" in sql
+        assert "evidence.user_id = CAST(:created_by AS uuid)" in sql
+        assert "evidence.recorded_at >= :day_start_utc" in sql
+        assert "evidence.recorded_at < :day_end_utc" in sql
+        assert "automation.task.execution_started" in sql
+        assert "automation-task-attempt.v1" in sql
+        assert params["day_start_utc"] == day_start
+        assert params["day_end_utc"] == day_end
     else:
         data = await repo.cron_summary(TENANT, created_by=OWNER)
         assert data["next_job"] == "Private owner's schedule"
@@ -780,10 +796,17 @@ async def test_dashboard_summary_definition_service_forwards_authenticated_creat
     class SummaryRepo:
         def __init__(self):
             self.calls = []
+            self.windows = []
 
-        async def task_summary(self, tenant_id, *, created_by):
+        async def task_summary(
+            self, tenant_id, *, created_by, day_start_utc, day_end_utc,
+        ):
             self.calls.append(("tasks", tenant_id, created_by))
-            return {"owner_id": created_by, "total_definitions": 1}
+            self.windows.append((day_start_utc, day_end_utc))
+            return {
+                "owner_id": created_by, "total_definitions": 1,
+                "tasks_run_today": 0, "active_tasks": 0, "failed_tasks": 0,
+            }
 
         async def cron_summary(self, tenant_id, *, created_by):
             self.calls.append(("cron", tenant_id, created_by))
@@ -798,11 +821,18 @@ async def test_dashboard_summary_definition_service_forwards_authenticated_creat
     other = UserData(user_id=OTHER, tenant_id=TENANT)
     foreign = UserData(user_id=OWNER, tenant_id=FOREIGN_TENANT)
 
-    assert (await service.task_summary(user=owner))["owner_id"] == OWNER
+    fixed_utc = datetime(2026, 11, 13, 12, 40, tzinfo=timezone.utc)
+    assert (await service.task_summary(user=owner, now=fixed_utc))["owner_id"] == OWNER
     assert (await service.cron_summary(user=owner))["owner_id"] == OWNER
-    assert (await service.task_summary(user=other))["owner_id"] == OTHER
+    assert (await service.task_summary(user=other, now=fixed_utc))["owner_id"] == OTHER
     assert (await service.cron_summary(user=other))["next_job"] == f"schedule-for-{OTHER}"
-    assert (await service.task_summary(user=foreign))["owner_id"] == OWNER
+    assert (await service.task_summary(user=foreign, now=fixed_utc))["owner_id"] == OWNER
+    assert repo.windows == [
+        (
+            datetime(2026, 11, 13, tzinfo=timezone.utc),
+            datetime(2026, 11, 14, tzinfo=timezone.utc),
+        ),
+    ] * 3
     assert repo.calls == [
         ("tasks", TENANT, OWNER),
         ("cron", TENANT, OWNER),
