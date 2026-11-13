@@ -203,13 +203,6 @@ class DirectCapabilityExecutor:
                 "Task ownership or conversation identity could not be verified. "
                 "No task was scheduled.",
             )
-        request_id = str(request.context.request_id or "").strip()
-        if not request_id:
-            return unavailable(
-                "automation_request_id_missing",
-                "A stable request ID is required for retry-safe scheduling. "
-                "No task was scheduled.",
-            )
         if not await meter.consume_tool_call():
             return unavailable(
                 "automation_budget_exhausted",
@@ -294,7 +287,6 @@ class DirectCapabilityExecutor:
                 minute_local=minute,
                 timezone_id=timezone_id,
                 conversation_id=conversation_id,
-                request_id=request_id,
             )
             task = receipt["task"]
             cron = receipt["cron"]
