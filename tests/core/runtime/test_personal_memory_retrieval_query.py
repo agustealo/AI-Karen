@@ -92,6 +92,39 @@ def test_profile_summary_followup_retrieves_saved_profile_not_literal_followup(f
     assert request.messages == original
 
 
+
+@pytest.mark.parametrize("followup", [
+    "tell me more", "ANything else?", "What else?", "any more",
+])
+def test_profile_expansion_followup_queries_other_verified_facts_not_identity(
+    followup,
+):
+    ctx = ChatExecutionContext(
+        user_id="user", tenant_id="tenant", session_id="session",
+        conversation_id="conversation", request_id="request",
+        correlation_id="correlation",
+    )
+    conversation = [
+        {"role": "user", "content": "What can you tell me about myself?"},
+        {"role": "assistant", "content": (
+            "You're Zeus. You were born in Jamaica. "
+            "You grew up in NYC. You live in Detroit."
+        )},
+        {"role": "user", "content": followup},
+    ]
+    request = ChatExecutionRequest(messages=conversation, context=ctx)
+    assert RuntimeEvidenceResolver._memory_retrieval_query(
+        request, SimpleNamespace(metadata={}),
+    ) == "what else do you know about me"
+    assert request.messages == conversation
+
+    # An exact policy-governed query still wins and cannot be overwritten
+    # by a generic search normalization.
+    assert RuntimeEvidenceResolver._memory_retrieval_query(
+        request, SimpleNamespace(metadata={"retrieval_query": "favorite_music_genre"}),
+    ) == "favorite_music_genre"
+
+
 @pytest.mark.parametrize("history", [
     [{"role": "user", "content": "share please"}],
     [{"role": "assistant", "content": "What can you share about me?"},
