@@ -734,8 +734,11 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   expect(inferred, "Consumer reload must not create a model run").toEqual([]);
 
   await page.goto("/dashboard");
-  await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
-  expect(inferred, "Ordinary dashboard remains on the existing consumer mount").toEqual([]);
+  // The live dashboard already mounts KarenCopilotConsumerChat; do not
+  // accidentally attest the retired assistant-ui renderer instead.
+  await expect(page.getByTestId("karen-copilot-consumer-chat"))
+    .toBeVisible({ timeout: 30000 });
+  expect(inferred, "Ordinary dashboard navigation must not start inference").toEqual([]);
 });
 
 test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread", async ({ page }) => {
