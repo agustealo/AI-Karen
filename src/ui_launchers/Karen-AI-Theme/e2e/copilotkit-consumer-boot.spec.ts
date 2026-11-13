@@ -215,6 +215,9 @@ if (personalContextAcceptance && !enabled) {
 }
 const kcon770FaultAcceptance = process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1";
 const kcon770TranscriptFaultAcceptance = process.env.KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE === "1";
+if (personalContextAcceptance && kcon770FaultAcceptance) {
+  throw new Error("Personal-context acceptance cannot run with deliberately injected KCON-770 failures");
+}
 if (kcon770TranscriptFaultAcceptance && !kcon770FaultAcceptance) {
   throw new Error("Case-08 transcript fault proof requires the approved KCON-770 failure gate");
 }
