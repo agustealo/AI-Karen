@@ -191,14 +191,19 @@ async def test_repository_owner_denial_precedes_ledger_admission(
 
 
 @pytest.mark.asyncio
-async def test_runtime_terminal_persists_before_success_chunk() -> None:
+@pytest.mark.parametrize("persistence_status", ["persisted", "already_persisted"])
+async def test_runtime_terminal_persists_before_success_chunk(
+    persistence_status: str,
+) -> None:
     repo = MemoryLedger()
     coordinator = ChatRunCoordinator(repo)
     lease = await coordinator.admit(context(), "run-2")
 
     async def upstream():
         yield content()
-        yield completed()
+        final = completed()
+        final.metadata["transcript_persistence_status"] = persistence_status
+        yield final
 
     events = []
     async for chunk in coordinator.stream(upstream(), lease=lease):
@@ -210,9 +215,15 @@ async def test_runtime_terminal_persists_before_success_chunk() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("persistence_status", [None, "failed", "rejected", "skipped"])
+@pytest.mark.parametrize(
+    "persistence_status",
+    [
+        None, "failed", "rejected", "skipped", "PERSISTED",
+        [], {}, ["persisted"], {"status": "persisted"}, 0, True,
+    ],
+)
 async def test_unverified_transcript_never_emits_run_completion(
-    persistence_status: str | None,
+    persistence_status: object,
 ) -> None:
     repo = MemoryLedger()
     coordinator = ChatRunCoordinator(repo)
