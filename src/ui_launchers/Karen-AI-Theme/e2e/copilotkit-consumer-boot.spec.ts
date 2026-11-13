@@ -209,6 +209,10 @@ async function expectRealCopilotKitStyles(page: Page): Promise<void> {
 const releaseMode = process.env.KAREN_CHAT_BOOT_ACCEPTANCE === "1";
 const localMode = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
 const enabled = releaseMode || localMode;
+const personalContextAcceptance = process.env.KAREN_PERSONAL_CONTEXT_ACCEPTANCE === "1";
+if (personalContextAcceptance && !enabled) {
+  throw new Error("KCON-490 personal context proof needs approved local or release browser acceptance");
+}
 const kcon770FaultAcceptance = process.env.KAREN_KCON770_FAULT_ACCEPTANCE === "1";
 const kcon770TranscriptFaultAcceptance = process.env.KAREN_KCON770_EXPECT_TRANSCRIPT_FAILURE === "1";
 if (kcon770TranscriptFaultAcceptance && !kcon770FaultAcceptance) {
@@ -280,7 +284,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
   test.skip(!enabled, "Set KAREN_LOCAL_CHAT_ACCEPTANCE=1 or KAREN_CHAT_BOOT_ACCEPTANCE=1 for real backend/browser proof");
 
   test("persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
-    test.setTimeout(180_000);
+    test.setTimeout(personalContextAcceptance ? 18 * 60_000 : 180_000);
     const target = new URL(approvedUrl!);
     const browserErrors: string[] = [];
     page.on("pageerror", error => {
@@ -530,6 +534,112 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       "The actual persisted assistant reply must be rendered after reload",
     ).toBeVisible({ timeout: 30_000 });
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
+
+    // KCON-490: real multi-turn regression in the SAME authenticated browser,
+    // verified revision and owner-scoped conversation. Explicit opt-in only.
+    if (personalContextAcceptance) {
+      await test.step("KCON-490 real multi-turn personal context", async () => {
+        const active = page.getByTestId("karen-copilot-consumer-chat");
+        await expect(active).toHaveAttribute("data-conversation-id", id!);
+        const composerForTurn = active.getByTestId("karen-copilot-sdk-chat")
+          .locator("textarea").first();
+        const initialRunCount = observedRunRequests.length;
+
+        const runPersonalTurn = async (utterance: string): Promise<string> => {
+          let answer = "";
+          await expect(composerForTurn).toBeVisible();
+          await composerForTurn.fill(utterance);
+          await composerForTurn.press("Enter");
+          await expect.poll(async () => {
+            const result = await readAuthorizedSameOriginJson(page, endpoint);
+            if (!result.ok || !result.body || typeof result.body !== "object") return false;
+            const rows = (result.body as {
+              messages?: Array<{ role?: string; content?: string }>;
+            }).messages;
+            if (!Array.isArray(rows)) return false;
+            const positions = rows.flatMap((message, index) =>
+              message.role === "user" && message.content === utterance ? [index] : []);
+            if (positions.length !== 1) return false;
+            const next = rows[positions[0] + 1];
+            if (next?.role !== "assistant" || !next.content?.trim()) return false;
+            answer = next.content.trim();
+            return true;
+          }, {
+            timeout: 120_000,
+            intervals: [1000, 2000, 3000],
+            message: "A unique personal turn must have an immediately following persisted reply",
+          }).toBe(true);
+          await expect(active.getByTestId("karen-copilot-assistant-message")
+            .filter({ hasText: answer }).last()).toBeVisible({ timeout: 30_000 });
+          await expect.poll(async () => {
+            const { ok, body } = await readAuthorizedSameOriginJson(
+              page, "/api/conversations/" + id + "/draft",
+            );
+            return ok && body !== null && typeof body === "object" &&
+              (body as { text?: unknown }).text === "";
+          }, { timeout: 30_000 }).toBe(true);
+          return answer;
+        };
+
+        const repeatsOldBiography = (answer: string) =>
+          ["valencia", "granada", "bilbao"]
+            .every(fact => answer.toLowerCase().includes(fact));
+
+        // Synthetic data only. No real person's identity or chat text is
+        // attached to CI output; approved accounts remain tenant-scoped.
+        await runPersonalTurn(
+          "My name is Rowan. I was born in Valencia. I grew up in Granada. I live in Bilbao.",
+        );
+        const summary = await runPersonalTurn("What can you tell me about myself?");
+        expect(summary).toMatch(/Rowan|Valencia|Granada|Bilbao/i);
+
+        const expansion = await runPersonalTurn("ANything else?");
+        expect(expansion).not.toBe(summary);
+        expect(repeatsOldBiography(expansion)).toBe(false);
+        await expectVerifiedExecutionReceipt(page, id!, expansion);
+
+        const favorite = await runPersonalTurn(
+          "Yeah like my favorite color, or whatever you can share",
+        );
+        expect(repeatsOldBiography(favorite)).toBe(false);
+
+        const disclosure = await runPersonalTurn(
+          "I am a vegetarian, and I love dancehall music, it is my favorite genre",
+        );
+        expect(disclosure).toMatch(/vegetarian/i);
+        expect(disclosure).toMatch(/dancehall/i);
+        expect(repeatsOldBiography(disclosure)).toBe(false);
+        await expectVerifiedExecutionReceipt(page, id!, disclosure);
+
+        const recallPrompt = "What did I just tell you about my diet and favorite music genre?";
+        const recalled = await runPersonalTurn(recallPrompt);
+        expect(recalled).toMatch(/vegetarian/i);
+        expect(recalled).toMatch(/dancehall/i);
+        expect(observedRunRequests.length - initialRunCount).toBe(6);
+
+        // A real authorized backend read after reload is required. Cached
+        // bubbles or a conversational acknowledgment are not memory receipts.
+        await page.reload();
+        const reloaded = page.getByTestId("karen-copilot-consumer-chat");
+        const reopen = page.getByRole("button", { name: "Ask Karen", exact: true });
+        if (!(await reloaded.isVisible().catch(() => false)) &&
+            await reopen.isVisible().catch(() => false)) await reopen.click();
+        await expect(reloaded).toHaveAttribute("data-conversation-id", id!);
+        const final = await readAuthorizedSameOriginJson(page, endpoint);
+        expect(final.ok).toBe(true);
+        const rows = (final.body as {
+          messages?: Array<{ role?: string; content?: string }>;
+        } | null)?.messages || [];
+        const positions = rows.flatMap((message, index) =>
+          message.role === "user" && message.content === recallPrompt ? [index] : []);
+        expect(positions).toHaveLength(1);
+        expect(rows[positions[0] + 1]?.role).toBe("assistant");
+        expect(rows[positions[0] + 1]?.content?.trim()).toBe(recalled);
+        await expect(reloaded.getByTestId("karen-copilot-assistant-message")
+          .filter({ hasText: recalled }).last()).toBeVisible({ timeout: 30_000 });
+        expect(browserErrors).toEqual([]);
+      });
+    }
   });
 
   for (const scenario of [
