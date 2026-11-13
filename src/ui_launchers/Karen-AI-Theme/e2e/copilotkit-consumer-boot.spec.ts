@@ -361,6 +361,35 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       }
     });
     const draftEndpoint = `/api/conversations/${id}/draft`;
+    // Observe only CAS operation type, status and revision. Do not retain the
+    // private submitted text or any authenticated response payload in logs.
+    const draftCas: Array<{ clearing: boolean; status: number; revision: number }> = [];
+    page.on("response", async (response) => {
+      if (response.request().method() !== "PUT" ||
+          new URL(response.url()).pathname !== draftEndpoint) return;
+      let submitted: unknown;
+      let receipt: unknown;
+      try {
+        submitted = response.request().postDataJSON();
+        receipt = await response.json();
+      } catch {
+        draftCas.push({ clearing: false, status: response.status(), revision: -1 });
+        return;
+      }
+      const request = submitted as { text?: unknown } | null;
+      const saved = receipt as { revision?: unknown } | null;
+      draftCas.push({
+        clearing: request?.text === "",
+        status: response.status(),
+        revision: typeof saved?.revision === "number" ? saved.revision : -1,
+      });
+    });
+    const { ok: draftBeforeOk, body: draftBefore } = await readAuthorizedSameOriginJson(
+      page, draftEndpoint,
+    );
+    expect(draftBeforeOk, "New conversation must expose the owned draft").toBe(true);
+    expect(draftBefore, "A fresh acceptance conversation must start with a blank draft")
+      .toEqual({ text: "", revision: 0 });
     await composer.fill(prompt);
     await composer.press("Enter");
 
@@ -405,6 +434,16 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       intervals: [250, 500, 1000],
       message: "Immediate Enter must consume the persisted draft without leaving stale text",
     }).toBe(true);
+    await expect.poll(() => draftCas.length, {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+      message: "A first Enter must receive both authenticated CAS save and clear responses",
+    }).toBe(2);
+    expect(draftCas, "Only confirmed save then clear may authorize one model run")
+      .toEqual([
+        { clearing: false, status: 200, revision: 1 },
+        { clearing: true, status: 200, revision: 2 },
+      ]);
     await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
     // A saved backend answer alone is not a functioning consumer chat.
     // The active CopilotKit view must render the real assistant response
