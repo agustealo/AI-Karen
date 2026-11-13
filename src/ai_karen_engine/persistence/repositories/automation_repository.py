@@ -687,52 +687,65 @@ class SqlAutomationRepository:
             )
             return _job_row(result.mappings().one())
 
-    async def get_job(self, job_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-        async with async_transaction_scope(tenant_id) as session:
+    async def get_job(
+        self, job_id: str, tenant_id: str, *, created_by: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Return creator-owned job, except deliberate tenant-wide legacy migration reads.
+
+        Only the migration owner can omit created_by. Interactive services must
+        pass their independently authenticated user_id and never trust a client
+        supplied creator field.
+        """
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
                     SELECT * FROM public.automation_jobs
                     WHERE job_id = :job_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND (:created_by IS NULL OR created_by = CAST(:created_by AS uuid))
                     """
                 ),
-                {"job_id": job_id, "tenant_id": tenant_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "created_by": created_by},
             )
             row = result.mappings().one_or_none()
             return _job_row(row) if row else None
 
-    async def list_jobs(self, tenant_id: str) -> List[Dict[str, Any]]:
-        async with async_transaction_scope(tenant_id) as session:
+    async def list_jobs(self, tenant_id: str, *, created_by: str) -> List[Dict[str, Any]]:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
                     SELECT * FROM public.automation_jobs
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     ORDER BY created_at DESC
                     """
                 ),
-                {"tenant_id": tenant_id},
+                {"tenant_id": tenant_id, "created_by": created_by},
             )
             return [_job_row(row) for row in result.mappings().all()]
 
-    async def delete_job(self, job_id: str, tenant_id: str) -> bool:
-        async with async_transaction_scope(tenant_id) as session:
+    async def delete_job(self, job_id: str, tenant_id: str, *, created_by: str) -> bool:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
                     DELETE FROM public.automation_jobs
                     WHERE job_id = :job_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     RETURNING job_id
                     """
                 ),
-                {"job_id": job_id, "tenant_id": tenant_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "created_by": created_by},
             )
             return result.scalar_one_or_none() is not None
 
-    async def mark_job_running(self, job_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-        async with async_transaction_scope(tenant_id) as session:
+    async def mark_job_running(
+        self, job_id: str, tenant_id: str, *, created_by: str
+    ) -> Optional[Dict[str, Any]]:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
@@ -743,10 +756,11 @@ class SqlAutomationRepository:
                         updated_at = now()
                     WHERE job_id = :job_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     RETURNING *
                     """
                 ),
-                {"job_id": job_id, "tenant_id": tenant_id},
+                {"job_id": job_id, "tenant_id": tenant_id, "created_by": created_by},
             )
             row = result.mappings().one_or_none()
             return _job_row(row) if row else None
@@ -756,11 +770,12 @@ class SqlAutomationRepository:
         job_id: str,
         tenant_id: str,
         *,
+        created_by: str,
         status: str,
         results: List[Dict[str, Any]],
         last_error: Optional[str],
     ) -> Optional[Dict[str, Any]]:
-        async with async_transaction_scope(tenant_id) as session:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
@@ -771,12 +786,14 @@ class SqlAutomationRepository:
                         updated_at = now()
                     WHERE job_id = :job_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     RETURNING *
                     """
                 ),
                 {
                     "job_id": job_id,
                     "tenant_id": tenant_id,
+                    "created_by": created_by,
                     "status": status,
                     "results": json.dumps(results),
                     "last_error": last_error,
