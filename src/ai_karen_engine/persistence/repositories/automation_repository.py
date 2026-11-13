@@ -10,7 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time as clock_time, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
@@ -20,6 +21,63 @@ from ai_karen_engine.core.runtime.outcome.store import PostgresOutcomeStore
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 _CRON_LEASE_SECONDS = 900
+
+# The same SQL and parameter normalization are used by the standalone CRUD and
+# the atomic chat task+schedule commit. Avoid a second persistence authority.
+_TASK_INSERT_SQL = """\nINSERT INTO public.automation_tasks (
+                        task_id, tenant_id, created_by, name, description,
+                        primary_agent, primary_agent_instructions, task_type, sub_agents,
+                        acceptance_criteria, verification_contract
+                    ) VALUES (
+                        :task_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
+                        :name, :description, :primary_agent,
+                        :primary_agent_instructions, :task_type,
+                        CAST(:sub_agents AS jsonb), :acceptance_criteria,
+                        CAST(:verification_contract AS jsonb)
+                    )\n"""
+_CRON_INSERT_SQL = """\nINSERT INTO public.automation_cron_jobs (
+                        cron_id, tenant_id, created_by, task_name, schedule,
+                        timezone_id, local_time,
+                        job_type, target_id, enabled, action, next_run_at
+                    ) VALUES (
+                        :cron_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
+                        :task_name, :schedule, :timezone_id, :local_time,
+                        :job_type, :target_id,
+                        :enabled, :action, :next_run_at
+                    )\n"""
+
+
+def _task_insert_values(tenant_id: str, created_by: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "task_id": record["id"],
+        "tenant_id": tenant_id,
+        "created_by": created_by,
+        "name": record["name"],
+        "description": record["description"],
+        "primary_agent": record["primaryAgent"],
+        "primary_agent_instructions": record.get("primaryAgentInstructions", ""),
+        "task_type": record["taskType"],
+        "sub_agents": json.dumps(record.get("subAgents") or []),
+        "acceptance_criteria": record.get("acceptanceCriteria") or "",
+        "verification_contract": json.dumps(record.get("verificationContract") or {}),
+    }
+
+
+def _cron_insert_values(tenant_id: str, created_by: str, record: Dict[str, Any], next_run_at: datetime) -> Dict[str, Any]:
+    return {
+        "cron_id": record["id"],
+        "tenant_id": tenant_id,
+        "created_by": created_by,
+        "task_name": record["taskName"],
+        "schedule": record["schedule"],
+        "timezone_id": record.get("timezone_id") or "UTC",
+        "local_time": record.get("local_time"),
+        "job_type": record["type"],
+        "target_id": record["targetId"],
+        "enabled": record["enabled"],
+        "action": record["action"],
+        "next_run_at": next_run_at,
+    }
 
 
 def _utcnow() -> datetime:
@@ -83,10 +141,22 @@ def _cron_row(row: Any) -> Dict[str, Any]:
     data = dict(row)
     enabled = bool(data["enabled"])
     next_run = data["next_run_at"]
+    timezone_id = str(data.get("timezone_id") or "UTC")
+    local_datetime = (
+        next_run.astimezone(ZoneInfo(timezone_id)).isoformat()
+        if next_run and enabled else None
+    )
+    wall_time = data.get("local_time")
+    if isinstance(wall_time, clock_time):
+        wall_time = wall_time.strftime("%H:%M:%S")
     return {
         "id": data["cron_id"],
         "taskName": data["task_name"],
         "schedule": data["schedule"],
+        "timezone_id": timezone_id,
+        "local_time": wall_time,
+        "timestamp_utc": next_run.astimezone(timezone.utc).isoformat() if next_run and enabled else None,
+        "local_datetime": local_datetime,
         "type": data["job_type"],
         "targetId": data["target_id"],
         "enabled": enabled,
@@ -264,35 +334,8 @@ class SqlAutomationRepository:
     ) -> Dict[str, Any]:
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
-                text(
-                    """
-                    INSERT INTO public.automation_tasks (
-                        task_id, tenant_id, created_by, name, description,
-                        primary_agent, primary_agent_instructions, task_type, sub_agents,
-                        acceptance_criteria, verification_contract
-                    ) VALUES (
-                        :task_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
-                        :name, :description, :primary_agent,
-                        :primary_agent_instructions, :task_type,
-                        CAST(:sub_agents AS jsonb), :acceptance_criteria,
-                        CAST(:verification_contract AS jsonb)
-                    )
-                    RETURNING *
-                    """
-                ),
-                {
-                    "task_id": record["id"],
-                    "tenant_id": tenant_id,
-                    "created_by": created_by,
-                    "name": record["name"],
-                    "description": record["description"],
-                    "primary_agent": record["primaryAgent"],
-                    "primary_agent_instructions": record.get("primaryAgentInstructions", ""),
-                    "task_type": record["taskType"],
-                    "sub_agents": json.dumps(record.get("subAgents") or []),
-                    "acceptance_criteria": record.get("acceptanceCriteria") or "",
-                    "verification_contract": json.dumps(record.get("verificationContract") or {}),
-                },
+                text(_TASK_INSERT_SQL + " RETURNING *"),
+                _task_insert_values(tenant_id, created_by, record),
             )
             return _task_row(result.mappings().one())
 
@@ -812,33 +855,116 @@ class SqlAutomationRepository:
     ) -> Dict[str, Any]:
         async with async_transaction_scope(tenant_id) as session:
             result = await session.execute(
-                text(
-                    """
-                    INSERT INTO public.automation_cron_jobs (
-                        cron_id, tenant_id, created_by, task_name, schedule,
-                        job_type, target_id, enabled, action, next_run_at
-                    ) VALUES (
-                        :cron_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
-                        :task_name, :schedule, :job_type, :target_id,
-                        :enabled, :action, :next_run_at
-                    )
-                    RETURNING *
-                    """
-                ),
-                {
-                    "cron_id": record["id"],
-                    "tenant_id": tenant_id,
-                    "created_by": created_by,
-                    "task_name": record["taskName"],
-                    "schedule": record["schedule"],
-                    "job_type": record["type"],
-                    "target_id": record["targetId"],
-                    "enabled": record["enabled"],
-                    "action": record["action"],
-                    "next_run_at": next_run_at,
-                },
+                text(_CRON_INSERT_SQL + " RETURNING *"),
+                _cron_insert_values(tenant_id, created_by, record, next_run_at),
             )
             return _cron_row(result.mappings().one())
+
+    async def create_chat_scheduled_task(
+        self,
+        *,
+        tenant_id: str,
+        created_by: str,
+        task_record: Dict[str, Any],
+        cron_record: Dict[str, Any],
+        next_run_at: datetime,
+    ) -> Dict[str, Any]:
+        """Commit a task and its IANA-local cron trigger in a single transaction.
+
+        IDs derive from authenticated tenant/user/conversation plus the
+        canonical daily commitment (purpose, agent, local time, timezone).
+        Transport request/response IDs are not stable across HTTP retries.
+        An identical repeated commitment reuses a single schedule; distinct
+        commitments receive distinct IDs. Both inserts roll back together.
+        """
+        if cron_record.get("targetId") != task_record.get("id"):
+            raise ValueError("Scheduled target does not match task")
+        if cron_record.get("type") != "Task" or cron_record.get("action") != "execute":
+            raise ValueError("Unsupported scheduled task target or action")
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
+            task_result = await session.execute(
+                text(_TASK_INSERT_SQL + " ON CONFLICT DO NOTHING RETURNING *"),
+                _task_insert_values(tenant_id, created_by, task_record),
+            )
+            raw_task = task_result.mappings().one_or_none()
+            task_inserted = raw_task is not None
+            if raw_task is None:
+                raw_task = (
+                    await session.execute(
+                        text("""
+                            SELECT * FROM public.automation_tasks
+                            WHERE task_id = :task_id
+                              AND tenant_id = CAST(:tenant_id AS uuid)
+                              AND created_by = CAST(:created_by AS uuid)
+                        """),
+                        {
+                            "task_id": task_record["id"],
+                            "tenant_id": tenant_id,
+                            "created_by": created_by,
+                        },
+                    )
+                ).mappings().one_or_none()
+            if raw_task is None:
+                raise ValueError("Scheduled task ID has conflicting ownership")
+            task = _task_row(raw_task)
+            for key in (
+                "name", "description", "primaryAgent",
+                "primaryAgentInstructions", "taskType",
+                "acceptanceCriteria", "verificationContract", "subAgents",
+            ):
+                expected = task_record.get(key)
+                if key == "acceptanceCriteria":
+                    expected = expected or ""
+                if key == "verificationContract":
+                    expected = expected or {}
+                if key == "subAgents":
+                    expected = expected or []
+                if task[key] != expected:
+                    raise ValueError("Scheduled task ID conflicts with an existing definition")
+
+            cron_result = await session.execute(
+                text(_CRON_INSERT_SQL + " ON CONFLICT DO NOTHING RETURNING *"),
+                _cron_insert_values(
+                    tenant_id, created_by, cron_record, next_run_at,
+                ),
+            )
+            raw_cron = cron_result.mappings().one_or_none()
+            cron_inserted = raw_cron is not None
+            if raw_cron is None:
+                raw_cron = (
+                    await session.execute(
+                        text("""
+                            SELECT * FROM public.automation_cron_jobs
+                            WHERE cron_id = :cron_id
+                              AND tenant_id = CAST(:tenant_id AS uuid)
+                              AND created_by = CAST(:created_by AS uuid)
+                        """),
+                        {
+                            "cron_id": cron_record["id"],
+                            "tenant_id": tenant_id,
+                            "created_by": created_by,
+                        },
+                    )
+                ).mappings().one_or_none()
+            if raw_cron is None:
+                raise ValueError("Cron ID has conflicting ownership")
+            cron = _cron_row(raw_cron)
+            for key in ("taskName", "schedule", "timezone_id", "targetId", "type", "action", "enabled"):
+                if cron[key] != cron_record[key]:
+                    raise ValueError("Cron ID conflicts with an existing definition")
+            expected_local_time = cron_record.get("local_time")
+            expected_local_string = (
+                expected_local_time.strftime("%H:%M:%S")
+                if isinstance(expected_local_time, clock_time)
+                else expected_local_time
+            )
+            if cron["local_time"] != expected_local_string:
+                raise ValueError("Cron ID conflicts with an existing local wall time")
+            return {
+                "task": task,
+                "cron": cron,
+                "replayed": not task_inserted and not cron_inserted,
+            }
 
     async def list_cron(self, tenant_id: str, *, created_by: str) -> List[Dict[str, Any]]:
         async with async_transaction_scope(tenant_id, user_id=created_by) as session:

@@ -320,6 +320,32 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # An authenticated conversation cannot grant itself recurring-task
+        # write authority merely by requesting the capability. The canonical
+        # scheduler RBAC entitlement applies equally to chat and HTTP callers.
+        if "automation.create" in request.requested_capabilities:
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            if not get_rbac_manager().has_permission(
+                principal, Permission.SCHEDULER_WRITE,
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=["automation.create"],
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
+
         forbidden = set(request.forbidden_capabilities)
         for cap in request.requested_capabilities:
             if cap in forbidden:

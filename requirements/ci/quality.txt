@@ -5,4 +5,5 @@ mypy
 langgraph==1.1.9
 langchain-core
 croniter
+tzdata
 psutil

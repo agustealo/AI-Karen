@@ -52,7 +52,8 @@ _queue_worker_task: Optional[asyncio.Task] = None
 
 class CronJobRequest(BaseModel):
     taskName: str = Field(..., description="Task or Sequence Name")
-    schedule: str = Field(..., description="Cron expression")
+    schedule: str = Field(..., description="Cron expression interpreted in timezone_id")
+    timezone_id: str = Field("UTC", description="IANA timezone for recurring wall-clock evaluation; not a location")
     type: str = Field(..., description="'Task', 'Job', or 'Sequence'")
     targetId: str = Field(..., description="The ID of the Task or Job to trigger")
     enabled: bool = Field(True, description="Whether this cron job is active")
@@ -62,6 +63,9 @@ class CronJobRequest(BaseModel):
 class CronJobResponse(CronJobRequest):
     id: str
     nextRun: str
+    timestamp_utc: Optional[str] = None
+    local_datetime: Optional[str] = None
+    local_time: Optional[str] = None
     created_at: datetime
 
 
@@ -215,6 +219,7 @@ async def _cron_executor_loop() -> None:
                 next_run_at = next_cron_run(
                     str(job["schedule"]),
                     now=datetime.now(timezone.utc),
+                    timezone_id=str(job.get("timezone_id") or "UTC"),
                 )
                 completed = await repository.complete_cron_claim(
                     str(job["id"]),
