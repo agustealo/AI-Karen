@@ -60,6 +60,12 @@ def test_personal_recall_cortex_overrides_unrelated_ml_intent(question, attribut
     assert decision.intent == "memory.recall"
     assert decision.memory_recall_required
     assert decision.policy_constraints.get("personal_evidence_attribute") == attribute
+    from ai_karen_engine.core.intelligence.profile_attribute import (
+        is_profile_summary_request,
+    )
+    assert (decision.policy_constraints.get(
+        "personal_evidence_identity_summary_requested"
+    ) is True) is is_profile_summary_request(question)
 
 
 @pytest.mark.parametrize("statement", [
@@ -102,7 +108,7 @@ def test_profile_summary_intent_does_not_capture_unrelated_user_requests(message
     assert is_profile_summary_request(message) is False
 
 
-@pytest.mark.parametrize("followup", ["share please", "Please share", "yes please", "go ahead"])
+@pytest.mark.parametrize("followup", ["share please", "Please share", "yes please", "go ahead", "ANything else?", "What else?"])
 def test_profile_summary_followup_remains_grounded_to_previous_user_request(followup):
     from ai_karen_engine.core.intelligence.profile_attribute import (
         is_profile_summary_followup,
@@ -137,6 +143,9 @@ def test_profile_summary_followup_remains_grounded_to_previous_user_request(foll
     assert decision.memory_recall_required
     # No profile value or user identity can be inferred from the assistant offer.
     assert decision.policy_constraints.get("personal_evidence_attribute") is None
+    assert decision.policy_constraints.get(
+        "personal_evidence_identity_summary_requested"
+    ) is not True
 
 
 @pytest.mark.parametrize("history", [
