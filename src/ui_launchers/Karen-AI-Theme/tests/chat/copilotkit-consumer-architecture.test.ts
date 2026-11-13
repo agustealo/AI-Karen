@@ -118,6 +118,26 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(session).toContain("workspaceRunId: string | null");
   });
 
+  it("externalizes only the Node-side CopilotKit runtime dynamic loader", () => {
+    const nextConfig = read("next.config.ts");
+    const route = read("src/app/api/copilotkit/[[...slug]]/route.ts");
+    const packageInfo = JSON.parse(read("package.json"));
+
+    // The 1.79.1 server SDK imports channel-manager.mjs, whose dynamic
+    // require is not statically resolvable by the Webpack app-route bundle.
+    // Next 15's public API keeps only this server package on native Node
+    // resolution; the browser SDK and app router remain bundle-owned.
+    expect(packageInfo.dependencies["@copilotkit/runtime"]).toBe("1.79.1");
+    expect(nextConfig).toContain("serverExternalPackages: ['@copilotkit/runtime']");
+    expect(nextConfig).not.toContain("serverExternalPackages: ['@copilotkit/react-core']");
+    expect(nextConfig).not.toContain("ignoreWarnings");
+    expect(route).toContain('export const runtime = "nodejs";');
+    expect(route).toContain('await import("@copilotkit/runtime/v2")');
+    expect(route.indexOf("COPILOTKIT_TELEMETRY_DISABLED")).toBeLessThan(
+      route.indexOf('await import("@copilotkit/runtime/v2")'),
+    );
+  });
+
   it("registers a scoped SDK agent from one canonical owner only", () => {
     expect(history).toContain("const registration = useAgent({");
     expect(history).toContain("ScopedAgentContext.Provider value={registration}");
