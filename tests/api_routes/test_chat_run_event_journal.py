@@ -190,6 +190,70 @@ async def test_untrusted_event_types_and_unbounded_fields_fail_before_sql(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "RUN_ERROR", "runId": "foreign-run", "message": "failed"},
+        {"type": "RUN_ERROR", "threadId": "foreign-thread", "message": "failed"},
+        {"type": "TEXT_MESSAGE_CONTENT", "runId": "foreign-run", "delta": "unowned"},
+        {"type": "TEXT_MESSAGE_CONTENT", "threadId": "foreign-thread", "delta": "unowned"},
+        {"type": "CUSTOM", "name": "karen.status", "runId": "foreign-run",
+         "value": {"state": "running"}},
+        {"type": "TOOL_CALL_START", "threadId": "foreign-thread",
+         "toolCallId": "unowned"},
+        {"type": "RUN_STARTED", "threadId": THREAD},
+        {"type": "RUN_FINISHED", "runId": RUN_ID},
+    ],
+)
+async def test_projected_event_rejects_foreign_or_incomplete_run_identity_before_sql(
+    monkeypatch, event,
+):
+    """Even nonterminal observations cannot carry a foreign top-level run."""
+    tx = Transaction()
+    scoped(monkeypatch, tx)
+    with pytest.raises(ValueError, match="chat_projection_identity_mismatch"):
+        await repository.SqlChatRunRepository().append_projected_event(
+            lease(), event=event,
+        )
+    assert tx.queries == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "event"),
+    [
+        ("running", {"type": "RUN_STARTED", "threadId": THREAD, "runId": RUN_ID}),
+        ("running", {"type": "TEXT_MESSAGE_CONTENT", "messageId": "owned",
+                     "delta": "hello"}),
+        ("running", {"type": "TEXT_MESSAGE_CONTENT", "threadId": THREAD,
+                     "runId": RUN_ID, "messageId": "owned", "delta": "hello"}),
+        ("failed", {"type": "RUN_ERROR", "message": "verified failure"}),
+        ("failed", {"type": "RUN_ERROR", "threadId": THREAD, "runId": RUN_ID,
+                    "message": "verified failure"}),
+    ],
+)
+async def test_projected_event_retains_valid_optional_scoped_identity(
+    monkeypatch, status, event,
+):
+    """Optional IDs may be absent, but present IDs must remain scoped."""
+    tx = Transaction(status=status)
+    scoped(monkeypatch, tx)
+    assert await repository.SqlChatRunRepository().append_projected_event(
+        lease(), event=event,
+    ) == 1
+    writes = [
+        params for sql, params in zip(tx.queries, tx.params)
+        if "INSERT INTO public.runtime_chat_run_events" in sql
+    ]
+    assert len(writes) == 1
+    assert writes[0]["tenant"] == TENANT
+    assert writes[0]["owner"] == OWNER
+    assert writes[0]["conversation"] == THREAD
+
+
+
+
+@pytest.mark.asyncio
 async def test_paged_event_read_marks_expired_lease_interrupted_without_success(monkeypatch):
     tx = Transaction(status="running", stored=[
         {"event_seq": 8, "event_payload": {"type": "TEXT_MESSAGE_CONTENT",
