@@ -291,9 +291,23 @@ class SqlChatRunRepository:
             raise ValueError("invalid_chat_projection_event")
         if not isinstance(event, dict):
             event = dict(event)
-        if event_type in {"RUN_STARTED", "RUN_FINISHED"} and (
-            event.get("threadId") != lease.conversation_id
-            or event.get("runId") != lease.transport_run_id
+        # Every explicit top-level AG-UI run identity must match the
+        # tenant/owner-scoped lease, including error and content events.
+        # Only RUN_STARTED and RUN_FINISHED require both fields; other
+        # canonical AG-UI event types legitimately omit them.
+        if (
+            (
+                event_type in {"RUN_STARTED", "RUN_FINISHED"}
+                and ("threadId" not in event or "runId" not in event)
+            )
+            or (
+                "threadId" in event
+                and event["threadId"] != lease.conversation_id
+            )
+            or (
+                "runId" in event
+                and event["runId"] != lease.transport_run_id
+            )
         ):
             raise ValueError("chat_projection_identity_mismatch")
         if event_type == "CUSTOM" and (
