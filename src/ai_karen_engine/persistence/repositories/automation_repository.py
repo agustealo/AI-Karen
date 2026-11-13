@@ -871,9 +871,11 @@ class SqlAutomationRepository:
     ) -> Dict[str, Any]:
         """Commit a task and its IANA-local cron trigger in a single transaction.
 
-        IDs derive from the authenticated conversation/request, not arbitrary
-        caller input. A retried request may only reuse an identically defined
-        object owned by the same user; both inserts roll back together.
+        IDs derive from authenticated tenant/user/conversation plus the
+        canonical daily commitment (purpose, agent, local time, timezone).
+        Transport request/response IDs are not stable across HTTP retries.
+        An identical repeated commitment reuses a single schedule; distinct
+        commitments receive distinct IDs. Both inserts roll back together.
         """
         if cron_record.get("targetId") != task_record.get("id"):
             raise ValueError("Scheduled target does not match task")
