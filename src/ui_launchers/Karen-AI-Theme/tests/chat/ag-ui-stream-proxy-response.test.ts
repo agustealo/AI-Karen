@@ -109,6 +109,53 @@ describe('AG-UI stream proxy', () => {
     );
   });
 
+  it('reports the real backend correlation when the upstream disconnects before terminal completion', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"TEXT_MESSAGE_CONTENT","delta":"partial"}\\n\\n'));
+        controller.error(new Error('backend transport disconnected'));
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, {
+      headers: {
+        'content-type': 'text/event-stream',
+        'x-correlation-id': 'corr-stream-incident-490',
+      },
+    })));
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    const output = await response.text();
+    expect(output).toContain('CHAT_STREAM_UPSTREAM_INTERRUPTED');
+    expect(output).not.toContain('"type":"RUN_FINISHED"');
+    const terminal = output
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => {
+        try { return JSON.parse(line.slice(5).trim()); } catch { return null; }
+      })
+      .filter(Boolean)
+      .filter(event => event.type === 'RUN_ERROR');
+    expect(terminal).toEqual([{
+      type: 'RUN_ERROR',
+      message: 'The backend stream ended before runtime completion.',
+      code: 'CHAT_STREAM_UPSTREAM_INTERRUPTED',
+      correlation_id: 'corr-stream-incident-490',
+    }]);
+    expect(response.headers.get('x-correlation-id')).toBe('corr-stream-incident-490');
+  });
+
+  it('does not fabricate a backend correlation for an incomplete uncorrelated stream', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    const response = await POST(request());
+    const output = await response.text();
+    expect(output).toContain('CHAT_STREAM_UPSTREAM_TERMINATED');
+    expect(output).not.toContain('correlation_id');
+    expect(response.headers.get('x-correlation-id')).toBeNull();
+  });
+
   it('fails closed when the upstream stream ends without completion', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', {
       headers: { 'content-type': 'text/event-stream' },
