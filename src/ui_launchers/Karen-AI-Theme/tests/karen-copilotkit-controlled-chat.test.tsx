@@ -74,6 +74,7 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedHistory", () => ({
   KarenCopilotAssistantSlot: () => null,
+  KarenCopilotUserSlot: () => null,
 }));
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
@@ -135,6 +136,19 @@ function input() {
 }
 
 describe("CK-07E4: SDK-native view with explicitly controlled inference", () => {
+  it("binds both speaker-labeled native SDK message slots without recreating messages", () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    const rendered = sdk.views.at(-1);
+    expect(rendered?.messages).toBe(sdk.agent.messages);
+    const slots = rendered?.messageView as
+      | { assistantMessage?: unknown; userMessage?: unknown }
+      | undefined;
+    expect(typeof slots?.userMessage).toBe("function");
+    expect(typeof slots?.assistantMessage).toBe("function");
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+  });
+
   it("does not start a provider, append a message or overwrite saved history on mount", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     expect(screen.getByTestId("native-copilot-view")).toBeTruthy();
