@@ -190,3 +190,78 @@ async def test_claimed_cron_enqueue_returns_only_provider_receipt(monkeypatch):
         await cron._dispatch_claimed_cron(_claimed_task(action="enqueue"))
         == "queue-receipt-1"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["cancelled", "failure", "success"])
+async def test_cron_worker_interruption_preserves_due_occurrence(monkeypatch, outcome):
+    """Cancellation leaves a fenced due claim for lease-expiry recovery."""
+    from datetime import datetime, timezone
+
+    from ai_karen_engine.api_routes.automation import cron
+
+    due = {
+        **_claimed_task(),
+        "schedule": "0 7 * * *",
+        "timezone_id": "America/Detroit",
+    }
+    next_instant = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
+    calls = []
+
+    class OneShotRepository:
+        async def claim_due_cron_jobs(self, worker_id, *, limit):
+            assert limit == 1
+            calls.append("claim")
+            if calls.count("claim") > 1:
+                raise asyncio.CancelledError()
+            return [due]
+
+        async def renew_cron_claim(self, cron_id, claim_token):
+            assert (cron_id, claim_token) == ("cron-a", "claim-a")
+            return True
+
+        async def complete_cron_claim(
+            self, cron_id, claim_token, *, next_run_at, last_error=None,
+        ):
+            calls.append(("complete", cron_id, claim_token, next_run_at, last_error))
+            return True
+
+    async def dispatch(job):
+        assert job is due
+        calls.append("dispatch")
+        if outcome == "cancelled":
+            raise asyncio.CancelledError()
+        if outcome == "failure":
+            raise RuntimeError("dispatch failed")
+
+    def resolve_next(schedule, *, now, timezone_id):
+        assert schedule == "0 7 * * *"
+        assert timezone_id == "America/Detroit"
+        assert now.tzinfo is not None
+        calls.append("next_run")
+        return next_instant
+
+    monkeypatch.setattr(cron, "get_automation_repository", OneShotRepository)
+    monkeypatch.setattr(cron, "_dispatch_claimed_cron", dispatch)
+    monkeypatch.setattr(cron, "next_cron_run", resolve_next)
+
+    with pytest.raises(asyncio.CancelledError):
+        await cron._cron_executor_loop()
+
+    assert calls[:2] == ["claim", "dispatch"]
+    completions = [
+        entry for entry in calls if isinstance(entry, tuple) and entry[0] == "complete"
+    ]
+    if outcome == "cancelled":
+        # The existing lease expires; the original due timestamp stays due.
+        assert calls == ["claim", "dispatch"]
+        assert completions == []
+    else:
+        assert len(completions) == 1
+        receipt = completions[0]
+        assert receipt[1:4] == ("cron-a", "claim-a", next_instant)
+        if outcome == "failure":
+            assert receipt[4] == "RuntimeError: dispatch failed"
+        else:
+            assert receipt[4] is None
+        assert calls[-1] == "claim"

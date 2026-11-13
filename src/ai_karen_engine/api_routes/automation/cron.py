@@ -204,6 +204,8 @@ async def _cron_executor_loop() -> None:
                     _dispatch_claimed_cron(job),
                 )
             except asyncio.CancelledError:
+                # An interrupted occurrence was not completed. Retain its
+                # fenced lease so recovery can reclaim it after expiry.
                 raise
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"[:4000]
@@ -215,27 +217,29 @@ async def _cron_executor_loop() -> None:
                         "worker_id": worker_id,
                     },
                 )
-            finally:
-                next_run_at = next_cron_run(
-                    str(job["schedule"]),
-                    now=datetime.now(timezone.utc),
-                    timezone_id=str(job.get("timezone_id") or "UTC"),
+
+            # Only a terminal dispatch attempt may advance the recurrence.
+            # Cancellation must never acknowledge or skip this occurrence.
+            next_run_at = next_cron_run(
+                str(job["schedule"]),
+                now=datetime.now(timezone.utc),
+                timezone_id=str(job.get("timezone_id") or "UTC"),
+            )
+            completed = await repository.complete_cron_claim(
+                str(job["id"]),
+                claim_token,
+                next_run_at=next_run_at,
+                last_error=error,
+            )
+            if not completed:
+                logger.error(
+                    "automation.cron.claim_completion_failed",
+                    extra={
+                        "cron_id": job["id"],
+                        "claim_token": claim_token,
+                        "worker_id": worker_id,
+                    },
                 )
-                completed = await repository.complete_cron_claim(
-                    str(job["id"]),
-                    claim_token,
-                    next_run_at=next_run_at,
-                    last_error=error,
-                )
-                if not completed:
-                    logger.error(
-                        "automation.cron.claim_completion_failed",
-                        extra={
-                            "cron_id": job["id"],
-                            "claim_token": claim_token,
-                            "worker_id": worker_id,
-                        },
-                    )
         except asyncio.CancelledError:
             raise
         except Exception:
