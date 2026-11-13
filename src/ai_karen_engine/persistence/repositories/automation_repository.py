@@ -46,34 +46,33 @@ _CRON_INSERT_SQL = """\nINSERT INTO public.automation_cron_jobs (
 
 def _task_insert_values(tenant_id: str, created_by: str, record: Dict[str, Any]) -> Dict[str, Any]:
     return {
-                    "task_id": record["id"],
-                    "tenant_id": tenant_id,
-                    "created_by": created_by,
-                    "name": record["name"],
-                    "description": record["description"],
-                    "primary_agent": record["primaryAgent"],
-                    "primary_agent_instructions": record.get("primaryAgentInstructions", ""),
-                    "task_type": record["taskType"],
-                    "sub_agents": json.dumps(record.get("subAgents") or []),
-                    "acceptance_criteria": record.get("acceptanceCriteria") or "",
-                    "verification_contract": json.dumps(record.get("verificationContract") or {}),
-}
+        "task_id": record["id"],
+        "tenant_id": tenant_id,
+        "created_by": created_by,
+        "name": record["name"],
+        "description": record["description"],
+        "primary_agent": record["primaryAgent"],
+        "primary_agent_instructions": record.get("primaryAgentInstructions", ""),
+        "task_type": record["taskType"],
+        "sub_agents": json.dumps(record.get("subAgents") or []),
+        "acceptance_criteria": record.get("acceptanceCriteria") or "",
+        "verification_contract": json.dumps(record.get("verificationContract") or {}),
+    }
 
 
 def _cron_insert_values(tenant_id: str, created_by: str, record: Dict[str, Any], next_run_at: datetime) -> Dict[str, Any]:
     return {
-                    "cron_id": record["id"],
-                    "tenant_id": tenant_id,
-                    "created_by": created_by,
-                    "task_name": record["taskName"],
-                    "schedule": record["schedule"],
-                    "job_type": record["type"],
-                    "target_id": record["targetId"],
-                    "enabled": record["enabled"],
-                    "action": record["action"],
-                    "next_run_at": next_run_at,
-}
-
+        "cron_id": record["id"],
+        "tenant_id": tenant_id,
+        "created_by": created_by,
+        "task_name": record["taskName"],
+        "schedule": record["schedule"],
+        "job_type": record["type"],
+        "target_id": record["targetId"],
+        "enabled": record["enabled"],
+        "action": record["action"],
+        "next_run_at": next_run_at,
+    }
 
 
 def _utcnow() -> datetime:
