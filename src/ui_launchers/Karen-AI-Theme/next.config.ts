@@ -59,6 +59,12 @@ const nextConfig: NextConfig = {
     ? __dirname
     : path.resolve(__dirname, '../..'),
   allowedDevOrigins,
+  // CopilotKit 1.79.1's server channel-manager has a runtime dynamic
+  // dependency loader. Keep this single Node-side package out of Webpack's
+  // static context resolution; it is installed with the app and loaded
+  // by the authenticated App Router route through native Node resolution.
+  // Do not suppress unrelated Webpack warnings or externalize browser SDKs.
+  serverExternalPackages: ['@copilotkit/runtime'],
   transpilePackages: [
     'rehype-raw', 
     'remark-gfm', 
