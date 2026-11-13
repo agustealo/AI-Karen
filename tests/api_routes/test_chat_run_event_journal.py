@@ -584,6 +584,67 @@ async def test_sse_journal_failure_before_start_never_launches_model(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_journal_enabled_runtime_exception_is_not_mislabelled_as_database_outage(
+    monkeypatch,
+):
+    """Journal availability must not disguise a real runtime exception."""
+    recorded = []
+
+    class Journal:
+        async def append_observed_event(self, owned, event):
+            recorded.append(event["type"])
+            return len(recorded)
+
+        async def stream(self, chunks, *, lease):
+            async for chunk in chunks:
+                yield chunk
+
+    class Runtime:
+        async def execute_stream(self, request):
+            raise RuntimeError("private provider transport failure")
+            yield  # pragma: no cover - preserve async generator
+
+    monkeypatch.setattr(
+        ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True,
+            enable_ag_ui_durable_runs=True,
+            enable_ag_ui_event_journal=True,
+        )),
+    )
+    monkeypatch.setattr(ingress, "get_chat_run_coordinator", lambda: Journal())
+    monkeypatch.setattr(ingress, "get_chat_runtime", lambda: Runtime())
+
+    owned = lease()
+    request = ingress._stream_execution_request(
+        request=ingress.ChatStreamRequest(
+            message="hi", session_id=THREAD, conversation_id=THREAD,
+        ),
+        user={"user_id": OWNER, "tenant_id": TENANT},
+        session_id=THREAD,
+        correlation_id=owned.correlation_id,
+        response_id=owned.request_id,
+    )
+    frames = [
+        frame async for frame in ingress._ag_ui_sse(
+            request, thread_id=THREAD, run_id=RUN_ID, run_lease=owned,
+        )
+    ]
+    assert recorded == ["RUN_STARTED", "RUN_ERROR"]
+    assert all("private provider transport failure" not in frame for frame in frames)
+    events = [
+        json.loads(part[6:])
+        for frame in frames
+        for part in frame.splitlines()
+        if part.startswith("data: ")
+    ]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "RUN_ERROR"]
+    assert events[-1]["code"] == "CHAT_STREAM_RUNTIME_EXCEPTION"
+    assert "CHAT_EVENT_JOURNAL_UNAVAILABLE" not in "".join(frames)
+    assert "RUN_FINISHED" not in "".join(frames)
+
+
+@pytest.mark.asyncio
 async def test_sse_cursor_is_emitted_only_after_successful_append(monkeypatch):
     records = []
     class Journal:

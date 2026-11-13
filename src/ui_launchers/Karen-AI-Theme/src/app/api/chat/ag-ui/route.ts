@@ -115,6 +115,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           type: 'RUN_ERROR',
           message: 'The backend stream ended before runtime completion.',
           code,
+          correlation_id: upstream.headers.get('x-correlation-id') || undefined,
         })}\n\n`,
       ));
       terminalSeen = true;
