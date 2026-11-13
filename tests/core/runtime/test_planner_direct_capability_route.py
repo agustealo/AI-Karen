@@ -740,3 +740,81 @@ async def test_daily_chat_original_agent_accepts_later_explicit_local_time(
     assert calls[0]["primary_agent"] == "research"
     assert calls[0]["hour_local"] == 7
     assert calls[0]["timezone_id"] == "America/Detroit"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("query", "expected_purpose"), [
+    (
+        "Create a daily task to summarize daily news "
+        "at 07:00 in America/Detroit using agent research",
+        "summarize daily news",
+    ),
+    (
+        "Create a task to summarize daily news every day "
+        "using agent research at 07:00 in America/Detroit",
+        "summarize daily news",
+    ),
+])
+async def test_daily_task_parser_preserves_interior_daily_words(
+    monkeypatch, query, expected_purpose,
+):
+    from ai_karen_engine.services.automation import definitions
+
+    calls = []
+
+    class DeniedStorage:
+        async def create_chat_recurring_task(self, **kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("Persistence intentionally unavailable")
+
+    monkeypatch.setattr(
+        definitions, "get_automation_definition_service",
+        lambda: DeniedStorage(),
+    )
+    result = await DirectCapabilityExecutor().execute(
+        request=_schedule_request(query),
+        decision=SimpleNamespace(intent="automation.create"),
+        plan=_schedule_plan(), meter=_ScheduleMeter(),
+    )
+    assert result.success is False
+    assert result.error == "automation_persistence_unavailable"
+    assert result.payload["automation_created"] is False
+    assert len(calls) == 1
+    assert calls[0]["purpose"] == expected_purpose
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("query", "reason"), [
+    (
+        "Create a daily task to pull news using agent research "
+        "using agent analyst at 07:00 in America/Detroit",
+        "automation_agent_ambiguous",
+    ),
+    (
+        "Create a daily task to pull news at 07:00 in America/Detroit "
+        "at 08:00 in UTC using agent research",
+        "automation_time_ambiguous",
+    ),
+])
+async def test_daily_chat_rejects_duplicate_fields_without_false_clarification(
+    monkeypatch, query, reason,
+):
+    from ai_karen_engine.services.automation import definitions
+
+    forbidden = AsyncMock(side_effect=AssertionError("Ambiguous schedule must not write"))
+    monkeypatch.setattr(
+        definitions, "get_automation_definition_service",
+        lambda: SimpleNamespace(create_chat_recurring_task=forbidden),
+    )
+    request = _schedule_request(query)
+    result = await DirectCapabilityExecutor().execute(
+        request=request,
+        decision=SimpleNamespace(intent="automation.create"),
+        plan=_schedule_plan(), meter=_ScheduleMeter(),
+    )
+    assert result.success is False
+    assert result.error == reason
+    assert result.payload["status"] == "unavailable"
+    assert result.payload["automation_created"] is False
+    assert ChatRuntime._pending_clarification_from_result(request, result) is None
+    forbidden.assert_not_awaited()
