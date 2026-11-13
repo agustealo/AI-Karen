@@ -119,6 +119,7 @@ describe("canonical CopilotKit chat ownership", () => {
     // Existing first-send authentication, revision and health preflights
     // remain the only authority to run this opt-in multi-turn extension.
     expect(liveBrowser).toContain('if (personalContextAcceptance && !enabled)');
+    expect(liveBrowser).toContain('if (personalContextAcceptance && kcon770FaultAcceptance)');
     expect(liveBrowser).toContain('trace: "off"');
     expect(liveBrowser).toContain('screenshot: "off"');
     expect(liveBrowser).toContain('video: "off"');
