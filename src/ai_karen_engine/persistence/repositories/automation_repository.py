@@ -144,7 +144,7 @@ def _cron_row(row: Any) -> Dict[str, Any]:
     timezone_id = str(data.get("timezone_id") or "UTC")
     local_datetime = (
         next_run.astimezone(ZoneInfo(timezone_id)).isoformat()
-        if next_run else None
+        if next_run and enabled else None
     )
     wall_time = data.get("local_time")
     if isinstance(wall_time, clock_time):
@@ -155,7 +155,7 @@ def _cron_row(row: Any) -> Dict[str, Any]:
         "schedule": data["schedule"],
         "timezone_id": timezone_id,
         "local_time": wall_time,
-        "timestamp_utc": next_run.astimezone(timezone.utc).isoformat() if next_run else None,
+        "timestamp_utc": next_run.astimezone(timezone.utc).isoformat() if next_run and enabled else None,
         "local_datetime": local_datetime,
         "type": data["job_type"],
         "targetId": data["target_id"],
@@ -949,7 +949,7 @@ class SqlAutomationRepository:
             if raw_cron is None:
                 raise ValueError("Cron ID has conflicting ownership")
             cron = _cron_row(raw_cron)
-            for key in ("taskName", "schedule", "timezone_id", "targetId", "type", "action"):
+            for key in ("taskName", "schedule", "timezone_id", "targetId", "type", "action", "enabled"):
                 if cron[key] != cron_record[key]:
                     raise ValueError("Cron ID conflicts with an existing definition")
             expected_local_time = cron_record.get("local_time")
