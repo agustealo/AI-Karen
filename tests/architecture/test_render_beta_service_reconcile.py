@@ -335,8 +335,19 @@ def test_recovery_workflow_is_manual_pinned_and_uses_existing_identity():
     assert "workflow_dispatch:" in source
     assert "environment: beta-release" in source
     assert source.count("RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}") == 2
-    assert "RENDER_BETA_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID }}" in source
-    assert "RENDER_BETA_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID }}" in source
+    assert "RENDER_BETA_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID || inputs.service_id }}" in source
+    assert "RENDER_BETA_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID || inputs.workspace_id }}" in source
+    # A missing repository variable must not make operator-approved inspection
+    # impossible. An explicitly supplied existing ID cannot replace a configured one.
+    for selector in ("service_id", "workspace_id", "postgres_id", "key_value_id"):
+        assert f"      {selector}:" in source
+    assert 'config_var="RENDER_CONFIG_${kind}_ID"' in source
+    assert 'input_var="RENDER_INPUT_${kind}_ID"' in source
+    assert '"${!config_var}" != "${!input_var}"' in source
+    assert '[[ "$RENDER_BETA_SERVICE_ID" =~ ^srv-[a-z0-9]+$ ]]' in source
+    assert '[[ "$RENDER_BETA_WORKSPACE_ID" =~ ^tea-[a-z0-9]+$ ]]' in source
+    assert "environment: beta-release" in source
+    assert "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}" in source
     assert "github.ref == 'refs/heads/main'" in source
     assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in source
     assert 'test "$TARGET_SHA" = "$ACTUAL_MAIN"' in source

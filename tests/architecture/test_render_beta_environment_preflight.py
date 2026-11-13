@@ -452,8 +452,11 @@ def test_source_workflow_is_protected_and_read_only():
     assert '--expected-deployed-sha "$TARGET_SHA"' in text
     assert "environment: beta-release" in text
     assert "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}" in text
-    assert "RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID }}" in text
-    assert "RENDER_BETA_KEY_VALUE_ID: ${{ vars.RENDER_BETA_KEY_VALUE_ID }}" in text
+    assert "RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID || inputs.postgres_id }}" in text
+    assert "RENDER_BETA_KEY_VALUE_ID: ${{ vars.RENDER_BETA_KEY_VALUE_ID || inputs.key_value_id }}" in text
+    assert '[[ "$RENDER_BETA_POSTGRES_ID" =~ ^dpg-[a-z0-9-]+$ ]]' in text
+    assert '[[ "$RENDER_BETA_KEY_VALUE_ID" =~ ^red-[a-z0-9-]+$ ]]' in text
+    assert "Explicit Render resource selector conflicts" in text
     assert "if: env.MODE == 'inspect-env'" in text
     assert "inspect_render_beta_environment.py" in text
     for dangerous in ("create_web_service", "create_postgres", "create_key_value"):
