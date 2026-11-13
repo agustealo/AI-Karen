@@ -663,8 +663,8 @@ class SqlAutomationRepository:
             )
             return _task_row(row)
 
-    async def task_summary(self, tenant_id: str) -> Dict[str, Any]:
-        async with async_transaction_scope(tenant_id) as session:
+    async def task_summary(self, tenant_id: str, *, created_by: str) -> Dict[str, Any]:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
@@ -677,9 +677,10 @@ class SqlAutomationRepository:
                         count(*) FILTER (WHERE status = 'Failed') AS failed_tasks
                     FROM public.automation_tasks
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     """
                 ),
-                {"tenant_id": tenant_id},
+                {"tenant_id": tenant_id, "created_by": created_by},
             )
             row = result.mappings().one()
             return {key: int(row[key] or 0) for key in row.keys()}
@@ -1047,8 +1048,8 @@ class SqlAutomationRepository:
             row = result.mappings().one_or_none()
             return _cron_row(row) if row else None
 
-    async def cron_summary(self, tenant_id: str) -> Dict[str, Any]:
-        async with async_transaction_scope(tenant_id) as session:
+    async def cron_summary(self, tenant_id: str, *, created_by: str) -> Dict[str, Any]:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
@@ -1058,9 +1059,10 @@ class SqlAutomationRepository:
                         min(next_run_at) FILTER (WHERE enabled) AS next_job_time
                     FROM public.automation_cron_jobs
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND created_by = CAST(:created_by AS uuid)
                     """
                 ),
-                {"tenant_id": tenant_id},
+                {"tenant_id": tenant_id, "created_by": created_by},
             )
             summary = dict(result.mappings().one())
             next_name = None
@@ -1071,12 +1073,13 @@ class SqlAutomationRepository:
                         SELECT task_name
                         FROM public.automation_cron_jobs
                         WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND created_by = CAST(:created_by AS uuid)
                           AND enabled
                         ORDER BY next_run_at ASC
                         LIMIT 1
                         """
                     ),
-                    {"tenant_id": tenant_id},
+                    {"tenant_id": tenant_id, "created_by": created_by},
                 )
                 next_name = name_result.scalar_one_or_none()
             return {
