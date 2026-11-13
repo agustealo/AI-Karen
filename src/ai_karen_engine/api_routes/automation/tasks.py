@@ -129,11 +129,9 @@ class TaskDefinitionResponse(TaskDefinitionRequest):
     reviewNote: Optional[str] = None
 
 
-async def get_tasks_summary(tenant_id: str) -> dict:
-    """Tenant-scoped task statistics for the automation dashboard."""
-    return await get_automation_definition_service().task_summary(
-        tenant_id=tenant_id
-    )
+async def get_tasks_summary(*, user: UserData) -> dict:
+    """Delegate authenticated, owner-scoped dashboard task statistics."""
+    return await get_automation_definition_service().task_summary(user=user)
 
 
 @router.post("/", response_model=TaskDefinitionResponse)
