@@ -548,48 +548,108 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
           .locator("textarea").first();
         const initialRunCount = observedRunRequests.length;
 
+        let expectedDraftRevision = 2; // First-send CAS 0 -> 1 -> 2 was verified above.
+        let personalTurnIndex = 0;
         const runPersonalTurn = async (utterance: string): Promise<string> => {
+          const turnIndex = ++personalTurnIndex;
+          const beforeCas = draftCas.length;
+          const beforeRuns = observedRunRequests.length;
+          const beforeResponses = observedRunResponses.length;
+          const beforeTransportFailures = observedRunTransportFailures.length;
           let answer = "";
-          await expect(composerForTurn).toBeVisible();
-          await composerForTurn.fill(utterance);
-          await composerForTurn.press("Enter");
-          await expect.poll(async () => {
-            const result = await readAuthorizedSameOriginJson(page, endpoint);
-            if (!result.ok || !result.body || typeof result.body !== "object") return false;
-            const rows = (result.body as {
-              messages?: Array<{ role?: string; content?: string }>;
-            }).messages;
-            if (!Array.isArray(rows)) return false;
-            const positions = rows.flatMap((message, index) =>
-              message.role === "user" && message.content === utterance ? [index] : []);
-            if (positions.length !== 1) return false;
-            const next = rows[positions[0] + 1];
-            if (next?.role !== "assistant" || !next.content?.trim()) return false;
-            answer = next.content.trim();
-            return true;
-          }, {
-            timeout: 120_000,
-            intervals: [1000, 2000, 3000],
-            message: "A unique personal turn must have an immediately following persisted reply",
-          }).toBe(true);
-          await expect.poll(async () =>
-            active.getByTestId("karen-copilot-assistant-message").evaluateAll(
-              (elements, expected) => elements.some(
-                element => (element.textContent || "").includes(expected),
-              ),
-              answer,
-            ), {
-            timeout: 30_000,
-            message: "The new assistant turn must be visibly rendered before replay",
-          }).toBe(true);
-          await expect.poll(async () => {
-            const { ok, body } = await readAuthorizedSameOriginJson(
-              page, "/api/conversations/" + id + "/draft",
-            );
-            return ok && body !== null && typeof body === "object" &&
-              (body as { text?: unknown }).text === "";
-          }, { timeout: 30_000 }).toBe(true);
-          return answer;
+          let persistedAssistantConfirmed = false;
+
+          try {
+            await expect(composerForTurn).toBeVisible();
+            await composerForTurn.fill(utterance);
+            await composerForTurn.press("Enter");
+            await expect.poll(async () => {
+              const result = await readAuthorizedSameOriginJson(page, endpoint);
+              if (!result.ok || !result.body || typeof result.body !== "object") return false;
+              const rows = (result.body as {
+                messages?: Array<{ role?: string; content?: string }>;
+              }).messages;
+              if (!Array.isArray(rows)) return false;
+              const positions = rows.flatMap((message, index) =>
+                message.role === "user" && message.content === utterance ? [index] : []);
+              if (positions.length !== 1) return false;
+              const next = rows[positions[0] + 1];
+              if (next?.role !== "assistant" || !next.content?.trim()) return false;
+              answer = next.content.trim();
+              return true;
+            }, {
+              timeout: 120_000,
+              intervals: [1000, 2000, 3000],
+              message: "A unique personal turn must have an immediately following persisted reply",
+            }).toBe(true);
+            persistedAssistantConfirmed = true;
+
+            // KCON-490: an assistant bubble or durable reply alone cannot
+            // prove the follow-up's draft save/clear boundary. Every accepted
+            // turn requires two ordered, revision-fenced CAS receipts and one
+            // real SDK execution. No silent blank echo may advance revision.
+            await expect.poll(() => draftCas.length - beforeCas, {
+              timeout: 30_000,
+              intervals: [250, 500, 1000],
+              message: "Follow-up must produce exactly one CAS save and one CAS clear",
+            }).toBe(2);
+            expect(draftCas.slice(beforeCas)).toEqual([
+              { clearing: false, status: 200, revision: expectedDraftRevision + 1 },
+              { clearing: true, status: 200, revision: expectedDraftRevision + 2 },
+            ]);
+            expectedDraftRevision += 2;
+            expect(observedRunRequests.length - beforeRuns,
+              "Each verified follow-up must initiate exactly one SDK run").toBe(1);
+
+            await expect.poll(async () =>
+              active.getByTestId("karen-copilot-assistant-message").evaluateAll(
+                (elements, expected) => elements.some(
+                  element => (element.textContent || "").includes(expected),
+                ),
+                answer,
+              ), {
+              timeout: 30_000,
+              message: "The new assistant turn must be visibly rendered before replay",
+            }).toBe(true);
+            await expect.poll(async () => {
+              const { ok, body } = await readAuthorizedSameOriginJson(
+                page, draftEndpoint,
+              );
+              return ok && body !== null && typeof body === "object" &&
+                (body as { text?: unknown }).text === "" &&
+                (body as { revision?: unknown }).revision === expectedDraftRevision;
+            }, {
+              timeout: 30_000,
+              message: "Cleared draft revision must be confirmed by the owned backend",
+            }).toBe(true);
+            return answer;
+          } catch (error) {
+            // Existing authenticated browser only. Never attach the prompt,
+            // answer, draft text, raw response, credentials, user IDs or URLs.
+            // This bounded receipt lets a failed SECOND or later prompt be
+            // correlated to the exact CAS/SDK stage, without declaring success.
+            const alertVisible = await active.getByRole("alert").first()
+              .isVisible().catch(() => false);
+            await testInfo.attach("kcon490-followup-failure-receipt", {
+              contentType: "application/json",
+              body: JSON.stringify({
+                schema: "karen.followup_send_failure.v1",
+                turn_index: turnIndex,
+                expected_draft_revision: expectedDraftRevision,
+                draft_cas: draftCas.slice(beforeCas).slice(-8),
+                run_request_count: observedRunRequests.length - beforeRuns,
+                run_request_routes: observedRunRequests.slice(beforeRuns, beforeRuns + 8)
+                  .map(path => runRoute(path)),
+                run_http_responses: observedRunResponses.slice(beforeResponses).slice(-8),
+                run_transport_failures:
+                  observedRunTransportFailures.slice(beforeTransportFailures).slice(-8),
+                browser_chunk_error_count: browserErrors.length,
+                composer_alert_visible: alertVisible,
+                persisted_assistant_confirmed: persistedAssistantConfirmed,
+              }),
+            });
+            throw error;
+          }
         };
 
         const repeatsOldBiography = (answer: string) =>
