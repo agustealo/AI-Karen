@@ -371,11 +371,19 @@ class AutomationDefinitionService:
             raise AutomationNotFoundError("Cron job not found")
         return updated
 
-    async def task_summary(self, *, tenant_id: str) -> Dict[str, Any]:
-        return await self._repository.task_summary(tenant_id)
+    async def task_summary(self, *, user: UserData) -> Dict[str, Any]:
+        """Report only the authenticated owner's task activity."""
+        _require_identity(user)
+        return await self._repository.task_summary(
+            str(user.tenant_id), created_by=str(user.user_id)
+        )
 
-    async def cron_summary(self, *, tenant_id: str) -> Dict[str, Any]:
-        return await self._repository.cron_summary(tenant_id)
+    async def cron_summary(self, *, user: UserData) -> Dict[str, Any]:
+        """Keep private schedule titles and execution times owner-scoped."""
+        _require_identity(user)
+        return await self._repository.cron_summary(
+            str(user.tenant_id), created_by=str(user.user_id)
+        )
 
 
 _definition_service: Optional[AutomationDefinitionService] = None
