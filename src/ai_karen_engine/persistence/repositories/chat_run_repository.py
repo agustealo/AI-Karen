@@ -426,7 +426,8 @@ class SqlChatRunRepository:
                            COALESCE(SUM(octet_length(event_payload::text)), 0) AS bytes,
                            COUNT(*) FILTER (
                                WHERE event_type IN ('RUN_FINISHED', 'RUN_ERROR')
-                           ) AS terminal_count
+                           ) AS terminal_count,
+                           COUNT(*) AS recorded_count
                     FROM public.runtime_chat_run_events
                     WHERE execution_id = CAST(:execution AS uuid)
                       AND tenant_id = CAST(:tenant AS uuid)
@@ -436,6 +437,8 @@ class SqlChatRunRepository:
                 self._scope(lease),
             )
             counter = aggregate.mappings().one()
+            if int(counter["recorded_count"]) != int(counter["last_seq"]):
+                raise RuntimeError("chat_projection_journal_sequence_gap")
             seq = int(counter["last_seq"]) + 1
             if seq > _MAX_EVENTS_PER_RUN or int(counter["bytes"]) + len(
                 encoded.encode("utf-8")
@@ -548,6 +551,7 @@ class SqlChatRunRepository:
                            COUNT(*) FILTER (
                                WHERE event_type IN ('RUN_FINISHED', 'RUN_ERROR')
                            ) AS terminal_count,
+                           COUNT(*) AS recorded_count,
                            MAX(event_seq) FILTER (
                                WHERE event_type IN ('RUN_FINISHED', 'RUN_ERROR')
                            ) AS terminal_seq
@@ -562,6 +566,8 @@ class SqlChatRunRepository:
             journal = observed.mappings().one()
             latest_seq = int(journal["last_seq"])
             terminal_count = int(journal["terminal_count"])
+            if int(journal["recorded_count"]) != latest_seq:
+                raise RuntimeError("chat_projection_journal_sequence_gap")
             if after > latest_seq:
                 raise ValueError("chat_projection_cursor_ahead_of_journal")
             if terminal_count > 1:
