@@ -8,7 +8,8 @@ here.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time as clock_time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Dict, List, Optional
 
 from croniter import croniter
@@ -44,13 +45,73 @@ def slugify_task_type(name: str) -> str:
     return slug or "general_task"
 
 
-def next_cron_run(schedule: str, *, now: Optional[datetime] = None) -> datetime:
+def _validated_timezone(timezone_id: str) -> ZoneInfo:
+    """Timezone is a scheduling preference, not evidence of physical location."""
+    raw = str(timezone_id or "").strip()
+    if not raw or len(raw) > 128:
+        raise AutomationDefinitionError("A valid IANA timezone_id is required")
+    try:
+        return ZoneInfo(raw)
+    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+        raise AutomationDefinitionError("Unrecognized IANA timezone_id") from exc
+
+
+def _daily_wall_time(schedule: str) -> Optional[clock_time]:
+    """Recognize a strict once-daily cron (not a general calendar expression)."""
+    fields = schedule.split()
+    if (
+        len(fields) != 5
+        or fields[2:] != ["*", "*", "*"]
+        or not fields[0].isdigit()
+        or not fields[1].isdigit()
+    ):
+        return None
+    minute, hour = int(fields[0]), int(fields[1])
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return clock_time(hour=hour, minute=minute)
+
+
+def next_cron_run(
+    schedule: str,
+    *,
+    now: Optional[datetime] = None,
+    timezone_id: str = "UTC",
+) -> datetime:
+    """Return next absolute UTC occurrence of an IANA-local recurrence.
+
+    For a named zone, a daily nonexistent DST spring time is skipped rather
+    than silently shifted to another hour. An ambiguous autumn wall time runs
+    once on its first (fold=0) occurrence. Legacy UTC non-daily expressions
+    retain croniter behavior. Non-daily IANA schedules fail closed until their
+    local recurrence semantics can be independently verified.
+    """
     if not croniter.is_valid(schedule):
         raise AutomationDefinitionError("Invalid cron expression")
+    zone = _validated_timezone(timezone_id)
     base = now or datetime.now(timezone.utc)
     if base.tzinfo is None:
-        base = base.replace(tzinfo=timezone.utc)
-    return croniter(schedule, base).get_next(datetime)
+        raise AutomationDefinitionError("Scheduler clock must include UTC offset")
+    base_utc = base.astimezone(timezone.utc)
+    wall_time = _daily_wall_time(schedule)
+    if wall_time is None:
+        if zone.key != "UTC":
+            raise AutomationDefinitionError(
+                "Named IANA timezones currently require a once-daily schedule"
+            )
+        return croniter(schedule, base_utc).get_next(datetime).astimezone(timezone.utc)
+
+    day = base_utc.astimezone(zone).date()
+    for offset in range(370):
+        wall = datetime.combine(day + timedelta(days=offset), wall_time)
+        candidate = wall.replace(tzinfo=zone, fold=0).astimezone(timezone.utc)
+        # ZoneInfo permits representing nonexistent local times. Validate
+        # round-trip to avoid moving 02:30 to 03:30 on a spring-forward day.
+        if candidate.astimezone(zone).replace(tzinfo=None) != wall:
+            continue
+        if candidate > base_utc:
+            return candidate
+    raise AutomationDefinitionError("Could not resolve a valid next occurrence")
 
 
 class AutomationDefinitionService:
@@ -120,12 +181,13 @@ class AutomationDefinitionService:
         user: UserData,
         purpose: str,
         primary_agent: str,
-        hour_utc: int,
-        minute_utc: int,
+        hour_local: int,
+        minute_local: int,
+        timezone_id: str,
         conversation_id: str,
         request_id: str,
     ) -> Dict[str, Any]:
-        """Authorize agent metadata then atomically commit a UTC daily task.
+        """Authorize agent metadata then atomically commit a local daily task.
 
         The canonical PostgreSQL repository enforces transaction/replay ownership.
         A scheduled definition is not evidence of execution or news delivery.
@@ -134,8 +196,9 @@ class AutomationDefinitionService:
         purpose = " ".join(str(purpose or "").strip().split())
         if not purpose or len(purpose) > 500:
             raise AutomationDefinitionError("Task purpose must be 1-500 characters")
-        if not 0 <= hour_utc <= 23 or not 0 <= minute_utc <= 59:
-            raise AutomationDefinitionError("UTC hour or minute is invalid")
+        if not 0 <= hour_local <= 23 or not 0 <= minute_local <= 59:
+            raise AutomationDefinitionError("Local hour or minute is invalid")
+        zone = _validated_timezone(timezone_id)
         if not str(conversation_id or "").strip() or not str(request_id or "").strip():
             raise AutomationDefinitionError("A durable chat request identity is required")
 
@@ -156,12 +219,14 @@ class AutomationDefinitionService:
             },
             record_id=task_id,
         )
-        schedule = f"{minute_utc} {hour_utc} * * *"
-        next_run_at = next_cron_run(schedule)
+        schedule = f"{minute_local} {hour_local} * * *"
+        next_run_at = next_cron_run(schedule, timezone_id=zone.key)
         cron = {
             "id": cron_id,
             "taskName": task["name"],
             "schedule": schedule,
+            "timezone_id": zone.key,
+            "local_time": clock_time(hour_local, minute_local),
             "type": "Task",
             "targetId": task_id,
             "enabled": True,
@@ -233,11 +298,15 @@ class AutomationDefinitionService:
             raise AutomationNotFoundError("Automation target not found")
 
         schedule = str(payload.get("schedule") or "").strip()
-        next_run_at = next_cron_run(schedule)
+        zone = _validated_timezone(str(payload.get("timezone_id") or "UTC"))
+        next_run_at = next_cron_run(schedule, timezone_id=zone.key)
+        local_time = _daily_wall_time(schedule)
         record = {
             "id": f"cron_{uuid.uuid4().hex[:12]}",
             "taskName": str(payload.get("taskName") or "").strip(),
             "schedule": schedule,
+            "timezone_id": zone.key,
+            "local_time": local_time,
             "type": job_type,
             "targetId": target_id,
             "enabled": bool(payload.get("enabled", True)),
@@ -272,7 +341,10 @@ class AutomationDefinitionService:
         )
         if current is None:
             raise AutomationNotFoundError("Cron job not found")
-        next_run_at = next_cron_run(current["schedule"])
+        next_run_at = next_cron_run(
+            current["schedule"],
+            timezone_id=current.get("timezone_id") or "UTC",
+        )
         updated = await self._repository.toggle_cron(
             cron_id,
             str(user.tenant_id),
