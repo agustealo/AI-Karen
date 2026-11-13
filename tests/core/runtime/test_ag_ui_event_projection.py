@@ -60,6 +60,95 @@ def test_runtime_errors_have_safe_provenance_and_no_internal_metadata_leak():
     assert "api_key" not in str(error)
 
 
+
+@pytest.mark.parametrize(
+    "invalid_status",
+    [[], {}, ["ready"], {"status": "ready"}, 100, True],
+)
+def test_malformed_learning_metadata_preserves_content_without_inventing_receipt(
+    invalid_status,
+):
+    """Plugin/provider metadata cannot abort an otherwise valid text stream."""
+    projection = AGUIEventProjection(thread_id="tenant-thread", run_id="run-typed")
+    projection.begin()
+    text_events = projection.project(chunk(
+        "content", "Verified model text",
+        execution_engine="deepagents",
+        learning_signal_status=invalid_status,
+        model_selection_source="canonical_registry",
+        secret={"api_key": "never-expose"},
+    ))
+    assert [event["type"] for event in text_events] == [
+        "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+    ]
+    assert text_events[1]["delta"] == "Verified model text"
+    assert "karen.learning_decision" not in str(text_events)
+    assert "never-expose" not in str(text_events)
+
+    terminal = projection.project(chunk(
+        "complete", transcript_persistence_status="persisted",
+    ))
+    assert [event["type"] for event in terminal] == [
+        "TEXT_MESSAGE_END", "RUN_FINISHED",
+    ]
+    assert projection.terminal is True
+
+
+@pytest.mark.parametrize(
+    "invalid_source",
+    [[], {}, ["authorized_memory_evidence"], {"source": "authorized_memory_evidence"},
+     101, True],
+)
+def test_malformed_recall_source_finishes_without_forged_grounding(
+    invalid_source,
+):
+    """Non-string metadata is not evidence and never crashes finality."""
+    projection = AGUIEventProjection(thread_id="tenant-thread", run_id="recall-run")
+    projection.begin()
+    events = projection.project(chunk(
+        "complete",
+        transcript_persistence_status="already_persisted",
+        cortex_intent="memory.recall",
+        response_source=invalid_source,
+        actual_provider="vllm",
+        actual_model="local-model",
+        secret="never-expose",
+    ))
+    assert [event["type"] for event in events] == ["CUSTOM", "RUN_FINISHED"]
+    assert events[0]["name"] == "karen.response_integrity.v1"
+    assert events[0]["value"] == {
+        "output_truncated": False,
+        "cortex_intent": "memory.recall",
+        "personal_recall_grounded": False,
+    }
+    assert "karen.execution_receipt.v1" not in str(events)
+    assert "never-expose" not in str(events)
+    assert projection.terminal is True
+
+
+@pytest.mark.parametrize(
+    "attested_source",
+    ["authorized_memory_evidence", "authorized_conversation_evidence"],
+)
+def test_valid_authorized_recall_source_retains_grounded_receipt(attested_source):
+    projection = AGUIEventProjection(thread_id="tenant-thread", run_id="recall-run")
+    projection.begin()
+    events = projection.project(chunk(
+        "complete",
+        transcript_persistence_status="persisted",
+        cortex_intent="memory.recall",
+        response_source=attested_source,
+    ))
+    assert [event["type"] for event in events] == ["CUSTOM", "RUN_FINISHED"]
+    assert events[0]["value"] == {
+        "output_truncated": False,
+        "cortex_intent": "memory.recall",
+        "personal_recall_grounded": True,
+        "evidence_source": attested_source,
+    }
+
+
+
 def test_agent_activity_does_not_fabricate_langgraph_progress():
     p = AGUIEventProjection(thread_id="thread", run_id="run")
     p.begin()
