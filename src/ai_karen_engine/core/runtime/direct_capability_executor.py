@@ -67,6 +67,8 @@ class DirectCapabilityResult:
                 "search_providers",
                 "crawl_provider",
                 "timer_receipt",
+                "automation_receipt",
+                "missing_fields",
             )
             if self.payload.get(key) is not None
         }
@@ -141,6 +143,232 @@ class DirectCapabilityExecutor:
                 "type": "capability", "id": "timer.schedule",
                 "status": "unavailable", "error": reason,
             }],
+        )
+
+    @staticmethod
+    def _automation_unavailable(
+        reason: str,
+        message: str,
+        *,
+        status: str = "unavailable",
+        missing_fields: Optional[List[str]] = None,
+    ) -> DirectCapabilityResult:
+        return DirectCapabilityResult(
+            handled=True,
+            text=message,
+            success=False,
+            degraded=True,
+            source="capability_unavailable",
+            source_id="automation.create",
+            error=reason,
+            payload={
+                "status": status,
+                "required_capability": "automation.create",
+                "automation_created": False,
+                "missing_fields": list(missing_fields or []),
+            },
+            attempts=[{
+                "type": "capability",
+                "id": "automation.create",
+                "status": status,
+                "error": reason,
+            }],
+        )
+
+    async def _execute_automation_create(
+        self,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ) -> DirectCapabilityResult:
+        """Execute an explicit, fully specified daily UTC task through SQL.
+
+        The user must choose a registered agent and UTC time in the command.
+        Local civil-time schedules, background delivery, and implied agents are
+        deliberately not fabricated by the chat assistant.
+        """
+        unavailable = self._automation_unavailable
+        if "automation.create" not in set(plan.allowed_capabilities):
+            return unavailable(
+                "automation_not_authorized",
+                "Creating recurring tasks is not authorized for this account. "
+                "No task was scheduled.",
+            )
+        try:
+            principal = request.context.require_authenticated_user()
+            conversation_id = request.context.require_conversation_id()
+        except (ValueError, PermissionError):
+            return unavailable(
+                "automation_principal_unverified",
+                "Task ownership or conversation identity could not be verified. "
+                "No task was scheduled.",
+            )
+        request_id = str(request.context.request_id or "").strip()
+        if not request_id:
+            return unavailable(
+                "automation_request_id_missing",
+                "A stable request ID is required for retry-safe scheduling. "
+                "No task was scheduled.",
+            )
+        if not await meter.consume_tool_call():
+            return unavailable(
+                "automation_budget_exhausted",
+                "Scheduling execution budget is exhausted. No task was scheduled.",
+            )
+
+        original = " ".join(self._latest_user_text(request).strip().split())
+        prefix = re.match(
+            r"^(?:please\s+)?(?:create|schedule|set\s+up|add)\s+"
+            r"(?:me\s+)?(?:a\s+)?(?P<frequency>daily|recurring|new|scheduled)?\s*"
+            r"(?:task|automation|job)\s+(?:to|for)\s+",
+            original,
+            re.IGNORECASE,
+        )
+        if prefix is None:
+            return unavailable(
+                "automation_command_ambiguous",
+                "Please specify a daily task to create. No task was scheduled.",
+                status="needs_input",
+                missing_fields=["task_purpose"],
+            )
+        detail = original[prefix.end():].strip().rstrip("?.!")
+        agent_match = re.search(
+            r"\s+(?:using|with)\s+(?:the\s+)?agent\s+([A-Za-z0-9_.-]{1,96})$",
+            detail, flags=re.IGNORECASE,
+        )
+        agent = agent_match.group(1) if agent_match else ""
+        if agent_match:
+            detail = detail[:agent_match.start()].strip()
+        time_match = re.search(
+            r"\s+at\s+(\d{1,2}):(\d{2})\s+(?:UTC|GMT)$",
+            detail, flags=re.IGNORECASE,
+        )
+        hour = int(time_match.group(1)) if time_match else None
+        minute = int(time_match.group(2)) if time_match else None
+        if time_match:
+            detail = detail[:time_match.start()].strip()
+        daily_match = re.search(r"\s+(?:every\s*day|daily)$", detail, re.IGNORECASE)
+        if daily_match:
+            detail = detail[:daily_match.start()].strip()
+        daily_explicit = bool(
+            daily_match or (prefix.group("frequency") or "").casefold() == "daily"
+        )
+        purpose = detail.strip()
+        missing = []
+        if not purpose or not daily_explicit:
+            missing.append("daily_task_purpose")
+        if hour is None or minute is None or not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            missing.append("utc_time")
+        if not agent:
+            missing.append("registered_agent")
+        if missing:
+            return unavailable(
+                "automation_requirements_missing",
+                "To create this recurring task, specify the task purpose, "
+                "a daily UTC time (for example 07:00 UTC), and a registered "
+                "agent ID using 'using agent <id>'. UTC schedules do not "
+                "automatically adjust for local daylight saving time. "
+                "No task was scheduled.",
+                status="needs_input",
+                missing_fields=missing,
+            )
+
+        started = time.perf_counter()
+        correlation_id = str(request.context.correlation_id or "")
+        try:
+            from ai_karen_engine.services.automation.definitions import (
+                AutomationDefinitionError,
+                AutomationNotFoundError,
+                get_automation_definition_service,
+            )
+
+            receipt = await get_automation_definition_service().create_chat_recurring_task(
+                user=principal,
+                purpose=purpose,
+                primary_agent=agent,
+                hour_utc=hour,
+                minute_utc=minute,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
+            task = receipt["task"]
+            cron = receipt["cron"]
+            if (
+                task["id"] != cron["targetId"]
+                or task["created_by"] != str(principal.user_id)
+                or task["tenant_id"] != str(principal.tenant_id)
+                or cron["created_by"] != str(principal.user_id)
+                or cron["tenant_id"] != str(principal.tenant_id)
+                or cron["schedule"] != f"{minute} {hour} * * *"
+            ):
+                raise ValueError("Scheduled task receipt ownership mismatch")
+        except (AutomationDefinitionError, AutomationNotFoundError, ValueError):
+            return unavailable(
+                "automation_definition_unavailable",
+                "The requested agent, task definition or saved receipt could "
+                "not be verified. No new schedule is confirmed.",
+            )
+        except Exception as exc:
+            logger.warning(
+                "automation.chat.create.unavailable",
+                extra={
+                    "correlation_id": correlation_id,
+                    "tenant_id": str(principal.tenant_id),
+                    "user_id": str(principal.user_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return unavailable(
+                "automation_persistence_unavailable",
+                "Scheduling storage is unavailable. No new schedule is confirmed.",
+            )
+
+        logger.info(
+            "automation.chat.create.persisted",
+            extra={
+                "correlation_id": correlation_id,
+                "tenant_id": str(principal.tenant_id),
+                "user_id": str(principal.user_id),
+                "task_id": task["id"],
+                "cron_id": cron["id"],
+                "replayed": bool(receipt["replayed"]),
+            },
+        )
+        message = (
+            f"Daily task definition saved in UTC. Task ID: {task['id']}. "
+            f"Schedule ID: {cron['id']}. Next scheduled run: {cron['nextRun']}. "
+            f"Agent: {task['primaryAgent']}. "
+            "This confirms the schedule was stored, not that the task has "
+            "run or delivered results."
+        )
+        return DirectCapabilityResult(
+            handled=True,
+            success=True,
+            degraded=False,
+            text=message,
+            source="postgresql_automation_schedule",
+            source_id="automation.create",
+            payload={
+                "status": "scheduled",
+                "required_capability": "automation.create",
+                "automation_created": True,
+                "automation_receipt": {
+                    "task_id": task["id"],
+                    "cron_id": cron["id"],
+                    "schedule": cron["schedule"],
+                    "next_run": cron["nextRun"],
+                    "timezone": "UTC",
+                    "agent": task["primaryAgent"],
+                    "replayed": bool(receipt["replayed"]),
+                },
+            },
+            attempts=[{
+                "type": "capability",
+                "id": "automation.create",
+                "status": "success",
+                "source": "postgresql_automation_schedule",
+            }],
+            latency_ms=(time.perf_counter() - started) * 1000.0,
         )
 
     async def _execute_timer(
@@ -299,6 +527,9 @@ class DirectCapabilityExecutor:
 
         if decision.intent == "timer.manage":
             return await self._execute_timer(request, plan, meter)
+
+        if decision.intent == "automation.create":
+            return await self._execute_automation_create(request, plan, meter)
 
         if decision.intent == "planner.read":
             from ai_karen_engine.config.runtime import get_runtime_settings
