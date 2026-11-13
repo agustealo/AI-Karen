@@ -174,6 +174,7 @@ async def test_daily_task_success_uses_only_owned_durable_receipt(monkeypatch):
             "local_datetime": "2026-11-14T07:00:00-05:00",
             "timezone_id": "America/Detroit",
             "local_time": "07:00:00",
+            "enabled": True,
             "created_by": user_id, "tenant_id": tenant_id,
         },
         "replayed": False,
