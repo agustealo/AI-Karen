@@ -754,3 +754,246 @@ async def test_live_postgres_cron_lease_expiry_reclaims_and_fences_old_worker():
                 "DROP TABLE IF EXISTS public.automation_cron_jobs"
             )
         await connection.close()
+
+
+async def test_live_postgres_chat_daily_commit_replay_ownership_and_rollback(monkeypatch):
+    """An authorized chat commitment creates exactly one task and one cron in SQL."""
+    import asyncpg
+    from datetime import time as wall_time
+    from sqlalchemy.exc import IntegrityError
+
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.services.automation import definitions
+
+    database_url = os.environ["DATABASE_URL"]
+    connection = await asyncpg.connect(database_url)
+    repository = SqlAutomationRepository()
+    root = Path(__file__).resolve().parents[2] / "supabase/migrations"
+    tenant_id, owner_id = uuid.uuid4(), uuid.uuid4()
+    other_tenant, other_user = uuid.uuid4(), uuid.uuid4()
+    task_table_created = False
+    cron_table_created = False
+
+    class RegisteredAgentMetadata:
+        """Isolate registry discovery; no model or task execution is simulated."""
+
+        async def initialize(self):
+            return None
+
+        async def get_agent_info(self, agent_id):
+            return {"id": "research"} if agent_id == "research" else None
+
+    monkeypatch.setattr(
+        definitions, "get_agent_integration_service", RegisteredAgentMetadata,
+    )
+
+    try:
+        existing = await connection.fetch(
+            """
+            SELECT to_regclass('public.automation_tasks') AS tasks,
+                   to_regclass('public.automation_cron_jobs') AS cron
+            """
+        )
+        if existing[0]["tasks"] is not None or existing[0]["cron"] is not None:
+            pytest.skip("Refusing destructive SQL on a pre-existing automation schema")
+
+        await connection.execute(
+            """
+            CREATE TABLE public.automation_tasks (
+                task_id text PRIMARY KEY,
+                tenant_id uuid NOT NULL,
+                created_by uuid NOT NULL,
+                name text NOT NULL,
+                description text NOT NULL,
+                primary_agent text NOT NULL,
+                primary_agent_instructions text NOT NULL DEFAULT '',
+                task_type text NOT NULL,
+                sub_agents jsonb NOT NULL DEFAULT '[]'::jsonb,
+                status varchar(32) NOT NULL DEFAULT 'Pending',
+                last_run_at timestamptz,
+                last_error text,
+                run_count integer NOT NULL DEFAULT 0,
+                runtime_task_id text,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+        task_table_created = True
+        for migration_name in (
+            "20261016010000_28_automation_task_fenced_claims.sql",
+            "20261016020000_29_saved_task_completion_review.sql",
+            "20261016030000_30_saved_task_structured_output_verification.sql",
+        ):
+            await connection.execute(
+                (root / migration_name).read_text(encoding="utf-8")
+            )
+
+        await connection.execute(
+            """
+            CREATE TABLE public.automation_cron_jobs (
+                cron_id text PRIMARY KEY,
+                tenant_id uuid NOT NULL,
+                created_by uuid NOT NULL,
+                task_name text NOT NULL,
+                schedule text NOT NULL,
+                job_type varchar(16) NOT NULL,
+                target_id text NOT NULL,
+                enabled boolean NOT NULL DEFAULT true,
+                action varchar(16) NOT NULL DEFAULT 'execute',
+                next_run_at timestamptz NOT NULL,
+                last_run_at timestamptz,
+                last_error text,
+                claim_token uuid,
+                claimed_by text,
+                claimed_at timestamptz,
+                claim_expires_at timestamptz,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+        cron_table_created = True
+        await connection.execute(
+            (root / "20261113010000_49_automation_cron_timezone_identity.sql")
+            .read_text(encoding="utf-8")
+        )
+        for table in ("automation_tasks", "automation_cron_jobs"):
+            await connection.execute(
+                f"""
+                ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE public.{table} FORCE ROW LEVEL SECURITY;
+                CREATE POLICY {table}_owner_scope
+                  ON public.{table} FOR ALL
+                  USING (
+                    tenant_id = NULLIF(
+                      current_setting('app.current_tenant_id', true), ''
+                    )::uuid
+                  )
+                  WITH CHECK (
+                    tenant_id = NULLIF(
+                      current_setting('app.current_tenant_id', true), ''
+                    )::uuid
+                  )
+                """
+            )
+
+        service = definitions.AutomationDefinitionService(repository=repository)
+        owner = UserData(user_id=str(owner_id), tenant_id=str(tenant_id))
+        commitment = dict(
+            user=owner,
+            purpose="get the latest news on Jamaica",
+            primary_agent="research",
+            hour_local=7,
+            minute_local=15,
+            timezone_id="America/Detroit",
+            conversation_id=str(uuid.uuid4()),
+        )
+
+        initial = await service.create_chat_recurring_task(**commitment)
+        assert initial["replayed"] is False
+        task = initial["task"]
+        cron = initial["cron"]
+        assert task["created_by"] == cron["created_by"] == str(owner_id)
+        assert task["tenant_id"] == cron["tenant_id"] == str(tenant_id)
+        assert task["description"] == "get the latest news on Jamaica"
+        assert task["primaryAgent"] == "research"
+        assert cron["targetId"] == task["id"]
+        assert cron["schedule"] == "15 7 * * *"
+        assert cron["timezone_id"] == "America/Detroit"
+        assert cron["local_time"] == "07:15:00"
+        assert cron["enabled"] is True
+        assert cron["next_run_at"].tzinfo is not None
+
+        # A transport retry must reuse the original committed definition.
+        replay = await service.create_chat_recurring_task(**commitment)
+        assert replay["replayed"] is True
+        assert replay["task"]["id"] == task["id"]
+        assert replay["cron"]["id"] == cron["id"]
+
+        assert (await repository.get_task(
+            task["id"], str(tenant_id), created_by=str(owner_id),
+        ))["id"] == task["id"]
+        assert (await repository.get_cron(
+            cron["id"], str(tenant_id), created_by=str(owner_id),
+        ))["id"] == cron["id"]
+        assert await repository.get_task(
+            task["id"], str(tenant_id), created_by=str(other_user),
+        ) is None
+        assert await repository.get_cron(
+            cron["id"], str(tenant_id), created_by=str(other_user),
+        ) is None
+        assert await repository.get_task(
+            task["id"], str(other_tenant), created_by=str(owner_id),
+        ) is None
+        assert await repository.get_cron(
+            cron["id"], str(other_tenant), created_by=str(owner_id),
+        ) is None
+
+        from ai_karen_engine.services.automation.definitions import (
+            AutomationNotFoundError,
+        )
+        with pytest.raises(AutomationNotFoundError):
+            await service.create_chat_recurring_task(
+                **{**commitment, "primary_agent": "unregistered"},
+            )
+
+        changed = await service.create_chat_recurring_task(
+            **{**commitment, "hour_local": 8},
+        )
+        assert changed["replayed"] is False
+        assert changed["task"]["id"] != task["id"]
+        assert changed["cron"]["id"] != cron["id"]
+
+        # A task insert followed by an invalid cron constraint must roll back
+        # both inserts. The repository owns this transaction, not a route.
+        failed_task_id = f"task_atomic_{uuid.uuid4().hex}"
+        failed_cron_id = f"cron_atomic_{uuid.uuid4().hex}"
+        invalid_task = {
+            "id": failed_task_id,
+            "name": "invalid timezone rejection",
+            "description": "Must never leave a task without its cron",
+            "primaryAgent": "research",
+            "primaryAgentInstructions": "test",
+            "taskType": "recovery_test",
+            "subAgents": [],
+        }
+        invalid_cron = {
+            "id": failed_cron_id,
+            "taskName": invalid_task["name"],
+            "schedule": "15 7 * * *",
+            "timezone_id": " invalid ",
+            "local_time": wall_time(7, 15),
+            "type": "Task",
+            "targetId": failed_task_id,
+            "enabled": True,
+            "action": "execute",
+        }
+        with pytest.raises(IntegrityError):
+            await repository.create_chat_scheduled_task(
+                tenant_id=str(tenant_id),
+                created_by=str(owner_id),
+                task_record=invalid_task,
+                cron_record=invalid_cron,
+                next_run_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.automation_tasks WHERE task_id=$1",
+            failed_task_id,
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.automation_cron_jobs WHERE cron_id=$1",
+            failed_cron_id,
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.automation_tasks"
+        ) == 2
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.automation_cron_jobs"
+        ) == 2
+    finally:
+        if cron_table_created:
+            await connection.execute("DROP TABLE IF EXISTS public.automation_cron_jobs")
+        if task_table_created:
+            await connection.execute("DROP TABLE IF EXISTS public.automation_tasks")
+        await connection.close()
