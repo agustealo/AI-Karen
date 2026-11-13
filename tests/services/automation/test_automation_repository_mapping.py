@@ -575,7 +575,6 @@ async def test_chat_task_definition_reuses_agent_validation_and_stable_identity(
         minute_local=0,
         timezone_id="America/Detroit",
         conversation_id="owned-chat",
-        request_id="same-message",
     )
     await service.create_chat_recurring_task(**kwargs)
     await service.create_chat_recurring_task(**kwargs)
@@ -587,11 +586,23 @@ async def test_chat_task_definition_reuses_agent_validation_and_stable_identity(
     assert repo.calls[0]["cron_record"]["timezone_id"] == "America/Detroit"
     assert repo.calls[0]["cron_record"]["local_time"] == clock_time(7, 0)
     assert repo.calls[0]["task_record"]["primaryAgentInstructions"] == kwargs["purpose"]
+
+    # The two calls model separate HTTP/SSE response IDs for the same
+    # commitment: idempotence must be semantic, not transport-request-based.
+    for variation in (
+        {"purpose": "Pull a different news digest"},
+        {"hour_local": 8},
+        {"timezone_id": "UTC"},
+        {"conversation_id": "another-owned-conversation"},
+    ):
+        await service.create_chat_recurring_task(**{**kwargs, **variation})
+        assert repo.calls[-1]["task_record"]["id"] != repo.calls[0]["task_record"]["id"]
+        assert repo.calls[-1]["cron_record"]["id"] != repo.calls[0]["cron_record"]["id"]
     with pytest.raises(AutomationNotFoundError, match="Primary agent"):
         await service.create_chat_recurring_task(
             **{**kwargs, "primary_agent": "invented-agent"},
         )
-    assert len(repo.calls) == 2
+    assert len(repo.calls) == 6
 
 
 @pytest.mark.parametrize(
