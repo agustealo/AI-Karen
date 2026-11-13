@@ -607,3 +607,150 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         await connection.execute("DROP TABLE IF EXISTS public.outcome_records")
         await connection.execute("DROP TABLE IF EXISTS public.automation_tasks")
         await connection.close()
+
+
+async def test_live_postgres_cron_lease_expiry_reclaims_and_fences_old_worker():
+    """A migrated due occurrence is reclaimable, but its stale token cannot commit."""
+    import asyncpg
+
+    database_url = os.environ["DATABASE_URL"]
+    connection = await asyncpg.connect(database_url)
+    repo = SqlAutomationRepository()
+    root = Path(__file__).resolve().parents[2]
+    cron_id = f"kcon490-cron-{uuid.uuid4().hex[:16]}"
+    tenant_id, creator_id = uuid.uuid4(), uuid.uuid4()
+    created = False
+
+    try:
+        exists = await connection.fetchval(
+            "SELECT to_regclass('public.automation_cron_jobs') IS NOT NULL"
+        )
+        if exists:
+            pytest.skip("Refusing to alter or drop an existing cron schema")
+
+        # Mirror only the canonical migration-16 cron base table in isolated CI.
+        # The actual migration-49 SQL upgrades this fixture before exercising
+        # the production SQL repository, not a Python simulation of its claims.
+        await connection.execute(
+            """
+            CREATE TABLE public.automation_cron_jobs (
+                cron_id text PRIMARY KEY,
+                tenant_id uuid NOT NULL,
+                created_by uuid NOT NULL,
+                task_name text NOT NULL,
+                schedule text NOT NULL,
+                job_type varchar(16) NOT NULL,
+                target_id text NOT NULL,
+                enabled boolean NOT NULL DEFAULT true,
+                action varchar(16) NOT NULL DEFAULT 'execute',
+                next_run_at timestamptz NOT NULL,
+                last_run_at timestamptz,
+                last_error text,
+                claim_token uuid,
+                claimed_by text,
+                claimed_at timestamptz,
+                claim_expires_at timestamptz,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+        created = True
+        migration = (
+            root / "supabase/migrations/"
+            "20261113010000_49_automation_cron_timezone_identity.sql"
+        ).read_text(encoding="utf-8")
+        await connection.execute(migration)
+        await connection.execute(
+            """
+            ALTER TABLE public.automation_cron_jobs ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.automation_cron_jobs FORCE ROW LEVEL SECURITY;
+            CREATE POLICY automation_cron_tenant_scope
+              ON public.automation_cron_jobs FOR ALL
+              USING (
+                tenant_id = NULLIF(
+                    current_setting('app.current_tenant_id', true), ''
+                )::uuid
+                OR current_setting('app.scheduler_worker', true) = '1'
+              )
+              WITH CHECK (
+                tenant_id = NULLIF(
+                    current_setting('app.current_tenant_id', true), ''
+                )::uuid
+                OR current_setting('app.scheduler_worker', true) = '1'
+              )
+            """
+        )
+        await connection.execute(
+            """
+            INSERT INTO public.automation_cron_jobs (
+                cron_id, tenant_id, created_by, task_name, schedule, job_type,
+                target_id, enabled, action, next_run_at, timezone_id, local_time
+            ) VALUES (
+                $1, $2, $3, 'lease recovery', '0 7 * * *', 'Task',
+                'owned-task', true, 'execute',
+                now() - interval '5 minutes', 'America/Detroit', '07:00:00'
+            )
+            """,
+            cron_id, tenant_id, creator_id,
+        )
+
+        first = await repo.claim_due_cron_jobs("worker-a", limit=1)
+        assert len(first) == 1
+        assert first[0]["id"] == cron_id
+        assert first[0]["timezone_id"] == "America/Detroit"
+        old_token = first[0]["claim_token"]
+        assert old_token
+
+        # The same due instant cannot be concurrently claimed while leased.
+        assert await repo.claim_due_cron_jobs("worker-b", limit=1) == []
+
+        # Simulate scheduler interruption and lease expiry. The occurrence
+        # remains due, because cancellation never advances next_run_at.
+        await connection.execute(
+            """
+            UPDATE public.automation_cron_jobs
+            SET claim_expires_at = now() - interval '1 second'
+            WHERE cron_id = $1
+            """,
+            cron_id,
+        )
+        second = await repo.claim_due_cron_jobs("worker-b", limit=1)
+        assert len(second) == 1
+        new_token = second[0]["claim_token"]
+        assert new_token and new_token != old_token
+        assert second[0]["created_by"] == str(creator_id)
+        assert second[0]["tenant_id"] == str(tenant_id)
+
+        assert await repo.renew_cron_claim(cron_id, old_token) is False
+        next_due = datetime.now(timezone.utc) + timedelta(days=1)
+        assert await repo.complete_cron_claim(
+            cron_id, old_token, next_run_at=next_due,
+        ) is False
+        assert await repo.renew_cron_claim(cron_id, new_token) is True
+        assert await repo.complete_cron_claim(
+            cron_id, new_token, next_run_at=next_due, last_error=None,
+        ) is True
+
+        row = await connection.fetchrow(
+            """
+            SELECT next_run_at, claim_token, claimed_by, claim_expires_at,
+                   timezone_id, local_time, last_error
+            FROM public.automation_cron_jobs WHERE cron_id=$1
+            """,
+            cron_id,
+        )
+        assert row["next_run_at"] == next_due
+        assert row["claim_token"] is None
+        assert row["claimed_by"] is None
+        assert row["claim_expires_at"] is None
+        assert row["timezone_id"] == "America/Detroit"
+        assert row["local_time"].strftime("%H:%M:%S") == "07:00:00"
+        assert row["last_error"] is None
+        assert await repo.claim_due_cron_jobs("worker-c", limit=1) == []
+    finally:
+        if created:
+            await connection.execute(
+                "DROP TABLE IF EXISTS public.automation_cron_jobs"
+            )
+        await connection.close()
