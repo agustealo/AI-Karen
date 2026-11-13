@@ -69,9 +69,9 @@ class CronJobResponse(CronJobRequest):
     created_at: datetime
 
 
-async def get_cron_summary(tenant_id: str) -> Dict[str, Any]:
-    """Tenant-scoped cron statistics for the automation dashboard."""
-    return await get_automation_definition_service().cron_summary(tenant_id=tenant_id)
+async def get_cron_summary(*, user: UserData) -> Dict[str, Any]:
+    """Delegate authenticated, owner-scoped schedule statistics."""
+    return await get_automation_definition_service().cron_summary(user=user)
 
 
 @router.post("", response_model=CronJobResponse)
