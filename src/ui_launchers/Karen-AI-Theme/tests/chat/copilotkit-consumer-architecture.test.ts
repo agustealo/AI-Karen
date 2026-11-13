@@ -81,6 +81,23 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).not.toContain("authenticatedRequest.get");
   });
 
+  it("captures only redacted first-send failure provenance in the existing real browser suite", () => {
+    expect(liveBrowser).toContain('"kcon490-first-send-failure-receipt"');
+    expect(liveBrowser).toContain('schema: "karen.first_send_failure.v1"');
+    expect(liveBrowser).toContain('run_http_responses: observedRunResponses.slice(-8)');
+    expect(liveBrowser).toContain('run_transport_failures: observedRunTransportFailures.slice(-8)');
+    expect(liveBrowser).toContain('draft_cas: draftCas.slice(-8)');
+    expect(liveBrowser).toContain('composer_alert_visible: alertVisible');
+    expect(liveBrowser).toContain('persisted_assistant_confirmed: false');
+    expect(liveBrowser).toContain('correlation_id: /^[A-Za-z0-9_-]{1,128}$/.test(header) ? header : null');
+    expect(liveBrowser).toContain('throw error;');
+    // No raw request/response bodies, user text, credentials or full URLs in
+    // acceptance attachments. They are disabled for public CI.
+    expect(liveBrowser).not.toContain('postDataJSON()\n      });');
+    expect(liveBrowser).not.toContain('testInfo.attach("chat-transcript"');
+    expect(liveBrowser).not.toContain('testInfo.attach("authorization"');
+  });
+
   it("requires a live non-cacheable backend before approved browser sign-in", () => {
     // Each independent real-browser scenario must verify backend readiness
     // before credentials are used. Do not hardcode the number of scenarios:
