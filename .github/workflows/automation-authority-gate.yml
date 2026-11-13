@@ -12,6 +12,10 @@ on:
       - "src/ai_karen_engine/persistence/repositories/**"
       - "src/ai_karen_engine/agent_medusa/**"
       - "scripts/migrate_legacy_automation_jobs.py"
+      - "src/ai_karen_engine/core/runtime/direct_capability_executor.py"
+      - "src/ai_karen_engine/core/cortex/routing_intents.py"
+      - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
+      - "tests/core/runtime/test_planner_direct_capability_route.py"
       - "tests/services/automation/**"
       - "tests/architecture/test_automation_authority.py"
       - "tests/agent_medusa/test_governed_tool_receipts.py"
@@ -30,6 +34,10 @@ on:
       - "src/ai_karen_engine/persistence/repositories/**"
       - "src/ai_karen_engine/agent_medusa/**"
       - "scripts/migrate_legacy_automation_jobs.py"
+      - "src/ai_karen_engine/core/runtime/direct_capability_executor.py"
+      - "src/ai_karen_engine/core/cortex/routing_intents.py"
+      - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
+      - "tests/core/runtime/test_planner_direct_capability_route.py"
       - "tests/services/automation/**"
       - "tests/architecture/test_automation_authority.py"
       - "tests/agent_medusa/test_governed_tool_receipts.py"
@@ -92,8 +100,8 @@ jobs:
       - name: Prove cron lease heartbeat
         run: pytest tests/services/automation/test_cron_lease.py -q
 
-      - name: Prove disabled schedule presentation
-        run: pytest tests/services/automation/test_automation_repository_mapping.py -q
+      - name: Prove scheduled task atomicity, chat admission and receipt truth
+        run: pytest tests/services/automation/test_automation_repository_mapping.py tests/core/runtime/test_planner_direct_capability_route.py -q
 
       - name: Prove legacy job cutover migration
         run: pytest tests/services/automation/test_legacy_job_migration.py -q
