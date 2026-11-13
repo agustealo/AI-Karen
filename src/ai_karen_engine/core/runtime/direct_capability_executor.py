@@ -181,11 +181,11 @@ class DirectCapabilityExecutor:
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
     ) -> DirectCapabilityResult:
-        """Execute an explicit, fully specified daily UTC task through SQL.
+        """Create an authorized daily IANA-local schedule, not a UTC-offset guess.
 
-        The user must choose a registered agent and UTC time in the command.
-        Local civil-time schedules, background delivery, and implied agents are
-        deliberately not fabricated by the chat assistant.
+        The user supplies a wall-clock time and an explicit IANA timezone.
+        Neither the stored preference nor the selected agent implies location.
+        Only an owner-scoped committed database receipt confirms scheduling.
         """
         unavailable = self._automation_unavailable
         if "automation.create" not in set(plan.allowed_capabilities):
@@ -240,11 +240,13 @@ class DirectCapabilityExecutor:
         if agent_match:
             detail = detail[:agent_match.start()].strip()
         time_match = re.search(
-            r"\s+at\s+(\d{1,2}):(\d{2})\s+(?:UTC|GMT)$",
+            r"\s+at\s+(\d{1,2}):(\d{2})\s+(?:in\s+)?"
+            r"(UTC|[A-Za-z_][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)+)$",
             detail, flags=re.IGNORECASE,
         )
         hour = int(time_match.group(1)) if time_match else None
         minute = int(time_match.group(2)) if time_match else None
+        timezone_id = time_match.group(3) if time_match else ""
         if time_match:
             detail = detail[:time_match.start()].strip()
         daily_match = re.search(r"\s+(?:every\s*day|daily)$", detail, re.IGNORECASE)
@@ -258,17 +260,19 @@ class DirectCapabilityExecutor:
         if not purpose or not daily_explicit:
             missing.append("daily_task_purpose")
         if hour is None or minute is None or not 0 <= hour <= 23 or not 0 <= minute <= 59:
-            missing.append("utc_time")
+            missing.append("local_time")
+        if not timezone_id:
+            missing.append("timezone_id")
         if not agent:
             missing.append("registered_agent")
         if missing:
             return unavailable(
                 "automation_requirements_missing",
-                "To create this recurring task, specify the task purpose, "
-                "a daily UTC time (for example 07:00 UTC), and a registered "
-                "agent ID using 'using agent <id>'. UTC schedules do not "
-                "automatically adjust for local daylight saving time. "
-                "No task was scheduled.",
+                "To schedule this task, specify its purpose, a daily wall-clock "
+                "time with an IANA timezone (for example '07:00 in "
+                "America/Detroit'), and a registered agent ID using "
+                "'using agent <id>'. The timezone is a scheduling preference, "
+                "not evidence of physical location. No task was scheduled.",
                 status="needs_input",
                 missing_fields=missing,
             )
@@ -286,8 +290,9 @@ class DirectCapabilityExecutor:
                 user=principal,
                 purpose=purpose,
                 primary_agent=agent,
-                hour_utc=hour,
-                minute_utc=minute,
+                hour_local=hour,
+                minute_local=minute,
+                timezone_id=timezone_id,
                 conversation_id=conversation_id,
                 request_id=request_id,
             )
@@ -300,6 +305,10 @@ class DirectCapabilityExecutor:
                 or cron["created_by"] != str(principal.user_id)
                 or cron["tenant_id"] != str(principal.tenant_id)
                 or cron["schedule"] != f"{minute} {hour} * * *"
+                or cron["timezone_id"] != timezone_id
+                or cron["local_time"] != f"{hour:02d}:{minute:02d}:00"
+                or not cron.get("timestamp_utc")
+                or not cron.get("local_datetime")
             ):
                 raise ValueError("Scheduled task receipt ownership mismatch")
         except (AutomationDefinitionError, AutomationNotFoundError, ValueError):
@@ -335,9 +344,12 @@ class DirectCapabilityExecutor:
             },
         )
         message = (
-            f"Daily task definition saved in UTC. Task ID: {task['id']}. "
-            f"Schedule ID: {cron['id']}. Next scheduled run: {cron['nextRun']}. "
-            f"Agent: {task['primaryAgent']}. "
+            f"Daily task schedule saved for {hour:02d}:{minute:02d} "
+            f"in {timezone_id}. Task ID: {task['id']}. "
+            f"Schedule ID: {cron['id']}. Next UTC instant: "
+            f"{cron['timestamp_utc']}. Local representation: "
+            f"{cron['local_datetime']}. Agent: {task['primaryAgent']}. "
+            "The timezone is a preference, not a physical location. "
             "This confirms the schedule was stored, not that the task has "
             "run or delivered results."
         )
@@ -357,7 +369,10 @@ class DirectCapabilityExecutor:
                     "cron_id": cron["id"],
                     "schedule": cron["schedule"],
                     "next_run": cron["nextRun"],
-                    "timezone": "UTC",
+                    "timestamp_utc": cron["timestamp_utc"],
+                    "timezone_id": cron["timezone_id"],
+                    "local_time": cron["local_time"],
+                    "local_datetime": cron["local_datetime"],
                     "agent": task["primaryAgent"],
                     "replayed": bool(receipt["replayed"]),
                 },
