@@ -167,12 +167,19 @@ class RuntimeEvidenceResolver:
         )
 
         from ai_karen_engine.core.intelligence.profile_attribute import (
+            is_profile_summary_expansion_followup,
             is_profile_summary_followup,
             is_profile_summary_request,
         )
-        if is_profile_summary_request(query) or is_profile_summary_followup(
-            query, request.messages
-        ):
+        if is_profile_summary_request(query):
+            return "who am i"
+        if is_profile_summary_expansion_followup(query, request.messages):
+            # A request for additional facts must not re-run the canonical
+            # identity-key lookup ("who am i") that produced the previous
+            # name/birthplace/residence answer. Keep user/tenant policy scope
+            # intact and search for broader authorized personal knowledge.
+            return "what else do you know about me"
+        if is_profile_summary_followup(query, request.messages):
             return "who am i"
 
         # Query by the requested fact, not by a sanitized user utterance.

@@ -1810,6 +1810,17 @@ class ChatRuntime:
         ).strip()
         if decision.intent != "memory.recall":
             return None
+        if (
+            not attribute
+            and decision.policy_constraints.get(
+                "personal_evidence_identity_summary_requested"
+            ) is not True
+        ):
+            # The intent model can label "Anything else?" or a volunteered
+            # preference as memory.recall. An ML label alone cannot turn that
+            # turn into another hardcoded identity summary. Route it through
+            # the normal authorized conversation/model path instead.
+            return None
         issue = decision.policy_constraints.get("personal_evidence_query_issue")
         if issue in {"historical", "unresolved_scope"}:
             explanation = (

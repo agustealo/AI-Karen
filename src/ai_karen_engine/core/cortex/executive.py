@@ -120,6 +120,7 @@ class CortexExecutionDecider:
         )
         from ai_karen_engine.core.intelligence.profile_attribute import (
             referenced_profile_attribute,
+            is_profile_summary_request,
             is_profile_summary_followup,
             requested_profile_query,
         )
@@ -231,6 +232,15 @@ class CortexExecutionDecider:
         policy_constraints.pop("personal_evidence_attribute", None)
         policy_constraints.pop("personal_evidence_query_scope", None)
         policy_constraints.pop("personal_evidence_query_issue", None)
+        # A generic ML memory.recall label is NOT an explicit request to
+        # repeat a personal biography. Strip any client-supplied claim, then
+        # let the canonical intelligence grammar attest only a current-turn
+        # broad profile question. Follow-ups without a named predicate remain
+        # eligible for authorized memory and ordinary model synthesis.
+        policy_constraints.pop("personal_evidence_identity_summary_requested", None)
+        if is_profile_summary_request(user_content):
+            policy_constraints["personal_evidence_identity_summary_requested"] = True
+            reason_codes.append("explicit_identity_summary_requested")
         # The intelligence-owned resolver is deterministic and remains available
         # when ML analysis degrades or does not populate the semantic envelope.
         from ai_karen_engine.core.intelligence.profile_attribute import (

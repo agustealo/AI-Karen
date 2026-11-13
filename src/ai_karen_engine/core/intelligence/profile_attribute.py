@@ -51,7 +51,8 @@ _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _PROFILE_SUMMARY = re.compile(
     r"\b(?:who\s+am\s+i|(?:tell|describe|remind)\s+me\s+(?:more\s+)?about\s+(?:me|myself)|"
-    r"what\s+(?:(?:do\s+you\s+(?:know|remember|think))|(?:can\s+you\s+share))\s+about\s+me)\b"
+    r"what\s+(?:(?:do\s+you\s+(?:know|remember|think))|(?:can\s+you\s+share))\s+about\s+me|"
+    r"what\s+can\s+you\s+tell\s+me\s+about\s+(?:me|myself))\b"
 )
 
 
@@ -61,20 +62,29 @@ def is_profile_summary_request(text: str) -> bool:
 
 
 
+_PROFILE_SUMMARY_AFFIRMATIVE_FOLLOWUPS = frozenset({
+    "share please", "please share", "yes please", "yes, please",
+    "go ahead", "please do",
+})
+_PROFILE_SUMMARY_EXPANSION_FOLLOWUPS = frozenset({
+    "tell me more", "anything else", "what else", "any more", "anything more",
+})
+
+
 def is_profile_summary_followup(
     text: str, messages: list[dict[str, object]]
 ) -> bool:
-    """Resolve a brief affirmative reply only to a preceding user identity query.
+    """Recognize context-bound affirmative or expansion of user profile facts.
 
     A model's self-description, assistant offer, or unrelated previous question
     is not evidence about the user. The actual answer must still pass the
     canonical runtime's authorized fact sufficiency checks.
     """
     utterance = normalize_personal_query(text).strip(" ?.!").strip()
-    if utterance not in {
-        "share please", "please share", "yes please", "yes, please",
-        "go ahead", "tell me more", "please do",
-    }:
+    if utterance not in (
+        _PROFILE_SUMMARY_AFFIRMATIVE_FOLLOWUPS
+        | _PROFILE_SUMMARY_EXPANSION_FOLLOWUPS
+    ):
         return False
     # The most recent preceding user request must be about their own profile.
     # An intervening unrelated user turn breaks discourse continuity.
@@ -86,6 +96,17 @@ def is_profile_summary_followup(
             prior = str(item.get("content") or "")
             return is_profile_summary_request(prior)
     return False
+
+
+def is_profile_summary_expansion_followup(
+    text: str, messages: list[dict[str, object]]
+) -> bool:
+    """Distinguish new-profile-detail requests from affirmative recap offers."""
+    utterance = normalize_personal_query(text).strip(" ?.!").strip()
+    return (
+        utterance in _PROFILE_SUMMARY_EXPANSION_FOLLOWUPS
+        and is_profile_summary_followup(text, messages)
+    )
 
 
 def requested_profile_attribute(text: str) -> str | None:
@@ -204,4 +225,6 @@ def requested_profile_query(text: str) -> ProfileQueryIntent:
     return ProfileQueryIntent(requested_profile_attribute(query))
 
 
-__all__ = ["normalize_personal_query", "requested_profile_attribute", "referenced_profile_attribute", "is_profile_summary_request", "ProfileQueryIntent", "requested_profile_query"]
+__all__ = ["normalize_personal_query", "requested_profile_attribute", "referenced_profile_attribute", "is_profile_summary_request", "is_profile_summary_followup",
+    "is_profile_summary_expansion_followup", "ProfileQueryIntent",
+    "requested_profile_query"]

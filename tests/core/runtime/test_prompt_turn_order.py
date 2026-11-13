@@ -40,3 +40,32 @@ async def test_existing_conversation_sequence_is_preserved() -> None:
     )
 
     assert result.messages[-len(messages):] == messages
+
+
+@pytest.mark.asyncio
+async def test_personal_followup_prompt_prioritizes_new_turn_not_replayed_biography() -> None:
+    messages = [
+        {"role": "user", "content": "What can you tell me about myself?"},
+        {"role": "assistant", "content": "You grew up in NYC."},
+        {"role": "user", "content": "Anything else?"},
+        {"role": "assistant", "content": "Your favorite color is black."},
+        {"role": "user", "content": "I am a vegetarian, and dancehall is my favorite genre."},
+    ]
+    result = await PromptAssembler(registry=None).assemble_prompt(
+        PromptAssemblyRequest(
+            messages=messages,
+            memory_items=[{
+                "id": "owned-profile-name",
+                "content": "name: Zeus",
+            }],
+        )
+    )
+    assert result.messages[-len(messages):] == messages
+    instructions = [
+        str(message.get("content") or "") for message in result.messages
+        if message.get("source") == "evidence_first_conversation_contract"
+    ]
+    assert len(instructions) == 1
+    assert "do not repeat the same biography" in instructions[0]
+    assert "acknowledge the new fact directly" in instructions[0]
+    assert "Prior assistant answers are discourse context" in instructions[0]
