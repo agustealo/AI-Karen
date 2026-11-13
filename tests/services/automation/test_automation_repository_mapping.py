@@ -889,3 +889,273 @@ async def test_mounted_automation_dashboard_never_aggregates_another_user(
     ] + [
         (kind, FOREIGN_TENANT, OWNER) for kind in ("tasks", "cron", "jobs")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("now_iso", "start_iso", "end_iso", "expected_date"),
+    [
+        (
+            "2026-03-08T12:00:00+00:00",
+            "2026-03-08T05:00:00+00:00",
+            "2026-03-09T04:00:00+00:00",
+            "2026-03-08",
+        ),
+        (
+            "2026-11-01T12:00:00+00:00",
+            "2026-11-01T04:00:00+00:00",
+            "2026-11-02T05:00:00+00:00",
+            "2026-11-01",
+        ),
+        (
+            "2026-11-13T00:30:00+00:00",
+            "2026-11-12T05:00:00+00:00",
+            "2026-11-13T05:00:00+00:00",
+            "2026-11-12",
+        ),
+        (
+            "2026-11-13T12:40:00+00:00",
+            "2026-11-13T05:00:00+00:00",
+            "2026-11-14T05:00:00+00:00",
+            "2026-11-13",
+        ),
+    ],
+)
+async def test_task_summary_uses_user_iana_day_not_utc_midnight(
+    now_iso, start_iso, end_iso, expected_date,
+):
+    class CapturedRepository:
+        async def task_summary(
+            self, tenant_id, *, created_by, day_start_utc, day_end_utc,
+        ):
+            assert tenant_id == TENANT and created_by == OWNER
+            assert day_start_utc.isoformat() == start_iso
+            assert day_end_utc.isoformat() == end_iso
+            return {
+                "total_definitions": 2, "tasks_run_today": 1,
+                "active_tasks": 1, "failed_tasks": 0,
+            }
+
+    owner = UserData(
+        user_id=OWNER, tenant_id=TENANT,
+        preferences={"timezone_id": "America/Detroit"},
+    )
+    actual = await AutomationDefinitionService(
+        repository=CapturedRepository(),
+    ).task_summary(user=owner, now=datetime.fromisoformat(now_iso))
+    assert actual["local_date"] == expected_date
+    assert actual["timezone_id"] == "America/Detroit"
+    assert actual["timezone_source"] == "user_preference"
+    assert actual["activity_metric"] == "durable_execution_starts"
+    assert actual["history_coverage"] == "from_task_start_receipt_instrumentation"
+    assert actual["tasks_run_today"] == 1
+    assert "location" not in actual
+
+
+@pytest.mark.asyncio
+async def test_task_summary_without_preference_uses_explicit_utc_not_geolocation():
+    class CapturedRepository:
+        async def task_summary(
+            self, tenant_id, *, created_by, day_start_utc, day_end_utc,
+        ):
+            assert tenant_id == TENANT and created_by == OWNER
+            assert day_start_utc.isoformat() == "2026-11-13T00:00:00+00:00"
+            assert day_end_utc.isoformat() == "2026-11-14T00:00:00+00:00"
+            return {
+                "total_definitions": 1, "tasks_run_today": 0,
+                "active_tasks": 0, "failed_tasks": 0,
+            }
+
+    owner = UserData(user_id=OWNER, tenant_id=TENANT)
+    actual = await AutomationDefinitionService(
+        repository=CapturedRepository(),
+    ).task_summary(
+        user=owner,
+        now=datetime.fromisoformat("2026-11-13T12:40:00+00:00"),
+    )
+    assert actual["timezone_id"] == "UTC"
+    assert actual["timezone_source"] == "default_utc"
+    assert actual["local_date"] == "2026-11-13"
+    assert actual["tasks_run_today"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_timezone", ["Mars/Unknown", "EST-5", "../invalid"])
+async def test_invalid_saved_timezone_fails_before_dashboard_query(bad_timezone):
+    class ForbiddenRepository:
+        async def task_summary(self, *args, **kwargs):
+            raise AssertionError("Invalid timezone must never be hidden by UTC fallback")
+
+    owner = UserData(
+        user_id=OWNER, tenant_id=TENANT,
+        preferences={"timezone_id": bad_timezone},
+    )
+    with pytest.raises(AutomationDefinitionError, match="timezone"):
+        await AutomationDefinitionService(
+            repository=ForbiddenRepository(),
+        ).task_summary(user=owner)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (datetime(2026, 11, 13), datetime(2026, 11, 14, tzinfo=timezone.utc)),
+        (datetime(2026, 11, 14, tzinfo=timezone.utc), datetime(2026, 11, 13, tzinfo=timezone.utc)),
+        (datetime(2026, 11, 13, tzinfo=timezone.utc), datetime(2026, 11, 13, tzinfo=timezone.utc)),
+    ],
+)
+async def test_task_summary_rejects_untrusted_day_bounds_before_sql(
+    monkeypatch, start, end,
+):
+    @asynccontextmanager
+    async def forbidden_transaction(*args, **kwargs):
+        raise AssertionError("Invalid UTC window cannot touch storage")
+        yield
+
+    monkeypatch.setattr(
+        automation_repository, "async_transaction_scope", forbidden_transaction,
+    )
+    with pytest.raises(ValueError, match="UTC day bounds"):
+        await SqlAutomationRepository().task_summary(
+            TENANT, created_by=OWNER,
+            day_start_utc=start, day_end_utc=end,
+        )
+
+
+class _FencedClaimResult:
+    def __init__(self, value):
+        self.value = value
+
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return self.value
+
+
+class _FencedTaskClaimSession:
+    def __init__(self, record):
+        self.record = record
+        self.executed = []
+
+    async def execute(self, statement, params):
+        self.executed.append((str(statement), dict(params)))
+        return _FencedClaimResult(self.record)
+
+
+@pytest.mark.asyncio
+async def test_fenced_task_claim_atomically_records_one_real_start(
+    monkeypatch,
+):
+    claimed_at = datetime(2026, 11, 13, 12, 40, tzinfo=timezone.utc)
+    row = {
+        "task_id": "task-owned",
+        "name": "Owned task",
+        "description": "Collect latest news",
+        "primary_agent": "research",
+        "primary_agent_instructions": "Collect latest news",
+        "task_type": "news",
+        "sub_agents": [],
+        "status": "Running",
+        "last_run_at": claimed_at,
+        "created_at": claimed_at,
+        "updated_at": claimed_at,
+        "tenant_id": TENANT,
+        "created_by": OWNER,
+    }
+    session = _FencedTaskClaimSession(row)
+    events = []
+    scopes = []
+
+    @asynccontextmanager
+    async def transaction(tenant_id, *, user_id=None):
+        scopes.append((tenant_id, user_id))
+        yield session
+
+    async def append_event(tx, payload):
+        assert tx is session
+        events.append(payload)
+
+    monkeypatch.setattr(
+        automation_repository, "async_transaction_scope", transaction,
+    )
+    monkeypatch.setattr(
+        automation_repository.PostgresOutcomeStore,
+        "append_in_transaction", staticmethod(append_event),
+    )
+    token = str(uuid4())
+    repo = SqlAutomationRepository()
+    result = await repo.mark_task_running(
+        "task-owned", TENANT, claim_token=token,
+        lease_seconds=60, created_by=OWNER,
+    )
+    assert result["status"] == "Running"
+    assert result["runCount"] == 0
+    assert scopes == [(TENANT, OWNER)]
+    assert len(events) == 1
+    event = events[0]
+    assert event["outcome_id"] == f"out_task_started_{token.replace('-', '')}"
+    assert event["execution_id"] == token
+    assert event["recorded_at"] == claimed_at
+    assert event["metadata"]["event_type"] == "automation.task.execution_started"
+    assert event["metadata"]["receipt_version"] == "automation-task-attempt.v1"
+    assert event["source"] == "runtime.execution"
+    assert event["tenant_id"] == TENANT and event["user_id"] == OWNER
+    sql, params = session.executed[0]
+    assert "SET status = 'Running'" in sql
+    assert "created_by = CAST(:created_by AS uuid)" in sql
+    assert params["created_by"] == OWNER
+    assert params["claim_token"] == token
+
+    session.record = None
+    result = await repo.mark_task_running(
+        "task-owned", TENANT, claim_token=str(uuid4()),
+        lease_seconds=60, created_by=OWNER,
+    )
+    assert result is None
+    assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_task_claim_rolls_back_when_execution_start_evidence_fails(
+    monkeypatch,
+):
+    claimed_at = datetime(2026, 11, 13, 12, 40, tzinfo=timezone.utc)
+    row = {
+        "task_id": "task-owned",
+        "last_run_at": claimed_at,
+    }
+    committed = []
+    rollbacks = []
+    session = _FencedTaskClaimSession(row)
+
+    @asynccontextmanager
+    async def transaction(tenant_id, *, user_id=None):
+        assert (tenant_id, user_id) == (TENANT, OWNER)
+        try:
+            yield session
+        except RuntimeError:
+            rollbacks.append(True)
+            raise
+        else:
+            committed.append(True)
+
+    async def failed_append(*args, **kwargs):
+        raise RuntimeError("outcome evidence unavailable")
+
+    monkeypatch.setattr(
+        automation_repository, "async_transaction_scope", transaction,
+    )
+    monkeypatch.setattr(
+        automation_repository.PostgresOutcomeStore,
+        "append_in_transaction", staticmethod(failed_append),
+    )
+    with pytest.raises(RuntimeError, match="outcome evidence unavailable"):
+        await SqlAutomationRepository().mark_task_running(
+            "task-owned", TENANT,
+            claim_token=str(uuid4()), lease_seconds=60,
+            created_by=OWNER,
+        )
+    assert not committed and rollbacks == [True]
+    assert len(session.executed) == 1
