@@ -501,6 +501,19 @@ class SqlChatRunRepository:
             run = result.mappings().one_or_none()
             if run is None:
                 return None
+            # Match the canonical run-status reader: a terminal label alone
+            # is never proof of a committed terminal transition. Do not return
+            # terminalConfirmed=True for an incomplete or unrecognized row.
+            run_status = str(run["status"])
+            if run_status not in {
+                "running", "cancelling", "completed",
+                "failed", "cancelled", "orphaned",
+            }:
+                raise RuntimeError("unrecognized_chat_run_status")
+            if run_status in {
+                "completed", "failed", "cancelled", "orphaned",
+            } and run["terminal_at"] is None:
+                raise RuntimeError("unverified_chat_run_terminal")
             events = await session.execute(
                 text("""
                     SELECT event_seq, event_payload
