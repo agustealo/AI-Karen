@@ -83,6 +83,7 @@ class Transaction:
                 one=lambda: {
                     "last_seq": self.cursor,
                     "bytes": 0,
+                    "recorded_count": len(self.stored),
                     "terminal_count": len(terminals),
                     "terminal_type": (
                         min(item["event_payload"]["type"] for item in terminals)
@@ -305,12 +306,18 @@ async def test_duplicate_journal_terminal_fails_under_serialized_run_lock(monkey
     with pytest.raises(ValueError, match="chat_projection_terminal_already_recorded"):
         await repo.append_projected_event(owned, event=event)
     assert len(tx.stored) == 1
-    assert all("FOR UPDATE" in sql for sql in tx.queries if "FOR UPDATE" in sql)
+    assert sum("FOR UPDATE" in sql for sql in tx.queries) == 2
 
 
 @pytest.mark.asyncio
 async def test_paged_event_read_marks_expired_lease_interrupted_without_success(monkeypatch):
     tx = Transaction(status="running", stored=[
+        *[
+            {"event_seq": seq, "event_payload": {
+                "type": "TEXT_MESSAGE_CONTENT",
+                "messageId": "a", "delta": f"prior {seq}",
+            }} for seq in range(1, 8)
+        ],
         {"event_seq": 8, "event_payload": {"type": "TEXT_MESSAGE_CONTENT",
                                          "messageId": "a", "delta": "observed"}},
         {"event_seq": 9, "event_payload": {"type": "TEXT_MESSAGE_END",
@@ -423,7 +430,8 @@ async def test_replay_rejects_cursor_ahead_of_committed_journal(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_replay_rejects_missing_committed_sequence_in_page(monkeypatch):
+@pytest.mark.parametrize("after", [0, 3])
+async def test_replay_rejects_missing_committed_sequence_in_page(monkeypatch, after):
     tx = Transaction(stored=[
         {"event_seq": 1, "event_payload": {
             "type": "RUN_STARTED", "threadId": THREAD, "runId": RUN_ID,
@@ -436,7 +444,7 @@ async def test_replay_rejects_missing_committed_sequence_in_page(monkeypatch):
     with pytest.raises(RuntimeError, match="chat_projection_journal_sequence_gap"):
         await repository.SqlChatRunRepository().read_projected_events(
             tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
-            transport_run_id=RUN_ID,
+            transport_run_id=RUN_ID, after=after,
         )
 
 
