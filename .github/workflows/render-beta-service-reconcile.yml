@@ -18,6 +18,23 @@ on:
           - inspect-env
           - inspect-consumer
 
+      service_id:
+        description: Existing Render web service ID; fallback only when RENDER_BETA_SERVICE_ID is unset
+        type: string
+        required: false
+      workspace_id:
+        description: Existing Render workspace ID; fallback only when RENDER_BETA_WORKSPACE_ID is unset
+        type: string
+        required: false
+      postgres_id:
+        description: Existing Render PostgreSQL ID for environment inspections only
+        type: string
+        required: false
+      key_value_id:
+        description: Existing Render Key Value ID for environment inspections only
+        type: string
+        required: false
+
 permissions:
   contents: read
 
@@ -34,10 +51,20 @@ jobs:
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
       MODE: ${{ inputs.mode }}
-      RENDER_BETA_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID }}
-      RENDER_BETA_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID }}
-      RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID }}
-      RENDER_BETA_KEY_VALUE_ID: ${{ vars.RENDER_BETA_KEY_VALUE_ID }}
+      # Reviewed repository/environment selectors are authoritative. Explicit
+      # dispatch inputs are a recovery-only fallback when those vars are absent.
+      RENDER_BETA_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID || inputs.service_id }}
+      RENDER_BETA_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID || inputs.workspace_id }}
+      RENDER_BETA_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID || inputs.postgres_id }}
+      RENDER_BETA_KEY_VALUE_ID: ${{ vars.RENDER_BETA_KEY_VALUE_ID || inputs.key_value_id }}
+      RENDER_CONFIG_SERVICE_ID: ${{ vars.RENDER_BETA_SERVICE_ID }}
+      RENDER_CONFIG_WORKSPACE_ID: ${{ vars.RENDER_BETA_WORKSPACE_ID }}
+      RENDER_CONFIG_POSTGRES_ID: ${{ vars.RENDER_BETA_POSTGRES_ID }}
+      RENDER_CONFIG_KEY_VALUE_ID: ${{ vars.RENDER_BETA_KEY_VALUE_ID }}
+      RENDER_INPUT_SERVICE_ID: ${{ inputs.service_id }}
+      RENDER_INPUT_WORKSPACE_ID: ${{ inputs.workspace_id }}
+      RENDER_INPUT_POSTGRES_ID: ${{ inputs.postgres_id }}
+      RENDER_INPUT_KEY_VALUE_ID: ${{ inputs.key_value_id }}
 
     steps:
       - name: Check out reviewed main
@@ -56,8 +83,30 @@ jobs:
           test "$TARGET_SHA" = "$(git rev-parse HEAD)" || { echo "::error::Checkout SHA mismatch"; exit 1; }
           ACTUAL_MAIN="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
           test "$TARGET_SHA" = "$ACTUAL_MAIN" || { echo "::error::Main moved after workflow dispatch"; exit 1; }
-          test -n "$RENDER_BETA_SERVICE_ID" || { echo "::error::Existing Render beta service ID is missing"; exit 1; }
-          test -n "$RENDER_BETA_WORKSPACE_ID" || { echo "::error::Existing Render workspace ID is missing"; exit 1; }
+          # Environment-owned selectors may never be overridden through a
+          # manual dispatch. Check before Render secrets or network calls.
+          for kind in SERVICE WORKSPACE POSTGRES KEY_VALUE; do
+            config_var="RENDER_CONFIG_${kind}_ID"
+            input_var="RENDER_INPUT_${kind}_ID"
+            if [[ -n "${!config_var}" && -n "${!input_var}" && "${!config_var}" != "${!input_var}" ]]; then
+              echo "::error::Explicit Render resource selector conflicts with reviewed environment configuration"
+              exit 1
+            fi
+          done
+          [[ "$RENDER_BETA_SERVICE_ID" =~ ^srv-[a-z0-9]+$ ]] || {
+            echo "::error::Existing Render beta service ID is missing or malformed"; exit 1;
+          }
+          [[ "$RENDER_BETA_WORKSPACE_ID" =~ ^tea-[a-z0-9]+$ ]] || {
+            echo "::error::Existing Render workspace ID is missing or malformed"; exit 1;
+          }
+          if [[ "$MODE" == "inspect-env" || "$MODE" == "inspect-consumer" ]]; then
+            [[ "$RENDER_BETA_POSTGRES_ID" =~ ^dpg-[a-z0-9-]+$ ]] || {
+              echo "::error::Existing PostgreSQL ID is missing or malformed"; exit 1;
+            }
+            [[ "$RENDER_BETA_KEY_VALUE_ID" =~ ^red-[a-z0-9-]+$ ]] || {
+              echo "::error::Existing Key Value ID is missing or malformed"; exit 1;
+            }
+          fi
 
       - uses: actions/setup-python@v5
         with:
