@@ -17,7 +17,10 @@ import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
 
 import { useKarenScopedAgent } from "./KarenCopilotHistoryGate";
-import { KarenCopilotAssistantSlot } from "./KarenCopilotVerifiedHistory";
+import {
+  KarenCopilotAssistantSlot,
+  KarenCopilotUserSlot,
+} from "./KarenCopilotVerifiedHistory";
 import { useKarenPersistedDraft } from "./useKarenPersistedDraft";
 
 const MAX_INPUT_CHARS = 65536;
@@ -429,7 +432,10 @@ export function KarenCopilotControlledChat({
           messages={agent.messages}
           isRunning={agent.isRunning}
           autoScroll
-          messageView={{ assistantMessage: KarenCopilotAssistantSlot }}
+          messageView={{
+            assistantMessage: KarenCopilotAssistantSlot,
+            userMessage: KarenCopilotUserSlot,
+          }}
           input={{ value: draft, onChange: onDraftChange, onSubmitMessage, onStop }}
         />
       </div>
