@@ -354,7 +354,7 @@ services:
   # ──────────────────────────────────────────────────────────────────────────────
   web-copilot:
     container_name: ai-karen-copilot-web
-    image: node:20-alpine
+    image: node:22-alpine
     working_dir: /app
     env_file:
       - .env
