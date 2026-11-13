@@ -5,7 +5,11 @@
  * CopilotKit owns text/toolbar/scroll/composer; existing Karen presentation
  * components own visuals. The backend alone owns execution, evidence and storage.
  */
-import { CopilotChatAssistantMessage } from "@copilotkit/react-core/v2";
+import {
+  CopilotChatAssistantMessage,
+  CopilotChatUserMessage,
+} from "@copilotkit/react-core/v2";
+import { useAuth } from "@/lib/useAuth";
 import { createContext, useContext } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import type { AgentStepEvent } from "@/lib/types";
@@ -247,12 +251,49 @@ export function useKarenLatestVerifiedAgentSteps(): AgentStepEvent[] {
   return Array.from(lifecycle.values());
 }
 
+/** Speaker labels annotate native SDK content, not a second message renderer.
+ *
+ * Only the current authenticated account can supply a user display name.
+ * Do not infer names from model prose or store a second per-message identity.
+ */
+function accountSpeakerLabel(value: unknown): string {
+  if (typeof value !== "string") return "You";
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length > 0 && normalized.length <= 100 ? normalized : "You";
+}
+
+export function KarenCopilotUserMessage(
+  props: ComponentProps<typeof CopilotChatUserMessage>,
+) {
+  const { user } = useAuth();
+  const speaker = accountSpeakerLabel(user?.full_name);
+  return (
+    <div data-testid="karen-copilot-user-message" className="min-w-0 w-full">
+      <p
+        data-testid="karen-copilot-user-speaker"
+        aria-label={`User: ${speaker}`}
+        className="mb-1 px-1 text-right text-xs font-semibold text-muted-foreground"
+      >
+        {speaker}
+      </p>
+      <CopilotChatUserMessage {...props} />
+    </div>
+  );
+}
+
 export function KarenCopilotAssistantMessage(
   props: ComponentProps<typeof CopilotChatAssistantMessage>,
 ) {
   const parts = useContext(VerifiedHistoryContext).get(props.message.id) || [];
   return (
     <div data-testid="karen-copilot-assistant-message" className="min-w-0">
+      <p
+        data-testid="karen-copilot-assistant-speaker"
+        aria-label="Assistant: Karen"
+        className="mb-1 px-1 text-left text-xs font-semibold text-muted-foreground"
+      >
+        Karen
+      </p>
       <CopilotChatAssistantMessage {...props} />
       {parts.map((part, index) => (
         <div key={index} data-testid="karen-copilot-verified-part">
@@ -271,4 +312,9 @@ export function KarenCopilotAssistantMessage(
 /** CopilotKit v2 slots require the default component's static slot namespace. */
 export const KarenCopilotAssistantSlot = Object.assign(
   KarenCopilotAssistantMessage, CopilotChatAssistantMessage,
+);
+
+/** Keep CopilotKit's user slot statics, toolbars and native render behavior. */
+export const KarenCopilotUserSlot = Object.assign(
+  KarenCopilotUserMessage, CopilotChatUserMessage,
 );
