@@ -267,7 +267,7 @@ async def test_failed_terminal_commit_cannot_claim_success() -> None:
     async def upstream():
         yield completed()
 
-    with pytest.raises(ChatRunLeaseLost, match="lease_lost"):
+    with pytest.raises(ChatRunLeaseLost, match="chat_run_atomic_commit_not_verified"):
         await anext(coordinator.stream(upstream(), lease=lease))
     assert repo.finalized == []
 
