@@ -96,3 +96,111 @@ async def test_missing_claim_token_refuses_to_start_work():
 
     assert started is False
     assert client.renew_calls == 0
+
+
+def _scheduled_item(*, tenant_id: str = "tenant-a") -> QueueItem:
+    return QueueItem(
+        id="queue-item-1",
+        queue="automation",
+        tenant_id=tenant_id,
+        claim_token="claim-token-1",
+        payload={
+            "cron_id": "cron-a",
+            "tenant_id": "tenant-a",
+            "created_by": "owner-a",
+            "target_id": "task-a",
+            "job_type": "Task",
+            "trigger": "cron",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_rejects_cross_tenant_payload_before_principal_resolution(
+    monkeypatch,
+):
+    from ai_karen_engine.api_routes.automation import cron
+
+    calls = []
+
+    async def forbidden_principal(**kwargs):
+        calls.append(("principal", kwargs))
+        raise AssertionError("Mismatched tenant must never resolve an owner")
+
+    async def forbidden_execution(**kwargs):
+        calls.append(("execution", kwargs))
+        raise AssertionError("Mismatched tenant must never execute")
+
+    monkeypatch.setattr(cron, "resolve_scheduled_principal", forbidden_principal)
+    monkeypatch.setattr(cron, "execute_automation_target", forbidden_execution)
+
+    with pytest.raises(RuntimeError, match="Queue tenant metadata mismatch"):
+        await cron._execute_claimed_queue_item(_scheduled_item(tenant_id="tenant-b"))
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_preserves_owner_and_cron_provenance(monkeypatch):
+    from ai_karen_engine.api_routes.automation import cron
+
+    calls = []
+    principal = object()
+
+    async def resolve(*, user_id, tenant_id):
+        calls.append(("principal", user_id, tenant_id))
+        return principal
+
+    async def execute(*, job_type, target_id, user, source_id):
+        calls.append(("execute", job_type, target_id, user, source_id))
+
+    monkeypatch.setattr(cron, "resolve_scheduled_principal", resolve)
+    monkeypatch.setattr(cron, "execute_automation_target", execute)
+
+    assert await cron._execute_claimed_queue_item(_scheduled_item()) == "tenant-a"
+    assert calls == [
+        ("principal", "owner-a", "tenant-a"),
+        ("execute", "Task", "task-a", principal, "cron-a"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_revoked_owner_never_executes(monkeypatch):
+    from ai_karen_engine.api_routes.automation import cron
+
+    calls = []
+
+    async def missing_owner(*, user_id, tenant_id):
+        calls.append(("principal", user_id, tenant_id))
+        raise PermissionError("Owner no longer authorized")
+
+    async def forbidden_execution(**kwargs):
+        calls.append(("execution", kwargs))
+        raise AssertionError("Revoked owner cannot execute")
+
+    monkeypatch.setattr(cron, "resolve_scheduled_principal", missing_owner)
+    monkeypatch.setattr(cron, "execute_automation_target", forbidden_execution)
+
+    with pytest.raises(PermissionError, match="Owner no longer authorized"):
+        await cron._execute_claimed_queue_item(_scheduled_item())
+
+    assert calls == [("principal", "owner-a", "tenant-a")]
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_failed_execution_is_not_success(monkeypatch):
+    from ai_karen_engine.api_routes.automation import cron
+
+    async def resolve(*, user_id, tenant_id):
+        return (user_id, tenant_id)
+
+    async def fail_execute(*, job_type, target_id, user, source_id):
+        assert user == ("owner-a", "tenant-a")
+        assert source_id == "cron-a"
+        raise RuntimeError("Durable task outcome unavailable")
+
+    monkeypatch.setattr(cron, "resolve_scheduled_principal", resolve)
+    monkeypatch.setattr(cron, "execute_automation_target", fail_execute)
+
+    with pytest.raises(RuntimeError, match="Durable task outcome unavailable"):
+        await cron._execute_claimed_queue_item(_scheduled_item())
