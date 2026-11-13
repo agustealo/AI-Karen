@@ -49,6 +49,7 @@ def test_cortex_produces_capability_without_fabricating_tool_identifier():
     "query",
     [
         "create a task to pull the latest news everyday",
+        "Create a daily task to summarize news every day at 07:00 in America/Detroit using agent research",
         "Please create a daily task to pull the latest news",
         "Schedule a task to collect updates every day at 07:00 UTC using agent research",
     ],
@@ -132,7 +133,7 @@ async def test_daily_task_does_not_fabricate_schedule_when_missing_fields(monkey
     assert result.degraded is True
     assert result.payload["status"] == "needs_input"
     assert result.payload["automation_created"] is False
-    assert set(result.payload["missing_fields"]) == {"utc_time", "registered_agent"}
+    assert set(result.payload["missing_fields"]) == {"local_time", "timezone_id", "registered_agent"}
     assert "No task was scheduled" in result.text
 
 
@@ -168,7 +169,11 @@ async def test_daily_task_success_uses_only_owned_durable_receipt(monkeypatch):
         "cron": {
             "id": "cron-stable", "targetId": "task-stable",
             "schedule": "0 7 * * *",
-            "nextRun": "2026-11-14T07:00:00+00:00",
+            "nextRun": "2026-11-14T12:00:00+00:00",
+            "timestamp_utc": "2026-11-14T12:00:00+00:00",
+            "local_datetime": "2026-11-14T07:00:00-05:00",
+            "timezone_id": "America/Detroit",
+            "local_time": "07:00:00",
             "created_by": user_id, "tenant_id": tenant_id,
         },
         "replayed": False,
@@ -197,7 +202,7 @@ async def test_daily_task_success_uses_only_owned_durable_receipt(monkeypatch):
             "role": "user",
             "content": (
                 "Create a task to pull latest news every day "
-                "at 07:00 UTC using agent research"
+                "at 07:00 in America/Detroit using agent research"
             ),
         }],
     )
@@ -215,12 +220,15 @@ async def test_daily_task_success_uses_only_owned_durable_receipt(monkeypatch):
     assert result.source == "postgresql_automation_schedule"
     assert result.payload["automation_receipt"]["task_id"] == "task-stable"
     assert result.payload["automation_receipt"]["cron_id"] == "cron-stable"
-    assert result.payload["automation_receipt"]["timezone"] == "UTC"
+    assert result.payload["automation_receipt"]["timezone_id"] == "America/Detroit"
+    assert result.payload["automation_receipt"]["timestamp_utc"] == "2026-11-14T12:00:00+00:00"
+    assert result.payload["automation_receipt"]["local_datetime"] == "2026-11-14T07:00:00-05:00"
     assert result.normalized_metadata()["actual_model"] is None
     assert result.normalized_metadata()["structured_content"]["automation_receipt"]["schedule"] == "0 7 * * *"
     assert calls[0]["purpose"] == "pull latest news"
-    assert calls[0]["hour_utc"] == 7
-    assert calls[0]["minute_utc"] == 0
+    assert calls[0]["hour_local"] == 7
+    assert calls[0]["minute_local"] == 0
+    assert calls[0]["timezone_id"] == "America/Detroit"
     assert calls[0]["primary_agent"] == "research"
     assert "not that the task has run" in result.text
 
@@ -245,7 +253,7 @@ async def test_daily_task_rejects_forged_owner_receipt(monkeypatch):
             require_conversation_id=lambda: "conversation",
             request_id="request", correlation_id="correlation",
         ),
-        messages=[{"role": "user", "content": "Schedule a task to pull news every day at 07:00 UTC using agent research"}],
+        messages=[{"role": "user", "content": "Schedule a task to pull news every day at 07:00 in America/Detroit using agent research"}],
     )
     class Meter:
         async def consume_tool_call(self):
