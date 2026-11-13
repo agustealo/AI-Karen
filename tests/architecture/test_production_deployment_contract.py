@@ -145,24 +145,24 @@ def test_production_web_uses_immutable_production_runtime() -> None:
 
 def test_copilotkit_server_runtime_uses_supported_node_22_everywhere() -> None:
     """SDK transitive packages require Node >=22.15, not the old Node 20."""
-    project = ROOT / "src/ui_launchers/Karen-AI-Theme"
+    project = REPO_ROOT / "src/ui_launchers/Karen-AI-Theme"
     prod_dockerfile = (project / "Dockerfile.production").read_text(encoding="utf-8")
     assert prod_dockerfile.count("FROM node:22-bookworm-slim") == 3
     assert "FROM node:20-" not in prod_dockerfile
 
-    dev_compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    dev_compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dev_web = _service_block(dev_compose, "web")
     assert "image: node:22-bookworm" in dev_web
     assert "image: node:20-" not in dev_web
 
     copilot_compose = (
-        ROOT / "deploy/compose/docker-compose-copilot.yml"
+        REPO_ROOT / "deploy/compose/docker-compose-copilot.yml"
     ).read_text(encoding="utf-8")
     assert "image: node:22-alpine" in copilot_compose
     assert "image: node:20-alpine" not in copilot_compose
 
     main_gate = (
-        ROOT / ".github/workflows/main-quality-gate.yml"
+        REPO_ROOT / ".github/workflows/main-quality-gate.yml"
     ).read_text(encoding="utf-8")
     assert 'node-version: "22"' in main_gate
     assert 'node-version: "20"' not in main_gate
