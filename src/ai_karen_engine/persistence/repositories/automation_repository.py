@@ -10,7 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time as clock_time, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
@@ -36,10 +37,12 @@ _TASK_INSERT_SQL = """\nINSERT INTO public.automation_tasks (
                     )\n"""
 _CRON_INSERT_SQL = """\nINSERT INTO public.automation_cron_jobs (
                         cron_id, tenant_id, created_by, task_name, schedule,
+                        timezone_id, local_time,
                         job_type, target_id, enabled, action, next_run_at
                     ) VALUES (
                         :cron_id, CAST(:tenant_id AS uuid), CAST(:created_by AS uuid),
-                        :task_name, :schedule, :job_type, :target_id,
+                        :task_name, :schedule, :timezone_id, :local_time,
+                        :job_type, :target_id,
                         :enabled, :action, :next_run_at
                     )\n"""
 
@@ -67,6 +70,8 @@ def _cron_insert_values(tenant_id: str, created_by: str, record: Dict[str, Any],
         "created_by": created_by,
         "task_name": record["taskName"],
         "schedule": record["schedule"],
+        "timezone_id": record.get("timezone_id") or "UTC",
+        "local_time": record.get("local_time"),
         "job_type": record["type"],
         "target_id": record["targetId"],
         "enabled": record["enabled"],
@@ -136,10 +141,22 @@ def _cron_row(row: Any) -> Dict[str, Any]:
     data = dict(row)
     enabled = bool(data["enabled"])
     next_run = data["next_run_at"]
+    timezone_id = str(data.get("timezone_id") or "UTC")
+    local_datetime = (
+        next_run.astimezone(ZoneInfo(timezone_id)).isoformat()
+        if next_run else None
+    )
+    wall_time = data.get("local_time")
+    if isinstance(wall_time, clock_time):
+        wall_time = wall_time.strftime("%H:%M:%S")
     return {
         "id": data["cron_id"],
         "taskName": data["task_name"],
         "schedule": data["schedule"],
+        "timezone_id": timezone_id,
+        "local_time": wall_time,
+        "timestamp_utc": next_run.astimezone(timezone.utc).isoformat() if next_run else None,
+        "local_datetime": local_datetime,
         "type": data["job_type"],
         "targetId": data["target_id"],
         "enabled": enabled,
@@ -852,7 +869,7 @@ class SqlAutomationRepository:
         cron_record: Dict[str, Any],
         next_run_at: datetime,
     ) -> Dict[str, Any]:
-        """Commit a task and its UTC cron trigger as one idempotent transaction.
+        """Commit a task and its IANA-local cron trigger in a single transaction.
 
         IDs derive from the authenticated conversation/request, not arbitrary
         caller input. A retried request may only reuse an identically defined
@@ -930,9 +947,17 @@ class SqlAutomationRepository:
             if raw_cron is None:
                 raise ValueError("Cron ID has conflicting ownership")
             cron = _cron_row(raw_cron)
-            for key in ("taskName", "schedule", "type", "targetId", "action"):
+            for key in ("taskName", "schedule", "timezone_id", "targetId", "type", "action"):
                 if cron[key] != cron_record[key]:
                     raise ValueError("Cron ID conflicts with an existing definition")
+            expected_local_time = cron_record.get("local_time")
+            expected_local_string = (
+                expected_local_time.strftime("%H:%M:%S")
+                if isinstance(expected_local_time, clock_time)
+                else expected_local_time
+            )
+            if cron["local_time"] != expected_local_string:
+                raise ValueError("Cron ID conflicts with an existing local wall time")
             return {
                 "task": task,
                 "cron": cron,
