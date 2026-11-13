@@ -279,7 +279,7 @@ test.use({
 test.describe("canonical consumer chat cold-load acceptance", () => {
   test.skip(!enabled, "Set KAREN_LOCAL_CHAT_ACCEPTANCE=1 or KAREN_CHAT_BOOT_ACCEPTANCE=1 for real backend/browser proof");
 
-  test("persists a real user message and a real assistant reply", async ({ page }) => {
+  test("persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
     test.setTimeout(180_000);
     const target = new URL(approvedUrl!);
     const browserErrors: string[] = [];
@@ -360,6 +360,38 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         observedRunRequests.push(pathname);
       }
     });
+    // Capture only whitelisted endpoint types, HTTP statuses and validated
+    // backend correlation IDs. In particular, do not attach messages, request
+    // or response bodies, user/tenant IDs, cookies, tokens, or full URLs.
+    type RunRoute = "copilotkit_run" | "ag_ui" | "legacy_stream";
+    const runRoute = (pathname: string): RunRoute | null => {
+      if (pathname === "/api/copilotkit/agent/default/run") return "copilotkit_run";
+      if (pathname === "/api/chat/ag-ui") return "ag_ui";
+      if (pathname === "/api/chat/stream") return "legacy_stream";
+      return null;
+    };
+    const observedRunResponses: Array<{
+      route: RunRoute;
+      status: number;
+      correlation_id: string | null;
+    }> = [];
+    const observedRunTransportFailures: RunRoute[] = [];
+    page.on("response", (response) => {
+      if (response.request().method() !== "POST") return;
+      const route = runRoute(new URL(response.url()).pathname);
+      if (!route) return;
+      const header = response.headers()["x-correlation-id"] || "";
+      observedRunResponses.push({
+        route,
+        status: response.status(),
+        correlation_id: /^[A-Za-z0-9_-]{1,128}$/.test(header) ? header : null,
+      });
+    });
+    page.on("requestfailed", (request) => {
+      if (request.method() !== "POST") return;
+      const route = runRoute(new URL(request.url()).pathname);
+      if (route) observedRunTransportFailures.push(route);
+    });
     const draftEndpoint = `/api/conversations/${id}/draft`;
     // Observe only CAS operation type, status and revision. Do not retain the
     // private submitted text or any authenticated response payload in logs.
@@ -395,6 +427,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
 
     const endpoint = `/api/conversations/${id}`;
     let persistedAnswer = "";
+    try {
     await expect.poll(async () => {
       const { ok, body } = await readAuthorizedSameOriginJson(page, endpoint);
       if (!ok || !body || typeof body !== "object" ||
@@ -420,6 +453,29 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       intervals: [1000, 2000, 3000],
       message: "A real user turn and subsequent assistant response must be persisted by the canonical backend",
     }).toBe(true);
+    } catch (error) {
+      // The response may fail after a 200 AG-UI stream has started. This
+      // bounded, content-free receipt distinguishes missing draft clearance,
+      // absent run dispatch, HTTP failure and transport interruption without
+      // hiding the original failed acceptance assertion.
+      const alertVisible = await shell.getByRole("alert").first()
+        .isVisible().catch(() => false);
+      await testInfo.attach("kcon490-first-send-failure-receipt", {
+        contentType: "application/json",
+        body: JSON.stringify({
+          schema: "karen.first_send_failure.v1",
+          draft_cas: draftCas.slice(-8),
+          run_request_count: observedRunRequests.length,
+          run_request_routes: observedRunRequests.slice(-8).map(path => runRoute(path)),
+          run_http_responses: observedRunResponses.slice(-8),
+          run_transport_failures: observedRunTransportFailures.slice(-8),
+          browser_chunk_error_count: browserErrors.length,
+          composer_alert_visible: alertVisible,
+          persisted_assistant_confirmed: false,
+        }),
+      });
+      throw error;
+    }
     expect(persistedAnswer.trim().length).toBeGreaterThan(0);
     expect(
       observedRunRequests,
