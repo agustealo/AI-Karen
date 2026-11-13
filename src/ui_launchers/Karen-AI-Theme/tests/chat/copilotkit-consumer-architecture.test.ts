@@ -98,6 +98,37 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).not.toContain('testInfo.attach("authorization"');
   });
 
+  it("keeps multi-turn personal-context proof in the real governed browser path", () => {
+    expect(liveBrowser).toContain(
+      'const personalContextAcceptance = process.env.KAREN_PERSONAL_CONTEXT_ACCEPTANCE === "1";',
+    );
+    expect(liveBrowser).toContain(
+      'await test.step("KCON-490 real multi-turn personal context", async () => {',
+    );
+    expect(liveBrowser).toContain('await runPersonalTurn("ANything else?")');
+    expect(liveBrowser).toContain(
+      '"Yeah like my favorite color, or whatever you can share"',
+    );
+    expect(liveBrowser).toContain(
+      '"I am a vegetarian, and I love dancehall music, it is my favorite genre"',
+    );
+    expect(liveBrowser).toContain('await expectVerifiedExecutionReceipt(page, id!, expansion)');
+    expect(liveBrowser).toContain('await expectVerifiedExecutionReceipt(page, id!, disclosure)');
+    expect(liveBrowser).toContain('expect(observedRunRequests.length - initialRunCount).toBe(6)');
+    expect(liveBrowser).toContain('const final = await readAuthorizedSameOriginJson(page, endpoint)');
+    // Existing first-send authentication, revision and health preflights
+    // remain the only authority to run this opt-in multi-turn extension.
+    expect(liveBrowser).toContain('if (personalContextAcceptance && !enabled)');
+    expect(liveBrowser).toContain('if (personalContextAcceptance && kcon770FaultAcceptance)');
+    expect(liveBrowser).toContain('expect(/vegetarian/i.test(disclosure)).toBe(true)');
+    expect(liveBrowser).toContain('(elements, expected) => elements.some(');
+    expect(liveBrowser).not.toContain('expect(disclosure).toMatch');
+    expect(liveBrowser).toContain('trace: "off"');
+    expect(liveBrowser).toContain('screenshot: "off"');
+    expect(liveBrowser).toContain('video: "off"');
+    expect(liveBrowser).not.toContain('testInfo.attach("kcon490-personal-transcript"');
+  });
+
   it("requires a live non-cacheable backend before approved browser sign-in", () => {
     // Each independent real-browser scenario must verify backend readiness
     // before credentials are used. Do not hardcode the number of scenarios:
