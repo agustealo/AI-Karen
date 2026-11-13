@@ -51,7 +51,8 @@ _ATTRIBUTE_QUESTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _PROFILE_SUMMARY = re.compile(
     r"\b(?:who\s+am\s+i|(?:tell|describe|remind)\s+me\s+(?:more\s+)?about\s+(?:me|myself)|"
-    r"what\s+(?:(?:do\s+you\s+(?:know|remember|think))|(?:can\s+you\s+share))\s+about\s+me|"\n    r"what\s+can\s+you\s+tell\s+me\s+about\s+(?:me|myself))\b"
+    r"what\s+(?:(?:do\s+you\s+(?:know|remember|think))|(?:can\s+you\s+share))\s+about\s+me|"
+    r"what\s+can\s+you\s+tell\s+me\s+about\s+(?:me|myself))\b"
 )
 
 
