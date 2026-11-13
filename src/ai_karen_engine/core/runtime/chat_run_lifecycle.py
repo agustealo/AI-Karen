@@ -206,6 +206,13 @@ class ChatRunCoordinator:
                     if await self._repository.cancel_requested(lease):
                         raise ChatRunCancellationRequested("chat_run_cancel_requested")
 
+                # A correlation identifier supplied by an upstream chunk is
+                # not proof that it belongs to this admitted, scoped lease.
+                # Reject even a syntactically valid foreign identifier before
+                # forwarding text, tools, error events, or completion.
+                if chunk.correlation_id != lease.correlation_id:
+                    raise ChatRunLeaseLost("chat_run_correlation_mismatch")
+
                 if chunk.type == ChatStreamEventType.ERROR:
                     if not await self._repository.finish(
                         lease, status="failed", error_code="CHAT_RUNTIME_ERROR"
