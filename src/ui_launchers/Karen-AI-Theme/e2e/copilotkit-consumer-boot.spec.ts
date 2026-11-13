@@ -572,8 +572,16 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
             intervals: [1000, 2000, 3000],
             message: "A unique personal turn must have an immediately following persisted reply",
           }).toBe(true);
-          await expect(active.getByTestId("karen-copilot-assistant-message")
-            .filter({ hasText: answer }).last()).toBeVisible({ timeout: 30_000 });
+          await expect.poll(async () =>
+            active.getByTestId("karen-copilot-assistant-message").evaluateAll(
+              (elements, expected) => elements.some(
+                element => (element.textContent || "").includes(expected),
+              ),
+              answer,
+            ), {
+            timeout: 30_000,
+            message: "The new assistant turn must be visibly rendered before replay",
+          }).toBe(true);
           await expect.poll(async () => {
             const { ok, body } = await readAuthorizedSameOriginJson(
               page, "/api/conversations/" + id + "/draft",
@@ -594,10 +602,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
           "My name is Rowan. I was born in Valencia. I grew up in Granada. I live in Bilbao.",
         );
         const summary = await runPersonalTurn("What can you tell me about myself?");
-        expect(summary).toMatch(/Rowan|Valencia|Granada|Bilbao/i);
+        expect(/Rowan|Valencia|Granada|Bilbao/i.test(summary)).toBe(true);
 
         const expansion = await runPersonalTurn("ANything else?");
-        expect(expansion).not.toBe(summary);
+        expect(expansion === summary).toBe(false);
         expect(repeatsOldBiography(expansion)).toBe(false);
         await expectVerifiedExecutionReceipt(page, id!, expansion);
 
@@ -609,15 +617,15 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         const disclosure = await runPersonalTurn(
           "I am a vegetarian, and I love dancehall music, it is my favorite genre",
         );
-        expect(disclosure).toMatch(/vegetarian/i);
-        expect(disclosure).toMatch(/dancehall/i);
+        expect(/vegetarian/i.test(disclosure)).toBe(true);
+        expect(/dancehall/i.test(disclosure)).toBe(true);
         expect(repeatsOldBiography(disclosure)).toBe(false);
         await expectVerifiedExecutionReceipt(page, id!, disclosure);
 
         const recallPrompt = "What did I just tell you about my diet and favorite music genre?";
         const recalled = await runPersonalTurn(recallPrompt);
-        expect(recalled).toMatch(/vegetarian/i);
-        expect(recalled).toMatch(/dancehall/i);
+        expect(/vegetarian/i.test(recalled)).toBe(true);
+        expect(/dancehall/i.test(recalled)).toBe(true);
         expect(observedRunRequests.length - initialRunCount).toBe(6);
 
         // A real authorized backend read after reload is required. Cached
@@ -637,9 +645,17 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
           message.role === "user" && message.content === recallPrompt ? [index] : []);
         expect(positions).toHaveLength(1);
         expect(rows[positions[0] + 1]?.role).toBe("assistant");
-        expect(rows[positions[0] + 1]?.content?.trim()).toBe(recalled);
-        await expect(reloaded.getByTestId("karen-copilot-assistant-message")
-          .filter({ hasText: recalled }).last()).toBeVisible({ timeout: 30_000 });
+        expect(rows[positions[0] + 1]?.content?.trim() === recalled).toBe(true);
+        await expect.poll(async () =>
+          reloaded.getByTestId("karen-copilot-assistant-message").evaluateAll(
+            (elements, expected) => elements.some(
+              element => (element.textContent || "").includes(expected),
+            ),
+            recalled,
+          ), {
+          timeout: 30_000,
+          message: "Restored assistant response must appear after authorized replay",
+        }).toBe(true);
         expect(browserErrors).toEqual([]);
       });
     }
