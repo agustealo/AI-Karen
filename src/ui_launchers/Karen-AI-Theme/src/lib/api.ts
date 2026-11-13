@@ -680,8 +680,11 @@ class ApiClient {
       response = await send(preferredBaseUrl);
     }
 
-    // 502 Retry with backoff for startup timing issues
-    if (response.status === 502) {
+    // Only reads can be replayed after an ambiguous 502. A draft CAS PUT,
+    // task POST, or any other mutation may have committed before its receipt
+    // was lost. Replaying it can create false 409 conflicts or duplicate work.
+    const safeRead = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase());
+    if (response.status === 502 && safeRead) {
       console.log('[ApiClient] 502 Bad Gateway detected, retrying with backoff for startup timing');
       await this.sleep(2000); // Wait 2s before retry
       try {

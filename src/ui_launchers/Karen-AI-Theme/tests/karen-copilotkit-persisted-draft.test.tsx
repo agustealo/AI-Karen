@@ -111,6 +111,66 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     });
   });
 
+  it("recovers a committed save whose 502 receipt was lost using exactly one authenticated readback", async () => {
+    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 })
+      .mockResolvedValueOnce({ text: "Send exactly once", revision: 5 });
+    backend.put.mockRejectedValueOnce(new ApiError(502, "gateway lost CAS receipt"));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Send exactly once" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
+    expect(backend.get).toHaveBeenCalledTimes(2);
+    expect(backend.put).toHaveBeenCalledTimes(2);
+    expect(backend.put.mock.calls[0][1]).toEqual({
+      text: "Send exactly once", expected_revision: 4,
+    });
+    expect(backend.put.mock.calls[1][1]).toEqual({
+      text: "", expected_revision: 5,
+    });
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("recovers a committed clear whose 502 receipt was lost without repeating that PUT", async () => {
+    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 })
+      .mockResolvedValueOnce({ text: "", revision: 6 });
+    backend.put.mockImplementationOnce(
+      async (_path: string, payload: { text: string; expected_revision: number }) =>
+        ({ text: payload.text, revision: payload.expected_revision + 1 }),
+    ).mockRejectedValueOnce(new ApiError(502, "clear receipt lost"));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Send after confirmed clear" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
+    expect(backend.get).toHaveBeenCalledTimes(2);
+    expect(backend.put).toHaveBeenCalledTimes(2);
+    expect(backend.put.mock.calls[1][1]).toEqual({ text: "", expected_revision: 5 });
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("never treats a lost write receipt as success when server readback stayed at the old revision", async () => {
+    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 })
+      .mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 });
+    backend.put.mockRejectedValueOnce(new ApiError(502, "unknown commit outcome"));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Unsent message stays editable" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("false"));
+    expect(backend.put).toHaveBeenCalledTimes(1);
+    expect(backend.get).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("draft-status").textContent).toBe("unavailable");
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value)
+      .toBe("Unsent message stays editable");
+  });
+
   it("does not clear or submit a just-typed message after a 409 CAS conflict", async () => {
     backend.put.mockRejectedValueOnce(new ApiError(409, "stale"));
     render(<Surface />);

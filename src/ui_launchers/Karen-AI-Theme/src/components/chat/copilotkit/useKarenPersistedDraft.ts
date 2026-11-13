@@ -132,6 +132,45 @@ export function useKarenPersistedDraft(conversationId: string) {
     };
   }, [conversationId, refresh]);
 
+  // A proxy 502 or network rejection does not prove a write failed:
+  // PostgreSQL may have committed the CAS before its HTTP receipt was lost.
+  // Never replay that mutation. An authenticated readback is the only safe
+  // way to acknowledge its exact intended text and next revision.
+  const commitDraftWrite = useCallback(async (
+    intendedText: string, expectedRevision: number, signal: AbortSignal,
+  ): Promise<DraftRecord> => {
+    try {
+      const receipt: unknown = await apiClient.put<DraftRecord>(
+        endpoint, { text: intendedText, expected_revision: expectedRevision },
+        { signal },
+      );
+      if (!validDraft(receipt) || receipt.text !== intendedText ||
+          receipt.revision !== expectedRevision + 1) {
+        throw new Error("Invalid draft CAS receipt");
+      }
+      return receipt;
+    } catch (error) {
+      if (signal.aborted ||
+          !(error instanceof TypeError ||
+            (error instanceof ApiError && [502, 503, 504].includes(error.status)))) {
+        throw error;
+      }
+      // A stale/foreign/different-revision result is NOT an acknowledgement.
+      // Fail closed if the read is unavailable or cannot prove this write.
+      let saved: unknown;
+      try {
+        saved = await apiClient.get<DraftRecord>(endpoint);
+      } catch {
+        throw error;
+      }
+      if (!validDraft(saved) || saved.text !== intendedText ||
+          saved.revision !== expectedRevision + 1) {
+        throw error;
+      }
+      return saved;
+    }
+  }, [endpoint]);
+
   const save = useCallback(async () => {
     if (!activeRef.current || !dirtyRef.current ||
         busyRef.current || revisionRef.current === null) return;
@@ -142,17 +181,12 @@ export function useKarenPersistedDraft(conversationId: string) {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const response: unknown = await apiClient.put<DraftRecord>(
-        endpoint, { text: sentText, expected_revision: expectedRevision },
-        { signal: controller.signal },
+      const response = await commitDraftWrite(
+        sentText, expectedRevision, controller.signal,
       );
-      if (!activeRef.current || generationRef.current !== generation) return;
-      if (!validDraft(response) ||
-          (response as DraftRecord).text !== sentText ||
-          (response as DraftRecord).revision !== expectedRevision + 1) {
-        throw new Error("Invalid draft persistence receipt");
-      }
-      revisionRef.current = (response as DraftRecord).revision;
+      if (!activeRef.current || generationRef.current !== generation ||
+          controller.signal.aborted) return;
+      revisionRef.current = response.revision;
       readSequenceRef.current += 1;
       if (textRef.current === sentText) {
         dirtyRef.current = false;
@@ -175,7 +209,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (abortRef.current === controller) abortRef.current = null;
       busyRef.current = false;
     }
-  }, [endpoint]);
+  }, [commitDraftWrite]);
 
   const startSave = useCallback((): Promise<void> => {
     if (pendingSaveRef.current) return pendingSaveRef.current;
@@ -206,17 +240,12 @@ export function useKarenPersistedDraft(conversationId: string) {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const response: unknown = await apiClient.put<DraftRecord>(
-        endpoint, { text: "", expected_revision: expectedRevision },
-        { signal: controller.signal },
+      const response = await commitDraftWrite(
+        "", expectedRevision, controller.signal,
       );
       if (!activeRef.current || generationRef.current !== generation ||
           controller.signal.aborted) return false;
-      if (!validDraft(response) || (response as DraftRecord).text !== "" ||
-          (response as DraftRecord).revision !== expectedRevision + 1) {
-        throw new Error("Invalid draft-clear receipt");
-      }
-      revisionRef.current = (response as DraftRecord).revision;
+      revisionRef.current = response.revision;
       readSequenceRef.current += 1;
       if (textRef.current === originalText) {
         textRef.current = "";
@@ -244,7 +273,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (abortRef.current === controller) abortRef.current = null;
       busyRef.current = false;
     }
-  }, [endpoint]);
+  }, [commitDraftWrite]);
 
   const prepareSubmission = useCallback(async (submittedText: string): Promise<boolean> => {
     // Enter is a real user gesture, not permission to skip persistence.

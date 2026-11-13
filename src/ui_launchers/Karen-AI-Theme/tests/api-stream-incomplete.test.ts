@@ -91,3 +91,34 @@ describe('chat SSE terminal provenance', () => {
     expect(onComplete).toHaveBeenCalledWith({ status: 'completed' }, 'finished');
   });
 });
+
+describe('authenticated API draft CAS retry safety', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('does not replay a mutating draft PUT after ambiguous 502 response', async () => {
+    const firstResponse = new Response(
+      JSON.stringify({ detail: 'Backend result unavailable' }),
+      { status: 502, headers: { 'Content-Type': 'application/json' } },
+    );
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(firstResponse)
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ detail: 'Draft revision conflict' }),
+        { status: 409, headers: { 'Content-Type': 'application/json' } },
+      ));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(apiClient.put(
+      '/api/conversations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/draft',
+      { text: 'Private unsent draft', expected_revision: 4 },
+    )).rejects.toMatchObject({ status: 502 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'PUT' });
+  });
+});
