@@ -696,3 +696,166 @@ def test_iana_schedule_timezone_preference_never_claims_user_location():
     assert mapped["local_time"] == "07:00:00"
     assert mapped["local_datetime"] == "2026-11-14T07:00:00-05:00"
     assert "location" not in mapped
+
+
+class _SummaryMappedResult:
+    """Small SQL-row stub for testing query shape and principal propagation."""
+
+    def __init__(self, row=None, scalar=None):
+        self.row = row or {}
+        self.scalar = scalar
+
+    def mappings(self):
+        return self
+
+    def one(self):
+        return self.row
+
+    def scalar_one_or_none(self):
+        return self.scalar
+
+
+class _SummaryQuerySession:
+    def __init__(self, *, cron=False):
+        self.cron = cron
+        self.executed = []
+        self.next_run = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
+
+    async def execute(self, statement, parameters):
+        sql, params = str(statement), dict(parameters)
+        self.executed.append((sql, params))
+        if self.cron and "SELECT task_name" in sql:
+            return _SummaryMappedResult(scalar="Private owner's schedule")
+        if self.cron:
+            return _SummaryMappedResult(row={
+                "total_cron_jobs": 2,
+                "enabled_cron_jobs": 1,
+                "next_job_time": self.next_run,
+            })
+        return _SummaryMappedResult(row={
+            "total_definitions": 3,
+            "tasks_run_today": 1,
+            "active_tasks": 1,
+            "failed_tasks": 0,
+        })
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["task", "cron"])
+async def test_dashboard_summary_sql_enforces_tenant_and_creator_on_every_query(
+    monkeypatch, kind,
+):
+    session = _SummaryQuerySession(cron=kind == "cron")
+    scopes = []
+
+    @asynccontextmanager
+    async def scoped_transaction(tenant_id, *, user_id=None):
+        scopes.append((tenant_id, user_id))
+        yield session
+
+    monkeypatch.setattr(
+        automation_repository, "async_transaction_scope", scoped_transaction,
+    )
+    repo = SqlAutomationRepository()
+    if kind == "task":
+        data = await repo.task_summary(TENANT, created_by=OWNER)
+        assert data["total_definitions"] == 3
+        assert len(session.executed) == 1
+    else:
+        data = await repo.cron_summary(TENANT, created_by=OWNER)
+        assert data["next_job"] == "Private owner's schedule"
+        assert data["next_job_time"] == session.next_run.isoformat()
+        assert len(session.executed) == 2
+
+    assert scopes == [(TENANT, OWNER)]
+    for statement, params in session.executed:
+        assert "tenant_id = CAST(:tenant_id AS uuid)" in statement
+        assert "created_by = CAST(:created_by AS uuid)" in statement
+        assert params["tenant_id"] == TENANT
+        assert params["created_by"] == OWNER
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_definition_service_forwards_authenticated_creator():
+    class SummaryRepo:
+        def __init__(self):
+            self.calls = []
+
+        async def task_summary(self, tenant_id, *, created_by):
+            self.calls.append(("tasks", tenant_id, created_by))
+            return {"owner_id": created_by, "total_definitions": 1}
+
+        async def cron_summary(self, tenant_id, *, created_by):
+            self.calls.append(("cron", tenant_id, created_by))
+            return {
+                "owner_id": created_by,
+                "next_job": f"schedule-for-{created_by}",
+            }
+
+    repo = SummaryRepo()
+    service = AutomationDefinitionService(repository=repo)
+    owner = UserData(user_id=OWNER, tenant_id=TENANT)
+    other = UserData(user_id=OTHER, tenant_id=TENANT)
+    foreign = UserData(user_id=OWNER, tenant_id=FOREIGN_TENANT)
+
+    assert (await service.task_summary(user=owner))["owner_id"] == OWNER
+    assert (await service.cron_summary(user=owner))["owner_id"] == OWNER
+    assert (await service.task_summary(user=other))["owner_id"] == OTHER
+    assert (await service.cron_summary(user=other))["next_job"] == f"schedule-for-{OTHER}"
+    assert (await service.task_summary(user=foreign))["owner_id"] == OWNER
+    assert repo.calls == [
+        ("tasks", TENANT, OWNER),
+        ("cron", TENANT, OWNER),
+        ("tasks", TENANT, OTHER),
+        ("cron", TENANT, OTHER),
+        ("tasks", FOREIGN_TENANT, OWNER),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mounted_automation_dashboard_never_aggregates_another_user(
+    monkeypatch,
+):
+    from ai_karen_engine.api_routes.automation import stats
+
+    forwarded = []
+
+    async def personal_tasks(*, user):
+        forwarded.append(("tasks", str(user.tenant_id), str(user.user_id)))
+        return {"active_tasks": 1, "tasks_run_today": 1, "total_definitions": 1}
+
+    async def personal_cron(*, user):
+        forwarded.append(("cron", str(user.tenant_id), str(user.user_id)))
+        return {
+            "total_cron_jobs": 1,
+            "enabled_cron_jobs": 1,
+            "next_job": f"Private schedule of {user.user_id}",
+            "next_job_time": "2026-11-14T12:00:00+00:00",
+        }
+
+    class Jobs:
+        async def list_jobs(self, user):
+            forwarded.append(("jobs", str(user.tenant_id), str(user.user_id)))
+            return [{"id": f"job-{user.user_id}"}]
+
+    monkeypatch.setattr(stats, "get_tasks_summary", personal_tasks)
+    monkeypatch.setattr(stats, "get_cron_summary", personal_cron)
+    for principal in (
+        UserData(user_id=OWNER, tenant_id=TENANT),
+        UserData(user_id=OTHER, tenant_id=TENANT),
+        UserData(user_id=OWNER, tenant_id=FOREIGN_TENANT),
+    ):
+        response = await stats.get_automation_stats(
+            user=principal, job_service=Jobs(),
+        )
+        assert response["nextJob"] == f"Private schedule of {principal.user_id}"
+        assert response["details"]["cron"]["next_job"] == response["nextJob"]
+        assert response["definedSequences"] == "1"
+
+    assert forwarded == [
+        (kind, TENANT, OWNER) for kind in ("tasks", "cron", "jobs")
+    ] + [
+        (kind, TENANT, OTHER) for kind in ("tasks", "cron", "jobs")
+    ] + [
+        (kind, FOREIGN_TENANT, OWNER) for kind in ("tasks", "cron", "jobs")
+    ]
