@@ -588,3 +588,155 @@ def test_scheduler_clarification_cannot_be_injected_by_raw_client_metadata():
     assert request.metadata == {}
     assert ChatRuntime._resolve_typed_pending_clarification(request) is False
     assert resolve_capability_decision(request.messages[-1]["content"]).intent != "automation.create"
+
+
+@pytest.mark.asyncio
+async def test_daily_chat_agent_first_then_time_resume_commits_once(monkeypatch):
+    from ai_karen_engine.services.automation import definitions
+
+    original = "create a task to pull the latest news everyday"
+    first = _schedule_request(original)
+    calls = []
+    owner, tenant = first.context.user_id, first.context.tenant_id
+
+    class ScheduleWriter:
+        async def create_chat_recurring_task(self, **kwargs):
+            calls.append(kwargs)
+            return {
+                "task": {
+                    "id": "task-agent-first", "primaryAgent": "research",
+                    "created_by": owner, "tenant_id": tenant,
+                },
+                "cron": {
+                    "id": "cron-agent-first", "targetId": "task-agent-first",
+                    "schedule": "0 7 * * *",
+                    "timezone_id": "America/Detroit",
+                    "local_time": "07:00:00",
+                    "enabled": True,
+                    "nextRun": "2026-11-14T12:00:00+00:00",
+                    "timestamp_utc": "2026-11-14T12:00:00+00:00",
+                    "local_datetime": "2026-11-14T07:00:00-05:00",
+                    "created_by": owner, "tenant_id": tenant,
+                },
+                "replayed": False,
+            }
+
+    monkeypatch.setattr(
+        definitions, "get_automation_definition_service", lambda: ScheduleWriter(),
+    )
+    executor = DirectCapabilityExecutor()
+    initial = await executor.execute(
+        request=first, decision=SimpleNamespace(intent="automation.create"),
+        plan=_schedule_plan(), meter=_ScheduleMeter(),
+    )
+    assert not initial.success and not calls
+    pending = ChatRuntime._pending_clarification_from_result(first, initial)
+    agent_text = "using agent research"
+    partial = _schedule_request(
+        agent_text, context=first.context,
+        messages=[
+            {"role": "user", "content": original},
+            {"role": "assistant", "content": initial.text,
+             "metadata": {"pending_clarification": pending}},
+            {"role": "user", "content": agent_text},
+        ],
+    )
+    assert ChatRuntime._resolve_typed_pending_clarification(partial)
+    assert partial.metadata["clarification_effective_query"] == (
+        original + " using agent research"
+    )
+    interim = await executor.execute(
+        request=partial, decision=SimpleNamespace(intent="automation.create"),
+        plan=_schedule_plan(), meter=_ScheduleMeter(),
+    )
+    assert interim.payload["missing_fields"] == ["local_time", "timezone_id"]
+    assert not calls
+    pending_time = ChatRuntime._pending_clarification_from_result(partial, interim)
+    assert pending_time["fragments"] == [agent_text]
+    assert pending_time["original_request"] == original
+
+    time_text = "07:00 in America/Detroit"
+    complete = _schedule_request(
+        time_text, context=first.context,
+        messages=[
+            *partial.messages,
+            {"role": "assistant", "content": interim.text,
+             "metadata": {"pending_clarification": pending_time}},
+            {"role": "user", "content": time_text},
+        ],
+    )
+    assert ChatRuntime._resolve_typed_pending_clarification(complete)
+    assert complete.metadata["clarification_effective_query"] == (
+        original + " using agent research at 07:00 in America/Detroit"
+    )
+    assert resolve_capability_decision(
+        complete.metadata["clarification_effective_query"]
+    ).intent == "automation.create"
+    accepted = await executor.execute(
+        request=complete, decision=SimpleNamespace(intent="automation.create"),
+        plan=_schedule_plan(), meter=_ScheduleMeter(),
+    )
+    assert accepted.success and accepted.payload["automation_created"] is True
+    assert len(calls) == 1
+    assert calls[0]["purpose"] == "pull the latest news"
+    assert calls[0]["primary_agent"] == "research"
+    assert calls[0]["timezone_id"] == "America/Detroit"
+    assert calls[0]["hour_local"] == 7
+    assert calls[0]["minute_local"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial", [
+    "Create a daily task to pull news using agent research",
+    "Create a task to pull news every day using agent research",
+])
+async def test_daily_chat_original_agent_accepts_later_explicit_local_time(
+    monkeypatch, initial,
+):
+    from ai_karen_engine.services.automation import definitions
+
+    calls = []
+
+    class CapturedWriter:
+        async def create_chat_recurring_task(self, **kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("Simulated storage outage, never fake a schedule")
+
+    monkeypatch.setattr(
+        definitions, "get_automation_definition_service",
+        lambda: CapturedWriter(),
+    )
+    original_request = _schedule_request(initial)
+    executor = DirectCapabilityExecutor()
+    incomplete = await executor.execute(
+        request=original_request,
+        decision=SimpleNamespace(intent="automation.create"),
+        plan=_schedule_plan(), meter=_ScheduleMeter(),
+    )
+    assert incomplete.payload["missing_fields"] == ["local_time", "timezone_id"]
+    assert not calls
+    pending = ChatRuntime._pending_clarification_from_result(
+        original_request, incomplete,
+    )
+    reply = "07:00 in America/Detroit"
+    request = _schedule_request(
+        reply, context=original_request.context,
+        messages=[
+            {"role": "user", "content": initial},
+            {"role": "assistant", "content": incomplete.text,
+             "metadata": {"pending_clarification": pending}},
+            {"role": "user", "content": reply},
+        ],
+    )
+    assert ChatRuntime._resolve_typed_pending_clarification(request)
+    denied = await executor.execute(
+        request=request, decision=SimpleNamespace(intent="automation.create"),
+        plan=_schedule_plan(), meter=_ScheduleMeter(),
+    )
+    assert not denied.success
+    assert denied.error == "automation_persistence_unavailable"
+    assert denied.payload["automation_created"] is False
+    assert len(calls) == 1
+    assert calls[0]["primary_agent"] == "research"
+    assert calls[0]["hour_local"] == 7
+    assert calls[0]["timezone_id"] == "America/Detroit"
