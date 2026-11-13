@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -292,9 +293,38 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         assert still_pending is not None
         assert still_pending["status"] == "ReviewRequired"
         assert still_pending["reviewedAt"] is None
+        # Two fenced claims were accepted (initial + recovery), regardless
+        # of how many reviews were attempted. No completed review event exists
+        # because the deliberately failed append must roll back with UPDATE.
         assert await connection.fetchval(
-            "SELECT count(*) FROM public.outcome_records"
+            """
+            SELECT count(*) FROM public.outcome_records
+            WHERE source = 'runtime.execution'
+              AND payload->'metadata'->>'event_type' = 'automation.task.execution_started'
+              AND payload->'metadata'->>'receipt_version' = 'automation-task-attempt.v1'
+            """
+        ) == 2
+        assert await connection.fetchval(
+            "SELECT count(*) FROM public.outcome_records WHERE source = 'user.feedback'"
         ) == 0
+
+        # Real PostgreSQL counts only owner-signed task starts inside the
+        # selected UTC day. IANA local bounds are covered in definition tests.
+        now_utc = datetime.now(timezone.utc)
+        day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        summary = await repo.task_summary(
+            str(tenant), created_by=str(user),
+            day_start_utc=day_start, day_end_utc=day_end,
+        )
+        assert summary["tasks_run_today"] == 2
+        assert summary["total_definitions"] == 1
+        foreign_summary = await repo.task_summary(
+            str(tenant), created_by=str(uuid.uuid4()),
+            day_start_utc=day_start, day_end_utc=day_end,
+        )
+        assert foreign_summary["tasks_run_today"] == 0
+        assert foreign_summary["total_definitions"] == 0
         await connection.execute(
             "ALTER TABLE public.outcome_records DROP CONSTRAINT forbid_task_feedback"
         )
@@ -368,7 +398,49 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         ]["answer_text"] == "Second output, intentionally rejected"
         assert await connection.fetchval(
             "SELECT count(*) FROM public.outcome_records"
+        ) == 5  # 3 accepted starts + 2 explicit user reviews
+        assert await connection.fetchval(
+            """
+            SELECT count(*) FROM public.outcome_records
+            WHERE source = 'user.feedback'
+              AND payload->>'feedback_type' = 'task_completion_confirmation'
+            """
         ) == 2
+
+        # A DB-level receipt write failure must roll back the accepted
+        # claim and lifetime counter. Existing outcome history remains valid.
+        await connection.execute(
+            """
+            ALTER TABLE public.outcome_records
+            ADD CONSTRAINT forbid_new_task_start_receipt
+            CHECK (
+              COALESCE(
+                payload->'metadata'->>'event_type',
+                ''
+              ) <> 'automation.task.execution_started'
+            ) NOT VALID
+            """
+        )
+        before_failed_claim = await repo.get_task(
+            task_id, str(tenant), created_by=str(user),
+        )
+        with pytest.raises(Exception):
+            await repo.mark_task_running(
+                task_id, str(tenant), claim_token=str(uuid.uuid4()),
+                lease_seconds=60, created_by=str(user),
+            )
+        rolled_back_claim = await repo.get_task(
+            task_id, str(tenant), created_by=str(user),
+        )
+        assert rolled_back_claim["status"] == before_failed_claim["status"] == "Rejected"
+        assert rolled_back_claim["runCount"] == before_failed_claim["runCount"] == 3
+        assert (await repo.task_summary(
+            str(tenant), created_by=str(user),
+            day_start_utc=day_start, day_end_utc=day_end,
+        ))["tasks_run_today"] == 3
+        await connection.execute(
+            "ALTER TABLE public.outcome_records DROP CONSTRAINT forbid_new_task_start_receipt"
+        )
 
         # A declared machine conformance policy can never be approved by
         # the user unless the actual runtime-owned checker marked it passed.
@@ -449,7 +521,18 @@ async def test_sql_atomic_claim_recovery_and_old_owner_fencing():
         )
         assert await connection.fetchval(
             "SELECT count(*) FROM public.outcome_records"
-        ) == 4
+        ) == 9  # 5 accepted starts + 4 explicit user reviews
+        assert await connection.fetchval(
+            """
+            SELECT count(*) FROM public.outcome_records
+            WHERE source = 'runtime.execution'
+              AND payload->'metadata'->>'event_type' = 'automation.task.execution_started'
+            """
+        ) == 5
+        assert (await repo.task_summary(
+            str(tenant), created_by=str(user),
+            day_start_utc=day_start, day_end_utc=day_end,
+        ))["tasks_run_today"] == 5
 
         # MI-12: real PostgreSQL stores governed tool-runtime acknowledgments
         # in the same canonical outcome table, owner/run/tenant filtered.

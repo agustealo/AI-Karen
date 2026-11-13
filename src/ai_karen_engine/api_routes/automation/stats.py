@@ -26,8 +26,9 @@ async def get_automation_stats(
     """Return dashboard truth only for the authenticated task owner.
 
     Agent catalog/lifecycle data is intentionally absent because the legacy
-    agent registry is installation-wide control-plane state. This tenant
-    dashboard exposes only metrics owned by tenant-scoped automation sources.
+    agent registry is installation-wide control-plane state. This personal dashboard exposes only authenticated-user-owned task,
+    schedule and job metrics. Task counts are accepted execution starts,
+    not assertions of completed work or delivery.
     """
     try:
         tasks_summary = await get_tasks_summary(user=user)
@@ -37,6 +38,10 @@ async def get_automation_stats(
         return {
             "activeTasks": str(tasks_summary["active_tasks"]),
             "tasksToday": str(tasks_summary["tasks_run_today"]),
+            "tasksTodayTimezone": tasks_summary["timezone_id"],
+            "tasksTodayLocalDate": tasks_summary["local_date"],
+            "tasksTodaySource": tasks_summary["activity_metric"],
+            "tasksTodayCoverage": tasks_summary["history_coverage"],
             "definedSequences": str(len(jobs)),
             "nextJob": cron_summary["next_job"] or "None Scheduled",
             "nextJobTime": cron_summary["next_job_time"] or "N/A",

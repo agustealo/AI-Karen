@@ -1,6 +1,10 @@
 export interface AutomationStats {
   activeTasks: string;
   tasksToday: string;
+  tasksTodayTimezone: string;
+  tasksTodayLocalDate: string;
+  tasksTodaySource: "durable_execution_starts";
+  tasksTodayCoverage: "from_task_start_receipt_instrumentation";
   definedSequences: string;
   nextJob: string;
   nextJobTime: string;
@@ -12,6 +16,9 @@ const hasNonEmptyString = (
 ): boolean => typeof value[key] === "string" && value[key].trim().length > 0;
 
 const NON_NEGATIVE_INTEGER = /^\d+$/;
+const ISO_LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const EXECUTION_SOURCE = "durable_execution_starts";
+const EXECUTION_COVERAGE = "from_task_start_receipt_instrumentation";
 const UNAVAILABLE_VALUES = new Set(["unavailable", "unknown"]);
 const NO_SCHEDULE = "none scheduled";
 const NOT_APPLICABLE = "n/a";
@@ -19,7 +26,7 @@ const NOT_APPLICABLE = "n/a";
 const normalized = (value: string): string => value.trim().toLowerCase();
 
 /**
- * Validate the tenant-scoped automation dashboard response shape without
+ * Validate the authenticated-owner automation dashboard response shape without
  * inventing missing runtime truth. Semantic readiness is evaluated separately.
  */
 export function parseAutomationStats(value: unknown): AutomationStats | null {
@@ -31,6 +38,10 @@ export function parseAutomationStats(value: unknown): AutomationStats | null {
   const requiredFields: Array<keyof AutomationStats> = [
     "activeTasks",
     "tasksToday",
+    "tasksTodayTimezone",
+    "tasksTodayLocalDate",
+    "tasksTodaySource",
+    "tasksTodayCoverage",
     "definedSequences",
     "nextJob",
     "nextJobTime",
@@ -39,10 +50,21 @@ export function parseAutomationStats(value: unknown): AutomationStats | null {
   if (!requiredFields.every((key) => hasNonEmptyString(candidate, key))) {
     return null;
   }
+  if (
+    candidate.tasksTodaySource !== EXECUTION_SOURCE ||
+    candidate.tasksTodayCoverage !== EXECUTION_COVERAGE ||
+    !ISO_LOCAL_DATE.test(candidate.tasksTodayLocalDate as string)
+  ) {
+    return null;
+  }
 
   return {
     activeTasks: candidate.activeTasks as string,
     tasksToday: candidate.tasksToday as string,
+    tasksTodayTimezone: candidate.tasksTodayTimezone as string,
+    tasksTodayLocalDate: candidate.tasksTodayLocalDate as string,
+    tasksTodaySource: EXECUTION_SOURCE,
+    tasksTodayCoverage: EXECUTION_COVERAGE,
     definedSequences: candidate.definedSequences as string,
     nextJob: candidate.nextJob as string,
     nextJobTime: candidate.nextJobTime as string,
@@ -51,7 +73,7 @@ export function parseAutomationStats(value: unknown): AutomationStats | null {
 
 /**
  * Return a reason when a structurally valid response is not trustworthy enough
- * to be presented as live tenant-scoped runtime truth.
+ * to be presented as live authenticated-owner runtime truth.
  *
  * An empty schedule is a valid operational state. The showcase capture applies
  * a stricter presentation-readiness policy and requires a populated demo.
@@ -71,6 +93,14 @@ export function automationStatsReadinessIssue(
 
   if (!NON_NEGATIVE_INTEGER.test(stats.tasksToday.trim())) {
     return "Task execution metrics are not backed by the canonical count contract.";
+  }
+  if (
+    stats.tasksTodaySource !== EXECUTION_SOURCE ||
+    stats.tasksTodayCoverage !== EXECUTION_COVERAGE ||
+    !ISO_LOCAL_DATE.test(stats.tasksTodayLocalDate) ||
+    !stats.tasksTodayTimezone.trim()
+  ) {
+    return "Task attempt metrics lack authenticated IANA-local evidence provenance.";
   }
 
   if (!NON_NEGATIVE_INTEGER.test(stats.definedSequences.trim())) {
