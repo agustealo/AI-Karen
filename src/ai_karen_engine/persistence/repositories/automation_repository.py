@@ -823,47 +823,50 @@ class SqlAutomationRepository:
             )
             return _cron_row(result.mappings().one())
 
-    async def list_cron(self, tenant_id: str) -> List[Dict[str, Any]]:
-        async with async_transaction_scope(tenant_id) as session:
+    async def list_cron(self, tenant_id: str, *, created_by: str) -> List[Dict[str, Any]]:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
                     SELECT * FROM public.automation_cron_jobs
                     WHERE tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     ORDER BY created_at DESC
                     """
                 ),
-                {"tenant_id": tenant_id},
+                {"tenant_id": tenant_id, "created_by": created_by},
             )
             return [_cron_row(row) for row in result.mappings().all()]
 
-    async def get_cron(self, cron_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-        async with async_transaction_scope(tenant_id) as session:
+    async def get_cron(self, cron_id: str, tenant_id: str, *, created_by: str) -> Optional[Dict[str, Any]]:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
                     SELECT * FROM public.automation_cron_jobs
                     WHERE cron_id = :cron_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     """
                 ),
-                {"cron_id": cron_id, "tenant_id": tenant_id},
+                {"cron_id": cron_id, "tenant_id": tenant_id, "created_by": created_by},
             )
             row = result.mappings().one_or_none()
             return _cron_row(row) if row else None
 
-    async def delete_cron(self, cron_id: str, tenant_id: str) -> bool:
-        async with async_transaction_scope(tenant_id) as session:
+    async def delete_cron(self, cron_id: str, tenant_id: str, *, created_by: str) -> bool:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
                     DELETE FROM public.automation_cron_jobs
                     WHERE cron_id = :cron_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     RETURNING cron_id
                     """
                 ),
-                {"cron_id": cron_id, "tenant_id": tenant_id},
+                {"cron_id": cron_id, "tenant_id": tenant_id, "created_by": created_by},
             )
             return result.scalar_one_or_none() is not None
 
@@ -872,9 +875,10 @@ class SqlAutomationRepository:
         cron_id: str,
         tenant_id: str,
         *,
+        created_by: str,
         next_run_at: Optional[datetime],
     ) -> Optional[Dict[str, Any]]:
-        async with async_transaction_scope(tenant_id) as session:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
@@ -887,12 +891,13 @@ class SqlAutomationRepository:
                         updated_at = now()
                     WHERE cron_id = :cron_id
                       AND tenant_id = CAST(:tenant_id AS uuid)
+                      AND created_by = CAST(:created_by AS uuid)
                     RETURNING *
                     """
                 ),
                 {
                     "cron_id": cron_id,
-                    "tenant_id": tenant_id,
+                    "tenant_id": tenant_id, "created_by": created_by,
                     "next_run_at": next_run_at or _utcnow(),
                 },
             )

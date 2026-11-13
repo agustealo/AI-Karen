@@ -183,16 +183,22 @@ class AutomationDefinitionService:
 
     async def list_cron(self, *, user: UserData) -> List[Dict[str, Any]]:
         _require_identity(user)
-        return await self._repository.list_cron(str(user.tenant_id))
+        return await self._repository.list_cron(
+            str(user.tenant_id), created_by=str(user.user_id)
+        )
 
     async def delete_cron(self, cron_id: str, *, user: UserData) -> None:
         _require_identity(user)
-        if not await self._repository.delete_cron(cron_id, str(user.tenant_id)):
+        if not await self._repository.delete_cron(
+            cron_id, str(user.tenant_id), created_by=str(user.user_id)
+        ):
             raise AutomationNotFoundError("Cron job not found")
 
     async def toggle_cron(self, cron_id: str, *, user: UserData) -> Dict[str, Any]:
         _require_identity(user)
-        current = await self._repository.get_cron(cron_id, str(user.tenant_id))
+        current = await self._repository.get_cron(
+            cron_id, str(user.tenant_id), created_by=str(user.user_id)
+        )
         if current is None:
             raise AutomationNotFoundError("Cron job not found")
         next_run_at = next_cron_run(current["schedule"])
@@ -200,6 +206,7 @@ class AutomationDefinitionService:
             cron_id,
             str(user.tenant_id),
             next_run_at=next_run_at,
+            created_by=str(user.user_id),
         )
         if updated is None:
             raise AutomationNotFoundError("Cron job not found")
