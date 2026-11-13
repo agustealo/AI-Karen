@@ -371,12 +371,47 @@ class AutomationDefinitionService:
             raise AutomationNotFoundError("Cron job not found")
         return updated
 
-    async def task_summary(self, *, user: UserData) -> Dict[str, Any]:
-        """Report only the authenticated owner's task activity."""
+    async def task_summary(
+        self, *, user: UserData, now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Summarize proven starts for the owner's selected IANA civil date.
+
+        A timezone preference is never interpreted as physical location.
+        Without a saved preference the day boundary is explicitly UTC.
+        Legacy cumulative run_count values cannot reconstruct historic dates.
+        """
         _require_identity(user)
-        return await self._repository.task_summary(
-            str(user.tenant_id), created_by=str(user.user_id)
+        prefs = user.preferences or {}
+        preferred = prefs.get("timezone_id") or prefs.get("timezone")
+        timezone_source = "user_preference" if preferred else "default_utc"
+        zone = _validated_timezone(str(preferred or "UTC"))
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise AutomationDefinitionError("Task activity clock requires a timezone")
+
+        local_date = current.astimezone(zone).date()
+        start_local = datetime.combine(local_date, clock_time.min, tzinfo=zone)
+        end_local = datetime.combine(
+            local_date + timedelta(days=1), clock_time.min, tzinfo=zone,
         )
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = end_local.astimezone(timezone.utc)
+        summary = await self._repository.task_summary(
+            str(user.tenant_id),
+            created_by=str(user.user_id),
+            day_start_utc=start_utc,
+            day_end_utc=end_utc,
+        )
+        return {
+            **summary,
+            "local_date": local_date.isoformat(),
+            "timezone_id": zone.key,
+            "timezone_source": timezone_source,
+            "day_start_utc": start_utc.isoformat(),
+            "day_end_utc": end_utc.isoformat(),
+            "activity_metric": "durable_execution_starts",
+            "history_coverage": "from_task_start_receipt_instrumentation",
+        }
 
     async def cron_summary(self, *, user: UserData) -> Dict[str, Any]:
         """Keep private schedule titles and execution times owner-scoped."""
