@@ -657,6 +657,41 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   );
   expect(owned.status(), "Consumer preview requires an owned canonical conversation").toBe(200);
 
+  // Derive expected speaker identity independently from the authenticated
+  // backend, never from the rendered text or untrusted browser storage.
+  const currentIdentity = await page.request.get("/api/auth/me");
+  expect(currentIdentity.status(), "Canonical authenticated identity must be available").toBe(200);
+  const account: unknown = await currentIdentity.json();
+  expect(account && typeof account === "object" && !Array.isArray(account)).toBe(true);
+  const auth = account as Record<string, unknown>;
+  // /api/auth/me is owner-authenticated and response_model=UserResponse
+  // deliberately excludes a redundant "authenticated" flag.
+  expect(typeof auth.user_id).toBe("string");
+  expect(UUID.test(auth.user_id as string)).toBe(true);
+  expect(typeof auth.tenant_id).toBe("string");
+  expect(UUID.test(auth.tenant_id as string)).toBe(true);
+  const normalizedName =
+    typeof auth.full_name === "string" ? auth.full_name.trim().replace(/\s+/g, " ") : "";
+  const expectedUserSpeaker = normalizedName.length > 0 && normalizedName.length <= 100
+    ? normalizedName : "You";
+
+  // Require authentic owner-scoped user AND assistant turns for visible
+  // speaker acceptance. Never manufacture an SDK transcript in Playwright.
+  const savedMessages = await page.request.get(
+    "/api/copilotkit/threads/" + encodeURIComponent(conversationId) + "/messages",
+  );
+  expect(savedMessages.status(),
+    "Speaker acceptance needs authenticated persisted user/assistant history").toBe(200);
+  const speakerHistory = await savedMessages.json() as {
+    threadId: string;
+    messages: Array<{ id: string; role: string }>;
+  };
+  expect(speakerHistory.threadId).toBe(conversationId);
+  expect(speakerHistory.messages.some(message => message.role === "user"),
+    "Owned fixture must contain a real user turn").toBe(true);
+  expect(speakerHistory.messages.some(message => message.role === "assistant"),
+    "Owned fixture must contain a real assistant turn").toBe(true);
+
   const inferred: string[] = [];
   page.context().on("request", request => {
     if (request.method() === "POST" && isInferenceRequest(request.url())) {
@@ -675,6 +710,21 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible({
     timeout: 30000,
   });
+  const userSpeaker = page.getByTestId("karen-copilot-user-speaker").last();
+  const karenSpeaker = page.getByTestId("karen-copilot-assistant-speaker").last();
+  await expect(userSpeaker, "Saved user messages must identify their speaker")
+    .toBeVisible({ timeout: 30000 });
+  await expect(userSpeaker).toHaveText(expectedUserSpeaker);
+  await expect(userSpeaker).toHaveAttribute("aria-label", `User: ${expectedUserSpeaker}`);
+  const userSpeakerTexts = await page.getByTestId("karen-copilot-user-speaker")
+    .allTextContents();
+  expect(userSpeakerTexts.length).toBeGreaterThan(0);
+  expect(userSpeakerTexts.every(label => label === expectedUserSpeaker),
+    "Every saved user turn must carry the canonical authenticated display name").toBe(true);
+  await expect(karenSpeaker, "Saved assistant messages must visibly identify Karen")
+    .toBeVisible({ timeout: 30000 });
+  await expect(karenSpeaker).toHaveText("Karen");
+  await expect(karenSpeaker).toHaveAttribute("aria-label", "Assistant: Karen");
   await page.setViewportSize({ width: 1440, height: 900 });
   const intelligence = page.locator(
     '[data-testid="conversation-context-rail"], [data-testid="karen-copilot-rail-unverified"]',
@@ -700,11 +750,29 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-copilot-consumer-chat"))
     .toHaveAttribute("data-conversation-id", conversationId);
   await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible();
+  // Recovery must retain the same speaker boundary without a new model run.
+  const restoredUserSpeakers = page.getByTestId("karen-copilot-user-speaker");
+  await expect(restoredUserSpeakers.last())
+    .toBeVisible({ timeout: 30000 });
+  await expect(restoredUserSpeakers.last()).toHaveText(expectedUserSpeaker);
+  await expect(restoredUserSpeakers.last())
+    .toHaveAttribute("aria-label", `User: ${expectedUserSpeaker}`);
+  const restoredNames = await restoredUserSpeakers.allTextContents();
+  expect(restoredNames.length).toBeGreaterThan(0);
+  expect(restoredNames.every(label => label === expectedUserSpeaker),
+    "Reload must retain the authenticated speaker for every saved user turn").toBe(true);
+  const restoredKarenSpeakers = page.getByTestId("karen-copilot-assistant-speaker");
+  await expect(restoredKarenSpeakers.last()).toHaveText("Karen", { timeout: 30000 });
+  await expect(restoredKarenSpeakers.last())
+    .toHaveAttribute("aria-label", "Assistant: Karen");
   expect(inferred, "Consumer reload must not create a model run").toEqual([]);
 
   await page.goto("/dashboard");
-  await expect(page.getByTestId("karen-assistant-ui-chat")).toBeVisible();
-  expect(inferred, "Ordinary dashboard remains on the existing consumer mount").toEqual([]);
+  // The live dashboard already mounts KarenCopilotConsumerChat; do not
+  // accidentally attest the retired assistant-ui renderer instead.
+  await expect(page.getByTestId("karen-copilot-consumer-chat"))
+    .toBeVisible({ timeout: 30000 });
+  expect(inferred, "Ordinary dashboard navigation must not start inference").toEqual([]);
 });
 
 test("CK-CONSUMER-02 unavailable scoped conversation cannot become a new thread", async ({ page }) => {
