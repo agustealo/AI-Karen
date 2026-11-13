@@ -2416,9 +2416,18 @@ class ChatRuntime:
                 "Authorized conversation history unavailable: %s",
                 type(exc).__name__,
             )
-        # These fields are server-issued only after reconciling an owner-scoped
-        # transcript. Never accept caller-injected routing/side-effect hints.
-        # The typed continuation below recreates them after provenance checks.
+        # Caller metadata must not choose a new effective mutation query.
+        self._discard_untrusted_clarification_metadata(request)
+        if not self._resolve_typed_pending_clarification(request):
+            self._resolve_pending_weather_followup(request)
+
+    @staticmethod
+    def _discard_untrusted_clarification_metadata(
+        request: ChatExecutionRequest,
+    ) -> None:
+        """Only a verified transcript can authorize clarification routing."""
+        # No client-supplied keys may bypass the canonical CORTEX intent and
+        # action-policy checks. Resolved values are reconstructed below.
         for key in (
             "clarification_effective_query",
             "clarification_resolved",
@@ -2427,8 +2436,6 @@ class ChatRuntime:
             "clarification_inputs",
         ):
             request.metadata.pop(key, None)
-        if not self._resolve_typed_pending_clarification(request):
-            self._resolve_pending_weather_followup(request)
 
     @staticmethod
     def _automation_clarification_fragment(
