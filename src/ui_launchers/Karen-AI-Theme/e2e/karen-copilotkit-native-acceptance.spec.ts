@@ -657,6 +657,23 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   );
   expect(owned.status(), "Consumer preview requires an owned canonical conversation").toBe(200);
 
+  // Require authentic owner-scoped user AND assistant turns for visible
+  // speaker acceptance. Never manufacture an SDK transcript in Playwright.
+  const savedMessages = await page.request.get(
+    "/api/copilotkit/threads/" + encodeURIComponent(conversationId) + "/messages",
+  );
+  expect(savedMessages.status(),
+    "Speaker acceptance needs authenticated persisted user/assistant history").toBe(200);
+  const speakerHistory = await savedMessages.json() as {
+    threadId: string;
+    messages: Array<{ id: string; role: string }>;
+  };
+  expect(speakerHistory.threadId).toBe(conversationId);
+  expect(speakerHistory.messages.some(message => message.role === "user"),
+    "Owned fixture must contain a real user turn").toBe(true);
+  expect(speakerHistory.messages.some(message => message.role === "assistant"),
+    "Owned fixture must contain a real assistant turn").toBe(true);
+
   const inferred: string[] = [];
   page.context().on("request", request => {
     if (request.method() === "POST" && isInferenceRequest(request.url())) {
@@ -675,6 +692,15 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible({
     timeout: 30000,
   });
+  const userSpeaker = page.getByTestId("karen-copilot-user-speaker").last();
+  const karenSpeaker = page.getByTestId("karen-copilot-assistant-speaker").last();
+  await expect(userSpeaker, "Saved user messages must identify their speaker")
+    .toBeVisible({ timeout: 30000 });
+  await expect(userSpeaker).toHaveAttribute("aria-label", /^User: \S.+|^User: \S$/);
+  await expect(karenSpeaker, "Saved assistant messages must visibly identify Karen")
+    .toBeVisible({ timeout: 30000 });
+  await expect(karenSpeaker).toHaveText("Karen");
+  await expect(karenSpeaker).toHaveAttribute("aria-label", "Assistant: Karen");
   await page.setViewportSize({ width: 1440, height: 900 });
   const intelligence = page.locator(
     '[data-testid="conversation-context-rail"], [data-testid="karen-copilot-rail-unverified"]',
@@ -700,6 +726,11 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(page.getByTestId("karen-copilot-consumer-chat"))
     .toHaveAttribute("data-conversation-id", conversationId);
   await expect(page.getByTestId("karen-copilot-sdk-chat")).toBeVisible();
+  // Recovery must retain the same speaker boundary without a new model run.
+  await expect(page.getByTestId("karen-copilot-user-speaker").last())
+    .toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId("karen-copilot-assistant-speaker").last())
+    .toHaveText("Karen", { timeout: 30000 });
   expect(inferred, "Consumer reload must not create a model run").toEqual([]);
 
   await page.goto("/dashboard");
