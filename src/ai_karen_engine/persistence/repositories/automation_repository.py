@@ -424,7 +424,7 @@ class SqlAutomationRepository:
         if lease_seconds <= 0:
             raise ValueError("Task lease_seconds must be positive")
         token = str(uuid.UUID(claim_token))
-        async with async_transaction_scope(tenant_id) as session:
+        async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
@@ -464,7 +464,35 @@ class SqlAutomationRepository:
                 },
             )
             row = result.mappings().one_or_none()
-            return _task_row(row) if row else None
+            if row is None:
+                return None
+
+            # The accepted, fenced PostgreSQL claim is the only authority for
+            # a task execution START. Record one append-only receipt in the
+            # exact same transaction. On any persistence failure, the claim
+            # and run_count increment roll back rather than inventing a run.
+            claimed_at = row["last_run_at"]
+            if not isinstance(claimed_at, datetime) or claimed_at.tzinfo is None:
+                raise ValueError("Accepted task claim lacks a UTC-aware start instant")
+            await PostgresOutcomeStore.append_in_transaction(
+                session,
+                {
+                    "outcome_id": f"out_task_started_{token.replace('-', '')}",
+                    "source": "runtime.execution",
+                    "trajectory_id": f"task:{task_id}",
+                    "task_id": task_id,
+                    "execution_id": token,
+                    "tenant_id": tenant_id,
+                    "user_id": created_by,
+                    "recorded_at": claimed_at,
+                    "metadata": {
+                        "event_type": "automation.task.execution_started",
+                        "receipt_version": "automation-task-attempt.v1",
+                        "claim_fenced": True,
+                    },
+                },
+            )
+            return _task_row(row)
 
     async def renew_task_claim(
         self,
@@ -663,16 +691,50 @@ class SqlAutomationRepository:
             )
             return _task_row(row)
 
-    async def task_summary(self, tenant_id: str, *, created_by: str) -> Dict[str, Any]:
+    async def task_summary(
+        self,
+        tenant_id: str,
+        *,
+        created_by: str,
+        day_start_utc: datetime,
+        day_end_utc: datetime,
+    ) -> Dict[str, Any]:
+        """Count durable accepted execution claims, not cumulative run_count.
+
+        Both bounds are calculated once by the authenticated definition owner
+        from an IANA local civil date. Exclusive end handles 23/25-hour DST
+        days. Historical claims predating this receipt are not reconstructed.
+        """
+        if (
+            not isinstance(day_start_utc, datetime)
+            or not isinstance(day_end_utc, datetime)
+            or day_start_utc.tzinfo is None
+            or day_end_utc.tzinfo is None
+            or day_start_utc >= day_end_utc
+        ):
+            raise ValueError("Task activity requires increasing aware UTC day bounds")
+        start_utc = day_start_utc.astimezone(timezone.utc)
+        end_utc = day_end_utc.astimezone(timezone.utc)
+
         async with async_transaction_scope(tenant_id, user_id=created_by) as session:
             result = await session.execute(
                 text(
                     """
                     SELECT
                         count(*) AS total_definitions,
-                        COALESCE(sum(run_count) FILTER (
-                            WHERE updated_at >= date_trunc('day', now() AT TIME ZONE 'UTC')
-                        ), 0) AS tasks_run_today,
+                        (
+                            SELECT count(*)
+                            FROM public.outcome_records AS evidence
+                            WHERE evidence.tenant_id = CAST(:tenant_id AS uuid)
+                              AND evidence.user_id = CAST(:created_by AS uuid)
+                              AND evidence.source = 'runtime.execution'
+                              AND evidence.recorded_at >= :day_start_utc
+                              AND evidence.recorded_at < :day_end_utc
+                              AND evidence.payload->'metadata'->>'event_type'
+                                  = 'automation.task.execution_started'
+                              AND evidence.payload->'metadata'->>'receipt_version'
+                                  = 'automation-task-attempt.v1'
+                        ) AS tasks_run_today,
                         count(*) FILTER (WHERE status = 'Running') AS active_tasks,
                         count(*) FILTER (WHERE status = 'Failed') AS failed_tasks
                     FROM public.automation_tasks
@@ -680,7 +742,12 @@ class SqlAutomationRepository:
                       AND created_by = CAST(:created_by AS uuid)
                     """
                 ),
-                {"tenant_id": tenant_id, "created_by": created_by},
+                {
+                    "tenant_id": tenant_id,
+                    "created_by": created_by,
+                    "day_start_utc": start_utc,
+                    "day_end_utc": end_utc,
+                },
             )
             row = result.mappings().one()
             return {key: int(row[key] or 0) for key in row.keys()}
