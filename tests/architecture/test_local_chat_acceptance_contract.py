@@ -30,7 +30,7 @@ def test_release_requires_https_and_reviewed_commit() -> None:
     assert 'if (!releaseMode) return;' in source
     assert 'new URL("/api/deployment-revision", target)' in source
     assert "await requireReviewedRevision(page, target)" in source
-    assert source.count("await requireReviewedRevision(page, target)") == 4
+    assert source.count("await requireReviewedRevision(page, target)") == 5
 
 
 def test_local_reuses_real_first_turn_model_persistence_and_replay_proof() -> None:
