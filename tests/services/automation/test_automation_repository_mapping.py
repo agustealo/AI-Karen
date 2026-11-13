@@ -499,6 +499,13 @@ async def test_chat_schedule_is_atomic_scoped_and_retry_idempotent(monkeypatch):
         )
     assert len(storage["task"]) == len(storage["cron"]) == 1
 
+    # Reissuing a previously disabled commitment must never silently
+    # reactivate it or return a truthful-looking active schedule receipt.
+    storage["cron"]["cron-stable"]["enabled"] = False
+    with pytest.raises(ValueError, match="conflicts"):
+        await repo.create_chat_scheduled_task(**kwargs)
+    assert storage["cron"]["cron-stable"]["enabled"] is False
+
 
 @pytest.mark.asyncio
 async def test_chat_schedule_rolls_back_task_when_cron_insert_fails(monkeypatch):
