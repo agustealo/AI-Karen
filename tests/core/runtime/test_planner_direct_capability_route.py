@@ -108,6 +108,7 @@ async def test_daily_task_does_not_fabricate_schedule_when_missing_fields(monkey
         correlation_id="corr-daily",
     )
     request = SimpleNamespace(
+        metadata={},
         context=context,
         messages=[{
             "role": "user",
@@ -190,6 +191,7 @@ async def test_daily_task_success_uses_only_owned_durable_receipt(monkeypatch):
         correlation_id="corr-200",
     )
     request = SimpleNamespace(
+        metadata={},
         context=context,
         messages=[{
             "role": "user",
@@ -237,6 +239,7 @@ async def test_daily_task_rejects_forged_owner_receipt(monkeypatch):
             }
     monkeypatch.setattr(definitions, "get_automation_definition_service", lambda: BadStore())
     request = SimpleNamespace(
+        metadata={},
         context=SimpleNamespace(
             require_authenticated_user=lambda: SimpleNamespace(user_id=owner, tenant_id=tenant),
             require_conversation_id=lambda: "conversation",
