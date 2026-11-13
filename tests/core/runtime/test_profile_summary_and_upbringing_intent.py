@@ -22,6 +22,7 @@ from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolv
     "What's my name, tell me about myself",
     "Who am I?",
     "What do you know about me?",
+    "What can you tell me about myself?",
 ])
 def test_broad_summary_wins_over_single_attribute(question):
     assert is_profile_summary_request(question)
