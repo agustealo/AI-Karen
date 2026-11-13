@@ -105,6 +105,7 @@ docx2markdown
 chunkr_ai
 xmltodict
 croniter
+tzdata
 mcp
 crawl4ai==0.8.6
 playwright==1.58.0
