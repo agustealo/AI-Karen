@@ -7,6 +7,7 @@ here.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, time as clock_time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -185,7 +186,6 @@ class AutomationDefinitionService:
         minute_local: int,
         timezone_id: str,
         conversation_id: str,
-        request_id: str,
     ) -> Dict[str, Any]:
         """Authorize agent metadata then atomically commit a local daily task.
 
@@ -199,12 +199,28 @@ class AutomationDefinitionService:
         if not 0 <= hour_local <= 23 or not 0 <= minute_local <= 59:
             raise AutomationDefinitionError("Local hour or minute is invalid")
         zone = _validated_timezone(timezone_id)
-        if not str(conversation_id or "").strip() or not str(request_id or "").strip():
-            raise AutomationDefinitionError("A durable chat request identity is required")
+        if not str(conversation_id or "").strip():
+            raise AutomationDefinitionError("An owner-scoped conversation identity is required")
 
+        # REST and SSE mint a new request_id on each transport retry. A task
+        # must never use that ephemeral ID to key a repeating side effect.
+        # Treat an identical commitment in the same conversation as one
+        # operation, including after a lost response; changed schedule,
+        # instructions, agent or timezone form a distinct commitment.
+        normalized_commitment = json.dumps(
+            {
+                "purpose": purpose,
+                "primary_agent": primary_agent,
+                "hour_local": hour_local,
+                "minute_local": minute_local,
+                "timezone_id": zone.key,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         identity = ":".join((
-            "karen-chat-recurring-v1", str(user.tenant_id), str(user.user_id),
-            str(conversation_id), str(request_id),
+            "karen-chat-recurring-v2", str(user.tenant_id), str(user.user_id),
+            str(conversation_id), normalized_commitment,
         ))
         stable_key = uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
         task_id = f"task_{stable_key}"
