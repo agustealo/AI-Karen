@@ -204,3 +204,85 @@ async def test_queue_worker_failed_execution_is_not_success(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Durable task outcome unavailable"):
         await cron._execute_claimed_queue_item(_scheduled_item())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "execution_failure", "ack_failure"])
+async def test_queue_worker_acknowledges_only_successful_owned_execution(
+    monkeypatch, outcome,
+):
+    """Exercise the actual worker loop through one durable claim and shutdown."""
+    from ai_karen_engine.api_routes.automation import cron
+
+    events = []
+    item = _scheduled_item()
+
+    class OneShotQueue:
+        def __init__(self):
+            self.dequeues = 0
+
+        async def dequeue(self, queue, worker_id):
+            assert queue == "automation"
+            self.dequeues += 1
+            if self.dequeues > 1:
+                raise asyncio.CancelledError()
+            events.append("dequeue")
+            return RepositoryResult(success=True, data=item)
+
+        async def renew_claim(self, queue, item_id, claim_token=None):
+            assert queue == "automation"
+            assert item_id == item.id
+            assert claim_token == item.claim_token
+            return RepositoryResult(success=True, data=True)
+
+        async def ack(self, queue, item_id, claim_token=None):
+            assert (queue, item_id, claim_token) == (
+                item.queue, item.id, item.claim_token,
+            )
+            events.append("ack")
+            if outcome == "ack_failure":
+                return RepositoryResult(success=False, data=False, error="claim lost")
+            return RepositoryResult(success=True, data=True)
+
+        async def nack(self, queue, item_id, error, claim_token=None):
+            assert (queue, item_id, claim_token) == (
+                item.queue, item.id, item.claim_token,
+            )
+            events.append(("nack", error))
+            return RepositoryResult(success=True, data=True)
+
+    async def resolve(*, user_id, tenant_id):
+        assert (user_id, tenant_id) == ("owner-a", "tenant-a")
+        events.append("principal")
+        return (user_id, tenant_id)
+
+    async def execute(*, job_type, target_id, user, source_id):
+        assert (job_type, target_id, user, source_id) == (
+            "Task", "task-a", ("owner-a", "tenant-a"), "cron-a",
+        )
+        events.append("execute")
+        if outcome == "execution_failure":
+            raise RuntimeError("task runtime failed")
+
+    client = OneShotQueue()
+    monkeypatch.setattr(cron, "get_queue_client", lambda: client)
+    monkeypatch.setattr(cron, "resolve_scheduled_principal", resolve)
+    monkeypatch.setattr(cron, "execute_automation_target", execute)
+
+    with pytest.raises(asyncio.CancelledError):
+        await cron._queue_worker_loop()
+
+    assert events[:3] == ["dequeue", "principal", "execute"]
+    assert client.dequeues == 2
+    if outcome == "success":
+        assert events == ["dequeue", "principal", "execute", "ack"]
+    elif outcome == "execution_failure":
+        assert "ack" not in events
+        assert len(events) == 4
+        assert events[3][0] == "nack"
+        assert "task runtime failed" in events[3][1]
+    else:
+        assert events[3] == "ack"
+        assert len(events) == 5
+        assert events[4][0] == "nack"
+        assert "claim lost" in events[4][1]
