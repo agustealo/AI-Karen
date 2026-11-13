@@ -258,6 +258,61 @@ async def test_unverified_transcript_never_emits_run_completion(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "foreign_event",
+    ["content", "error", "complete", "after_content"],
+)
+async def test_foreign_correlation_chunk_is_fenced_before_any_unowned_terminal(
+    foreign_event: str,
+) -> None:
+    """A well-formed foreign trace ID is never an owned execution receipt."""
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), f"foreign-{foreign_event}")
+    closed = asyncio.Event()
+
+    async def upstream():
+        try:
+            if foreign_event == "after_content":
+                yield content("owned-prefix")
+                foreign = completed()
+            elif foreign_event == "complete":
+                foreign = completed()
+            elif foreign_event == "error":
+                foreign = ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content="Unowned provider error",
+                    correlation_id="forged-foreign-correlation",
+                )
+            else:
+                foreign = ChatStreamChunk(
+                    type=ChatStreamEventType.CONTENT,
+                    content="Unowned provider text",
+                    correlation_id="forged-foreign-correlation",
+                )
+            foreign.correlation_id = "forged-foreign-correlation"
+            yield foreign
+            yield completed()  # A valid later completion cannot revive this run.
+        finally:
+            closed.set()
+
+    received = []
+    with pytest.raises(ChatRunLeaseLost, match="chat_run_correlation_mismatch"):
+        async for chunk in coordinator.stream(upstream(), lease=lease):
+            received.append(chunk)
+
+    assert [chunk.type for chunk in received] == (
+        [ChatStreamEventType.CONTENT] if foreign_event == "after_content" else []
+    )
+    assert all(chunk.correlation_id == lease.correlation_id for chunk in received)
+    assert all(chunk.type != ChatStreamEventType.COMPLETE for chunk in received)
+    assert closed.is_set()
+    assert repo.finalized == [
+        (f"foreign-{foreign_event}", "failed", "CHAT_RUN_LEASE_LOST")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_failed_terminal_commit_cannot_claim_success() -> None:
     repo = MemoryLedger()
     coordinator = ChatRunCoordinator(repo)
