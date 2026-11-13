@@ -672,6 +672,10 @@ async def _ag_ui_sse(
         if journal is not None and run_lease is not None:
             try:
                 seq = await journal.append_observed_event(run_lease, event)
+            except (ChatRunLeaseLost, ChatRunCancellationRequested):
+                # A revoked fence or authorized cancellation is not a
+                # storage outage and must retain its dedicated terminal code.
+                raise
             except Exception as exc:
                 raise _AGUIEventJournalWriteError(
                     "Durable AG-UI event append failed"
