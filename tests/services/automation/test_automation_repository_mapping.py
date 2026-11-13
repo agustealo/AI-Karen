@@ -43,6 +43,8 @@ def test_disabled_cron_record_reports_disabled_next_run():
     )
 
     assert record["nextRun"] == "Disabled"
+    assert record["timestamp_utc"] is None
+    assert record["local_datetime"] is None
     assert record["next_run_at"] == now
 
 
