@@ -124,6 +124,39 @@ def test_grounded_response_never_uses_upbringing_as_birthplace():
     assert "don't have verified" in text
 
 
+def test_ambiguous_recall_intent_never_replays_static_identity_summary():
+    """ML-only memory.recall is not a request to repeat old identity facts."""
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    authorized = context(
+        evidence("preferred_name", "Zeus"),
+        evidence("birthplace", "Jamaica"),
+        evidence("upbringing_location", "NYC"),
+        evidence("residence_location", "Detroit"),
+    )
+    uncertain = ExecutionDecision(intent="memory.recall")
+    uncertain.cognitive_context = authorized
+    assert ChatRuntime._grounded_personal_response(
+        uncertain, tenant_id="tenant", user_id="user",
+    ) is None
+
+    # Explicit CORTEX decisions still use the governed, verified evidence.
+    explicit = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
+    explicit.cognitive_context = authorized
+    result = ChatRuntime._grounded_personal_response(
+        explicit, tenant_id="tenant", user_id="user",
+    )
+    assert result is not None
+    answer, meta = result
+    assert "Zeus" in answer
+    assert "Jamaica" in answer
+    assert meta["response_source"] == "authorized_memory_evidence"
+
+
 def test_no_trusted_semantic_target_does_not_force_an_answer():
     from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
     from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
