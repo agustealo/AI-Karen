@@ -592,17 +592,17 @@ services:
       sh -c "
         npm config set loglevel error &&
         lock_sha=$$(sha256sum /app/package-lock.json | cut -d ' ' -f1) &&
-        node_major=$(node -p 'process.versions.node.split(/[.]/)[0]') &&
-        node_abi=$(node -p 'process.versions.modules') &&
-        install_fingerprint=\"${lock_sha}:node${node_major}:abi${node_abi}\" &&
-        cached_fingerprint=$(cat /app/node_modules/.install_dependency_fingerprint 2>/dev/null || true) &&
-        if [ -n \"$$lock_sha\" ] && [ \"$install_fingerprint\" = \"$cached_fingerprint\" ] &&
+        node_major=$$(node -p 'process.versions.node.split(/[.]/)[0]') &&
+        node_abi=$$(node -p 'process.versions.modules') &&
+        install_fingerprint=\"$${lock_sha}:node$${node_major}:abi$${node_abi}\" &&
+        cached_fingerprint=$$(cat /app/node_modules/.install_dependency_fingerprint 2>/dev/null || true) &&
+        if [ -n \"$$lock_sha\" ] && [ \"$$install_fingerprint\" = \"$$cached_fingerprint\" ] &&
            node -e \"const p=require('@copilotkit/react-core/package.json'); if(p.version!=='1.79.1') process.exit(1);\"; then
           echo 'Using npm dependencies verified against lock and Node runtime ABI';
         else
           echo 'Dependency lock, Node runtime, or SDK changed; refreshing npm dependencies';
           npm ci --cache /root/.npm --prefer-offline --no-audit &&
-          printf '%s\\n' \"$install_fingerprint\" > /app/node_modules/.install_dependency_fingerprint;
+          printf '%s\\n' \"$$install_fingerprint\" > /app/node_modules/.install_dependency_fingerprint;
         fi &&
         npm run dev -- --hostname 0.0.0.0 --port 8010
       "
