@@ -696,7 +696,7 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   const karenSpeaker = page.getByTestId("karen-copilot-assistant-speaker").last();
   await expect(userSpeaker, "Saved user messages must identify their speaker")
     .toBeVisible({ timeout: 30000 });
-  await expect(userSpeaker).toHaveAttribute("aria-label", /^User: \S.+|^User: \S$/);
+  await expect(userSpeaker).toHaveAttribute("aria-label", /^User: \S(?:.*\S)?$/);
   await expect(karenSpeaker, "Saved assistant messages must visibly identify Karen")
     .toBeVisible({ timeout: 30000 });
   await expect(karenSpeaker).toHaveText("Karen");
