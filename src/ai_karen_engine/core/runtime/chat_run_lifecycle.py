@@ -222,9 +222,14 @@ class ChatRunCoordinator:
                     gated = meta.get("status") == "gate" or meta.get(
                         "error_code"
                     ) == "CHAT_RUNTIME_GATED"
-                    persisted = meta.get("transcript_persistence_status") in {
-                        "persisted", "already_persisted",
-                    }
+                    persistence_status = meta.get("transcript_persistence_status")
+                    # Only the canonical transcript owner's string receipts
+                    # can claim durability. A malformed list/dict must fail
+                    # closed, not raise TypeError and obscure the actual cause.
+                    persisted = (
+                        isinstance(persistence_status, str)
+                        and persistence_status in {"persisted", "already_persisted"}
+                    )
                     error_code = (
                         "CHAT_RUNTIME_GATED" if gated else
                         "CHAT_TRANSCRIPT_NOT_PERSISTED" if not persisted else None

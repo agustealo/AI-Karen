@@ -43,6 +43,7 @@ USER_B = "22222222-2222-2222-2222-222222222222"
 TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 THREAD = "4f6dc890-2644-4ff8-8f15-888888888888"
+CORRELATION_ID = "correlation-1"
 
 
 def context(*, user: str = USER_A, tenant: str = TENANT_A) -> ChatExecutionContext:
@@ -52,7 +53,7 @@ def context(*, user: str = USER_A, tenant: str = TENANT_A) -> ChatExecutionConte
         session_id="canonical-session",
         conversation_id=THREAD,
         request_id="request-1",
-        correlation_id="correlation-1",
+        correlation_id=CORRELATION_ID,
         authenticated_user=UserData(
             user_id=user, tenant_id=tenant, is_active=True, is_verified=True
         ),
@@ -127,13 +128,17 @@ class MemoryLedger:
 
 
 def content(text: str = "token") -> ChatStreamChunk:
-    return ChatStreamChunk(type=ChatStreamEventType.CONTENT, content=text)
+    return ChatStreamChunk(
+        type=ChatStreamEventType.CONTENT, content=text,
+        correlation_id=CORRELATION_ID,
+    )
 
 
 def completed() -> ChatStreamChunk:
     return ChatStreamChunk(
         type=ChatStreamEventType.COMPLETE,
         content="",
+        correlation_id=CORRELATION_ID,
         metadata={
             "transcript_persistence_status": "persisted",
             "user_message_id": "11111111-1111-5111-8111-111111111111",
@@ -191,14 +196,19 @@ async def test_repository_owner_denial_precedes_ledger_admission(
 
 
 @pytest.mark.asyncio
-async def test_runtime_terminal_persists_before_success_chunk() -> None:
+@pytest.mark.parametrize("persistence_status", ["persisted", "already_persisted"])
+async def test_runtime_terminal_persists_before_success_chunk(
+    persistence_status: str,
+) -> None:
     repo = MemoryLedger()
     coordinator = ChatRunCoordinator(repo)
     lease = await coordinator.admit(context(), "run-2")
 
     async def upstream():
         yield content()
-        yield completed()
+        final = completed()
+        final.metadata["transcript_persistence_status"] = persistence_status
+        yield final
 
     events = []
     async for chunk in coordinator.stream(upstream(), lease=lease):
@@ -210,9 +220,15 @@ async def test_runtime_terminal_persists_before_success_chunk() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("persistence_status", [None, "failed", "rejected", "skipped"])
+@pytest.mark.parametrize(
+    "persistence_status",
+    [
+        None, "failed", "rejected", "skipped", "PERSISTED",
+        [], {}, ["persisted"], {"status": "persisted"}, 0, True,
+    ],
+)
 async def test_unverified_transcript_never_emits_run_completion(
-    persistence_status: str | None,
+    persistence_status: object,
 ) -> None:
     repo = MemoryLedger()
     coordinator = ChatRunCoordinator(repo)
@@ -227,6 +243,7 @@ async def test_unverified_transcript_never_emits_run_completion(
         yield ChatStreamChunk(
             type=ChatStreamEventType.COMPLETE,
             content="",
+            correlation_id=CORRELATION_ID,
             metadata=metadata,
         )
 
@@ -250,7 +267,7 @@ async def test_failed_terminal_commit_cannot_claim_success() -> None:
     async def upstream():
         yield completed()
 
-    with pytest.raises(ChatRunLeaseLost, match="lease_lost"):
+    with pytest.raises(ChatRunLeaseLost, match="chat_run_atomic_commit_not_verified"):
         await anext(coordinator.stream(upstream(), lease=lease))
     assert repo.finalized == []
 
@@ -422,6 +439,7 @@ async def test_concurrent_stop_wins_error_or_missing_terminal_race(
             yield ChatStreamChunk(
                 type=ChatStreamEventType.ERROR,
                 content="Provider reported an error",
+                correlation_id=CORRELATION_ID,
             )
         else:
             yield content("partial")
