@@ -219,8 +219,10 @@ class DirectCapabilityExecutor:
 
         original = " ".join(self._latest_user_text(request).strip().split())
         prefix = re.match(
-            r"^(?:please\s+)?(?:create|schedule|set\s+up|add)\s+"
-            r"(?:me\s+)?(?:a\s+)?(?P<frequency>daily|recurring|new|scheduled)?\s*"
+            r"^(?:(?:please\s+)?(?:create|schedule|set\s+up|add)\s+"
+            r"(?:me\s+)?|i\s+(?:need|want)\s+|"
+            r"i(?:'d|\s+would)\s+like\s+)"
+            r"(?:a\s+)?(?P<frequency>daily|recurring|new|scheduled)?\s*"
             r"(?:task|automation|job)\s+(?:to|for)\s+",
             original,
             re.IGNORECASE,

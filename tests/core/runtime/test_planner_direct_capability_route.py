@@ -56,6 +56,9 @@ def test_cortex_produces_capability_without_fabricating_tool_identifier():
         "Create a daily task to summarize news every day at 07:00 in America/Detroit using agent research",
         "Please create a daily task to pull the latest news",
         "Schedule a task to collect updates every day at 07:00 UTC using agent research",
+        "I need a task to get the latest news on Jamaica daily",
+        "I want a task to get the latest news on Jamaica every day",
+        "I\'d like a daily task to get the latest news on Jamaica daily",
     ],
 )
 def test_daily_task_requests_require_governed_mutation_and_never_model_script(query):
@@ -89,10 +92,57 @@ def test_daily_task_requests_require_governed_mutation_and_never_model_script(qu
         "Show my tasks",
         "What's the latest news today?",
         "Start a 10 minute timer",
+        "I need help creating a task to get Jamaica news daily",
+        "What daily tasks can report Jamaica news?",
+        "What is the latest Jamaica news today?",
     ],
 )
 def test_non_mutating_queries_do_not_trigger_daily_schedule_creation(query):
     assert resolve_capability_decision(query).intent != "automation.create"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("original", [
+    "I need a task to get the latest news on Jamaica daily",
+    "I want a task to get the latest news on Jamaica every day",
+    "I'd like a daily task to get the latest news on Jamaica daily",
+])
+async def test_first_person_daily_news_task_enters_typed_clarification(
+    monkeypatch, original,
+):
+    """Real user request must ask for missing inputs, not offer generic news advice."""
+    from ai_karen_engine.services.automation import definitions
+
+    route = resolve_capability_decision(original)
+    assert route.intent == "automation.create"
+    assert route.requires_tool is True
+    assert route.allow_llm_only is False
+
+    write = AsyncMock(side_effect=AssertionError("Incomplete task must not persist"))
+    monkeypatch.setattr(
+        definitions,
+        "get_automation_definition_service",
+        lambda: SimpleNamespace(create_chat_recurring_task=write),
+    )
+    request = _schedule_request(original)
+    result = await DirectCapabilityExecutor().execute(
+        request=request,
+        decision=SimpleNamespace(intent=route.intent),
+        plan=_schedule_plan(),
+        meter=_ScheduleMeter(),
+    )
+    assert result.handled is True
+    assert result.success is False
+    assert result.payload["status"] == "needs_input"
+    assert result.payload["automation_created"] is False
+    assert set(result.payload["missing_fields"]) == {
+        "local_time", "timezone_id", "registered_agent",
+    }
+    assert "No task was scheduled" in result.text
+    pending = ChatRuntime._pending_clarification_from_result(request, result)
+    assert pending["slot"] == "automation.details"
+    assert pending["original_request"] == original
+    write.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -370,10 +420,17 @@ async def test_daily_chat_clarification_registers_slot_and_requires_explicit_own
 
 
 @pytest.mark.asyncio
-async def test_daily_chat_resumes_two_explicit_details_without_fake_schedule(monkeypatch):
+@pytest.mark.parametrize(("original", "purpose"), [
+    ("create a task to pull the latest news everyday", "pull the latest news"),
+    (
+        "I need a task to get the latest news on Jamaica daily",
+        "get the latest news on Jamaica",
+    ),
+])
+async def test_daily_chat_resumes_two_explicit_details_without_fake_schedule(
+    monkeypatch, original, purpose,
+):
     from ai_karen_engine.services.automation import definitions
-
-    original = "create a task to pull the latest news everyday"
     first = _schedule_request(original)
     context = first.context
     invalid_writer = AsyncMock(side_effect=AssertionError("No complete schedule yet"))
@@ -476,7 +533,7 @@ async def test_daily_chat_resumes_two_explicit_details_without_fake_schedule(mon
     args = writer.await_args.kwargs
     assert args["conversation_id"] == context.conversation_id
     assert args["user"] is context.authenticated_user
-    assert args["purpose"] == "pull the latest news"
+    assert args["purpose"] == purpose
     assert args["primary_agent"] == "research"
     assert args["hour_local"] == 7 and args["minute_local"] == 0
 
