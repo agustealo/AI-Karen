@@ -159,7 +159,10 @@ def test_quote_is_not_promoted_as_user_assertion():
 
 
 def test_broad_identity_summary_can_use_same_user_conversation():
-    decision = ExecutionDecision(intent="memory.recall")
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
     decision.cognitive_context = ctx(
         ("user", "My name is Zeus"),
         ("assistant", "Your name is John"),
