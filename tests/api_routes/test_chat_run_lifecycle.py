@@ -43,6 +43,7 @@ USER_B = "22222222-2222-2222-2222-222222222222"
 TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 THREAD = "4f6dc890-2644-4ff8-8f15-888888888888"
+CORRELATION_ID = "correlation-1"
 
 
 def context(*, user: str = USER_A, tenant: str = TENANT_A) -> ChatExecutionContext:
@@ -52,7 +53,7 @@ def context(*, user: str = USER_A, tenant: str = TENANT_A) -> ChatExecutionConte
         session_id="canonical-session",
         conversation_id=THREAD,
         request_id="request-1",
-        correlation_id="correlation-1",
+        correlation_id=CORRELATION_ID,
         authenticated_user=UserData(
             user_id=user, tenant_id=tenant, is_active=True, is_verified=True
         ),
@@ -127,13 +128,17 @@ class MemoryLedger:
 
 
 def content(text: str = "token") -> ChatStreamChunk:
-    return ChatStreamChunk(type=ChatStreamEventType.CONTENT, content=text)
+    return ChatStreamChunk(
+        type=ChatStreamEventType.CONTENT, content=text,
+        correlation_id=CORRELATION_ID,
+    )
 
 
 def completed() -> ChatStreamChunk:
     return ChatStreamChunk(
         type=ChatStreamEventType.COMPLETE,
         content="",
+        correlation_id=CORRELATION_ID,
         metadata={
             "transcript_persistence_status": "persisted",
             "user_message_id": "11111111-1111-5111-8111-111111111111",
@@ -238,6 +243,7 @@ async def test_unverified_transcript_never_emits_run_completion(
         yield ChatStreamChunk(
             type=ChatStreamEventType.COMPLETE,
             content="",
+            correlation_id=CORRELATION_ID,
             metadata=metadata,
         )
 
@@ -433,6 +439,7 @@ async def test_concurrent_stop_wins_error_or_missing_terminal_race(
             yield ChatStreamChunk(
                 type=ChatStreamEventType.ERROR,
                 content="Provider reported an error",
+                correlation_id=CORRELATION_ID,
             )
         else:
             yield content("partial")
