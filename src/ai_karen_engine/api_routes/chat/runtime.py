@@ -642,6 +642,10 @@ async def stream_chat_response(
 
 
 
+class _AGUIEventJournalWriteError(RuntimeError):
+    """Private classifier for a failed durable AG-UI event append."""
+
+
 async def _ag_ui_sse(
     runtime_request: ChatExecutionRequest, *, thread_id: str, run_id: str,
     run_lease: Optional[ChatRunLease] = None,
@@ -666,7 +670,16 @@ async def _ag_ui_sse(
     async def frame(event: dict[str, Any]) -> str:
         payload = json.dumps(event, ensure_ascii=False, allow_nan=False)
         if journal is not None and run_lease is not None:
-            seq = await journal.append_observed_event(run_lease, event)
+            try:
+                seq = await journal.append_observed_event(run_lease, event)
+            except (ChatRunLeaseLost, ChatRunCancellationRequested):
+                # A revoked fence or authorized cancellation is not a
+                # storage outage and must retain its dedicated terminal code.
+                raise
+            except Exception as exc:
+                raise _AGUIEventJournalWriteError(
+                    "Durable AG-UI event append failed"
+                ) from exc
             return f"id: {seq}\ndata: {payload}\n\n"
         return f"data: {payload}\n\n"
 
@@ -737,16 +750,25 @@ async def _ag_ui_sse(
             "AG-UI runtime projection or journal failed",
             extra={
                 "correlation_id": runtime_request.context.correlation_id,
-                "error_type": type(exc).__name__,
+                "error_type": type(exc.__cause__ or exc).__name__,
+                "failure_source": (
+                    "event_journal" if isinstance(exc, _AGUIEventJournalWriteError)
+                    else "runtime_or_projection"
+                ),
             },
         )
-        if journal is not None and canonical_stream is None and run_lease is not None:
+        if (
+            isinstance(exc, _AGUIEventJournalWriteError)
+            and canonical_stream is None
+            and run_lease is not None
+        ):
             # Before inference, a failed start-event write is a durable
             # failed run, not a user-visible fake model response.
             with suppress(Exception):
                 await journal.fail_unstarted_event_journal(run_lease)
         async for packet in error_frames(
-            "CHAT_EVENT_JOURNAL_UNAVAILABLE" if journal is not None
+            "CHAT_EVENT_JOURNAL_UNAVAILABLE"
+            if isinstance(exc, _AGUIEventJournalWriteError)
             else "CHAT_STREAM_RUNTIME_EXCEPTION",
             "Chat streaming failed before verified completion.",
         ):
