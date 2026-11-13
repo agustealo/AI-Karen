@@ -31,6 +31,9 @@ function Surface() {
     <button onClick={() => {
       void draft.prepareSubmission(draft.draft).then(setClearConfirmed);
     }}>Submit with pending changes</button>
+    <button onClick={() => draft.setText(draft.draft)}>
+      Replay unchanged controlled value
+    </button>
     <span data-testid="draft-status">{draft.status}</span>
     <span data-testid="draft-synced">{String(draft.synced)}</span>
     <textarea aria-label="Saved draft" value={draft.draft}
@@ -88,6 +91,58 @@ describe("CK-07E6 authenticated composer draft hook", () => {
       text: "", expected_revision: 5,
     });
     expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("keeps the second prompt revision correct after CopilotKit replays an unchanged empty composer", async () => {
+    backend.get.mockResolvedValueOnce({ text: "", revision: 0 });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+
+    fireEvent.change(input, { target: { value: "First question" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
+    expect(backend.put).toHaveBeenCalledTimes(2);
+    expect(input.value).toBe("");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+
+    // Model completion and SDK controlled-input re-render can send the same
+    // empty value. Do not treat that as a dirty change or write revision 3.
+    fireEvent.click(screen.getByRole("button", { name: "Replay unchanged controlled value" }));
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 600));
+    });
+    expect(backend.put).toHaveBeenCalledTimes(2);
+
+    fireEvent.change(input, { target: { value: "Tell me more about myself" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(input.value).toBe(""));
+    await waitFor(() => expect(screen.getByTestId("draft-synced").textContent).toBe("true"));
+    expect(backend.put.mock.calls.map(call => call[1])).toEqual([
+      { text: "First question", expected_revision: 0 },
+      { text: "", expected_revision: 1 },
+      { text: "Tell me more about myself", expected_revision: 2 },
+      { text: "", expected_revision: 3 },
+    ]);
+    expect(input.value).toBe("");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+  });
+
+  it("does not retry a rejected draft write merely because the SDK repeats identical local text", async () => {
+    backend.put.mockRejectedValueOnce(new ApiError(409, "another tab changed the draft"));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "Private text to preserve" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("conflict"));
+    fireEvent.click(screen.getByRole("button", { name: "Replay unchanged controlled value" }));
+    expect(input.value).toBe("Private text to preserve");
+    expect(backend.put).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("draft-status").textContent).toBe("conflict");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("false");
   });
 
   it("reuses an in-flight autosave instead of racing a duplicate CAS write", async () => {

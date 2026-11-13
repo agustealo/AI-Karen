@@ -54,6 +54,12 @@ export function useKarenPersistedDraft(conversationId: string) {
         new TextEncoder().encode(value).length > MAX_BYTES) {
       return;
     }
+    // CopilotKit may emit an unchanged controlled value when a completed run
+    // rehydrates the composer. An identical value is not a new user edit:
+    // marking it dirty would schedule a redundant CAS write (including an
+    // empty draft after a confirmed clear), advancing the server revision
+    // before the user's next actual follow-up.
+    if (value === textRef.current) return;
     textRef.current = value;
     dirtyRef.current = true;
     setSynced(false);
