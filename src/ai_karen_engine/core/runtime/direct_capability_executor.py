@@ -299,6 +299,7 @@ class DirectCapabilityExecutor:
                 or cron["schedule"] != f"{minute} {hour} * * *"
                 or cron["timezone_id"] != timezone_id
                 or cron["local_time"] != f"{hour:02d}:{minute:02d}:00"
+                or cron.get("enabled") is not True
                 or not cron.get("timestamp_utc")
                 or not cron.get("local_datetime")
             ):
