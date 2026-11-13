@@ -55,14 +55,18 @@ class JobService:
     async def list_jobs(self, user_context: Any) -> List[Dict[str, Any]]:
         self._assert_legacy_cutover()
         user = self._user(user_context)
-        return await self._repository.list_jobs(str(user.tenant_id))
+        return await self._repository.list_jobs(
+            str(user.tenant_id), created_by=str(user.user_id)
+        )
 
     async def get_job(
         self, job_id: str, user_context: Any
     ) -> Optional[Dict[str, Any]]:
         self._assert_legacy_cutover()
         user = self._user(user_context)
-        return await self._repository.get_job(job_id, str(user.tenant_id))
+        return await self._repository.get_job(
+            job_id, str(user.tenant_id), created_by=str(user.user_id)
+        )
 
     async def create_job(
         self,
@@ -92,7 +96,9 @@ class JobService:
     async def delete_job(self, job_id: str, *, user_context: Any) -> bool:
         self._assert_legacy_cutover()
         user = self._user(user_context)
-        return await self._repository.delete_job(job_id, str(user.tenant_id))
+        return await self._repository.delete_job(
+            job_id, str(user.tenant_id), created_by=str(user.user_id)
+        )
 
     async def execute_job(
         self,
@@ -103,7 +109,9 @@ class JobService:
         self._assert_legacy_cutover()
         user = self._user(user_context)
         tenant_id = str(user.tenant_id)
-        job = await self._repository.mark_job_running(job_id, tenant_id)
+        job = await self._repository.mark_job_running(
+            job_id, tenant_id, created_by=str(user.user_id)
+        )
         if job is None:
             raise JobNotFoundError(f"Job {job_id} not found")
 
@@ -155,6 +163,7 @@ class JobService:
             await self._repository.complete_job(
                 job_id,
                 tenant_id,
+                created_by=str(user.user_id),
                 status="Failed",
                 results=results,
                 last_error="Job execution cancelled",
@@ -164,6 +173,7 @@ class JobService:
             await self._repository.complete_job(
                 job_id,
                 tenant_id,
+                created_by=str(user.user_id),
                 status="Failed",
                 results=results,
                 last_error=type(exc).__name__,
@@ -173,6 +183,7 @@ class JobService:
         completed = await self._repository.complete_job(
             job_id,
             tenant_id,
+            created_by=str(user.user_id),
             status="Success",
             results=results,
             last_error=None,

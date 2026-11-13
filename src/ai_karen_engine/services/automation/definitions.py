@@ -157,7 +157,9 @@ class AutomationDefinitionService:
                 target_id, str(user.tenant_id), created_by=str(user.user_id)
             )
         else:
-            target = await self._repository.get_job(target_id, str(user.tenant_id))
+            target = await self._repository.get_job(
+                target_id, str(user.tenant_id), created_by=str(user.user_id)
+            )
         if target is None:
             raise AutomationNotFoundError("Automation target not found")
 
