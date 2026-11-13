@@ -1,4 +1,4 @@
-"""Tenant-scoped automation dashboard statistics."""
+"""Authenticated owner-scoped automation dashboard statistics."""
 
 from __future__ import annotations
 
@@ -23,16 +23,15 @@ async def get_automation_stats(
     user: UserData = Depends(get_current_user),
     job_service: JobService = Depends(get_job_service),
 ) -> Dict[str, Any]:
-    """Return dashboard truth only for the authenticated tenant.
+    """Return dashboard truth only for the authenticated task owner.
 
     Agent catalog/lifecycle data is intentionally absent because the legacy
     agent registry is installation-wide control-plane state. This tenant
     dashboard exposes only metrics owned by tenant-scoped automation sources.
     """
     try:
-        tenant_id = str(user.tenant_id)
-        tasks_summary = await get_tasks_summary(tenant_id)
-        cron_summary = await get_cron_summary(tenant_id)
+        tasks_summary = await get_tasks_summary(user=user)
+        cron_summary = await get_cron_summary(user=user)
         jobs = await job_service.list_jobs(user)
 
         return {
