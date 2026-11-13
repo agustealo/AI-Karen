@@ -166,6 +166,14 @@ class DirectCapabilityExecutor:
                 "required_capability": "automation.create",
                 "automation_created": False,
                 "missing_fields": list(missing_fields or []),
+                # The existing ChatRuntime clarification mechanism requires
+                # one typed slot. Every missing task detail remains explicit
+                # within that slot; no model or UI may infer absent values.
+                **(
+                    {"missing_requirement": "automation.details"}
+                    if status == "needs_input"
+                    else {}
+                ),
             },
             attempts=[{
                 "type": "capability",
