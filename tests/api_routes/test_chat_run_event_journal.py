@@ -32,8 +32,9 @@ def lease() -> repository.ChatRunLease:
 
 
 class Transaction:
-    def __init__(self, *, status="running", cursor=0, stored=None):
+    def __init__(self, *, status="running", cursor=0, stored=None, terminal_recorded=True):
         self.status = status
+        self.terminal_recorded = terminal_recorded
         self.cursor = cursor
         self.stored = stored or []
         self.queries = []
@@ -64,7 +65,13 @@ class Transaction:
                     "execution_id": params.get("execution", "33333333-3333-4333-8333-333333333333"),
                     "status": self.status,
                     "lease_expires_at": "future",
-                    "terminal_at": None,
+                    "terminal_at": (
+                        "committed"
+                        if self.terminal_recorded and self.status in {
+                            "completed", "failed", "cancelled", "orphaned",
+                        }
+                        else None
+                    ),
                 },
             ))
         if "COALESCE(MAX(event_seq)" in sql:
@@ -214,6 +221,71 @@ async def test_paged_event_read_marks_expired_lease_interrupted_without_success(
     assert result["hasMore"] is True
     assert [p["seq"] for p in result["events"]] == [8, 9]
     assert all(p["event"]["type"] != "RESUME_EXECUTION" for p in result["events"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_status",
+    ["completed", "failed", "cancelled", "orphaned"],
+)
+async def test_journal_replay_rejects_terminal_status_without_durable_marker(
+    monkeypatch, terminal_status,
+):
+    """A row label alone must not become a verified terminal on reconnect."""
+    tx = Transaction(status=terminal_status, terminal_recorded=False)
+    scoped(monkeypatch, tx)
+
+    with pytest.raises(RuntimeError, match="unverified_chat_run_terminal"):
+        await repository.SqlChatRunRepository().read_projected_events(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            transport_run_id=RUN_ID,
+        )
+    assert not any(
+        "SELECT event_seq, event_payload" in statement
+        for statement in tx.queries
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_status",
+    ["completed", "failed", "cancelled", "orphaned"],
+)
+async def test_journal_replay_distinguishes_durable_terminal_from_observed_event(
+    monkeypatch, terminal_status,
+):
+    """Committed run truth is valid without inventing journal observations."""
+    tx = Transaction(status=terminal_status, terminal_recorded=True)
+    scoped(monkeypatch, tx)
+
+    result = await repository.SqlChatRunRepository().read_projected_events(
+        tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+        transport_run_id=RUN_ID,
+    )
+
+    assert result["runStatus"] == terminal_status
+    assert result["terminalConfirmed"] is True
+    assert result["journalTerminalObserved"] is False
+    assert result["events"] == []
+    assert result["continuationAvailable"] is False
+
+
+@pytest.mark.asyncio
+async def test_journal_replay_rejects_unrecognized_status_before_reading_events(
+    monkeypatch,
+):
+    tx = Transaction(status="unknown")
+    scoped(monkeypatch, tx)
+
+    with pytest.raises(RuntimeError, match="unrecognized_chat_run_status"):
+        await repository.SqlChatRunRepository().read_projected_events(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            transport_run_id=RUN_ID,
+        )
+    assert not any(
+        "SELECT event_seq, event_payload" in statement
+        for statement in tx.queries
+    )
 
 
 @pytest.mark.asyncio

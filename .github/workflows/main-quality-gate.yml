@@ -259,6 +259,10 @@ jobs:
           # Durable lease finality must reject malformed transcript receipts
           # without raising TypeError or fabricating RUN_FINISHED.
           pytest tests/api_routes/test_chat_run_lifecycle.py -q
+          # Replayed observations must never claim a terminal without a
+          # committed run marker; include the canonical scoped SQL owner.
+          pytest tests/api_routes/test_chat_run_event_journal.py -q
+          pytest tests/api_routes/test_chat_run_repository.py -q
           pytest tests/core/runtime/test_presentation_contract.py -q
           pytest tests/core/runtime/test_authorized_time_tool_fallback.py -q
           pytest tests/core/runtime/test_outcome_store_contract.py -q
