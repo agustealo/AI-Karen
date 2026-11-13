@@ -852,7 +852,15 @@ async def test_mounted_automation_dashboard_never_aggregates_another_user(
 
     async def personal_tasks(*, user):
         forwarded.append(("tasks", str(user.tenant_id), str(user.user_id)))
-        return {"active_tasks": 1, "tasks_run_today": 1, "total_definitions": 1}
+        return {
+            "active_tasks": 1,
+            "tasks_run_today": 1,
+            "total_definitions": 1,
+            "timezone_id": "America/Detroit",
+            "local_date": "2026-11-13",
+            "activity_metric": "durable_execution_starts",
+            "history_coverage": "from_task_start_receipt_instrumentation",
+        }
 
     async def personal_cron(*, user):
         forwarded.append(("cron", str(user.tenant_id), str(user.user_id)))
@@ -881,6 +889,11 @@ async def test_mounted_automation_dashboard_never_aggregates_another_user(
         assert response["nextJob"] == f"Private schedule of {principal.user_id}"
         assert response["details"]["cron"]["next_job"] == response["nextJob"]
         assert response["definedSequences"] == "1"
+        assert response["tasksToday"] == "1"
+        assert response["tasksTodayTimezone"] == "America/Detroit"
+        assert response["tasksTodayLocalDate"] == "2026-11-13"
+        assert response["tasksTodaySource"] == "durable_execution_starts"
+        assert response["tasksTodayCoverage"] == "from_task_start_receipt_instrumentation"
 
     assert forwarded == [
         (kind, TENANT, OWNER) for kind in ("tasks", "cron", "jobs")
