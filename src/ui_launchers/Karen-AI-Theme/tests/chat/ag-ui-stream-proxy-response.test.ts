@@ -129,7 +129,7 @@ describe('AG-UI stream proxy', () => {
     expect(output).toContain('CHAT_STREAM_UPSTREAM_INTERRUPTED');
     expect(output).not.toContain('"type":"RUN_FINISHED"');
     const terminal = output
-      .split(/\\r?\\n/)
+      .split(/\r?\n/)
       .filter(line => line.startsWith('data:'))
       .map(line => {
         try { return JSON.parse(line.slice(5).trim()); } catch { return null; }
