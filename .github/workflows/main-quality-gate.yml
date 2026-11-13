@@ -476,7 +476,11 @@ jobs:
           assert isinstance(command, list) or isinstance(command, str)
           script = ' '.join(command) if isinstance(command, list) else command
           assert 'sha256sum /app/package-lock.json' in script
-          assert '/app/node_modules/.install_lock_sha256' in script
+          assert '/app/node_modules/.install_dependency_fingerprint' in script
+          assert 'process.versions.node.split(/[.]/)[0]' in script
+          assert 'process.versions.modules' in script
+          assert 'install_fingerprint=' in script
+          assert '.install_lock_sha256' not in script
           assert "require('@copilotkit/react-core/package.json')" in script
           assert 'npm ci --cache /root/.npm --prefer-offline --no-audit' in script
           assert "npm run dev -- --hostname 0.0.0.0 --port 8010" in script
