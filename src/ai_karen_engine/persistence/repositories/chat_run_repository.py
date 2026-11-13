@@ -423,7 +423,11 @@ class SqlChatRunRepository:
             aggregate = await session.execute(
                 text("""
                     SELECT COALESCE(MAX(event_seq), 0) AS last_seq,
-                           COALESCE(SUM(octet_length(event_payload::text)), 0) AS bytes
+                           COALESCE(SUM(octet_length(event_payload::text)), 0) AS bytes,
+                           COUNT(*) FILTER (
+                               WHERE event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+                           ) AS terminal_count,
+                           COUNT(*) AS recorded_count
                     FROM public.runtime_chat_run_events
                     WHERE execution_id = CAST(:execution AS uuid)
                       AND tenant_id = CAST(:tenant AS uuid)
@@ -433,28 +437,20 @@ class SqlChatRunRepository:
                 self._scope(lease),
             )
             counter = aggregate.mappings().one()
+            if int(counter["recorded_count"]) != int(counter["last_seq"]):
+                raise RuntimeError("chat_projection_journal_sequence_gap")
             seq = int(counter["last_seq"]) + 1
             if seq > _MAX_EVENTS_PER_RUN or int(counter["bytes"]) + len(
                 encoded.encode("utf-8")
             ) > _MAX_JOURNAL_BYTES:
                 raise ValueError("chat_projection_journal_limit")
-            # Terminal events are distinct from the durable status; a retry
-            # cannot duplicate an observed completion/error in the journal.
-            if event_type in {"RUN_FINISHED", "RUN_ERROR"}:
-                prior = await session.execute(
-                    text("""
-                        SELECT 1 FROM public.runtime_chat_run_events
-                        WHERE execution_id = CAST(:execution AS uuid)
-                          AND tenant_id = CAST(:tenant AS uuid)
-                          AND user_id = CAST(:owner AS uuid)
-                          AND conversation_id = CAST(:conversation AS uuid)
-                          AND event_type IN ('RUN_FINISHED', 'RUN_ERROR')
-                        LIMIT 1
-                    """),
-                    self._scope(lease),
-                )
-                if prior.scalar_one_or_none() is not None:
+            # Row locking serializes all observations. Once a terminal event
+            # has committed, even a normally permitted completed-run envelope
+            # must not appear after it or resurrect the replay stream.
+            if int(counter["terminal_count"]) > 0:
+                if event_type in {"RUN_FINISHED", "RUN_ERROR"}:
                     raise ValueError("chat_projection_terminal_already_recorded")
+                raise ValueError("chat_projection_post_terminal_event")
             written = await session.execute(
                 text("""
                     INSERT INTO public.runtime_chat_run_events (
@@ -543,20 +539,53 @@ class SqlChatRunRepository:
                 {**scope, "execution": str(run["execution_id"])},
             )
             records = events.mappings().all()
-            observed_terminal = await session.execute(
+            # The run SHARE lock freezes appends and terminal transitions for
+            # this entire snapshot. Derive both the journal high-water mark and
+            # terminal observation from the same scoped event set.
+            observed = await session.execute(
                 text("""
-                    SELECT event_type FROM public.runtime_chat_run_events
+                    SELECT COALESCE(MAX(event_seq), 0) AS last_seq,
+                           MIN(event_type) FILTER (
+                               WHERE event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+                           ) AS terminal_type,
+                           COUNT(*) FILTER (
+                               WHERE event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+                           ) AS terminal_count,
+                           COUNT(*) AS recorded_count,
+                           MAX(event_seq) FILTER (
+                               WHERE event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+                           ) AS terminal_seq
+                    FROM public.runtime_chat_run_events
                     WHERE execution_id = CAST(:execution AS uuid)
                       AND tenant_id = CAST(:tenant AS uuid)
                       AND user_id = CAST(:owner AS uuid)
                       AND conversation_id = CAST(:conversation AS uuid)
-                      AND event_type IN ('RUN_FINISHED', 'RUN_ERROR')
-                    LIMIT 1
                 """),
                 {**scope, "execution": str(run["execution_id"])},
             )
-            journal_terminal_type = observed_terminal.scalar_one_or_none()
-            journal_terminal_seen = journal_terminal_type is not None
+            journal = observed.mappings().one()
+            latest_seq = int(journal["last_seq"])
+            terminal_count = int(journal["terminal_count"])
+            if int(journal["recorded_count"]) != latest_seq:
+                raise RuntimeError("chat_projection_journal_sequence_gap")
+            if after > latest_seq:
+                raise ValueError("chat_projection_cursor_ahead_of_journal")
+            if terminal_count > 1:
+                raise RuntimeError("chat_run_journal_multiple_terminals")
+            journal_terminal_type = journal["terminal_type"]
+            journal_terminal_seen = terminal_count == 1
+            if journal_terminal_seen and (
+                int(journal["terminal_seq"]) != latest_seq
+            ):
+                raise RuntimeError("chat_run_journal_post_terminal_event")
+            expected_seq = after
+            for record in records:
+                seq = int(record["event_seq"])
+                if seq != expected_seq + 1:
+                    raise RuntimeError("chat_projection_journal_sequence_gap")
+                expected_seq = seq
+            if after < latest_seq and not records:
+                raise RuntimeError("chat_projection_journal_sequence_gap")
             if journal_terminal_type is not None and (
                 (
                     str(run["status"]) == "completed"
