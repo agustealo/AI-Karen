@@ -2416,13 +2416,66 @@ class ChatRuntime:
                 "Authorized conversation history unavailable: %s",
                 type(exc).__name__,
             )
+        # These fields are server-issued only after reconciling an owner-scoped
+        # transcript. Never accept caller-injected routing/side-effect hints.
+        # The typed continuation below recreates them after provenance checks.
+        for key in (
+            "clarification_effective_query",
+            "clarification_resolved",
+            "clarification_slot",
+            "clarification_source",
+            "clarification_inputs",
+        ):
+            request.metadata.pop(key, None)
         if not self._resolve_typed_pending_clarification(request):
             self._resolve_pending_weather_followup(request)
 
     @staticmethod
+    def _automation_clarification_fragment(
+        answer: str, *, missing_fields: list[str] | None = None,
+    ) -> str | None:
+        """Normalize only explicit user-provided time, zone and agent details."""
+        import re
+
+        value = " ".join(str(answer or "").strip().split())
+        if not value or len(value) > 500:
+            return None
+        time_match = re.fullmatch(
+            r"(?:at\s+)?(?P<hour>\d{1,2}):(?P<minute>\d{2})\s+"
+            r"(?:in\s+)?(?P<zone>UTC|[A-Za-z_][A-Za-z0-9_+-]*"
+            r"(?:/[A-Za-z0-9_+-]+)+)"
+            r"(?:\s+(?:using|with)\s+(?:the\s+)?agent\s+"
+            r"(?P<agent>[A-Za-z0-9_.-]{1,96}))?",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if time_match:
+            hour, minute = int(time_match["hour"]), int(time_match["minute"])
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                return None
+            suffix = f"at {hour:02d}:{minute:02d} in {time_match['zone']}"
+            if time_match["agent"]:
+                suffix += f" using agent {time_match['agent']}"
+            return suffix
+        agent_match = re.fullmatch(
+            r"(?:using|with)\s+(?:the\s+)?agent\s+([A-Za-z0-9_.-]{1,96})",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if agent_match:
+            return f"using agent {agent_match.group(1)}"
+        # A bare agent ID is allowed only if it was the sole outstanding slot.
+        if (
+            missing_fields == ["registered_agent"]
+            and re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", value)
+        ):
+            return f"using agent {value}"
+        return None
+
+    @staticmethod
     def _pending_clarification_from_result(
         request: ChatExecutionRequest, result: Any,
-    ) -> Dict[str, str] | None:
+    ) -> Dict[str, Any] | None:
         """Translate a governed capability's missing-input result to durable state."""
         import re
 
@@ -2436,16 +2489,63 @@ class ChatRuntime:
              if str(message.get("role") or "").lower() == "user"),
             "",
         )
+        fragments: list[str] = []
+        missing: list[str] = []
+        if slot == "automation.details":
+            fields = payload.get("missing_fields")
+            if (
+                not isinstance(fields, list)
+                or not fields
+                or any(field not in {
+                    "daily_task_purpose", "task_purpose", "local_time",
+                    "timezone_id", "registered_agent",
+                } for field in fields)
+            ):
+                return None
+            missing = list(fields)
+            details = (request.metadata or {}).get("clarification_inputs")
+            if (
+                isinstance(details, dict)
+                and (request.metadata or {}).get("clarification_resolved") is True
+                and details.get("source") == "authorized_conversation"
+                and details.get("slot") == slot
+            ):
+                anchor = details.get("original_request")
+                preceding = request.messages[:-1]
+                if (
+                    isinstance(anchor, str)
+                    and any(
+                        str(message.get("role") or "").lower() == "user"
+                        and str(message.get("content") or "").strip() == anchor
+                        for message in preceding
+                    )
+                ):
+                    original = anchor
+                    raw_fragments = details.get("fragments") or []
+                    if (
+                        not isinstance(raw_fragments, list)
+                        or len(raw_fragments) > 4
+                        or any(
+                            not isinstance(fragment, str) or len(fragment) > 500
+                            for fragment in raw_fragments
+                        )
+                    ):
+                        return None
+                    fragments = list(raw_fragments)
         if (
             not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
             or not original or len(original) > 4000
         ):
             return None
-        return {
+        pending: Dict[str, Any] = {
             "status": "awaiting_user",
             "slot": slot,
             "original_request": original,
         }
+        if slot == "automation.details":
+            pending["missing_fields"] = missing
+            pending["fragments"] = fragments
+        return pending
 
     @staticmethod
     def _resolve_typed_pending_clarification(request: ChatExecutionRequest) -> bool:
@@ -2488,12 +2588,54 @@ class ChatRuntime:
             for item in messages[:-2]
         ):
             return False
-        if slot == "weather_location":
-            if not re.fullmatch(r"[A-Za-z][A-Za-z .,\'-]{0,79}", answer):
+        if slot == "automation.details":
+            from ai_karen_engine.core.cortex.routing_intents import (
+                resolve_capability_decision,
+            )
+            if resolve_capability_decision(original).intent != "automation.create":
                 return False
-            request.metadata["clarification_effective_query"] = f"What\'s the weather in {answer}?"
+            prior = pending.get("fragments") or []
+            missing = pending.get("missing_fields") or []
+            if (
+                not isinstance(prior, list) or len(prior) >= 4
+                or not isinstance(missing, list)
+            ):
+                return False
+            previous_user_texts = {
+                str(item.get("content") or "").strip()
+                for item in messages[:-2]
+                if str(item.get("role") or "").lower() == "user"
+            }
+            normalized = []
+            for fragment in prior:
+                if (
+                    not isinstance(fragment, str)
+                    or fragment not in previous_user_texts
+                ):
+                    return False
+                safe_fragment = ChatRuntime._automation_clarification_fragment(
+                    fragment,
+                )
+                if safe_fragment is None:
+                    return False
+                normalized.append(safe_fragment)
+            safe_answer = ChatRuntime._automation_clarification_fragment(
+                answer, missing_fields=missing,
+            )
+            if safe_answer is None:
+                return False
+            fragments = [*prior, answer]
+            normalized.append(safe_answer)
+            request.metadata["clarification_effective_query"] = (
+                original + " " + " ".join(normalized)
+            )
         else:
-            request.metadata["clarification_effective_query"] = f"{original}\nAdditional {slot}: {answer}"
+            if slot == "weather_location":
+                if not re.fullmatch(r"[A-Za-z][A-Za-z .,\'-]{0,79}", answer):
+                    return False
+                request.metadata["clarification_effective_query"] = f"What\'s the weather in {answer}?"
+            else:
+                request.metadata["clarification_effective_query"] = f"{original}\nAdditional {slot}: {answer}"
         request.metadata["clarification_resolved"] = True
         request.metadata["clarification_slot"] = slot
         request.metadata["clarification_source"] = "authorized_conversation"
@@ -2504,6 +2646,11 @@ class ChatRuntime:
             "original_request": original,
             "values": {slot: answer},
             "source": "authorized_conversation",
+            **(
+                {"slot": slot, "fragments": fragments}
+                if slot == "automation.details"
+                else {}
+            ),
         }
         return True
 
