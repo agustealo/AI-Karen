@@ -664,7 +664,8 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   const account: unknown = await currentIdentity.json();
   expect(account && typeof account === "object" && !Array.isArray(account)).toBe(true);
   const auth = account as Record<string, unknown>;
-  expect(auth.authenticated).toBe(true);
+  // /api/auth/me is owner-authenticated and response_model=UserResponse
+  // deliberately excludes a redundant "authenticated" flag.
   expect(typeof auth.user_id).toBe("string");
   expect(UUID.test(auth.user_id as string)).toBe(true);
   expect(typeof auth.tenant_id).toBe("string");
