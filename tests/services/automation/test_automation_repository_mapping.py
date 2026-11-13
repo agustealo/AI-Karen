@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -333,3 +334,250 @@ async def test_scheduled_job_target_requires_same_authenticated_creator():
     assert len(repo.created_cron) == 1
     assert ("get", TENANT, OTHER) in repo.calls
     assert ("get", FOREIGN_TENANT, OWNER) in repo.calls
+
+
+class _MappedRows:
+    def __init__(self, row):
+        self.row = row
+
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return self.row
+
+
+class _AtomicScheduleSession:
+    def __init__(self, records, *, fail_cron=False):
+        self.records = records
+        self.fail_cron = fail_cron
+        self.statements = []
+
+    async def execute(self, statement, params):
+        sql = str(statement)
+        self.statements.append((sql, dict(params)))
+        if "INSERT INTO public.automation_tasks" in sql:
+            key = params["task_id"]
+            if key in self.records["task"]:
+                return _MappedRows(None)
+            row = {
+                "task_id": key,
+                "tenant_id": params["tenant_id"],
+                "created_by": params["created_by"],
+                "name": params["name"],
+                "description": params["description"],
+                "primary_agent": params["primary_agent"],
+                "primary_agent_instructions": params["primary_agent_instructions"],
+                "task_type": params["task_type"],
+                "sub_agents": json.loads(params["sub_agents"]),
+                "acceptance_criteria": params["acceptance_criteria"],
+                "verification_contract": json.loads(params["verification_contract"]),
+                "status": "Pending",
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            self.records["task"][key] = row
+            return _MappedRows(row)
+        if "SELECT * FROM public.automation_tasks" in sql:
+            row = self.records["task"].get(params["task_id"])
+            if row is not None and (
+                str(row["tenant_id"]) != params["tenant_id"]
+                or str(row["created_by"]) != params["created_by"]
+            ):
+                row = None
+            return _MappedRows(row)
+        if "INSERT INTO public.automation_cron_jobs" in sql:
+            if self.fail_cron:
+                raise RuntimeError("cron insert unavailable")
+            key = params["cron_id"]
+            if key in self.records["cron"]:
+                return _MappedRows(None)
+            row = {
+                "cron_id": key,
+                "tenant_id": params["tenant_id"],
+                "created_by": params["created_by"],
+                "task_name": params["task_name"],
+                "schedule": params["schedule"],
+                "job_type": params["job_type"],
+                "target_id": params["target_id"],
+                "enabled": params["enabled"],
+                "action": params["action"],
+                "next_run_at": params["next_run_at"],
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            self.records["cron"][key] = row
+            return _MappedRows(row)
+        if "SELECT * FROM public.automation_cron_jobs" in sql:
+            row = self.records["cron"].get(params["cron_id"])
+            if row is not None and (
+                str(row["tenant_id"]) != params["tenant_id"]
+                or str(row["created_by"]) != params["created_by"]
+            ):
+                row = None
+            return _MappedRows(row)
+        raise AssertionError(f"Unexpected automation statement: {sql[:80]}")
+
+
+@pytest.mark.asyncio
+async def test_chat_schedule_is_atomic_scoped_and_retry_idempotent(monkeypatch):
+    storage = {"task": {}, "cron": {}}
+    sessions = []
+    scopes = []
+
+    @asynccontextmanager
+    async def transaction(tenant_id, *, user_id=None):
+        scopes.append((tenant_id, user_id))
+        pending = {kind: dict(rows) for kind, rows in storage.items()}
+        session = _AtomicScheduleSession(pending)
+        sessions.append(session)
+        yield session
+        storage.update(pending)
+
+    monkeypatch.setattr(automation_repository, "async_transaction_scope", transaction)
+    task = {
+        "id": "task-stable",
+        "name": "Pull the latest news",
+        "description": "Pull the latest news",
+        "primaryAgent": "research",
+        "primaryAgentInstructions": "Pull the latest news",
+        "taskType": "news",
+        "subAgents": [],
+        "acceptanceCriteria": "",
+        "verificationContract": {},
+    }
+    cron = {
+        "id": "cron-stable",
+        "taskName": "Pull the latest news",
+        "schedule": "0 7 * * *",
+        "type": "Task",
+        "targetId": "task-stable",
+        "enabled": True,
+        "action": "execute",
+    }
+    kwargs = dict(
+        tenant_id=TENANT, created_by=OWNER,
+        task_record=task, cron_record=cron,
+        next_run_at=datetime.now(timezone.utc),
+    )
+    repo = SqlAutomationRepository()
+    first = await repo.create_chat_scheduled_task(**kwargs)
+    assert first["replayed"] is False
+    assert first["task"]["created_by"] == OWNER
+    assert first["cron"]["tenant_id"] == TENANT
+    assert first["cron"]["targetId"] == first["task"]["id"]
+    second = await repo.create_chat_scheduled_task(**kwargs)
+    assert second["replayed"] is True
+    assert second["task"]["id"] == first["task"]["id"]
+    assert len(storage["task"]) == len(storage["cron"]) == 1
+    assert scopes == [(TENANT, OWNER), (TENANT, OWNER)]
+    assert all(
+        "ON CONFLICT DO NOTHING" in statement
+        for session in sessions
+        for statement, _ in session.statements
+        if "INSERT INTO" in statement
+    )
+
+    conflicting = {**task, "description": "Different instruction"}
+    with pytest.raises(ValueError, match="conflicts"):
+        await repo.create_chat_scheduled_task(
+            **{**kwargs, "task_record": conflicting},
+        )
+    assert len(storage["task"]) == len(storage["cron"]) == 1
+
+    with pytest.raises(ValueError, match="ownership"):
+        await repo.create_chat_scheduled_task(
+            **{**kwargs, "created_by": OTHER},
+        )
+    assert len(storage["task"]) == len(storage["cron"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_schedule_rolls_back_task_when_cron_insert_fails(monkeypatch):
+    storage = {"task": {}, "cron": {}}
+
+    @asynccontextmanager
+    async def transaction(tenant_id, *, user_id=None):
+        assert tenant_id == TENANT and user_id == OWNER
+        pending = {kind: dict(rows) for kind, rows in storage.items()}
+        session = _AtomicScheduleSession(pending, fail_cron=True)
+        yield session
+        storage.update(pending)
+
+    monkeypatch.setattr(automation_repository, "async_transaction_scope", transaction)
+    repo = SqlAutomationRepository()
+    task = {
+        "id": "task-new",
+        "name": "Daily digest",
+        "description": "Create a daily digest",
+        "primaryAgent": "research",
+        "primaryAgentInstructions": "Create a daily digest",
+        "taskType": "news",
+        "subAgents": [],
+        "acceptanceCriteria": "",
+        "verificationContract": {},
+    }
+    cron = {
+        "id": "cron-new",
+        "taskName": "Daily digest",
+        "schedule": "0 7 * * *",
+        "type": "Task",
+        "targetId": "task-new",
+        "enabled": True,
+        "action": "execute",
+    }
+    with pytest.raises(RuntimeError, match="cron insert unavailable"):
+        await repo.create_chat_scheduled_task(
+            tenant_id=TENANT, created_by=OWNER,
+            task_record=task, cron_record=cron,
+            next_run_at=datetime.now(timezone.utc),
+        )
+    assert storage == {"task": {}, "cron": {}}
+
+
+@pytest.mark.asyncio
+async def test_chat_task_definition_reuses_agent_validation_and_stable_identity(monkeypatch):
+    from ai_karen_engine.services.automation import definitions
+
+    class AgentCatalog:
+        async def initialize(self):
+            pass
+
+        async def get_agent_info(self, agent_id):
+            return {"id": agent_id} if agent_id == "research" else None
+
+    class ReceiptRepo:
+        def __init__(self):
+            self.calls = []
+
+        async def create_chat_scheduled_task(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"task": kwargs["task_record"], "cron": kwargs["cron_record"], "replayed": False}
+
+    monkeypatch.setattr(
+        definitions, "get_agent_integration_service", lambda: AgentCatalog(),
+    )
+    repo = ReceiptRepo()
+    service = AutomationDefinitionService(repository=repo)
+    kwargs = dict(
+        user=UserData(user_id=OWNER, tenant_id=TENANT),
+        purpose="Pull the latest news",
+        primary_agent="research",
+        hour_utc=7,
+        minute_utc=0,
+        conversation_id="owned-chat",
+        request_id="same-message",
+    )
+    await service.create_chat_recurring_task(**kwargs)
+    await service.create_chat_recurring_task(**kwargs)
+    assert repo.calls[0]["created_by"] == OWNER
+    assert repo.calls[0]["tenant_id"] == TENANT
+    assert repo.calls[0]["task_record"]["id"] == repo.calls[1]["task_record"]["id"]
+    assert repo.calls[0]["cron_record"]["id"] == repo.calls[1]["cron_record"]["id"]
+    assert repo.calls[0]["cron_record"]["schedule"] == "0 7 * * *"
+    assert repo.calls[0]["task_record"]["primaryAgentInstructions"] == kwargs["purpose"]
+    with pytest.raises(AutomationNotFoundError, match="Primary agent"):
+        await service.create_chat_recurring_task(
+            **{**kwargs, "primary_agent": "invented-agent"},
+        )
+    assert len(repo.calls) == 2
