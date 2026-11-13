@@ -35,8 +35,8 @@ class Transaction:
     def __init__(self, *, status="running", cursor=0, stored=None, terminal_recorded=True):
         self.status = status
         self.terminal_recorded = terminal_recorded
-        self.cursor = cursor
-        self.stored = stored or []
+        self.stored = list(stored or [])
+        self.cursor = max([cursor, *(int(item["event_seq"]) for item in self.stored)])
         self.queries = []
         self.params = []
         self.committed = False
@@ -75,25 +75,39 @@ class Transaction:
                 },
             ))
         if "COALESCE(MAX(event_seq)" in sql:
+            terminals = [
+                entry for entry in self.stored
+                if entry["event_payload"]["type"] in {"RUN_FINISHED", "RUN_ERROR"}
+            ]
             return SimpleNamespace(mappings=lambda: SimpleNamespace(
-                one=lambda: {"last_seq": self.cursor, "bytes": 0},
+                one=lambda: {
+                    "last_seq": self.cursor,
+                    "bytes": 0,
+                    "terminal_count": len(terminals),
+                    "terminal_type": (
+                        min(item["event_payload"]["type"] for item in terminals)
+                        if terminals else None
+                    ),
+                    "terminal_seq": (
+                        max(int(item["event_seq"]) for item in terminals)
+                        if terminals else None
+                    ),
+                },
             ))
         if "SELECT event_seq, event_payload" in sql:
             return SimpleNamespace(mappings=lambda: SimpleNamespace(
-                all=lambda: self.stored,
+                all=lambda: [
+                    entry for entry in self.stored
+                    if int(entry["event_seq"]) > params["after"]
+                ][:params["limit"]],
             ))
         if "INSERT INTO public.runtime_chat_run_events" in sql:
             self.cursor = params["seq"]
+            self.stored.append({
+                "event_seq": self.cursor,
+                "event_payload": json.loads(params["event_payload"]),
+            })
             return SimpleNamespace(scalar_one_or_none=lambda: self.cursor)
-        if "SELECT event_type FROM public.runtime_chat_run_events" in sql:
-            terminals = [
-                entry["event_payload"]["type"]
-                for entry in self.stored
-                if entry["event_payload"]["type"] in {"RUN_FINISHED", "RUN_ERROR"}
-            ]
-            return SimpleNamespace(
-                scalar_one_or_none=lambda: terminals[0] if terminals else None,
-            )
         if "SELECT 1" in sql:
             return SimpleNamespace(scalar_one_or_none=lambda: (
                 1 if self.status == "running" else None
@@ -254,6 +268,47 @@ async def test_projected_event_retains_valid_optional_scoped_identity(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "late_event",
+    [
+        {"type": "TEXT_MESSAGE_END", "messageId": "assistant-run_cursor"},
+        {"type": "CUSTOM", "name": "karen.execution_receipt.v1",
+         "value": {"actual_model": "observed"}},
+        {"type": "CUSTOM", "name": "karen.response_integrity.v1",
+         "value": {"status": "verified"}},
+    ],
+)
+async def test_committed_journal_terminal_rejects_late_final_envelope(
+    monkeypatch, late_event,
+):
+    """A completed transcript never permits new observations after RUN_FINISHED."""
+    tx = Transaction(status="completed")
+    scoped(monkeypatch, tx)
+    repo = repository.SqlChatRunRepository()
+    owned = lease()
+    assert await repo.append_projected_event(
+        owned, event={"type": "RUN_FINISHED", "threadId": THREAD, "runId": RUN_ID},
+    ) == 1
+    with pytest.raises(ValueError, match="chat_projection_post_terminal_event"):
+        await repo.append_projected_event(owned, event=late_event)
+    assert [item["event_payload"]["type"] for item in tx.stored] == ["RUN_FINISHED"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_journal_terminal_fails_under_serialized_run_lock(monkeypatch):
+    tx = Transaction(status="completed")
+    scoped(monkeypatch, tx)
+    repo = repository.SqlChatRunRepository()
+    owned = lease()
+    event = {"type": "RUN_FINISHED", "threadId": THREAD, "runId": RUN_ID}
+    await repo.append_projected_event(owned, event=event)
+    with pytest.raises(ValueError, match="chat_projection_terminal_already_recorded"):
+        await repo.append_projected_event(owned, event=event)
+    assert len(tx.stored) == 1
+    assert all("FOR UPDATE" in sql for sql in tx.queries if "FOR UPDATE" in sql)
+
+
+@pytest.mark.asyncio
 async def test_paged_event_read_marks_expired_lease_interrupted_without_success(monkeypatch):
     tx = Transaction(status="running", stored=[
         {"event_seq": 8, "event_payload": {"type": "TEXT_MESSAGE_CONTENT",
@@ -350,6 +405,84 @@ async def test_journal_replay_rejects_unrecognized_status_before_reading_events(
         "SELECT event_seq, event_payload" in statement
         for statement in tx.queries
     )
+
+
+@pytest.mark.asyncio
+async def test_replay_rejects_cursor_ahead_of_committed_journal(monkeypatch):
+    tx = Transaction(stored=[
+        {"event_seq": 1, "event_payload": {
+            "type": "RUN_STARTED", "threadId": THREAD, "runId": RUN_ID,
+        }},
+    ])
+    scoped(monkeypatch, tx)
+    with pytest.raises(ValueError, match="chat_projection_cursor_ahead_of_journal"):
+        await repository.SqlChatRunRepository().read_projected_events(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            transport_run_id=RUN_ID, after=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_replay_rejects_missing_committed_sequence_in_page(monkeypatch):
+    tx = Transaction(stored=[
+        {"event_seq": 1, "event_payload": {
+            "type": "RUN_STARTED", "threadId": THREAD, "runId": RUN_ID,
+        }},
+        {"event_seq": 3, "event_payload": {
+            "type": "TEXT_MESSAGE_CONTENT", "delta": "lost event 2",
+        }},
+    ])
+    scoped(monkeypatch, tx)
+    with pytest.raises(RuntimeError, match="chat_projection_journal_sequence_gap"):
+        await repository.SqlChatRunRepository().read_projected_events(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            transport_run_id=RUN_ID,
+        )
+
+
+@pytest.mark.asyncio
+async def test_replay_detects_post_terminal_and_duplicate_terminal_rows(monkeypatch):
+    finished = {"event_seq": 1, "event_payload": {
+        "type": "RUN_FINISHED", "threadId": THREAD, "runId": RUN_ID,
+    }}
+    for bad in [
+        {"event_seq": 2, "event_payload": {
+            "type": "TEXT_MESSAGE_END", "messageId": "late",
+        }},
+        {"event_seq": 2, "event_payload": {
+            "type": "RUN_ERROR", "message": "contradictory",
+        }},
+    ]:
+        tx = Transaction(status="completed", stored=[finished, bad])
+        scoped(monkeypatch, tx)
+        with pytest.raises(RuntimeError, match="journal_(post_terminal_event|multiple_terminals)"):
+            await repository.SqlChatRunRepository().read_projected_events(
+                tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+                transport_run_id=RUN_ID,
+            )
+
+
+@pytest.mark.asyncio
+async def test_replay_cursor_uses_only_committed_contiguous_page(monkeypatch):
+    tx = Transaction(stored=[
+        {"event_seq": seq, "event_payload": {
+            "type": "TEXT_MESSAGE_CONTENT", "delta": str(seq),
+        }} for seq in (1, 2, 3)
+    ])
+    scoped(monkeypatch, tx)
+    repo = repository.SqlChatRunRepository()
+    scope = {
+        "tenant_id": TENANT, "user_id": OWNER, "conversation_id": THREAD,
+        "transport_run_id": RUN_ID,
+    }
+    first = await repo.read_projected_events(**scope, after=0, limit=2)
+    assert [event["seq"] for event in first["events"]] == [1, 2]
+    assert first["nextCursor"] == 2
+    assert first["hasMore"] is True
+    second = await repo.read_projected_events(**scope, after=first["nextCursor"], limit=2)
+    assert [event["seq"] for event in second["events"]] == [3]
+    assert second["nextCursor"] == 3
+    assert second["hasMore"] is False
 
 
 @pytest.mark.asyncio
