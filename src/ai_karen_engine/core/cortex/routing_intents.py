@@ -3,6 +3,19 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    "automation.create": {
+        # Mutating recurring task requests must enter RuntimePolicy and obtain
+        # a durable database receipt, never fall back to a model-only script.
+        # CORTEX recognizes a bounded command; Runtime validates all fields.
+        "triggers": ["create daily task", "schedule daily task", "create a task every day"],
+        "patterns": [
+            r"^(?:please\s+)?(?:create|schedule|set\s+up|add)\s+(?:me\s+)?(?:a\s+)?(?:daily|recurring)\s+(?:task|automation|job)\s+(?:to|for)\s+.+$",
+            r"^(?:please\s+)?(?:create|schedule|set\s+up|add)\s+(?:me\s+)?(?:a\s+)?(?:(?:new|scheduled)\s+)?(?:task|automation|job)\s+(?:to|for)\s+.+\b(?:every\s*day|daily)\b.*$",
+        ],
+        "required_capability": "automation.create",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "timer.manage": {
         # Timer commands require a durable scheduler receipt. In-memory alarm
         # definitions and generated prose are not execution evidence.
