@@ -558,7 +558,7 @@ services:
   # ────────────────────────────────────────────────────────────────────
   web:
     container_name: ai-karen-web
-    image: node:20-bullseye
+    image: node:22-bookworm
     working_dir: /app
     env_file:
       - .env
