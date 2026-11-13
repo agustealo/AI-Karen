@@ -420,10 +420,17 @@ async def test_daily_chat_clarification_registers_slot_and_requires_explicit_own
 
 
 @pytest.mark.asyncio
-async def test_daily_chat_resumes_two_explicit_details_without_fake_schedule(monkeypatch):
+@pytest.mark.parametrize(("original", "purpose"), [
+    ("create a task to pull the latest news everyday", "pull the latest news"),
+    (
+        "I need a task to get the latest news on Jamaica daily",
+        "get the latest news on Jamaica",
+    ),
+])
+async def test_daily_chat_resumes_two_explicit_details_without_fake_schedule(
+    monkeypatch, original, purpose,
+):
     from ai_karen_engine.services.automation import definitions
-
-    original = "create a task to pull the latest news everyday"
     first = _schedule_request(original)
     context = first.context
     invalid_writer = AsyncMock(side_effect=AssertionError("No complete schedule yet"))
@@ -526,7 +533,7 @@ async def test_daily_chat_resumes_two_explicit_details_without_fake_schedule(mon
     args = writer.await_args.kwargs
     assert args["conversation_id"] == context.conversation_id
     assert args["user"] is context.authenticated_user
-    assert args["purpose"] == "pull the latest news"
+    assert args["purpose"] == purpose
     assert args["primary_agent"] == "research"
     assert args["hour_local"] == 7 and args["minute_local"] == 0
 
