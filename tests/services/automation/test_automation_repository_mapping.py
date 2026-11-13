@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 import json
-from datetime import datetime, timezone
+from datetime import datetime, time as clock_time, timezone
 from uuid import uuid4
 
 import pytest
@@ -12,6 +12,8 @@ from ai_karen_engine.persistence.repositories.automation_repository import (
     _cron_row,
 )
 from ai_karen_engine.services.automation.definitions import (
+    AutomationDefinitionError,
+    next_cron_run,
     AutomationDefinitionService,
     AutomationNotFoundError,
 )
@@ -398,6 +400,8 @@ class _AtomicScheduleSession:
                 "created_by": params["created_by"],
                 "task_name": params["task_name"],
                 "schedule": params["schedule"],
+                "timezone_id": params["timezone_id"],
+                "local_time": params["local_time"],
                 "job_type": params["job_type"],
                 "target_id": params["target_id"],
                 "enabled": params["enabled"],
@@ -450,6 +454,8 @@ async def test_chat_schedule_is_atomic_scoped_and_retry_idempotent(monkeypatch):
         "id": "cron-stable",
         "taskName": "Pull the latest news",
         "schedule": "0 7 * * *",
+        "timezone_id": "America/Detroit",
+        "local_time": clock_time(7, 0),
         "type": "Task",
         "targetId": "task-stable",
         "enabled": True,
@@ -521,6 +527,8 @@ async def test_chat_schedule_rolls_back_task_when_cron_insert_fails(monkeypatch)
         "id": "cron-new",
         "taskName": "Daily digest",
         "schedule": "0 7 * * *",
+        "timezone_id": "America/Detroit",
+        "local_time": clock_time(7, 0),
         "type": "Task",
         "targetId": "task-new",
         "enabled": True,
@@ -563,8 +571,9 @@ async def test_chat_task_definition_reuses_agent_validation_and_stable_identity(
         user=UserData(user_id=OWNER, tenant_id=TENANT),
         purpose="Pull the latest news",
         primary_agent="research",
-        hour_utc=7,
-        minute_utc=0,
+        hour_local=7,
+        minute_local=0,
+        timezone_id="America/Detroit",
         conversation_id="owned-chat",
         request_id="same-message",
     )
@@ -575,9 +584,95 @@ async def test_chat_task_definition_reuses_agent_validation_and_stable_identity(
     assert repo.calls[0]["task_record"]["id"] == repo.calls[1]["task_record"]["id"]
     assert repo.calls[0]["cron_record"]["id"] == repo.calls[1]["cron_record"]["id"]
     assert repo.calls[0]["cron_record"]["schedule"] == "0 7 * * *"
+    assert repo.calls[0]["cron_record"]["timezone_id"] == "America/Detroit"
+    assert repo.calls[0]["cron_record"]["local_time"] == clock_time(7, 0)
     assert repo.calls[0]["task_record"]["primaryAgentInstructions"] == kwargs["purpose"]
     with pytest.raises(AutomationNotFoundError, match="Primary agent"):
         await service.create_chat_recurring_task(
             **{**kwargs, "primary_agent": "invented-agent"},
         )
     assert len(repo.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("schedule", "timezone_id", "now_iso", "expected_utc"),
+    [
+        (
+            "0 7 * * *", "America/Detroit",
+            "2026-03-07T12:30:00+00:00", "2026-03-08T11:00:00+00:00",
+        ),
+        (
+            "0 7 * * *", "America/Detroit",
+            "2026-11-01T10:30:00+00:00", "2026-11-01T12:00:00+00:00",
+        ),
+        (
+            "30 2 * * *", "America/Detroit",
+            "2026-03-08T06:00:00+00:00", "2026-03-09T06:30:00+00:00",
+        ),
+        (
+            "30 1 * * *", "America/Detroit",
+            "2026-11-01T04:45:00+00:00", "2026-11-01T05:30:00+00:00",
+        ),
+        (
+            "30 1 * * *", "America/Detroit",
+            "2026-11-01T06:00:00+00:00", "2026-11-02T06:30:00+00:00",
+        ),
+        (
+            "0 7 * * *", "UTC",
+            "2026-11-13T12:40:00+00:00", "2026-11-14T07:00:00+00:00",
+        ),
+    ],
+)
+def test_iana_daily_next_run_respects_dst_gap_fold_and_utc(
+    schedule, timezone_id, now_iso, expected_utc,
+):
+    result = next_cron_run(
+        schedule, now=datetime.fromisoformat(now_iso), timezone_id=timezone_id,
+    )
+    assert result.isoformat() == expected_utc
+    assert result.tzinfo == timezone.utc
+
+
+@pytest.mark.parametrize(
+    ("schedule", "timezone_id"),
+    [
+        ("0 7 * * *", "Mars/Unknown"),
+        ("0 7 * * *", ""),
+        ("*/15 * * * *", "America/Detroit"),
+        ("0 45 * * *", "America/Detroit"),
+    ],
+)
+def test_iana_schedule_rejects_unverified_timezone_and_nondaily_recurrence(
+    schedule, timezone_id,
+):
+    with pytest.raises(AutomationDefinitionError):
+        next_cron_run(schedule, timezone_id=timezone_id)
+
+
+def test_iana_schedule_timezone_preference_never_claims_user_location():
+    now = datetime.fromisoformat("2026-11-13T12:40:00+00:00")
+    next_run = next_cron_run(
+        "0 7 * * *", timezone_id="America/Detroit", now=now,
+    )
+    assert next_run.isoformat() == "2026-11-14T12:00:00+00:00"
+    mapped = _cron_row({
+        "cron_id": "cron-detroit",
+        "task_name": "Daily digest",
+        "schedule": "0 7 * * *",
+        "timezone_id": "America/Detroit",
+        "local_time": clock_time(7, 0),
+        "job_type": "Task",
+        "target_id": "task-id",
+        "enabled": True,
+        "action": "execute",
+        "next_run_at": next_run,
+        "created_at": now,
+        "updated_at": now,
+        "tenant_id": TENANT,
+        "created_by": OWNER,
+    })
+    assert mapped["timestamp_utc"] == "2026-11-14T12:00:00+00:00"
+    assert mapped["timezone_id"] == "America/Detroit"
+    assert mapped["local_time"] == "07:00:00"
+    assert mapped["local_datetime"] == "2026-11-14T07:00:00-05:00"
+    assert "location" not in mapped
