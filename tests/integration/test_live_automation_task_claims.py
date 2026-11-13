@@ -759,6 +759,8 @@ async def test_live_postgres_cron_lease_expiry_reclaims_and_fences_old_worker():
 async def test_live_postgres_chat_daily_commit_replay_ownership_and_rollback(monkeypatch):
     """An authorized chat commitment creates exactly one task and one cron in SQL."""
     import asyncpg
+    from datetime import time as wall_time
+    from sqlalchemy.exc import IntegrityError
 
     from ai_karen_engine.auth.models import UserData
     from ai_karen_engine.services.automation import definitions
@@ -961,13 +963,13 @@ async def test_live_postgres_chat_daily_commit_replay_ownership_and_rollback(mon
             "taskName": invalid_task["name"],
             "schedule": "15 7 * * *",
             "timezone_id": " invalid ",
-            "local_time": "07:15:00",
+            "local_time": wall_time(7, 15),
             "type": "Task",
             "targetId": failed_task_id,
             "enabled": True,
             "action": "execute",
         }
-        with pytest.raises(Exception):
+        with pytest.raises(IntegrityError):
             await repository.create_chat_scheduled_task(
                 tenant_id=str(tenant_id),
                 created_by=str(owner_id),
