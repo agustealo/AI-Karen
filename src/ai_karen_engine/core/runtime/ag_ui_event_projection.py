@@ -103,7 +103,7 @@ class AGUIEventProjection:
             if (
                 not self._learning_reported
                 and meta.get("execution_engine") == "deepagents"
-                and meta.get("learning_signal_status") in {
+                and _text(meta.get("learning_signal_status"), 32) in {
                     "ready", "cold_start", "unavailable", "disabled",
                     "not_consulted",
                 }
@@ -337,7 +337,7 @@ class AGUIEventProjection:
             }
             if meta.get("cortex_intent") == "memory.recall":
                 receipt["cortex_intent"] = "memory.recall"
-                source = meta.get("response_source")
+                source = _text(meta.get("response_source"), 100)
                 receipt["personal_recall_grounded"] = source in {
                     "authorized_memory_evidence",
                     "authorized_conversation_evidence",
