@@ -11,7 +11,10 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "patterns": [
             r"^(?:please\s+)?(?:create|schedule|set\s+up|add)\s+(?:me\s+)?(?:a\s+)?(?:daily|recurring)\s+(?:task|automation|job)\s+(?:to|for)\s+.+$",
             r"^(?:please\s+)?(?:create|schedule|set\s+up|add)\s+(?:me\s+)?(?:a\s+)?(?:(?:new|scheduled)\s+)?(?:task|automation|job)\s+(?:to|for)\s+.+\b(?:every\s*day|daily)\b.*$",
-            # A first-person task commitment is a mutation request, even when\n            # its purpose contains "latest news". It must not become advice.\n            r"^i\s+(?:need|want)\s+(?:a\s+)?(?:(?:daily|recurring)\s+)?(?:task|automation|job)\s+(?:to|for)\s+.+\b(?:every\s*day|daily)\b.*$",\n            r"^i(?:\x27d|\s+would)\s+like\s+(?:a\s+)?(?:(?:daily|recurring)\s+)?(?:task|automation|job)\s+(?:to|for)\s+.+\b(?:every\s*day|daily)\b.*$",
+            # A first-person task commitment is a mutation request, even when
+            # its purpose contains "latest news". It must not become advice.
+            r"^i\s+(?:need|want)\s+(?:a\s+)?(?:(?:daily|recurring)\s+)?(?:task|automation|job)\s+(?:to|for)\s+.+\b(?:every\s*day|daily)\b.*$",
+            r"^i(?:\x27d|\s+would)\s+like\s+(?:a\s+)?(?:(?:daily|recurring)\s+)?(?:task|automation|job)\s+(?:to|for)\s+.+\b(?:every\s*day|daily)\b.*$",
         ],
         "required_capability": "automation.create",
         "requires_live_data": True,
