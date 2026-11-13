@@ -247,8 +247,7 @@ class DirectCapabilityExecutor:
             return unavailable(
                 "automation_agent_ambiguous",
                 "Specify exactly one registered agent ID. No task was scheduled.",
-                status="needs_input",
-                missing_fields=["registered_agent"],
+                status="unavailable",
             )
         agent_match = agent_matches[0] if agent_matches else None
         agent = agent_match.group(1) if agent_match else ""
@@ -268,8 +267,7 @@ class DirectCapabilityExecutor:
                 "automation_time_ambiguous",
                 "Specify exactly one local time and IANA timezone. "
                 "No task was scheduled.",
-                status="needs_input",
-                missing_fields=["local_time", "timezone_id"],
+                status="unavailable",
             )
         time_match = time_matches[0] if time_matches else None
         hour = int(time_match.group(1)) if time_match else None
@@ -281,7 +279,7 @@ class DirectCapabilityExecutor:
             ).strip()
         # Frequency may occur before or after the supplied independent fields.
         daily_match = re.search(
-            r"\s+(?:every\s*day|daily)(?=$|\s)", detail,
+            r"\s+(?:every\s*day|daily)$", detail,
             flags=re.IGNORECASE,
         )
         if daily_match:
