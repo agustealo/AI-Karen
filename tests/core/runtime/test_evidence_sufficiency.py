@@ -128,7 +128,10 @@ def test_no_trusted_semantic_target_does_not_force_an_answer():
     from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
     from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
-    decision = ExecutionDecision(intent="memory.recall")
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
     decision.cognitive_context = context(evidence("upbringing_location", "NYC"))
     text, meta = ChatRuntime._grounded_personal_response(
         decision, tenant_id="tenant", user_id="user"
@@ -159,7 +162,10 @@ def test_identity_clarification_does_not_confuse_assistant_and_user():
     from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
     from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
-    decision = ExecutionDecision(intent="memory.recall")
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
     decision.cognitive_context = context(
         evidence("birthplace", "Jamaica"),
         evidence("upbringing_location", "NYC"),
@@ -198,7 +204,10 @@ def test_broad_identity_only_includes_individually_supported_user_facts():
     from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
     from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
-    decision = ExecutionDecision(intent="memory.recall")
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
     decision.cognitive_context = context(
         evidence("preferred_name", "Aurelia"),
         evidence("origin_location", "Jamaica", user="someone-else"),
@@ -223,7 +232,10 @@ def test_broad_identity_fails_closed_with_no_authorized_evidence():
     from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
     from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
-    decision = ExecutionDecision(intent="memory.recall")
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
     decision.cognitive_context = context(
         evidence("preferred_name", "Aurelia"), authorized=False,
     )
