@@ -74,6 +74,7 @@ def is_profile_summary_followup(
     if utterance not in {
         "share please", "please share", "yes please", "yes, please",
         "go ahead", "tell me more", "please do",
+        "anything else", "what else", "any more", "anything more",
     }:
         return False
     # The most recent preceding user request must be about their own profile.
