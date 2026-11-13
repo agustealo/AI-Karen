@@ -57,13 +57,10 @@ class AutomationDefinitionService:
     def __init__(self, repository: Optional[SqlAutomationRepository] = None) -> None:
         self._repository = repository or get_automation_repository()
 
-    async def create_task(
-        self,
-        payload: Dict[str, Any],
-        *,
-        user: UserData,
+    async def _normalize_task_record(
+        self, payload: Dict[str, Any], *, record_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        _require_identity(user)
+        """One validation and agent registry path for UI and chat task authors."""
         primary_agent = str(payload.get("primaryAgent") or "").strip()
         if not primary_agent:
             raise AutomationDefinitionError("primaryAgent is required")
@@ -81,7 +78,7 @@ class AutomationDefinitionService:
                 raise AutomationNotFoundError(f"Sub-agent {agent_id} not found")
 
         record = {
-            "id": f"task_{uuid.uuid4().hex[:12]}",
+            "id": record_id or f"task_{uuid.uuid4().hex[:12]}",
             "name": str(payload.get("name") or "").strip(),
             "description": str(payload.get("description") or "").strip(),
             "acceptanceCriteria": str(payload.get("acceptanceCriteria") or "").strip(),
@@ -100,10 +97,82 @@ class AutomationDefinitionService:
             raise AutomationDefinitionError("Task name and description are required")
         if len(record["acceptanceCriteria"]) > 4000:
             raise AutomationDefinitionError("Acceptance criteria must not exceed 4000 characters")
+
+        return record
+
+    async def create_task(
+        self,
+        payload: Dict[str, Any],
+        *,
+        user: UserData,
+    ) -> Dict[str, Any]:
+        _require_identity(user)
+        record = await self._normalize_task_record(payload)
         return await self._repository.create_task(
             tenant_id=str(user.tenant_id),
             created_by=str(user.user_id),
             record=record,
+        )
+
+    async def create_chat_recurring_task(
+        self,
+        *,
+        user: UserData,
+        purpose: str,
+        primary_agent: str,
+        hour_utc: int,
+        minute_utc: int,
+        conversation_id: str,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        """Authorize agent metadata then atomically commit a UTC daily task.
+
+        The canonical PostgreSQL repository enforces transaction/replay ownership.
+        A scheduled definition is not evidence of execution or news delivery.
+        """
+        _require_identity(user)
+        purpose = " ".join(str(purpose or "").strip().split())
+        if not purpose or len(purpose) > 500:
+            raise AutomationDefinitionError("Task purpose must be 1-500 characters")
+        if not 0 <= hour_utc <= 23 or not 0 <= minute_utc <= 59:
+            raise AutomationDefinitionError("UTC hour or minute is invalid")
+        if not str(conversation_id or "").strip() or not str(request_id or "").strip():
+            raise AutomationDefinitionError("A durable chat request identity is required")
+
+        identity = ":".join((
+            "karen-chat-recurring-v1", str(user.tenant_id), str(user.user_id),
+            str(conversation_id), str(request_id),
+        ))
+        stable_key = uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
+        task_id = f"task_{stable_key}"
+        cron_id = f"cron_{stable_key}"
+        task = await self._normalize_task_record(
+            {
+                "name": purpose[:120],
+                "description": purpose,
+                "primaryAgent": primary_agent,
+                "primaryAgentInstructions": purpose,
+                "taskType": slugify_task_type(purpose[:80]),
+            },
+            record_id=task_id,
+        )
+        schedule = f"{minute_utc} {hour_utc} * * *"
+        next_run_at = next_cron_run(schedule)
+        cron = {
+            "id": cron_id,
+            "taskName": task["name"],
+            "schedule": schedule,
+            "type": "Task",
+            "targetId": task_id,
+            "enabled": True,
+            "action": "execute",
+        }
+        return await self._repository.create_chat_scheduled_task(
+            tenant_id=str(user.tenant_id),
+            created_by=str(user.user_id),
+            task_record=task,
+            cron_record=cron,
+            next_run_at=next_run_at,
         )
 
     async def get_task(self, task_id: str, *, user: UserData) -> Dict[str, Any]:
