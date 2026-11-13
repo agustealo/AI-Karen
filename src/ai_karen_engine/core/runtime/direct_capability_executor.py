@@ -238,8 +238,8 @@ class DirectCapabilityExecutor:
         # "at 07:00 in America/Detroit" or after it, including typed follow-ups.
         # Extract at most one of each, preserving the user's actual task body.
         agent_matches = list(re.finditer(
-            r"\\s+(?:using|with)\\s+(?:the\\s+)?agent\\s+"
-            r"([A-Za-z0-9_.-]{1,96})(?=$|\\s)",
+            r"\s+(?:using|with)\s+(?:the\s+)?agent\s+"
+            r"([A-Za-z0-9_.-]{1,96})(?=$|\s)",
             detail,
             flags=re.IGNORECASE,
         ))
@@ -257,9 +257,9 @@ class DirectCapabilityExecutor:
                 detail[:agent_match.start()] + detail[agent_match.end():]
             ).strip()
         time_matches = list(re.finditer(
-            r"\\s+at\\s+(\\d{1,2}):(\\d{2})\\s+(?:in\\s+)?"
+            r"\s+at\s+(\d{1,2}):(\d{2})\s+(?:in\s+)?"
             r"(UTC|[A-Za-z_][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)+)"
-            r"(?=$|\\s)",
+            r"(?=$|\s)",
             detail,
             flags=re.IGNORECASE,
         ))
@@ -281,7 +281,7 @@ class DirectCapabilityExecutor:
             ).strip()
         # Frequency may occur before or after the supplied independent fields.
         daily_match = re.search(
-            r"\\s+(?:every\\s*day|daily)(?=$|\\s)", detail,
+            r"\s+(?:every\s*day|daily)(?=$|\s)", detail,
             flags=re.IGNORECASE,
         )
         if daily_match:
