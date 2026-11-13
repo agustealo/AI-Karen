@@ -233,30 +233,65 @@ class DirectCapabilityExecutor:
                 missing_fields=["task_purpose"],
             )
         detail = original[prefix.end():].strip().rstrip("?.!")
-        agent_match = re.search(
-            r"\s+(?:using|with)\s+(?:the\s+)?agent\s+([A-Za-z0-9_.-]{1,96})$",
-            detail, flags=re.IGNORECASE,
-        )
+        # Explicit agent and local time are independent fields, not an
+        # ordering contract. A user may supply "using agent research" before
+        # "at 07:00 in America/Detroit" or after it, including typed follow-ups.
+        # Extract at most one of each, preserving the user's actual task body.
+        agent_matches = list(re.finditer(
+            r"\\s+(?:using|with)\\s+(?:the\\s+)?agent\\s+"
+            r"([A-Za-z0-9_.-]{1,96})(?=$|\\s)",
+            detail,
+            flags=re.IGNORECASE,
+        ))
+        if len(agent_matches) > 1:
+            return unavailable(
+                "automation_agent_ambiguous",
+                "Specify exactly one registered agent ID. No task was scheduled.",
+                status="needs_input",
+                missing_fields=["registered_agent"],
+            )
+        agent_match = agent_matches[0] if agent_matches else None
         agent = agent_match.group(1) if agent_match else ""
         if agent_match:
-            detail = detail[:agent_match.start()].strip()
-        time_match = re.search(
-            r"\s+at\s+(\d{1,2}):(\d{2})\s+(?:in\s+)?"
-            r"(UTC|[A-Za-z_][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)+)$",
-            detail, flags=re.IGNORECASE,
-        )
+            detail = (
+                detail[:agent_match.start()] + detail[agent_match.end():]
+            ).strip()
+        time_matches = list(re.finditer(
+            r"\\s+at\\s+(\\d{1,2}):(\\d{2})\\s+(?:in\\s+)?"
+            r"(UTC|[A-Za-z_][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)+)"
+            r"(?=$|\\s)",
+            detail,
+            flags=re.IGNORECASE,
+        ))
+        if len(time_matches) > 1:
+            return unavailable(
+                "automation_time_ambiguous",
+                "Specify exactly one local time and IANA timezone. "
+                "No task was scheduled.",
+                status="needs_input",
+                missing_fields=["local_time", "timezone_id"],
+            )
+        time_match = time_matches[0] if time_matches else None
         hour = int(time_match.group(1)) if time_match else None
         minute = int(time_match.group(2)) if time_match else None
         timezone_id = time_match.group(3) if time_match else ""
         if time_match:
-            detail = detail[:time_match.start()].strip()
-        daily_match = re.search(r"\s+(?:every\s*day|daily)$", detail, re.IGNORECASE)
+            detail = (
+                detail[:time_match.start()] + detail[time_match.end():]
+            ).strip()
+        # Frequency may occur before or after the supplied independent fields.
+        daily_match = re.search(
+            r"\\s+(?:every\\s*day|daily)(?=$|\\s)", detail,
+            flags=re.IGNORECASE,
+        )
         if daily_match:
-            detail = detail[:daily_match.start()].strip()
+            detail = (
+                detail[:daily_match.start()] + detail[daily_match.end():]
+            ).strip()
         daily_explicit = bool(
             daily_match or (prefix.group("frequency") or "").casefold() == "daily"
         )
-        purpose = detail.strip()
+        purpose = " ".join(detail.split())
         missing = []
         if not purpose or not daily_explicit:
             missing.append("daily_task_purpose")
