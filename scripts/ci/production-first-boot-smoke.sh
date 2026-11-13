@@ -399,6 +399,76 @@ assert payload.get("username"), payload
 assert {"admin", "user"}.issubset(roles), payload
 PY
 
+echo "[smoke] proving authenticated composer draft CAS against production API"
+draft_session_id="$("${PYTHON_BIN}" -c 'import uuid; print(uuid.uuid4())')"
+draft_conversation_json="$(curl -fsS -X POST -b "${COOKIE_JAR}" \
+  "${BASE_URL}/api/conversations/ensure-session/${draft_session_id}")"
+draft_conversation_id="$(printf '%s' "${draft_conversation_json}" | \
+  "${PYTHON_BIN}" -c 'import json, sys, uuid; print(uuid.UUID(json.load(sys.stdin)["id"]))')"
+draft_endpoint="${BASE_URL}/api/conversations/${draft_conversation_id}/draft"
+
+draft_initial_json="$(curl -fsS -b "${COOKIE_JAR}" "${draft_endpoint}")"
+"${PYTHON_BIN}" - "${draft_initial_json}" <<'PY'
+import json
+import sys
+
+draft = json.loads(sys.argv[1])
+assert draft == {"text": "", "revision": 0}, draft
+PY
+
+draft_save_json="$(curl -fsS -X PUT -b "${COOKIE_JAR}" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"KCON-490 production draft persistence probe","expected_revision":0}' \
+  "${draft_endpoint}")"
+"${PYTHON_BIN}" - "${draft_save_json}" <<'PY'
+import json
+import sys
+
+draft = json.loads(sys.argv[1])
+assert draft == {
+    "text": "KCON-490 production draft persistence probe",
+    "revision": 1,
+}, draft
+PY
+
+draft_clear_json="$(curl -fsS -X PUT -b "${COOKIE_JAR}" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"","expected_revision":1}' \
+  "${draft_endpoint}")"
+"${PYTHON_BIN}" - "${draft_clear_json}" <<'PY'
+import json
+import sys
+
+assert json.loads(sys.argv[1]) == {"text": "", "revision": 2}
+PY
+
+draft_reloaded_json="$(curl -fsS -b "${COOKIE_JAR}" "${draft_endpoint}")"
+"${PYTHON_BIN}" - "${draft_reloaded_json}" <<'PY'
+import json
+import sys
+
+assert json.loads(sys.argv[1]) == {"text": "", "revision": 2}
+PY
+
+draft_stale_http="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
+  -b "${COOKIE_JAR}" -H 'Content-Type: application/json' \
+  -d '{"text":"stale write must be rejected","expected_revision":1}' \
+  "${draft_endpoint}")"
+if [[ "${draft_stale_http}" != "409" ]]; then
+  echo "Canonical draft CAS accepted a stale revision or returned an unexpected status" >&2
+  exit 1
+fi
+
+draft_after_conflict_json="$(curl -fsS -b "${COOKIE_JAR}" "${draft_endpoint}")"
+"${PYTHON_BIN}" - "${draft_after_conflict_json}" <<'PY'
+import json
+import sys
+
+assert json.loads(sys.argv[1]) == {"text": "", "revision": 2}
+PY
+
+echo "[smoke] authenticated composer draft save-clear and stale-write refusal passed"
+
 if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "${LIVE_MODEL_PROVIDER}" == "ollama-local" ) ]]; then
   echo "[smoke] proving real Ollama Settings discovery, save, reload and unforced ChatRuntime execution"
   "${PYTHON_BIN}" scripts/ci/ollama_settings_live_proof.py \
