@@ -3,19 +3,42 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 
+const currentAccount = vi.hoisted(() => ({ fullName: "Zeus" as string | null }));
+
+vi.mock("@/lib/useAuth", () => ({
+  useAuth: () => ({
+    user: currentAccount.fullName === null ? null : {
+      user_id: "11111111-1111-4111-8111-111111111111",
+      tenant_id: "22222222-2222-4222-8222-222222222222",
+      full_name: currentAccount.fullName,
+    },
+  }),
+}));
+
 vi.mock("@copilotkit/react-core/v2", () => ({
   CopilotChatAssistantMessage: ({ message }: { message: { id: string; content: string } }) =>
     <div data-testid="sdk-default-assistant">{message.content}</div>,
+  CopilotChatUserMessage: ({ message }: { message: { id: string; content: string } }) =>
+    <div data-testid="sdk-default-user">{message.content}</div>,
 }));
 
-import { CopilotChatAssistantMessage } from "@copilotkit/react-core/v2";
+import {
+  CopilotChatAssistantMessage, CopilotChatUserMessage,
+} from "@copilotkit/react-core/v2";
 import {
   KarenCopilotAssistantMessage,
+  KarenCopilotUserMessage,
+  KarenCopilotUserSlot,
+  KarenCopilotAssistantSlot,
   KarenVerifiedHistoryProvider,
   parseKarenVerifiedHistory,
 } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  currentAccount.fullName = "Zeus";
+  vi.restoreAllMocks();
+});
 
 const messages = [
   { id: "user-1", role: "user" },
@@ -55,6 +78,43 @@ function renderAssistant(events: unknown, id = "assistant-1") {
     </KarenVerifiedHistoryProvider>,
   );
 }
+
+describe("KCON-140: native CopilotKit speaker attribution", () => {
+  it("labels user messages from the authenticated profile while keeping SDK content", () => {
+    const message = { id: "user-1", role: "user", content: "Where am I from?" };
+    render(
+      <KarenCopilotUserMessage {...( { message } as unknown as ComponentProps<typeof CopilotChatUserMessage> )} />,
+    );
+    expect(screen.getByTestId("karen-copilot-user-speaker").textContent).toBe("Zeus");
+    expect(screen.getByLabelText("User: Zeus")).toBeTruthy();
+    expect(screen.getByTestId("sdk-default-user").textContent).toBe(message.content);
+  });
+
+  it("labels assistant messages Karen without changing saved text or evidence", () => {
+    renderAssistant([timeEvent, receiptEvent]);
+    expect(screen.getByTestId("karen-copilot-assistant-speaker").textContent).toBe("Karen");
+    expect(screen.getByLabelText("Assistant: Karen")).toBeTruthy();
+    expect(screen.getByTestId("sdk-default-assistant").textContent)
+      .toBe("Saved canonical reply");
+    expect(screen.getAllByTestId("karen-copilot-verified-part")).toHaveLength(2);
+  });
+
+  it("never invents another user's name when authenticated identity is missing", () => {
+    currentAccount.fullName = null;
+    render(
+      <KarenCopilotUserMessage {...( {
+        message: { id: "user-2", role: "user", content: "Unverified speaker" },
+      } as unknown as ComponentProps<typeof CopilotChatUserMessage> )} />,
+    );
+    expect(screen.getByTestId("karen-copilot-user-speaker").textContent).toBe("You");
+    expect(screen.queryByText("Zeus")).toBeNull();
+  });
+
+  it("retains SDK slot statics rather than replacing native toolbars or branch semantics", () => {
+    expect(KarenCopilotUserSlot).toBe(KarenCopilotUserMessage);
+    expect(KarenCopilotAssistantSlot).toBe(KarenCopilotAssistantMessage);
+  });
+});
 
 describe("CK-07E3 CopilotKit v2 rich restoration in native message slot", () => {
   it("preserves SDK message and mounts the existing verified clock and execution receipt", () => {

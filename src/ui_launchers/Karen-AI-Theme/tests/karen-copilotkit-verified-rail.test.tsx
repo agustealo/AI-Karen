@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@copilotkit/react-core/v2", () => ({
   CopilotChatAssistantMessage: () => <div />,
+  CopilotChatUserMessage: () => null,
 }));
 
 vi.mock("@/components/chat/ConversationContextRail", () => ({
