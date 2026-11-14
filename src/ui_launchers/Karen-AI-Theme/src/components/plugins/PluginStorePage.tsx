@@ -85,6 +85,7 @@ export default function PluginStorePage() {
     searchPlugins,
     refreshPlugins,
     installPlugin,
+    disablePlugin,
     loadCategories,
     loadTrending,
     getPluginDetails,
@@ -164,6 +165,20 @@ export default function PluginStorePage() {
       }
     },
     [installPlugin],
+  );
+
+  const handleDisable = useCallback(
+    async (pluginId: string) => {
+      setOperationError('');
+      setOperationSuccess('');
+      try {
+        await disablePlugin(pluginId);
+        setOperationSuccess(`Plugin '${pluginId}' disabled successfully.`);
+      } catch (cause) {
+        setOperationError(getErrorMessage(cause));
+      }
+    },
+    [disablePlugin],
   );
 
   const handleDetails = useCallback(
@@ -452,6 +467,7 @@ export default function PluginStorePage() {
                 hasPrev={(searchParams.page ?? 1) > 1}
                 onPageChange={handlePageChange}
                 onInstall={handleInstall}
+                onDisable={handleDisable}
                 onDetails={handleDetails}
                 onDiscover={handleDiscover}
                 installingPlugins={installingPlugins}
@@ -506,6 +522,7 @@ export default function PluginStorePage() {
                   plugins={trendingPlugins}
                   loading={loading}
                   onInstall={handleInstall}
+                  onDisable={handleDisable}
                   onDetails={handleDetails}
                   onDiscover={handleDiscover}
                   installingPlugins={installingPlugins}
@@ -562,6 +579,8 @@ export default function PluginStorePage() {
                 <PluginGrid
                   plugins={installedPlugins}
                   loading={loading}
+                  onInstall={handleInstall}
+                  onDisable={handleDisable}
                   onDetails={handleDetails}
                   installingPlugins={installingPlugins}
                   emptyMessage="No installed plugins found"
