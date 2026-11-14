@@ -20,6 +20,7 @@ import {
   GraduationCap,
   HardDrive,
   MessageSquareMore,
+  MessagesSquare,
   Shield,
   Speaker,
   UserCog,
@@ -36,6 +37,7 @@ import TrainingSettingsPanel from '@/components/admin/TrainingSettingsPanel';
 import CommsCenterPage from '@/components/comms/CommsCenterPage';
 
 import BehaviorSettings from './BehaviorSettings';
+import ChannelsSettings from './ChannelsSettings';
 import ModelDownloads from './ModelDownloads';
 import ModelSettings from './ModelSettings';
 import ExpressionSettings from './ExpressionSettings';
@@ -58,6 +60,7 @@ type SettingsSectionId =
   | 'personal-facts'
   | 'notifications'
   | 'privacy'
+  | 'channels'
   | 'model'
   | 'expression'
   | 'model-downloads'
@@ -192,6 +195,13 @@ export default function SettingsDialog({
             label: 'Privacy',
             icon: Shield,
             render: () => <PrivacySettings />,
+          },
+          {
+            id: 'channels',
+            label: 'Channels',
+            description: 'View verified, account-owned channel status without claiming live pairing.',
+            icon: MessagesSquare,
+            render: () => <ChannelsSettings />,
           },
         ],
       },
