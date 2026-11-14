@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import sys
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -297,7 +298,7 @@ def _settings_receipt_ids(request: Request) -> tuple[str, str]:
     request_id = (
         getattr(request.state, "request_id", None)
         or request.headers.get("X-Request-Id")
-        or ""
+        or str(uuid.uuid4())
     )
     correlation_id = (
         getattr(request.state, "correlation_id", None)
@@ -305,7 +306,7 @@ def _settings_receipt_ids(request: Request) -> tuple[str, str]:
         or request_id
     )
     # These are audit identifiers, not arbitrary unbounded user input.
-    return str(request_id)[:128], str(correlation_id)[:128]
+    return str(request_id), str(correlation_id)
 
 
 def _settings_error(exc: Exception) -> HTTPException:
@@ -317,7 +318,7 @@ def _settings_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, PluginSettingsRevisionConflict):
         return HTTPException(status_code=409, detail=str(exc))
-    logger.exception("plugin.settings.unavailable", extra={"error_type": type(exc).__name__})
+    logger.error("plugin.settings.unavailable error_type=%s", type(exc).__name__)
     return HTTPException(status_code=503, detail="Plugin settings persistence unavailable")
 
 
