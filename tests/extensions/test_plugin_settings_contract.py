@@ -440,6 +440,10 @@ def test_migration_has_forced_rls_tenant_policies_atomic_audit_without_secrets()
     assert "CREATE TABLE public.extension_plugin_settings (" in migration
     assert "CREATE TABLE public.extension_plugin_settings_audit (" in migration
     assert "FORCE ROW LEVEL SECURITY" in migration
+    assert "REVOKE ALL ON public.extension_plugin_settings FROM PUBLIC;" in migration
+    assert "REVOKE ALL ON public.extension_plugin_settings_audit FROM PUBLIC;" in migration
+    assert "REVOKE ALL ON SEQUENCE public.extension_plugin_settings_audit_id_seq FROM PUBLIC;" in migration
+    assert "ARRAY['anon', 'authenticated']" in migration
     assert migration.count("current_setting('app.current_tenant_id', true)") >= 5
     assert "ON DELETE CASCADE" in migration
     assert "encrypted_value" not in migration
