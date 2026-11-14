@@ -416,8 +416,12 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
     assert "b.status NOT IN ('sent', 'delivered', 'read')" not in query
     selected = query.split("FROM public.channel_connections c")[0]
     for secret in ("credential_handle", "provider_account_id",
-                   "session_reference", "provider_receipt_id", "message_text"):
+                   "session_reference", "message_text"):
         assert secret not in selected
+    # A receipt may be checked for non-null inside EXISTS, but must never be
+    # selected or returned as a column in this owner-facing review.
+    assert "d.provider_receipt_id IS NOT NULL" in selected
+    assert "d.provider_receipt_id AS " not in selected
 
 
 @pytest.mark.asyncio
