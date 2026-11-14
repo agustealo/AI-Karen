@@ -584,3 +584,52 @@ async def test_nous_catalog_does_not_claim_ready_when_live_discovery_fails(
     assert provider.healthy is False
     assert not any(model.available for model in provider.models)
     assert catalog.default_model == "auto"
+
+@pytest.mark.asyncio
+async def test_admin_hidden_provider_never_advertises_chat_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _settings_payload()
+    payload["providers"][0]["chat_enabled"] = False
+
+    async def settings():
+        return payload
+
+    async def inventory(_url: str):
+        return ["qwen2.5:7b"]
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", settings)
+    monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", inventory)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["user"]})
+    provider = catalog.providers[0]
+    assert provider.enabled is True
+    assert provider.chat_enabled is False
+    assert provider.healthy is False
+    assert all(not model.available for model in provider.models)
+    assert catalog.default_model == "auto"
+
+
+@pytest.mark.asyncio
+async def test_admin_hidden_model_is_excluded_without_disabling_other_live_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _settings_payload()
+    payload["providers"][0]["chat_model_visibility"] = {
+        "goekdenizguelmez/JOSIEFIED-Qwen3:8b": False
+    }
+
+    async def settings():
+        return payload
+
+    async def inventory(_url: str):
+        return ["goekdenizguelmez/JOSIEFIED-Qwen3:8b", "qwen2.5:7b"]
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", settings)
+    monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", inventory)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["user"]})
+    provider = catalog.providers[0]
+    assert {m.id: m.available for m in provider.models} == {
+        "goekdenizguelmez/JOSIEFIED-Qwen3:8b": False,
+        "qwen2.5:7b": True,
+    }
+    assert catalog.default_model == "qwen2.5:7b"
