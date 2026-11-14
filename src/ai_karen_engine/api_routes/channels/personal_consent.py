@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -315,7 +315,7 @@ class PersonalRetirementAssessment(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    contract_version: Literal["retirement-verification-readiness-v1"]
+    contract_version: Literal["retirement-verification-readiness-v2"]
     status: Literal["blocked"]
     cleanup_authorized: Literal[False]
     provider_unlink_independently_verified: Literal[False]
@@ -329,6 +329,7 @@ class PersonalRetirementAssessment(BaseModel):
         "provider_unlink_claim_missing",
         "credential_deletion_request_missing",
         "credential_deletion_claim_missing",
+        "provider_revision_claims_mismatched",
         "credential_deletion_requests_unverified",
         "inbound_work_unresolved",
         "outbound_delivery_unconfirmed",
@@ -361,10 +362,30 @@ class PersonalRetirementEvidenceItem(BaseModel):
     provider_unlink_claim_recorded: bool
     deletion_request_recorded: bool
     credential_deletion_claim_recorded: bool
+    provider_revision_claims_correlated: bool
     unverified_deletion_request: bool
     inbox_not_completed: bool
     outbound_not_confirmed: bool
     retirement_assessment: PersonalRetirementAssessment
+
+    @model_validator(mode="after")
+    def require_consistent_provider_revision_correlation(self) -> "PersonalRetirementEvidenceItem":
+        paired_claims = (
+            self.provider_unlink_claim_recorded
+            and self.credential_deletion_claim_recorded
+        )
+        if self.provider_revision_claims_correlated and not (
+            self.retirement_held
+            and not self.connection_enabled
+            and paired_claims
+        ):
+            raise ValueError("Inconsistent retirement claim correlation")
+        mismatched = "provider_revision_claims_mismatched" in (
+            self.retirement_assessment.blocking_reasons
+        )
+        if mismatched != (paired_claims and not self.provider_revision_claims_correlated):
+            raise ValueError("Missing or contradictory retirement claim mismatch evidence")
+        return self
 
 
 class PersonalRetirementEvidenceInventory(BaseModel):

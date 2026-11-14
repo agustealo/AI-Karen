@@ -544,6 +544,28 @@ class SqlChannelRepository:
                                  AND d.status = 'provider_claimed'
                            ) AS credential_deletion_claim_recorded,
                            EXISTS (
+                               SELECT 1
+                               FROM public.channel_personal_credential_deletions d
+                               JOIN public.channel_personal_pairing_state s
+                                 ON s.tenant_id = d.tenant_id
+                                AND s.connection_id = d.connection_id
+                                AND s.provider_id = d.provider_id
+                                AND s.connection_revision = d.connection_revision
+                               JOIN public.channel_personal_retirement_holds h
+                                 ON h.tenant_id = d.tenant_id
+                                AND h.connection_id = d.connection_id
+                               WHERE d.tenant_id = c.tenant_id
+                                 AND d.connection_id = c.connection_id
+                                 AND d.user_id = o.user_id
+                                 AND d.status = 'provider_claimed'
+                                 AND d.provider_receipt_id IS NOT NULL
+                                 AND s.phase = 'disconnected'
+                                 AND s.provider_unlink_receipt_id IS NOT NULL
+                                 AND s.connection_revision = h.requested_revision
+                                 AND h.fenced_revision = c.revision
+                                 AND c.retirement_locked = true
+                           ) AS provider_revision_claims_correlated,
+                           EXISTS (
                                SELECT 1 FROM public.channel_personal_credential_deletions d
                                WHERE d.tenant_id = c.tenant_id
                                  AND d.connection_id = c.connection_id
@@ -560,7 +582,8 @@ class SqlChannelRepository:
                                SELECT 1 FROM public.channel_outbox b
                                WHERE b.tenant_id = c.tenant_id
                                  AND b.connection_id = c.connection_id
-                                 AND b.status NOT IN ('sent', 'delivered', 'read')
+                                 -- 'sent' proves adapter handoff, not provider delivery.
+                                 AND b.status NOT IN ('delivered', 'read')
                            ) AS outbound_not_confirmed
                     FROM public.channel_connections c
                     JOIN public.channel_connection_owners o
@@ -591,6 +614,7 @@ class SqlChannelRepository:
                 "provider_unlink_claim_recorded": bool(row["provider_unlink_claim_recorded"]),
                 "deletion_request_recorded": bool(row["deletion_request_recorded"]),
                 "credential_deletion_claim_recorded": bool(row["credential_deletion_claim_recorded"]),
+                "provider_revision_claims_correlated": bool(row["provider_revision_claims_correlated"]),
                 "unverified_deletion_request": bool(row["unverified_deletion_request"]),
                 "inbox_not_completed": bool(row["inbox_not_completed"]),
                 "outbound_not_confirmed": bool(row["outbound_not_confirmed"]),

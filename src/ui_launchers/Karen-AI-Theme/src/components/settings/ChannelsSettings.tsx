@@ -688,6 +688,7 @@ const RETIREMENT_BLOCKER_LABELS = {
   provider_unlink_claim_missing: 'Original-session provider unlink claim is missing',
   credential_deletion_request_missing: 'Credential deletion request not recorded',
   credential_deletion_claim_missing: 'Provider credential-deletion claim is missing',
+  provider_revision_claims_mismatched: 'Unlink and credential-deletion claims do not match the same held provider and revision',
   credential_deletion_requests_unverified: 'Credential-deletion request remains unverified',
   inbound_work_unresolved: 'Inbound work remains unfinished',
   outbound_delivery_unconfirmed: 'Outbound delivery is not confirmed',
@@ -700,7 +701,7 @@ const RETIREMENT_BLOCKER_LABELS = {
 type RetirementBlocker = keyof typeof RETIREMENT_BLOCKER_LABELS;
 
 type RetirementAssessment = {
-  contract_version: 'retirement-verification-readiness-v1';
+  contract_version: 'retirement-verification-readiness-v2';
   status: 'blocked';
   cleanup_authorized: false;
   provider_unlink_independently_verified: false;
@@ -719,6 +720,7 @@ type PersonalRetirementEvidence = {
   provider_unlink_claim_recorded: boolean;
   deletion_request_recorded: boolean;
   credential_deletion_claim_recorded: boolean;
+  provider_revision_claims_correlated: boolean;
   unverified_deletion_request: boolean;
   inbox_not_completed: boolean;
   outbound_not_confirmed: boolean;
@@ -737,7 +739,7 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
   const booleanFields = [
     'connection_enabled', 'retirement_held', 'active_consent', 'unresolved_pairing',
     'provider_unlink_claim_recorded', 'deletion_request_recorded', 'credential_deletion_claim_recorded',
-    'unverified_deletion_request', 'inbox_not_completed', 'outbound_not_confirmed',
+    'provider_revision_claims_correlated', 'unverified_deletion_request', 'inbox_not_completed', 'outbound_not_confirmed',
   ] as const;
   for (const entry of rows) {
     if (!entry || typeof entry !== 'object') {
@@ -760,7 +762,7 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
     const review = assessment as Record<string, unknown>;
     const blockers = review.blocking_reasons;
     if (
-      review.contract_version !== 'retirement-verification-readiness-v1' ||
+      review.contract_version !== 'retirement-verification-readiness-v2' ||
       review.status !== 'blocked' ||
       review.cleanup_authorized !== false ||
       review.provider_unlink_independently_verified !== false ||
@@ -770,6 +772,19 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
       blockers.some((code) => typeof code !== 'string' || !(code in RETIREMENT_BLOCKER_LABELS)) ||
       new Set(blockers).size !== blockers.length ||
       RETIREMENT_REQUIRED_BLOCKERS.some((code) => !blockers.includes(code))
+      || (
+        row.provider_revision_claims_correlated === true && (
+          row.retirement_held !== true || row.connection_enabled !== false ||
+          row.provider_unlink_claim_recorded !== true ||
+          row.credential_deletion_claim_recorded !== true
+        )
+      )
+      || (
+        row.provider_unlink_claim_recorded === true &&
+        row.credential_deletion_claim_recorded === true &&
+        row.provider_revision_claims_correlated === false &&
+        !blockers.includes('provider_revision_claims_mismatched')
+      )
     ) {
       throw new Error('Untrusted or incomplete retirement verification');
     }
@@ -879,6 +894,11 @@ function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: bo
                 {record.credential_deletion_claim_recorded
                   ? 'Provider credential-deletion claim recorded. Independent erasure verification remains unavailable.'
                   : 'No provider credential-deletion claim recorded'}
+              </p>
+              <p className="text-xs">
+                {record.provider_revision_claims_correlated
+                  ? 'Unlink and deletion claims match provider and held revision only. Remote session identity is not independently verified.'
+                  : 'No matching provider/revision evidence pair confirmed'}
               </p>
               <p className="text-xs">
                 {record.unverified_deletion_request

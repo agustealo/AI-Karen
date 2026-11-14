@@ -653,11 +653,12 @@ describe('KOC-05 read-only retirement evidence review', () => {
     provider_unlink_claim_recorded: true,
     deletion_request_recorded: true,
     credential_deletion_claim_recorded: true,
+    provider_revision_claims_correlated: true,
     unverified_deletion_request: true,
     inbox_not_completed: false,
     outbound_not_confirmed: true,
     retirement_assessment: {
-      contract_version: 'retirement-verification-readiness-v1',
+      contract_version: 'retirement-verification-readiness-v2',
       status: 'blocked',
       cleanup_authorized: false,
       provider_unlink_independently_verified: false,
@@ -696,6 +697,7 @@ describe('KOC-05 read-only retirement evidence review', () => {
     expect(screen.getByText('Final cleanup: blocked')).toBeTruthy();
     expect(screen.getByText('Independent provider unlink verification unavailable')).toBeTruthy();
     expect(screen.getByText('Provider retention and backup coverage unverified')).toBeTruthy();
+    expect(screen.getByText(/Unlink and deletion claims match provider and held revision only/)).toBeTruthy();
     expect(screen.getByText(/Provider credential-deletion claim recorded/)).toBeTruthy();
     expect(apiClient.delete).not.toHaveBeenCalled();
     expect(apiClient.post).not.toHaveBeenCalled();
@@ -722,7 +724,7 @@ describe('KOC-05 read-only retirement evidence review', () => {
   it.each([
     { retirement_assessment: { ...evidence.retirement_assessment, cleanup_authorized: true } },
     { retirement_assessment: { ...evidence.retirement_assessment, status: 'verified' } },
-    { retirement_assessment: { ...evidence.retirement_assessment, contract_version: 'retirement-verification-readiness-v2' } },
+    { retirement_assessment: { ...evidence.retirement_assessment, contract_version: 'retirement-verification-readiness-v3' } },
     { retirement_assessment: { ...evidence.retirement_assessment, provider_unlink_independently_verified: true } },
     { retirement_assessment: { ...evidence.retirement_assessment, blocking_reasons: [] } },
     { retirement_assessment: { ...evidence.retirement_assessment, blocking_reasons: ['governed_final_cleanup_authority_unavailable'] } },
@@ -730,6 +732,10 @@ describe('KOC-05 read-only retirement evidence review', () => {
     { retirement_assessment: { ...evidence.retirement_assessment, blocking_reasons: [...evidence.retirement_assessment.blocking_reasons, 'governed_final_cleanup_authority_unavailable'] } },
     { retirement_assessment: undefined },
     { credential_deletion_claim_recorded: 'true' },
+    { provider_revision_claims_correlated: 'true' },
+    { provider_revision_claims_correlated: undefined },
+    { provider_unlink_claim_recorded: false },
+    { credential_deletion_claim_recorded: false },
   ])('refuses forged or incomplete verification contracts %#', async (override) => {
     vi.mocked(apiClient.get).mockImplementation(async (path) => {
       if (path === '/api/channels/personal/connections') return { connections: [] };
@@ -743,6 +749,34 @@ describe('KOC-05 read-only retirement evidence review', () => {
     expect((await screen.findByRole('alert')).textContent)
       .toContain('Retirement evidence unavailable');
     expect(screen.queryByText('Final cleanup: blocked')).toBeNull();
+    expect(apiClient.delete).not.toHaveBeenCalled();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('visibly blocks mismatched original-provider claims without revealing identifiers', async () => {
+    const mismatched = {
+      ...evidence,
+      provider_revision_claims_correlated: false,
+      retirement_assessment: {
+        ...evidence.retirement_assessment,
+        blocking_reasons: [
+          ...evidence.retirement_assessment.blocking_reasons,
+          'provider_revision_claims_mismatched',
+        ],
+      },
+    };
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) return { connections: [mismatched] };
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review channel retirement evidence',
+    }));
+    expect(await screen.findByText('Final cleanup: blocked')).toBeTruthy();
+    expect(screen.getByText(/Unlink and credential-deletion claims do not match/)).toBeTruthy();
+    expect(screen.queryByText(/Unlink and deletion claims match provider/)).toBeNull();
     expect(apiClient.delete).not.toHaveBeenCalled();
     expect(apiClient.post).not.toHaveBeenCalled();
   });

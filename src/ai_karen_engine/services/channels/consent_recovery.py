@@ -29,7 +29,7 @@ from ai_karen_engine.services.auth.fresh_user_lookup import get_fresh_user_by_id
 
 logger = logging.getLogger(__name__)
 
-RETIREMENT_VERIFICATION_CONTRACT_VERSION = "retirement-verification-readiness-v1"
+RETIREMENT_VERIFICATION_CONTRACT_VERSION = "retirement-verification-readiness-v2"
 
 _RETIREMENT_BOOLEAN_FIELDS = (
     "connection_enabled",
@@ -39,6 +39,7 @@ _RETIREMENT_BOOLEAN_FIELDS = (
     "provider_unlink_claim_recorded",
     "deletion_request_recorded",
     "credential_deletion_claim_recorded",
+    "provider_revision_claims_correlated",
     "unverified_deletion_request",
     "inbox_not_completed",
     "outbound_not_confirmed",
@@ -72,6 +73,16 @@ def assess_retirement_evidence_snapshot(
         or any(type(record.get(field)) is not bool for field in _RETIREMENT_BOOLEAN_FIELDS)
     ):
         raise ValueError("Retirement assessment requires complete stored evidence")
+    # This is a provider/revision match only. Pairing evidence has no canonical
+    # remote session identifier, and neither claim is independently attested.
+    # Reject an impossible SQL snapshot rather than exposing a coherent state.
+    if record["provider_revision_claims_correlated"] and not (
+        record["retirement_held"]
+        and not record["connection_enabled"]
+        and record["provider_unlink_claim_recorded"]
+        and record["credential_deletion_claim_recorded"]
+    ):
+        raise ValueError("Retirement claim correlation evidence inconsistent")
 
     blockers: list[str] = []
     def block_if(condition: bool, reason: str) -> None:
@@ -93,6 +104,12 @@ def assess_retirement_evidence_snapshot(
     block_if(
         not record["credential_deletion_claim_recorded"],
         "credential_deletion_claim_missing",
+    )
+    block_if(
+        record["provider_unlink_claim_recorded"]
+        and record["credential_deletion_claim_recorded"]
+        and not record["provider_revision_claims_correlated"],
+        "provider_revision_claims_mismatched",
     )
     block_if(
         record["unverified_deletion_request"],
