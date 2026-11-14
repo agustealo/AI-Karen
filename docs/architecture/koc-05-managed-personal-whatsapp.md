@@ -859,3 +859,28 @@ a valid original-revision claim, replaces the unlink receipt with historical
 whitespace to prove it no longer counts, then restores the valid receipt and
 proves that only local provider/revision correlation returns. Independent
 session identity and credential/backup retention scope remain unverified.
+
+## KOC-05 exact read-only blocker consistency (v2, no new authority)
+
+The thin retirement-evidence API must reject an assessment whose claimed local
+blockers disagree with the stored source flags, even if all four mandatory
+independent-verification blockers are present. It now recomputes the expected
+read-only assessment through the existing
+`assess_retirement_evidence_snapshot` owner and requires an exact match to the
+typed response, including local reasons and their canonical order. Evidence
+booleans and connection revision use strict Pydantic types, so strings or
+integer surrogates cannot become apparently valid flags.
+
+The Channels Settings panel independently validates that each reported
+local blocker matches the corresponding backend flag. It refuses stale,
+missing, extra, contradictory, or reordered blockers rather than displaying
+a misleading partly complete report. This validation never invents provider
+health or erasure evidence, and it never constitutes deletion authority.
+The `retirement-verification-readiness-v2` shape and all mandatory blockers
+remain unchanged. A bad response is a redacted failure, not a partial success.
+
+Existing API and frontend contract tests exercise every local flag, evidence
+coercion, conflicting blocker lists and the unchanged legitimate blocked
+report. Independent provider-session authentication, remote credential erasure
+and retention/backup coverage are still unavailable. Finalization remains
+disabled and requires its own security review.
