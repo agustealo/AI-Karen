@@ -10,11 +10,15 @@ import sys
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from fastapi import Query
 
 from ai_karen_engine.core.services.dependencies import get_plugin_service
 from ai_karen_engine.services.plugin_service import PluginService
+from ai_karen_engine.services.identity_vault.credential_vault_service import (
+    PluginCredentialConflict,
+    PluginCredentialDenied,
+)
 from ai_karen_engine.services.plugin_settings_repository import (
     PluginSettingsNotConfigured,
     PluginSettingsRevisionConflict,
@@ -318,6 +322,10 @@ def _settings_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, PluginSettingsRevisionConflict):
         return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, PluginCredentialConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, PluginCredentialDenied):
+        return HTTPException(status_code=403, detail="Plugin credential access denied")
     logger.error("plugin.settings.unavailable error_type=%s", type(exc).__name__)
     return HTTPException(status_code=503, detail="Plugin settings persistence unavailable")
 
@@ -390,6 +398,76 @@ async def reset_extension_settings(
             request_id=request_id,
             correlation_id=correlation_id,
             reset=True,
+        )
+    except Exception as exc:
+        raise _settings_error(exc) from exc
+
+
+class PluginCredentialWriteRequest(BaseModel):
+    """Write-only secret: Pydantic repr and error logs must never include it."""
+
+    model_config = ConfigDict(extra="forbid")
+    value: SecretStr = Field(min_length=1, max_length=4096)
+    revision: int = Field(ge=0)
+
+
+@router.get("/{extension_name}/credentials")
+async def list_extension_credentials(
+    extension_name: str,
+    user: dict[str, Any] = Depends(require_extension_mutation_access),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    """Status/revision only. Never return secret handles or plaintext."""
+    try:
+        return await plugin_service.read_plugin_credential_status(
+            extension_name, str(user["tenant_id"])
+        )
+    except Exception as exc:
+        raise _settings_error(exc) from exc
+
+
+@router.post("/{extension_name}/credentials/{field_key}")
+async def write_extension_credential(
+    extension_name: str,
+    field_key: str,
+    body: PluginCredentialWriteRequest,
+    request: Request,
+    user: dict[str, Any] = Depends(require_extension_mutation_access),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    _, correlation_id = _settings_receipt_ids(request)
+    try:
+        return await plugin_service.write_plugin_credential(
+            plugin_id=extension_name,
+            field_key=field_key,
+            tenant_id=str(user["tenant_id"]),
+            actor_user_id=str(user["user_id"]),
+            secret_value=body.value.get_secret_value(),
+            revision=body.revision,
+            correlation_id=correlation_id,
+        )
+    except Exception as exc:
+        raise _settings_error(exc) from exc
+
+
+@router.delete("/{extension_name}/credentials/{field_key}")
+async def revoke_extension_credential(
+    extension_name: str,
+    field_key: str,
+    request: Request,
+    revision: int = Query(..., ge=1),
+    user: dict[str, Any] = Depends(require_extension_mutation_access),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    _, correlation_id = _settings_receipt_ids(request)
+    try:
+        return await plugin_service.revoke_plugin_credential(
+            plugin_id=extension_name,
+            field_key=field_key,
+            tenant_id=str(user["tenant_id"]),
+            actor_user_id=str(user["user_id"]),
+            revision=revision,
+            correlation_id=correlation_id,
         )
     except Exception as exc:
         raise _settings_error(exc) from exc
