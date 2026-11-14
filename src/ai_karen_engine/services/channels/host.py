@@ -15,6 +15,7 @@ requires a separate tenant-authorized reconciliation action.
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 
 import httpx
 
@@ -293,6 +294,51 @@ class ChannelHostServices:
             installation_id=connection.installation_id,
             action="channel.consent", plan=authorized_plan,
         )
+
+    async def list_owned_personal_channels(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict]:
+        """Owner-only status projection; never expose credentials or vendor IDs.
+
+        Inventory is read through the same scoped SQL owner ledger and
+        channel.consent policy gate as the existing per-connection status API.
+        Persisted provider events are historical, not live session proof.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel inventory authority unavailable")
+        connections = await self.repository.list_personal_owned_connections(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        inventory: list[dict] = []
+        for connection in connections:
+            if connection.tenant_id != tenant_id:
+                raise PermissionError("Personal channel tenant mismatch")
+            if connection.installation_id not in self._installed:
+                raise PermissionError("Channel installation no longer available")
+            session_id = str(uuid4())
+            plan = await self.activation.issue_action_plan(
+                tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+                installation_id=connection.installation_id,
+                action="channel.consent",
+            )
+            provider_id = self.settings.personal_pairing_providers.get(
+                connection.installation_id,
+            )
+            status = await self.get_personal_pairing_status(
+                tenant_id=tenant_id,
+                connection_id=connection.connection_id,
+                provider_id=provider_id or "",
+                user_id=user_id,
+                session_id=session_id,
+                authorized_plan=plan,
+            )
+            inventory.append({
+                "connection_id": connection.connection_id,
+                "installation_id": connection.installation_id,
+                "provider_id": provider_id,
+                **status,
+            })
+        return inventory
 
     async def get_personal_pairing_status(
         self, *, tenant_id: str, connection_id: str, provider_id: str,
