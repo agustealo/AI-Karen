@@ -78,13 +78,13 @@ describe("authenticated display preferences", () => {
 
   it("follows the OS color scheme in system mode", () => {
     let systemDark = true;
-    let fireChange: (() => void) | null = null;
+    const callback = { fireChange: undefined as (() => void) | undefined };
     vi.spyOn(window, "matchMedia").mockImplementation(() => ({
       matches: systemDark,
       media: "(prefers-color-scheme: dark)",
       onchange: null,
       addEventListener: (_event: string, listener: EventListenerOrEventListenerObject) => {
-        fireChange = () => {
+        callback.fireChange = () => {
           if (typeof listener === "function") listener(new Event("change"));
           else listener.handleEvent(new Event("change"));
         };
@@ -98,7 +98,7 @@ describe("authenticated display preferences", () => {
     render(<ThemeProvider><Display /></ThemeProvider>);
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     systemDark = false;
-    fireChange?.();
+    callback.fireChange?.();
     expect(document.documentElement.classList.contains("light")).toBe(true);
   });
 });
