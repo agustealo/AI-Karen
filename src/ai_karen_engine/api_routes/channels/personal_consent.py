@@ -240,6 +240,39 @@ class PersonalConsentRecoveryInventory(BaseModel):
     consents: list[PersonalConsentRecoveryItem]
 
 
+class PersonalCredentialDeletionRequestItem(BaseModel):
+    request_id: UUID
+    connection_id: str
+    provider_id: str
+    connection_revision: int
+    status: Literal[
+        "requested", "provider_pending", "provider_claimed",
+        "verification_pending", "verified", "unknown",
+    ]
+
+
+class PersonalCredentialDeletionInventory(BaseModel):
+    requests: list[PersonalCredentialDeletionRequestItem]
+
+
+@router.get(
+    "/consent-recovery/deletion-requests",
+    response_model=PersonalCredentialDeletionInventory,
+)
+async def list_retired_credential_deletion_requests(
+    user: UserData = Depends(get_current_user),
+) -> PersonalCredentialDeletionInventory:
+    """Show stored deletion intent; never assert provider or local erasure."""
+    tenant_id, user_id = _verified_actor(user)
+    try:
+        rows = await PersonalConsentRecoveryService().list_deletion_requests(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+    except Exception as exc:
+        raise _translate(exc, operation="recovery") from None
+    return PersonalCredentialDeletionInventory(requests=rows)
+
+
 @router.get("/consent-recovery", response_model=PersonalConsentRecoveryInventory)
 async def list_personal_consent_recovery(
     user: UserData = Depends(get_current_user),

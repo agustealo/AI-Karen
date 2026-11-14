@@ -460,6 +460,55 @@ class SqlChannelRepository:
             for row in rows
         ]
 
+    async def list_owned_personal_credential_deletion_requests(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict[str, str | int]]:
+        """Read bounded owner-only deletion INTENT, not proof of vendor erasure.
+
+        Recovery remains available after an installation or ChannelHost retires.
+        Never expose session references, credential scopes, secret handles,
+        provider receipt IDs, or another connection owner's records.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT d.request_id, d.connection_id, d.provider_id,
+                           d.connection_revision, d.status
+                    FROM public.channel_personal_credential_deletions d
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = d.tenant_id
+                     AND o.connection_id = d.connection_id
+                     AND o.user_id = d.user_id
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = o.tenant_id
+                     AND c.connection_id = o.connection_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = d.tenant_id
+                     AND u.user_id = d.user_id
+                    WHERE d.tenant_id = CAST(:tenant AS uuid)
+                      AND d.user_id = CAST(:user AS uuid)
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ORDER BY d.created_at DESC, d.request_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id, "user": user_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise RuntimeError("Personal credential deletion inventory limit exceeded")
+        return [
+            {
+                "request_id": str(row["request_id"]),
+                "connection_id": str(row["connection_id"]),
+                "provider_id": str(row["provider_id"]),
+                "connection_revision": int(row["connection_revision"]),
+                "status": str(row["status"]),
+            }
+            for row in rows
+        ]
+
     async def list_active_personal_consent_providers(
         self, *, tenant_id: str, connection_id: str, user_id: str,
     ) -> list[str]:

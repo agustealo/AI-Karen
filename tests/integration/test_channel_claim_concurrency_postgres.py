@@ -42,6 +42,10 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
     try:
         # Disposable dedicated DB, with only prerequisites of the migration.
         await raw.execute("""
+            DROP TABLE IF EXISTS public.channel_personal_credential_deletions CASCADE;
+            DROP TABLE IF EXISTS public.channel_personal_pairing_state CASCADE;
+            DROP TABLE IF EXISTS public.channel_personal_pairing_consents CASCADE;
+            DROP TABLE IF EXISTS public.channel_connection_owners CASCADE;
             DROP TABLE IF EXISTS public.channel_outbox CASCADE;
             DROP TABLE IF EXISTS public.channel_inbox CASCADE;
             DROP TABLE IF EXISTS public.channel_link_challenges CASCADE;
@@ -70,6 +74,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261018020000_34_channel_personal_pairing_state.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(pairing_migration)
+        deletion_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261018030000_35_channel_personal_credential_deletions.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(deletion_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -162,6 +171,36 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert not await SqlChannelRepository().is_personal_connection_owner(
             tenant_id=str(tenant_b), connection_id=connection_id, user_id=str(user),
         )
+
+        # KOC-05 retired-host deletion request status is a read of durable
+        # intent, scoped to the assigned owner and tenant, never vendor erasure.
+        assert await owner_repo.list_owned_personal_credential_deletion_requests(
+            tenant_id=str(tenant_a), user_id=str(user),
+        ) == []
+        deletion = await owner_repo.request_personal_credential_deletion(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user), provider_id="retired-operator",
+            connection_revision=1, session_reference="opaque-session",
+            credential_scope="companion-credentials",
+            idempotency_key="retired-deletion-request",
+        )
+        assert deletion["status"] == "requested"
+        recovered = await owner_repo.list_owned_personal_credential_deletion_requests(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        assert recovered == [{
+            "request_id": deletion["request_id"],
+            "connection_id": connection_id,
+            "provider_id": "retired-operator",
+            "connection_revision": 1,
+            "status": "requested",
+        }]
+        assert await owner_repo.list_owned_personal_credential_deletion_requests(
+            tenant_id=str(tenant_a), user_id=str(another_user),
+        ) == []
+        assert await owner_repo.list_owned_personal_credential_deletion_requests(
+            tenant_id=str(tenant_b), user_id=str(user),
+        ) == []
 
         # Exercise actual SQL consent acceptance, scope and durable revocation.
         from ai_karen_engine.services.channels.personal_pairing_policy import (
@@ -316,7 +355,8 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         await raw.execute(
             "GRANT SELECT ON public.channel_inbox, public.channel_outbox, "
             "public.channel_personal_pairing_consents, public.channel_connection_owners, "
-            "public.channel_personal_pairing_state "
+            "public.channel_personal_pairing_state, "
+            "public.channel_personal_credential_deletions "
             "TO karen_channel_rls_probe"
         )
         async with raw.transaction():
@@ -337,6 +377,9 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_personal_pairing_state"
             ) == 1
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_credential_deletions"
+            ) == 1
             await raw.execute(
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_b),
@@ -353,10 +396,14 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_personal_pairing_state"
             ) == 0
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_credential_deletions"
+            ) == 0
         await raw.execute(
             "REVOKE SELECT ON public.channel_inbox, public.channel_outbox, "
             "public.channel_personal_pairing_consents, public.channel_connection_owners, "
-            "public.channel_personal_pairing_state "
+            "public.channel_personal_pairing_state, "
+            "public.channel_personal_credential_deletions "
             "FROM karen_channel_rls_probe"
         )
         await raw.execute(

@@ -5,7 +5,14 @@ import ChannelsSettings from '@/components/settings/ChannelsSettings';
 import { apiClient, ApiError } from '@/lib/api';
 
 const { auth } = vi.hoisted(() => ({
-  auth: { isAuthenticated: true, isLoading: false },
+  auth: {
+    isAuthenticated: true,
+    isLoading: false,
+    user: {
+      tenant_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      user_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    },
+  },
 }));
 
 vi.mock('@/lib/useAuth', () => ({
@@ -74,6 +81,8 @@ function mockInventoryAndConsent(
 beforeEach(() => {
   auth.isAuthenticated = true;
   auth.isLoading = false;
+  auth.user.tenant_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  auth.user.user_id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
   vi.mocked(apiClient.get).mockResolvedValue({ connections: [] });
 });
 
@@ -535,6 +544,97 @@ describe('KOC-05 host-independent stored consent recovery', () => {
       name: 'Review stored channel consent',
     }) as HTMLButtonElement;
     expect(review.disabled).toBe(true);
+    expect(apiClient.get).not.toHaveBeenCalled();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('KOC-05 retired provider deletion request evidence', () => {
+  const endpoint = '/api/channels/personal/consent-recovery/deletion-requests';
+  const deletion = {
+    request_id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    connection_id: channel.connection_id,
+    provider_id: 'retired-operator',
+    connection_revision: 2,
+    status: 'provider_claimed',
+  };
+
+  it('shows owner-scoped deletion request claims only after explicit review, even with host offline', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') {
+        throw new ApiError(503, 'Channel host retired');
+      }
+      if (path === endpoint) {
+        return { requests: [{
+          ...deletion,
+        }] };
+      }
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Channels service is unavailable');
+    expect(apiClient.get).not.toHaveBeenCalledWith(endpoint);
+    fireEvent.click(screen.getByRole('button', { name: 'Review credential deletion requests' }));
+    expect(await screen.findByText('retired-operator')).toBeTruthy();
+    expect(screen.getByText(/Provider claims credential erasure/)).toBeTruthy();
+    expect(screen.getByText(/Independent verification is not established/)).toBeTruthy();
+    expect(screen.queryByText('Credentials erased')).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the history is malformed rather than claiming no deletion requests', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) return { requests: [{ ...deletion, status: 'erased' }] };
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review credential deletion requests',
+    }));
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Deletion request status unavailable');
+    expect(screen.queryByText('retired-operator')).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('clears retained deletion history across a tenant principal switch without automatic replay', async () => {
+    let oldPrincipal = true;
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) return { requests: oldPrincipal ? [deletion] : [] };
+      throw new Error('Unexpected URL');
+    });
+    const view = render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review credential deletion requests',
+    }));
+    expect(await screen.findByText('retired-operator')).toBeTruthy();
+    oldPrincipal = false;
+    auth.user.user_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+    view.rerender(<ChannelsSettings />);
+    await waitFor(() => {
+      expect(screen.queryByText('retired-operator')).toBeNull();
+    });
+    expect(vi.mocked(apiClient.get).mock.calls.filter(([path]) => path === endpoint))
+      .toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Review credential deletion requests',
+    }));
+    expect(await screen.findByText(/No retained deletion requests were found/)).toBeTruthy();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('does not read private deletion history when signed out', async () => {
+    auth.isAuthenticated = false;
+    render(<ChannelsSettings />);
+    const button = screen.getByRole('button', {
+      name: 'Review credential deletion requests',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
     expect(apiClient.get).not.toHaveBeenCalled();
     expect(apiClient.post).not.toHaveBeenCalled();
   });

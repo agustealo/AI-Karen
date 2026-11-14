@@ -42,6 +42,11 @@ def service(monkeypatch, *, permissions=None, account=None, records=None):
             }],
         ),
         revoke_personal_pairing_consent=AsyncMock(return_value=True),
+        list_owned_personal_credential_deletion_requests=AsyncMock(return_value=[{
+            "request_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            "connection_id": CONNECTION, "provider_id": PROVIDER,
+            "connection_revision": 2, "status": "provider_claimed",
+        }]),
     )
     lookup = AsyncMock(return_value=account if account is not None else principal())
     allowed = {Permission.CHANNEL_CONSENT} if permissions is None else permissions
@@ -165,3 +170,24 @@ async def test_recovery_permission_does_not_grant_provision_or_pairing(monkeypat
     assert not hasattr(authority, "pair")
     await authority.list_active(tenant_id=TENANT, user_id=USER)
     repository.revoke_personal_pairing_consent.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_retired_deletion_inventory_reuses_fresh_consent_permission_and_no_host(monkeypatch):
+    authority, repository, lookup = service(monkeypatch)
+    records = await authority.list_deletion_requests(tenant_id=TENANT, user_id=USER)
+    assert records[0]["status"] == "provider_claimed"
+    lookup.assert_awaited_once_with(tenant_id=TENANT, user_id=USER)
+    repository.list_owned_personal_credential_deletion_requests.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+    repository.revoke_personal_pairing_consent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retired_deletion_inventory_denied_without_fresh_rbac(monkeypatch):
+    authority, repository, _ = service(monkeypatch, permissions=set())
+    with pytest.raises(PermissionError, match="RBAC"):
+        await authority.list_deletion_requests(tenant_id=TENANT, user_id=USER)
+    repository.list_owned_personal_credential_deletion_requests.assert_not_awaited()

@@ -532,8 +532,152 @@ function RetiredPersonalConsentRecovery({
   );
 }
 
+type RetiredCredentialDeletion = {
+  request_id: string;
+  connection_id: string;
+  provider_id: string;
+  connection_revision: number;
+  status:
+    | 'requested'
+    | 'provider_pending'
+    | 'provider_claimed'
+    | 'verification_pending'
+    | 'verified'
+    | 'unknown';
+};
+
+function parseRetiredCredentialDeletions(value: unknown): RetiredCredentialDeletion[] {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Missing deletion request ledger');
+  }
+  const requests = (value as { requests?: unknown }).requests;
+  if (!Array.isArray(requests) || requests.length > 50) {
+    throw new Error('Invalid deletion request ledger');
+  }
+  const statuses = new Set([
+    'requested', 'provider_pending', 'provider_claimed',
+    'verification_pending', 'verified', 'unknown',
+  ]);
+  const seen = new Set<string>();
+  for (const item of requests) {
+    if (!item || typeof item !== 'object') {
+      throw new Error('Invalid deletion request record');
+    }
+    const record = item as Record<string, unknown>;
+    if (
+      typeof record.request_id !== 'string' ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(record.request_id) ||
+      typeof record.connection_id !== 'string' ||
+      !record.connection_id.trim() || record.connection_id.length > 256 ||
+      typeof record.provider_id !== 'string' ||
+      !record.provider_id.trim() || record.provider_id.length > 128 ||
+      typeof record.connection_revision !== 'number' ||
+      !Number.isSafeInteger(record.connection_revision) || record.connection_revision < 1 ||
+      typeof record.status !== 'string' || !statuses.has(record.status) ||
+      seen.has(record.request_id)
+    ) {
+      throw new Error('Untrusted deletion request record');
+    }
+    seen.add(record.request_id);
+  }
+  return requests as RetiredCredentialDeletion[];
+}
+
+const deletionStatusDescription: Record<RetiredCredentialDeletion['status'], string> = {
+  requested: 'Deletion requested in Karen. Provider outcome has not been verified.',
+  provider_pending: 'Deletion request pending with the provider. Erasure has not been verified.',
+  provider_claimed: 'Provider claims credential erasure. Independent verification is not established.',
+  verification_pending: 'A verification step is pending. Erasure has not been confirmed here.',
+  verified: 'Historical ledger status: verified. This screen does not independently verify provider or retained-data deletion.',
+  unknown: 'Deletion outcome is unknown. No erasure confirmation is available.',
+};
+
+function RetiredCredentialDeletionHistory({ authenticated }: { authenticated: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const [records, setRecords] = useState<RetiredCredentialDeletion[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failure, setFailure] = useState(false);
+
+  useEffect(() => {
+    if (!authenticated) {
+      setRecords(null);
+      setExpanded(false);
+      setFailure(false);
+    }
+  }, [authenticated]);
+
+  const review = async () => {
+    if (!authenticated || loading) return;
+    setExpanded(true);
+    setLoading(true);
+    setRecords(null);
+    setFailure(false);
+    try {
+      const response = await apiClient.get<{ requests: RetiredCredentialDeletion[] }>(
+        '/api/channels/personal/consent-recovery/deletion-requests',
+      );
+      setRecords(parseRetiredCredentialDeletions(response));
+    } catch {
+      setFailure(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="space-y-3 border-t border-border/60 pt-4"
+      aria-label="Retired provider deletion history">
+      <p className="text-sm font-semibold">Credential deletion request history</p>
+      <p className="text-xs text-muted-foreground">
+        Review retained Karen deletion requests after a provider or channel host
+        is retired. A vendor claim does not prove remote unlink, credential erasure,
+        deletion of retained messages, or permission to purge the connection.
+      </p>
+      <Button type="button" size="sm" variant="outline"
+        aria-label="Review credential deletion requests"
+        disabled={!authenticated || loading}
+        onClick={() => void review()}>
+        {expanded ? 'Refresh deletion request history' : 'Review deletion requests'}
+      </Button>
+      {loading && <p role="status" className="text-sm">Reading the deletion request ledger...</p>}
+      {!loading && failure && authenticated && (
+        <Alert role="alert" variant="destructive">
+          <AlertCircle className="h-4 w-4" aria-hidden="true" />
+          <AlertTitle>Deletion request status unavailable</AlertTitle>
+          <AlertDescription>
+            Karen could not verify your retained deletion requests. No deletion was performed.
+          </AlertDescription>
+        </Alert>
+      )}
+      {!loading && authenticated && records?.length === 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          No retained deletion requests were found. This is not proof that provider data
+          or credentials do not exist.
+        </p>
+      )}
+      {!loading && authenticated && records && records.length > 0 && (
+        <div className="space-y-3">
+          {records.map((record) => (
+            <div key={record.request_id}
+              className="space-y-1 rounded-md border border-border/60 p-3">
+              <p className="break-all text-sm font-semibold">{record.provider_id}</p>
+              <p className="break-all text-xs text-muted-foreground">
+                Connection {record.connection_id}, revision {record.connection_revision}
+              </p>
+              <p className="text-xs">{deletionStatusDescription[record.status]}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function ChannelsSettings() {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const principalKey = isAuthenticated && user?.tenant_id && user?.user_id
+    ? user.tenant_id + ':' + user.user_id
+    : 'signed-out';
   const [inventory, setInventory] = useState<PersonalChannel[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -582,7 +726,7 @@ export default function ChannelsSettings() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, isAuthLoading, reload]);
+  }, [isAuthenticated, isAuthLoading, reload, principalKey]);
 
   return (
     <div className="space-y-5">
@@ -712,7 +856,12 @@ export default function ChannelsSettings() {
         </div>
       )}
       <RetiredPersonalConsentRecovery
+        key={'consent:' + principalKey}
         channels={inventory}
+        authenticated={isAuthenticated && !isAuthLoading}
+      />
+      <RetiredCredentialDeletionHistory
+        key={'deletion:' + principalKey}
         authenticated={isAuthenticated && !isAuthLoading}
       />
     </div>

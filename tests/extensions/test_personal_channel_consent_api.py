@@ -582,6 +582,11 @@ def retired_recovery_context(monkeypatch, *, consents=None, revoked=True):
             "policy_version": "obsolete-policy",
         }]),
         revoke=AsyncMock(return_value=revoked),
+        list_deletion_requests=AsyncMock(return_value=[{
+            "request_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            "connection_id": CONNECTION, "provider_id": PROVIDER,
+            "connection_revision": 2, "status": "provider_claimed",
+        }]),
     )
     monkeypatch.setattr(api, "PersonalConsentRecoveryService", lambda: recovery)
     return recovery
@@ -683,6 +688,7 @@ def test_retired_consent_recovery_routes_are_authenticated_and_not_activation_ro
     routes = [route for route in api.router.routes if isinstance(route, APIRoute)]
     for path, method in (
         ("/api/channels/personal/consent-recovery", "GET"),
+        ("/api/channels/personal/consent-recovery/deletion-requests", "GET"),
         ("/api/channels/personal/consent-recovery/{connection_id}/{provider_id}/revoke", "POST"),
     ):
         matches = [route for route in routes if route.path == path]
@@ -692,3 +698,36 @@ def test_retired_consent_recovery_routes_are_authenticated_and_not_activation_ro
             dep.call is api.get_current_user
             for dep in matches[0].dependant.dependencies
         )
+
+
+
+@pytest.mark.asyncio
+async def test_retired_deletion_requests_are_auth_only_and_never_claim_verified_erasure(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    result = await api.list_retired_credential_deletion_requests(user=actor())
+    assert len(result.requests) == 1
+    record = result.requests[0].model_dump()
+    assert record["status"] == "provider_claimed"
+    assert record["connection_revision"] == 2
+    for field in ("session_reference", "credential_scope", "provider_receipt_id",
+                  "credential_handle", "provider_unlinked", "credentials_erased"):
+        assert field not in record
+    recovery.list_deletion_requests.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retired_deletion_requests_denied_and_errors_redacted(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    with pytest.raises(HTTPException) as forbidden:
+        await api.list_retired_credential_deletion_requests(
+            user=actor(is_verified=False),
+        )
+    assert forbidden.value.status_code == 403
+    recovery.list_deletion_requests.assert_not_awaited()
+    recovery.list_deletion_requests.side_effect = RuntimeError("vault://secret-token")
+    with pytest.raises(HTTPException) as unavailable:
+        await api.list_retired_credential_deletion_requests(user=actor())
+    assert unavailable.value.status_code == 503
+    assert "vault://" not in unavailable.value.detail

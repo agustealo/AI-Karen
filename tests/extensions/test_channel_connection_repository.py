@@ -293,3 +293,70 @@ async def test_retired_consent_inventory_rejects_bad_user_before_database(monkey
             tenant_id=TENANT, user_id="forged-user",
         )
     assert session.calls == []
+
+
+
+@pytest.mark.asyncio
+async def test_retired_deletion_request_inventory_is_owner_and_tenant_scoped(monkeypatch):
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    request_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    session = Session([{
+        "request_id": request_id,
+        "connection_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "provider_id": "retired-operator",
+        "connection_revision": 7,
+        "status": "provider_claimed",
+        "session_reference": "must-not-return",
+        "credential_scope": "must-not-return",
+        "provider_receipt_id": "must-not-return",
+    }])
+    install(monkeypatch, session)
+    records = await SqlChannelRepository().list_owned_personal_credential_deletion_requests(
+        tenant_id=TENANT, user_id=user,
+    )
+    assert records == [{
+        "request_id": request_id,
+        "connection_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "provider_id": "retired-operator",
+        "connection_revision": 7,
+        "status": "provider_claimed",
+    }]
+    query, params = session.calls[0]
+    assert "JOIN public.channel_connection_owners o" in query
+    assert "o.user_id = d.user_id" in query
+    assert "JOIN public.channel_connections c" in query
+    assert "JOIN public.auth_users u" in query
+    assert "u.is_active = true" in query and "u.is_verified = true" in query
+    assert "d.tenant_id = CAST(:tenant AS uuid)" in query
+    assert "d.user_id = CAST(:user AS uuid)" in query
+    assert "LIMIT 51" in query
+    assert params == {"tenant": TENANT, "user": user}
+    selected = query.split("FROM public.channel_personal_credential_deletions")[0]
+    for secret in ("session_reference", "credential_scope", "provider_receipt_id", "credential_handle"):
+        assert secret not in selected
+
+
+@pytest.mark.asyncio
+async def test_retired_deletion_request_inventory_is_empty_or_fails_closed_on_overflow(monkeypatch):
+    session = Session([])
+    install(monkeypatch, session)
+    kwargs = {"tenant_id": TENANT, "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+    assert await SqlChannelRepository().list_owned_personal_credential_deletion_requests(**kwargs) == []
+    session.value = [{
+        "request_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "connection_id": "conn", "provider_id": "provider",
+        "connection_revision": 1, "status": "requested",
+    }] * 51
+    with pytest.raises(RuntimeError, match="inventory limit exceeded"):
+        await SqlChannelRepository().list_owned_personal_credential_deletion_requests(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_retired_deletion_request_inventory_rejects_forged_identity_before_sql(monkeypatch):
+    session = Session([])
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().list_owned_personal_credential_deletion_requests(
+            tenant_id=TENANT, user_id="not-an-authenticated-user",
+        )
+    assert session.calls == []
