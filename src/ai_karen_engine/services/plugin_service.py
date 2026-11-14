@@ -625,27 +625,13 @@ class PluginService:
         if record is None:
             raise LookupError(plugin_name)
         manifest = record.get("manifest")
-        schema = getattr(manifest, "config_schema", None)
-        if schema is None:
+        if manifest is None:
+            raise ValueError("Plugin has no canonical invocation manifest")
+        # The canonical kernel owns the projection. Persisted config fields
+        # are not caller parameters and must not be used to validate actions.
+        rules = PluginKernel.execution_input_schema(manifest)
+        if not rules:
             return dict(parameters)
-        schema_data = (
-            schema.model_dump()
-            if hasattr(schema, "model_dump")
-            else dict(schema)
-            if isinstance(schema, dict)
-            else {}
-        )
-        if not schema_data:
-            return dict(parameters)
-        rules = {
-            "type": schema_data.get("type", "object"),
-            "properties": schema_data.get("properties", {}),
-            "required": schema_data.get("required", []),
-            "additionalProperties": schema_data.get(
-                "additional_properties",
-                schema_data.get("additionalProperties", True),
-            ),
-        }
         self._validate_value(parameters, rules, "parameters")
         return dict(parameters)
 
