@@ -1018,6 +1018,150 @@ class AuthService(BaseService):
                 raise RuntimeError("Session retrieval unavailable") from e
             return []
 
+    async def list_account_sessions(
+        self,
+        user_id: str,
+        tenant_id: str,
+        current_access_token: str,
+        *,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List only active sessions owned by this user and durable tenant.
+
+        Consumer responses never include session credentials or device hashes.
+        The supplied access token comes from the already-authenticated request,
+        not from any client-selected session identifier.
+        """
+        if not self._initialized:
+            await self.initialize()
+        try:
+            user_uuid = uuid.UUID(str(user_id))
+            tenant_uuid = uuid.UUID(str(tenant_id))
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Invalid authenticated session scope") from exc
+        if not current_access_token:
+            raise ValueError("An authenticated access token is required")
+        bounded_limit = max(1, min(int(limit), 50))
+
+        try:
+            async with self._session_scope() as session:
+                result = await session.execute(
+                    select(AuthSession)
+                    .join(AuthUser, AuthSession.user_id == AuthUser.user_id)
+                    .where(
+                        AuthSession.user_id == user_uuid,
+                        AuthUser.tenant_id == tenant_uuid,
+                        AuthUser.is_active,
+                        AuthSession.is_active,
+                    )
+                    .order_by(AuthSession.created_at.desc())
+                    .limit(bounded_limit)
+                )
+                now = datetime.utcnow()
+                entries: List[Dict[str, Any]] = []
+                for row in result.scalars().all():
+                    expires_at = (
+                        row.created_at + timedelta(seconds=row.expires_in)
+                        if row.created_at and row.expires_in
+                        else None
+                    )
+                    if expires_at and expires_at <= now:
+                        continue
+                    entries.append(
+                        {
+                            "session_id": str(row.session_token),
+                            "is_current": secrets.compare_digest(
+                                str(row.access_token), current_access_token
+                            ),
+                            "created_at": row.created_at.isoformat()
+                            if row.created_at else None,
+                            "last_accessed": row.last_accessed.isoformat()
+                            if row.last_accessed else None,
+                            "expires_at": expires_at.isoformat()
+                            if expires_at else None,
+                            "ip_address": row.ip_address or None,
+                            "user_agent": row.user_agent or None,
+                        }
+                    )
+                return entries
+        except Exception as exc:
+            logger.error(
+                "Consumer session listing failed: %s", type(exc).__name__
+            )
+            raise RuntimeError("Session retrieval unavailable") from exc
+
+    async def revoke_account_session(
+        self,
+        user_id: str,
+        tenant_id: str,
+        session_id: str,
+        current_access_token: str,
+    ) -> bool:
+        """Atomically revoke a different session belonging to the same account.
+
+        Locked ownership checks and a committed write precede the success
+        receipt. Never accept a raw access or refresh token as the target.
+        """
+        if not self._initialized:
+            await self.initialize()
+        try:
+            user_uuid = uuid.UUID(str(user_id))
+            tenant_uuid = uuid.UUID(str(tenant_id))
+            session_uuid = uuid.UUID(str(session_id))
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Invalid session identifier or account scope") from exc
+        if not current_access_token:
+            raise ValueError("An authenticated access token is required")
+
+        try:
+            async with self._session_scope() as session:
+                result = await session.execute(
+                    select(AuthSession)
+                    .join(AuthUser, AuthSession.user_id == AuthUser.user_id)
+                    .where(
+                        AuthSession.session_token == session_uuid,
+                        AuthSession.user_id == user_uuid,
+                        AuthUser.tenant_id == tenant_uuid,
+                        AuthUser.is_active,
+                        AuthSession.is_active,
+                    )
+                    .with_for_update(of=AuthSession)
+                )
+                target = result.scalar_one_or_none()
+                if target is None:
+                    return False
+                if secrets.compare_digest(
+                    str(target.access_token), current_access_token
+                ):
+                    raise ValueError(
+                        "Use Sign out to terminate the current session"
+                    )
+                target.is_active = False
+                target.invalidated_at = datetime.utcnow()
+                target.invalidation_reason = "account_remote_revoke"
+                await session.flush()
+                await session.commit()
+
+            for cached_session in self._active_sessions.values():
+                if cached_session.access_token == target.access_token:
+                    cached_session.is_active = False
+            await self._emit_audit_event(
+                action="auth.session.remote_revoked",
+                actor_user_id=user_id,
+                target_user_id=user_id,
+                status="success",
+                reason_code="account_remote_revoke",
+                session_id=session_id,
+            )
+            return True
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Account session revocation failed: %s", type(exc).__name__
+            )
+            raise RuntimeError("Session revocation unavailable") from exc
+
     async def revoke_session(self, session_token: str, reason: str = "manual_revoke") -> bool:
         if not self._initialized:
             await self.initialize()
