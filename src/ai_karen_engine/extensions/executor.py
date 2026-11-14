@@ -38,6 +38,7 @@ from ai_karen_engine.core.runtime.contracts import (
 from ai_karen_engine.extensions.contracts import (
     CapabilityInvocationRequest,
     DataClassification,
+    ExecutionIsolationMode,
     ExtensionCapability,
     ExtensionExecutionContext,
     ExtensionExecutionRequest,
@@ -153,8 +154,8 @@ class ExtensionExecutionService:
         resolved: Any,
     ) -> None:
         """Add provenance metadata from resolved capability."""
-        result.trust_tier = getattr(resolved, "extension_trust_tier", TrustTier.UNTRUSTED)
-
+        # The actual registered manifest is the trust authority. A capability
+        # resolver must never promote an untrusted handler to first-party.
         if hasattr(resolved, "capability"):
             capability = resolved.capability
             result.result_trust = getattr(capability, "result_trust", ResultTrust.UNTRUSTED_EXTERNAL)
@@ -268,6 +269,27 @@ class ExtensionExecutionService:
                 execution_id,
                 error.error_code,
                 str(error),
+                trust_tier,
+                result_trust,
+                data_classification,
+            )
+
+        # The current canonical handler runner invokes Python in this process.
+        # Requested sandbox/subprocess/container labels do not create isolation.
+        # Fail closed before resolving or importing code from an untrusted origin.
+        isolation_mode = getattr(
+            manifest, "isolation_mode", ExecutionIsolationMode.IN_PROCESS
+        )
+        if (
+            trust_tier not in (TrustTier.FIRST_PARTY, TrustTier.BUILTIN_TRUSTED)
+            or isolation_mode != ExecutionIsolationMode.IN_PROCESS
+        ):
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                "isolation_unavailable",
+                "The plugin runtime cannot safely execute this trust tier or isolation mode",
                 trust_tier,
                 result_trust,
                 data_classification,
