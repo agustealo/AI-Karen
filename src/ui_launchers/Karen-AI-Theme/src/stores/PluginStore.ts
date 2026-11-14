@@ -14,6 +14,8 @@ interface PluginStoreState {
   searchParams: PluginSearchParams;
   searchResponse: PluginSearchResponse | null;
   selectedPlugin: PluginDetails | null;
+  detailsLoading: boolean;
+  detailsError: string | null;
   categories: CategoryInfo[];
   trendingPlugins: Plugin[];
   trendingStatus: 'idle' | 'loading' | 'available' | 'unavailable' | 'error';
@@ -37,6 +39,7 @@ interface PluginStoreState {
 
 let latestPluginSearchRequestId = 0;
 let latestInstalledSearchRequestId = 0;
+let latestPluginDetailsRequestId = 0;
 
 export const usePluginStore = create<PluginStoreState>((set, get) => ({
   plugins: [],
@@ -54,6 +57,8 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   },
   searchResponse: null,
   selectedPlugin: null,
+  detailsLoading: false,
+  detailsError: null,
   categories: [],
   trendingPlugins: [],
   trendingStatus: 'idle',
@@ -148,17 +153,21 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   },
 
   getPluginDetails: async (pluginId: string) => {
-    set({ loading: true, error: null });
+    const requestId = ++latestPluginDetailsRequestId;
+    set({ selectedPlugin: null, detailsLoading: true, detailsError: null });
     try {
       const details = await pluginStoreService.getPluginDetails(pluginId);
+      if (requestId !== latestPluginDetailsRequestId) return;
+      if (!details?.plugin || details.plugin.id !== pluginId) {
+        throw new Error('Plugin details returned an invalid or mismatched plugin.');
+      }
+      set({ selectedPlugin: details, detailsLoading: false });
+    } catch (cause) {
+      if (requestId !== latestPluginDetailsRequestId) return;
       set({
-        selectedPlugin: details,
-        loading: false,
-      });
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to get plugin details',
-        loading: false,
+        selectedPlugin: null,
+        detailsLoading: false,
+        detailsError: cause instanceof Error ? cause.message : 'Failed to get plugin details',
       });
     }
   },
@@ -269,7 +278,8 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
   },
 
   clearSelectedPlugin: () => {
-    set({ selectedPlugin: null });
+    ++latestPluginDetailsRequestId;
+    set({ selectedPlugin: null, detailsLoading: false, detailsError: null });
   },
 
   clearError: () => {
