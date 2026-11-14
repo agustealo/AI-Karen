@@ -156,7 +156,7 @@ def _plugin_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "runtime_status": runtime_status,
         "settings_available": bool(
             getattr(getattr(manifest, "config_schema", None), "properties", None)
-        ),
+        ) and not metadata.get("activation_blocked_reason"),
         "activation_blocked_reason": metadata.get("activation_blocked_reason"),
         "category": str(getattr(manifest, "category", "")) or None,
         "downloads": marketplace.get("downloads"),
