@@ -9,6 +9,7 @@ const downloads = readFileSync(resolve(process.cwd(), 'src/components/settings/M
 const facts = readFileSync(resolve(process.cwd(), 'src/components/settings/PersonalFactsSettings.tsx'), 'utf8');
 const privacy = readFileSync(resolve(process.cwd(), 'src/components/settings/PrivacySettings.tsx'), 'utf8');
 const notifications = readFileSync(resolve(process.cwd(), 'src/components/settings/NotificationSettings.tsx'), 'utf8');
+const channels = readFileSync(resolve(process.cwd(), 'src/components/settings/ChannelsSettings.tsx'), 'utf8');
 
 describe('settings UX ownership contract', () => {
   it('keeps settings navigation in the shell and persistence in existing panels', () => {
@@ -102,6 +103,19 @@ describe('settings UX ownership contract', () => {
     expect(facts).toContain('onClick={() => setFactPendingDeletion(fact)}');
     expect(facts).not.toContain('Use History');
     expect(facts).toContain('await apiClient.delete');
+  });
+
+  it('routes personal Channels through read-only owner-scoped backend truth', () => {
+    expect(settings).toContain("render: () => <ChannelsSettings />");
+    expect(settings).toContain("id: 'channels'");
+    expect(channels).toContain("'/api/channels/personal/connections'");
+    expect(channels).toContain('parseInventory(response)');
+    expect(channels).toContain('setInventory(null)');
+    expect(channels).toContain('Not verified connected');
+    expect(channels).toContain('historical, not a health check');
+    expect(channels).not.toContain('apiClient.post');
+    expect(channels).not.toContain('localStorage.setItem');
+    expect(channels).not.toContain('sessionStorage.setItem');
   });
 
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
