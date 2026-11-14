@@ -169,7 +169,10 @@ deleting the row to prevent ABA conflicts.
 API-key, credential, \`writeOnly\`, and secret-formatted manifest fields are
 reported read-only and omitted from readback. Nested/unsupported fields are
 also read-only. Attempts to write such fields fail with HTTP 422; they are
-never stored in \`extension_plugin_settings\`. Secrets must be integrated with
+never stored in \`extension_plugin_settings\`. Quarantined uploaded plugins are not settings-eligible, and the Plugin Store
+will not advertise Configure for them until their isolation boundary is verified.
+
+Secrets must be integrated with
 the existing tenant Identity Vault using managed credential bindings, secure
 rotation, and revocation before the platform may claim full secrets readiness.
 Do not substitute plaintext JSON, local files, or client-side encryption.
