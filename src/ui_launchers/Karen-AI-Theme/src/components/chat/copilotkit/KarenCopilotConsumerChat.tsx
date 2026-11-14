@@ -16,7 +16,13 @@ import { KarenCopilotChat } from "./KarenCopilotChat";
 import { KarenComposerRuntimeCatalog } from "../KarenComposerRuntimeCatalog";
 import type { ComposerModelRequest } from "../KarenComposerRuntimeCatalog";
 
-export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents?: () => void }) {
+export function KarenCopilotConsumerChat({
+  onOpenAgents,
+  onOpenProviderSettings,
+}: {
+  onOpenAgents?: () => void;
+  onOpenProviderSettings?: () => void;
+}) {
   const {
     currentSession,
     strictInitialSession,
@@ -339,17 +345,22 @@ export function KarenCopilotConsumerChat({ onOpenAgents }: { onOpenAgents?: () =
         </section>
       )}
       {modelRequest && <p role="status" data-testid="karen-pending-model-preference" className="shrink-0 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">Requested for upcoming messages: {modelRequest.provider} / {modelRequest.model}. Karen determines and reports the actual executor.</p>}
-      <details data-testid="karen-copilot-model-discovery" className="shrink-0 border-b border-border/60 px-4 py-2">
-        <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-          Model preferences
-        </summary>
-        <fieldset disabled={runBusy} className="max-w-2xl py-2 disabled:opacity-60">
-          <KarenComposerRuntimeCatalog selection={modelRequest} onSelectionChange={handleModelRequest} onOpenAgents={onOpenAgents} />
+      <section data-testid="karen-copilot-model-discovery"
+        aria-label="Conversation model preferences"
+        className="shrink-0 border-b border-border/60 px-4 py-2">
+        <fieldset disabled={runBusy} className="min-w-0 disabled:opacity-60">
+          <legend className="sr-only">Model preferences</legend>
+          <KarenComposerRuntimeCatalog
+            selection={modelRequest}
+            onSelectionChange={handleModelRequest}
+            onOpenAgents={onOpenAgents}
+            onOpenProviders={onOpenProviderSettings}
+          />
         </fieldset>
         {runBusy && <p role="status" className="text-xs text-muted-foreground">
           Model changes are unavailable while Karen is processing this message.
         </p>}
-      </details>
+      </section>
       <KarenCopilotChat
         key={currentSession.id}
         conversationId={currentSession.id}

@@ -225,6 +225,7 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model'>('behavior');
   const [karenPanelOpen, setKarenPanelOpen] = useState(false);
   const karenLauncherRef = useRef<HTMLButtonElement | null>(null);
   const karenPanelRef = useRef<HTMLDivElement | null>(null);
@@ -379,7 +380,7 @@ export default function DashboardPage() {
   const staticViewMap = useMemo<Record<string, React.ReactNode>>(
     () => ({
 
-      settings: <SettingsDialogComponent />,
+      settings: <SettingsDialogComponent initialSection={settingsInitialSection} />,
       personaStudio: (
         <section data-testid="persona-studio-workspace" className="mx-auto w-full max-w-5xl space-y-5 overflow-y-auto p-4 md:p-7">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -404,7 +405,7 @@ export default function DashboardPage() {
       account: <AccountPage />,
       growth: <GrowthPage />,
     }),
-    [],
+    [settingsInitialSection],
   );
 
   const currentViewContent = useMemo(() => {
@@ -582,7 +583,10 @@ export default function DashboardPage() {
                           return (
                             <SidebarMenuItem key={item.key}>
                               <SidebarMenuButton
-                                onClick={() => setActiveMainView(item.key)}
+                                onClick={() => {
+                                  if (item.key === "settings") setSettingsInitialSection('behavior');
+                                  setActiveMainView(item.key);
+                                }}
                                 isActive={activeMainView === item.key}
                                 className={`w-full ${item.className ?? ""}`}
                               >
@@ -726,7 +730,14 @@ export default function DashboardPage() {
                       : "hidden"}
                     aria-hidden={backendStatus !== "ready" || (activeMainView !== "chat" && !karenPanelOpen)}
                   >
-                    <KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />
+                    <KarenCopilotConsumerChat
+                       onOpenAgents={() => setActiveMainView("agents")}
+                       onOpenProviderSettings={() => {
+                         setSettingsInitialSection('model');
+                         setKarenPanelOpen(false);
+                         setActiveMainView("settings");
+                       }}
+                     />
                   </div>
                   <div
                     key={activeMainView}

@@ -38,8 +38,19 @@ vi.mock("@/components/chat/SessionProvider", () => ({
 }));
 
 vi.mock("@/components/chat/KarenComposerRuntimeCatalog", () => ({
-  KarenComposerRuntimeCatalog: ({ onSelectionChange }: { onSelectionChange: (selection: { provider: string; model: string } | null) => void }) => (
-    <button type="button" onClick={() => { state.onModelChange = onSelectionChange; onSelectionChange({ provider: "local", model: "selected-model" }); }}>Choose available model</button>
+  KarenComposerRuntimeCatalog: ({
+    onSelectionChange, onOpenProviders,
+  }: {
+    onSelectionChange: (selection: { provider: string; model: string } | null) => void;
+    onOpenProviders?: () => void;
+  }) => (
+    <>
+      <button type="button" onClick={() => {
+        state.onModelChange = onSelectionChange;
+        onSelectionChange({ provider: "local", model: "selected-model" });
+      }}>Choose available model</button>
+      {onOpenProviders && <button type="button" onClick={onOpenProviders}>Configure providers</button>}
+    </>
   ),
 }));
 
@@ -331,10 +342,22 @@ describe("CopilotKit consumer session adapter", () => {
     state.sessions = [{ id: FIRST, title: "Project Alpha" }];
     render(<KarenCopilotConsumerChat />);
     expect(state.modelProps.at(-1)).toEqual({ preferredProvider: null, preferredModel: null, workspaceRunId: null });
-    fireEvent.click(screen.getByText("Model preferences"));
+    expect(screen.getByRole("region", { name: "Conversation model preferences" })).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
     expect(state.modelProps.at(-1)).toEqual({
       preferredProvider: "local", preferredModel: "selected-model", workspaceRunId: null,
+    });
+  });
+
+  it("opens real provider configuration without changing the requested executor", () => {
+    state.currentSession = { id: FIRST, title: "Project Alpha" };
+    state.sessions = [{ id: FIRST, title: "Project Alpha" }];
+    const openProviders = vi.fn();
+    render(<KarenCopilotConsumerChat onOpenProviderSettings={openProviders} />);
+    fireEvent.click(screen.getByRole("button", { name: "Configure providers" }));
+    expect(openProviders).toHaveBeenCalledTimes(1);
+    expect(state.modelProps.at(-1)).toEqual({
+      preferredProvider: null, preferredModel: null, workspaceRunId: null,
     });
   });
 
@@ -342,7 +365,6 @@ describe("CopilotKit consumer session adapter", () => {
     state.currentSession = { id: FIRST, title: "Project Alpha" };
     state.sessions = [{ id: FIRST, title: "Project Alpha" }];
     render(<KarenCopilotConsumerChat />);
-    fireEvent.click(screen.getByText("Model preferences"));
     fireEvent.click(screen.getByRole("button", { name: "Choose available model" }));
     const busy = state.onBusyChange;
     const change = state.onModelChange;

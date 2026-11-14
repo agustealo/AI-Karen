@@ -566,6 +566,17 @@ export default function ModelSettings() {
 
   return (
     <div className="flex flex-col gap-6">
+      {!canManageRuntime && (
+        <Alert role="status" className="border-border/60">
+          <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+          <AlertDescription className="text-sm">
+            Provider connections and API credentials are administered by your workspace.
+            This panel shows their backend-reported status. You can choose any verified,
+            authorized provider and model from your conversation's model controls;
+            contact an administrator to configure additional providers.
+          </AlertDescription>
+        </Alert>
+      )}
       <div role="status" className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 text-sm">
         <p className="font-semibold">Saved model: {normalizedSettings?.selected_model || 'None configured'}</p>
         <p className="mt-1 text-muted-foreground">
@@ -1023,14 +1034,20 @@ export default function ModelSettings() {
                             <Input
                               id="api-key"
                               type={isEditingApiKey ? "password" : "text"}
-                              value={isEditingApiKey ? apiKey : (selectedProviderDetails.api_key_masked || '')}
-                              readOnly={!isEditingApiKey && selectedProviderDetails.api_key_configured}
+                              value={!canManageRuntime
+                                ? (selectedProviderDetails.api_key_configured ? 'Configured by administrator' : '')
+                                : (isEditingApiKey ? apiKey : (selectedProviderDetails.api_key_masked || ''))}
+                              disabled={!canManageRuntime}
+                              readOnly={!canManageRuntime || (!isEditingApiKey && selectedProviderDetails.api_key_configured)}
                               onFocus={() => {
+                                if (!canManageRuntime) return;
                                 setIsEditingApiKey(true);
                                 setApiKey('');
                               }}
                               onChange={(e) => setApiKey(e.target.value)}
-                              placeholder={`Enter ${selectedProviderLabel || selectedProviderDetails.display_name} API Secret...`}
+                              placeholder={canManageRuntime
+                                ? `Enter ${selectedProviderLabel || selectedProviderDetails.display_name} API Secret...`
+                                : 'Administrator-managed credential'}
                               className="h-12 border-border/60 bg-background/50 pr-10 font-mono text-sm leading-relaxed tracking-widest transition-all focus:border-primary/40 focus:ring-primary/10"
                             />
                             <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">

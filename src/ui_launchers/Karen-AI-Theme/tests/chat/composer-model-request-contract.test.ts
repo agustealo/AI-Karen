@@ -33,6 +33,29 @@ describe("CopilotKit model request transport", () => {
     expect(catalog).toContain("Advanced provider and agent details");
   });
 
+  it("exposes provider and model choices without burying selection or fabricating backend readiness", () => {
+    const consumer = read("copilotkit/KarenCopilotConsumerChat.tsx");
+    const catalog = read("KarenComposerRuntimeCatalog.tsx");
+    const dashboard = readFileSync(resolve(process.cwd(), "src/app/dashboard/page.tsx"), "utf8");
+    const settings = readFileSync(resolve(process.cwd(), "src/components/settings/SettingsDialog.tsx"), "utf8");
+    expect(consumer).toContain('aria-label="Conversation model preferences"');
+    expect(consumer).toContain("onOpenProviders={onOpenProviderSettings}");
+    expect(consumer).not.toContain('<details data-testid="karen-copilot-model-discovery"');
+    expect(catalog).toContain('aria-label="Requested model provider"');
+    expect(catalog).toContain('aria-label="Requested model"');
+    expect(catalog).toContain("Configure providers");
+    expect(catalog).toContain("Refresh models");
+    expect(catalog).toContain("No selectable models are verified");
+    expect(dashboard).toContain("onOpenProviderSettings={() => {");
+    expect(dashboard).toContain("setSettingsInitialSection('model')");
+    expect(settings).toContain("initialSection = 'behavior'");
+    expect(settings).toContain("render: () => <ModelSettings />");
+    const modelSettings = readFileSync(resolve(process.cwd(), "src/components/settings/ModelSettings.tsx"), "utf8");
+    expect(modelSettings).toContain("Provider connections and API credentials are administered by your workspace.");
+    expect(modelSettings).toContain("disabled={!canManageRuntime}");
+    expect(modelSettings).toContain("Configured by administrator");
+  });
+
   it("does not retain a dependency on retired assistant-ui transport", () => {
     const provider = read("copilotkit/KarenCopilotChat.tsx");
     const consumer = read("copilotkit/KarenCopilotConsumerChat.tsx");
