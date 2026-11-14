@@ -61,17 +61,54 @@ describe("live canonical backend readiness", () => {
     expect(await result.json()).toEqual({ status: "initializing", backend_ready: false });
   });
 
-  it("never turns a backend proxy 502 into success", async () => {
-    backend.proxy.mockResolvedValue(upstream(
-      { detail: "Failed to proxy /ready to backend", error: "fetch failed" }, 502,
-    ));
-    const result = await GET(request());
-    expect(result.status).toBe(502);
-    expect(result.headers.get("cache-control")).toBe("no-store");
-    expect(await result.json()).toEqual({
-      detail: "Failed to proxy /ready to backend",
-      error: "fetch failed",
-    });
+  it.each([401, 403, 404, 429, 500, 502, 504])(
+    "normalizes upstream HTTP %i to a private, uncached 503 readiness failure",
+    async (status) => {
+      backend.proxy.mockResolvedValue(new Response(
+        JSON.stringify({
+          error_code: "BACKEND_UPSTREAM_UNAVAILABLE",
+          detail: "Private internal endpoint and credential are not public",
+        }),
+        {
+          status,
+          headers: {
+            "content-type": "application/json",
+            "x-internal-backend-address": "private.internal",
+          },
+        },
+      ));
+      const result = await GET(request());
+      expect(result.status).toBe(503);
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      expect(result.headers.get("x-internal-backend-address")).toBeNull();
+      expect(await result.json()).toEqual({
+        status: "initializing",
+        backend_ready: false,
+      });
+      expect(backend.proxy).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("never exposes an upstream error page or a redirect as readiness evidence", async () => {
+    backend.proxy.mockResolvedValueOnce(new Response("<private>secret</private>", {
+      status: 502,
+      headers: { "content-type": "text/html" },
+    })).mockResolvedValueOnce(new Response(null, {
+      status: 302,
+      headers: { location: "https://internal.example/private" },
+    }));
+
+    for (const expected of [502, 302]) {
+      const result = await GET(request());
+      expect(result.status).toBe(503);
+      expect(result.headers.get("location")).toBeNull();
+      expect(await result.json()).toEqual({
+        status: "initializing",
+        backend_ready: false,
+      });
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      expect(backend.proxy).toHaveBeenCalledTimes(expected === 502 ? 1 : 2);
+    }
   });
 
   it("fails closed on canonical backend 503 without leaking service diagnostics", async () => {
