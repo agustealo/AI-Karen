@@ -138,7 +138,7 @@ jobs:
         run: pytest tests/api_routes/test_consumer_my_account_contract.py -q
 
       - name: Enforce durable account session revocation
-        run: pytest tests/auth/test_live_session_enforcement.py tests/architecture/test_auth_session_validation_contract.py -q
+        run: pytest tests/auth/test_live_session_enforcement.py tests/architecture/test_auth_session_validation_contract.py tests/architecture/test_account_beta_recovery_contract.py -q
 
       - name: Ruff correctness baseline
         run: |
