@@ -64,3 +64,25 @@ def test_plugin_search_ignores_superseded_success_and_failure() -> None:
     assert action.count("if (requestId !== latestPluginSearchRequestId) return;") == 2
     assert "plugins: response.plugins" in action
     assert "plugins: []" in action
+
+
+def test_plugin_store_disabled_lifecycle_actions_use_real_backend_paths() -> None:
+    card = (ROOT / "components/plugins/PluginCard.tsx").read_text(encoding="utf-8")
+    badge = (ROOT / "components/plugins/PluginStatusBadge.tsx").read_text(encoding="utf-8")
+    grid = (ROOT / "components/plugins/PluginGrid.tsx").read_text(encoding="utf-8")
+    page = PAGE.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
+    state = STORE.read_text(encoding="utf-8")
+
+    assert "plugin.runtime_status === 'disabled' ? 'disabled' : plugin.status" in card
+    assert "plugin.status === 'available' || plugin.runtime_status === 'disabled'" in card
+    assert "plugin.runtime_status === 'enabled'" in card
+    assert "onDisable?.(pluginId);" in card
+    assert "PluginStatus | 'disabled' | 'error'" in badge
+    assert "onDisable={onDisable}" in grid
+    assert page.count("onDisable={handleDisable}") == 3
+    assert page.count("onInstall={handleInstall}") == 3
+    assert "await disablePlugin(pluginId);" in page
+    assert "`/api/plugins/${encodeURIComponent(pluginId)}/disable`" in service
+    assert "await pluginStoreService.disablePlugin(pluginId);" in state
+    assert "Plugin disable request succeeded, but the plugin list could not be refreshed:" in state
