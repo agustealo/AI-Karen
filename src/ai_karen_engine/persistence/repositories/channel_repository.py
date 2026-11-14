@@ -525,7 +525,7 @@ class SqlChannelRepository:
                                WHERE s.tenant_id = c.tenant_id
                                  AND s.connection_id = c.connection_id
                                  AND s.phase = 'disconnected'
-                                 AND NULLIF(BTRIM(s.provider_unlink_receipt_id), '') IS NOT NULL
+                                 AND s.provider_unlink_receipt_id ~ '[^[:space:]]'
                                  AND s.connection_revision = h.requested_revision
                                  AND h.fenced_revision = c.revision
                                  AND c.retirement_locked = true
@@ -542,7 +542,7 @@ class SqlChannelRepository:
                                  AND d.connection_id = c.connection_id
                                  AND d.user_id = o.user_id
                                  AND d.status = 'provider_claimed'
-                                 AND NULLIF(BTRIM(d.provider_receipt_id), '') IS NOT NULL
+                                 AND d.provider_receipt_id ~ '[^[:space:]]'
                            ) AS credential_deletion_claim_recorded,
                            EXISTS (
                                SELECT 1
@@ -559,9 +559,9 @@ class SqlChannelRepository:
                                  AND d.connection_id = c.connection_id
                                  AND d.user_id = o.user_id
                                  AND d.status = 'provider_claimed'
-                                 AND NULLIF(BTRIM(d.provider_receipt_id), '') IS NOT NULL
+                                 AND d.provider_receipt_id ~ '[^[:space:]]'
                                  AND s.phase = 'disconnected'
-                                 AND NULLIF(BTRIM(s.provider_unlink_receipt_id), '') IS NOT NULL
+                                 AND s.provider_unlink_receipt_id ~ '[^[:space:]]'
                                  AND s.connection_revision = h.requested_revision
                                  AND h.fenced_revision = c.revision
                                  AND c.retirement_locked = true
