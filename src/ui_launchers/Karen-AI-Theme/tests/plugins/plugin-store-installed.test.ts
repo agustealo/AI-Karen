@@ -92,6 +92,27 @@ describe('Plugin Store installed catalog authority', () => {
     expect(usePluginStore.getState().installedPlugins).toEqual([]);
   });
 
+  it('clamps the installed page after the last item on a later page is removed', async () => {
+    vi.mocked(pluginStoreService.searchPlugins)
+      .mockResolvedValueOnce({
+        plugins: [],
+        total: 1,
+        page: 2,
+        per_page: 20,
+        total_pages: 1,
+        has_next: false,
+      })
+      .mockResolvedValueOnce(response([plugin('remaining', 'installed')]));
+
+    await usePluginStore.getState().loadInstalled(2);
+
+    const state = usePluginStore.getState();
+    expect(state.installedPage).toBe(1);
+    expect(state.installedError).toBeNull();
+    expect(state.installedPlugins.map((entry) => entry.id)).toEqual(['remaining']);
+    expect(pluginStoreService.searchPlugins).toHaveBeenCalledTimes(2);
+  });
+
   it('paginates installed records without changing browse parameters', async () => {
     vi.mocked(pluginStoreService.searchPlugins).mockResolvedValue(response([
       plugin('installed-on-page-two', 'installed'),
