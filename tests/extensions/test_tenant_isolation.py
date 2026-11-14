@@ -15,6 +15,7 @@ from ai_karen_engine.extensions.contracts import (
     ExtensionManifest,
     ExtensionRegistration,
     TenantScope,
+    TrustTier,
 )
 from ai_karen_engine.extensions.executor import ExtensionExecutionService
 
@@ -62,6 +63,7 @@ def _manifest(
         capabilities=[ExtensionCapability(id="execute")],
         tenant_scope=tenant_scope,
         allowed_tenant_ids=list(allowed_tenant_ids or []),
+        trust_tier=TrustTier.FIRST_PARTY,
     )
 
 
