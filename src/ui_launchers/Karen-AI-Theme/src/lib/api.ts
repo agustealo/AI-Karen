@@ -589,6 +589,11 @@ class ApiClient {
         ...authHeaders,
         ...((init.headers as Record<string, string> | undefined) || {}),
       };
+      // Let fetch assign the multipart boundary. The canonical auth headers
+      // default to JSON for ordinary requests, which breaks FormData uploads.
+      if (init.body instanceof FormData) {
+        delete requestHeaders['Content-Type'];
+      }
 
       const url = this.forceBrowserRelativeApiUrl(this.buildUrl(baseUrl, endpoint));
       console.log(`[ApiClient] Request: ${url} (Base: ${baseUrl}, Endpoint: ${endpoint})`);
@@ -808,6 +813,13 @@ class ApiClient {
   async delete<T>(endpoint: string): Promise<T> {
     return this.request<T>(endpoint, {
       method: 'DELETE',
+    });
+  }
+
+  async postFormData<T>(endpoint: string, data: FormData): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'POST',
+      body: data,
     });
   }
 
