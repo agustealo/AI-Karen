@@ -660,6 +660,45 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.runAgent).not.toHaveBeenCalled();
   });
 
+  it("keeps a failed follow-up draft-CAS warning visible on unchanged SDK input echo", async () => {
+    sdk.clearDraft.mockResolvedValueOnce(false);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Follow-up question");
+      input().onSubmitMessage("Follow-up question");
+    });
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("The draft could not be safely saved and cleared"));
+    act(() => input().onChange("Follow-up question"));
+    expect(screen.getByRole("alert").textContent)
+      .toContain("The draft could not be safely saved and cleared");
+    expect(sdk.draftWrites).toEqual(["Follow-up question"]);
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    act(() => input().onChange("Updated follow-up question"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(sdk.draftWrites).toEqual(["Follow-up question", "Updated follow-up question"]);
+  });
+
+  it("does not erase an observed RUN_ERROR when the SDK replays the unchanged composer", () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "failed-run-echo" },
+    }));
+    act(() => sdk.lifecycle?.onRunFailed());
+    expect(screen.getByRole("alert").textContent)
+      .toContain("Karen could not complete the request");
+    act(() => input().onChange(""));
+    expect(screen.getByRole("alert").textContent)
+      .toContain("Karen could not complete the request");
+    expect(sdk.draftWrites).toHaveLength(0);
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    act(() => input().onChange("A new user edit"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(sdk.draftWrites).toEqual(["A new user edit"]);
+  });
+
   it("shows an honest failure when SDK reports RUN_ERROR without rejecting runAgent", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     act(() => sdk.lifecycle?.onRunStartedEvent({
