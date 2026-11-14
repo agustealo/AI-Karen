@@ -80,7 +80,7 @@ describe("authenticated display preferences", () => {
     let systemDark = true;
     const callback = { fireChange: undefined as (() => void) | undefined };
     vi.spyOn(window, "matchMedia").mockImplementation(() => ({
-      matches: systemDark,
+      get matches() { return systemDark; },
       media: "(prefers-color-scheme: dark)",
       onchange: null,
       addEventListener: (_event: string, listener: EventListenerOrEventListenerObject) => {
