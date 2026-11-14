@@ -1,0 +1,221 @@
+name: One-time archive and prune abandoned PR branches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-archive-abandoned-pr-branches.yml
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: one-time-archive-abandoned-pr-branches
+  cancel-in-progress: false
+
+jobs:
+  archive-and-prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out main with complete commit history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Fetch every current branch tip
+        run: git -c protocol.version=2 fetch --no-tags --filter=blob:none origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Archive abandoned PR branch tips before removing any refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execFileSync } = require('child_process');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const fullName = owner + '/' + repo;
+            const retentionDays = 21;
+            const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+            const tagName = 'branch-archive/2026-11-14-closed-unmerged-prs';
+            const manifestPath = '.branch-archives/2026-11-14-closed-unmerged-prs.json';
+            const reserved = new Set(['main', 'master', 'develop', 'development', 'production', 'staging']);
+            const protectedPrefixes = ['release/', 'hotfix/', 'production/', 'staging/'];
+            const command = (args, options = {}) => execFileSync('git', args, {
+              encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+              stdio: ['ignore', 'pipe', 'pipe'], ...options
+            }).trim();
+            const [repoInfo, branches, prs] = await Promise.all([
+              github.rest.repos.get({ owner, repo }),
+              github.paginate(github.rest.repos.listBranches, { owner, repo, per_page: 100 }),
+              github.paginate(github.rest.pulls.list, { owner, repo, state: 'all', per_page: 100 }),
+            ]);
+            const defaultBranch = repoInfo.data.default_branch;
+            reserved.add(defaultBranch);
+            const mainSha = command(['rev-parse', 'refs/remotes/origin/' + defaultBranch]);
+            const openPrBases = new Set(prs.filter(pr => pr.state === 'open' && pr.base?.repo?.full_name === fullName).map(pr => pr.base.ref));
+            const byHead = new Map();
+            for (const pr of prs) {
+              if (pr.head?.repo?.full_name !== fullName || !pr.head?.ref) continue;
+              const items = byHead.get(pr.head.ref) ?? [];
+              items.push(pr);
+              byHead.set(pr.head.ref, items);
+            }
+            const eligible = [], withheld = [], deleted = [], failed = [];
+            const hold = (name, reason, details = {}) => withheld.push({ name, reason, ...details });
+            for (const b of branches) {
+              const name = b.name;
+              const sha = b.commit.sha;
+              const linked = byHead.get(name) ?? [];
+              if (b.protected || reserved.has(name) || protectedPrefixes.some(p => name.startsWith(p))) {
+                hold(name, 'protected_or_reserved'); continue;
+              }
+              if (openPrBases.has(name) || linked.some(pr => pr.state === 'open')) {
+                hold(name, 'active_pr_or_pr_base'); continue;
+              }
+              if (!linked.length) {
+                hold(name, 'no_pr_record_not_safe_to_classify'); continue;
+              }
+              if (linked.some(pr => pr.merged_at)) {
+                hold(name, 'merged_pr_with_changed_tip_or_other_history'); continue;
+              }
+              if (linked.some(pr => pr.state !== 'closed' || pr.merged_at || pr.head?.sha !== sha)) {
+                hold(name, 'pr_head_changed_or_unresolved_state'); continue;
+              }
+              if (linked.some(pr => !pr.closed_at || !pr.updated_at || new Date(pr.closed_at).getTime() > cutoff || new Date(pr.updated_at).getTime() > cutoff)) {
+                hold(name, 'recent_pr_activity'); continue;
+              }
+              if (linked.some(pr => (pr.labels || []).some(label => /^(keep|do-not-delete|hold|wip|in-progress)$/i.test(label.name)))) {
+                hold(name, 'explicit_preservation_label'); continue;
+              }
+              try {
+                const committedAt = command(['show', '-s', '--format=%cI', sha]);
+                if (!committedAt || new Date(committedAt).getTime() > cutoff) {
+                  hold(name, 'recent_or_unknown_commit_date', { committed_at: committedAt || null }); continue;
+                }
+                let referenced = false;
+                try {
+                  referenced = !!command(['grep', '-F', '-l', '-e', name, '--', '.github']);
+                } catch (error) {
+                  if (error.status !== 1) {
+                    hold(name, 'reference_scan_failed', { exit_code: error.status ?? null }); continue;
+                  }
+                }
+                if (referenced) {
+                  hold(name, 'referenced_by_current_github_config'); continue;
+                }
+                command(['cat-file', '-e', sha + '^{commit}']);
+                const uniqueCommits = Number(command(['rev-list', '--count', mainSha + '..' + sha]));
+                const mergeBase = command(['merge-base', mainSha, sha]);
+                eligible.push({
+                  name, sha, committed_at: committedAt, unique_commits_vs_main: uniqueCommits,
+                  merge_base: mergeBase, closed_prs: linked.map(pr => ({ number: pr.number, closed_at: pr.closed_at, updated_at: pr.updated_at }))
+                });
+              } catch (error) {
+                hold(name, 'git_history_unverifiable', { error: error.message });
+              }
+            }
+            let archiveCommit = null;
+            let archivalError = null;
+            if (eligible.length) {
+              try {
+                try {
+                  const existing = await github.rest.git.getRef({ owner, repo, ref: 'tags/' + tagName });
+                  throw new Error('Archive tag already exists: ' + existing.data.object.sha + '; refusing reuse');
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                }
+                const manifest = {
+                  repository: fullName, default_branch: defaultBranch, main_sha_at_audit: mainSha,
+                  retention_days: retentionDays, archive_tag: tagName, created_at: new Date().toISOString(),
+                  recovery: 'git fetch origin tag ' + tagName + '; git show ' + tagName + ':' + manifestPath + '; git branch <recovered-name> <branch-sha>',
+                  branches: eligible
+                };
+                fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+                fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+                command(['add', '--', manifestPath]);
+                const tree = command(['write-tree']);
+                let parent = mainSha;
+                const environment = {
+                  ...process.env,
+                  GIT_AUTHOR_NAME: 'AI-Karen Branch Archive',
+                  GIT_AUTHOR_EMAIL: 'actions@users.noreply.github.com',
+                  GIT_COMMITTER_NAME: 'AI-Karen Branch Archive',
+                  GIT_COMMITTER_EMAIL: 'actions@users.noreply.github.com'
+                };
+                for (let i = 0; i < eligible.length; i += 8) {
+                  const batch = eligible.slice(i, i + 8);
+                  parent = command(['commit-tree', tree, '-p', parent, ...batch.flatMap(e => ['-p', e.sha]), '-m',
+                    'Archive closed PR branch histories, group ' + (1 + Math.floor(i / 8))], { env: environment });
+                }
+                archiveCommit = parent;
+                for (const e of eligible) {
+                  command(['merge-base', '--is-ancestor', e.sha, archiveCommit]);
+                }
+                await github.rest.git.createRef({ owner, repo, ref: 'refs/tags/' + tagName, sha: archiveCommit });
+                const verified = await github.rest.git.getRef({ owner, repo, ref: 'tags/' + tagName });
+                if (verified.data.object.sha !== archiveCommit) {
+                  throw new Error('Archive tag mismatch: refuse branch deletion');
+                }
+                core.info('Verified durable archive tag ' + tagName + ' at ' + archiveCommit + ' covering ' + eligible.length + ' branch tips');
+              } catch (error) {
+                archivalError = error.message;
+                failed.push({ stage: 'archive', error: error.message });
+              }
+            }
+            if (archiveCommit && !archivalError) {
+              for (const e of eligible) {
+                try {
+                  const fresh = (await github.rest.repos.getBranch({ owner, repo, branch: e.name })).data;
+                  if (fresh.protected || fresh.commit.sha !== e.sha) {
+                    hold(e.name, 'changed_head_or_newly_protected'); continue;
+                  }
+                  const freshOpen = await github.rest.pulls.list({
+                    owner, repo, state: 'open', head: owner + ':' + e.name, per_page: 100
+                  });
+                  if (freshOpen.data.length) {
+                    hold(e.name, 'newly_open_pr'); continue;
+                  }
+                  command(['merge-base', '--is-ancestor', e.sha, archiveCommit]);
+                  await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + e.name });
+                  deleted.push(e);
+                } catch (error) {
+                  failed.push({ stage: 'delete', name: e.name, status: error.status ?? null, error: error.message });
+                }
+              }
+            }
+            const report = {
+              repository: fullName, main_sha_at_audit: mainSha, retention_days: retentionDays,
+              archive_tag: archiveCommit && !archivalError ? tagName : null,
+              archive_commit: archiveCommit && !archivalError ? archiveCommit : null,
+              examined: branches.length, eligible_count: eligible.length,
+              deleted_count: deleted.length, withheld_count: withheld.length, failed_count: failed.length,
+              deleted, withheld, failed
+            };
+            fs.writeFileSync('closed-pr-branch-archive-audit.json', JSON.stringify(report, null, 2));
+            core.info(JSON.stringify({
+              examined: report.examined, eligible: report.eligible_count,
+              deleted: report.deleted_count, withheld: report.withheld_count,
+              failed: report.failed_count, archive_tag: report.archive_tag
+            }));
+            await core.summary.addHeading('Recoverable cleanup of old, closed PR branches').addTable([
+              [{data:'Metric',header:true},{data:'Count',header:true}],
+              ['Examined branches', String(report.examined)],
+              ['Archived and removed', String(report.deleted_count)],
+              ['Preserved', String(report.withheld_count)],
+              ['Failures', String(report.failed_count)],
+            ]).addLink('Archive history tag', 'https://github.com/' + fullName + '/tree/' + tagName).write();
+            if (failed.length) core.setFailed('Archive or deletion errors; audit artifact contains details.');
+
+      - name: Upload archive and deletion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: closed-pr-branch-archive-audit
+          path: closed-pr-branch-archive-audit.json
+          if-no-files-found: warn
+          retention-days: 60
