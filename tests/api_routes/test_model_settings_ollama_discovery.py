@@ -671,6 +671,41 @@ async def test_provider_validation_fails_closed_for_unapproved_endpoint_and_miss
 
 
 @pytest.mark.asyncio
+async def test_nous_candidate_key_never_probes_an_untrusted_saved_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderAuthentication,
+    )
+    from ai_karen_engine.config.provider_authentication import (
+        AuthenticationStatus,
+        ProviderAuthenticationManager,
+    )
+
+    provider = SimpleNamespace(
+        name="nous",
+        enabled=True,
+        authentication=ProviderAuthentication(type=AuthenticationType.API_KEY),
+        endpoint=SimpleNamespace(base_url="https://untrusted.example/v1"),
+    )
+    manager = object.__new__(ProviderAuthenticationManager)
+    manager.config_manager = SimpleNamespace(
+        get_provider=lambda name: provider if name == "nous" else None,
+    )
+
+    async def forbidden_probe(*args, **kwargs):
+        pytest.fail("Submitted token must not be sent to an untrusted host")
+
+    monkeypatch.setattr(manager, "_validate_api_key_auth", forbidden_probe)
+    result = await manager.validate_candidate_api_key(
+        "nous", "sensitive-submitted-key"
+    )
+    assert result.status == AuthenticationStatus.UNKNOWN
+    assert "sensitive-submitted-key" not in result.message
+
+
+@pytest.mark.asyncio
 async def test_provider_validation_rejects_consumer_before_any_provider_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
