@@ -41,6 +41,7 @@ import {
   TabsTrigger,
 } from '@/components/ui/tabs';
 
+import pluginStoreService from '@/lib/PluginStoreService';
 import { usePluginStore } from '@/stores/PluginStore';
 import type { PluginCategory } from '@/types/plugin';
 
@@ -85,6 +86,7 @@ export default function PluginStorePage() {
     searchPlugins,
     refreshPlugins,
     installPlugin,
+    disablePlugin,
     loadCategories,
     loadTrending,
     getPluginDetails,
@@ -166,6 +168,20 @@ export default function PluginStorePage() {
     [installPlugin],
   );
 
+  const handleDisable = useCallback(
+    async (pluginId: string) => {
+      setOperationError('');
+      setOperationSuccess('');
+      try {
+        await disablePlugin(pluginId);
+        setOperationSuccess(`Plugin '${pluginId}' disabled successfully.`);
+      } catch (cause) {
+        setOperationError(getErrorMessage(cause));
+      }
+    },
+    [disablePlugin],
+  );
+
   const handleDetails = useCallback(
     (pluginId: string) => {
       setOperationError('');
@@ -221,14 +237,9 @@ export default function PluginStorePage() {
     setOperationError('');
     setOperationSuccess('');
     try {
-      const response = await fetch('/api/plugins/store/' + encodeURIComponent(uninstallId) + '/installation', {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        const detail: unknown = await response.json().catch(() => null);
-        const message = detail && typeof detail === 'object' ? (detail as { detail?: unknown }).detail : null;
-        throw new Error(typeof message === 'string' ? message : 'Uninstall failed');
+      const result = await pluginStoreService.uninstallPlugin(uninstallId);
+      if (result?.success !== true || result.uninstalled !== true) {
+        throw new Error('Plugin uninstall did not confirm package removal.');
       }
       setUninstallId('');
       try {
@@ -253,20 +264,9 @@ export default function PluginStorePage() {
     setOperationError('');
     setOperationSuccess('');
     try {
-      const form = new FormData();
-      form.append('plugin_id', uploadId);
-      form.append('archive', uploadFile);
-      const response = await fetch('/api/plugins/store/upload', {
-        method: 'POST',
-        credentials: 'include',
-        body: form,
-      });
-      if (!response.ok) {
-        const detail: unknown = await response.json().catch(() => null);
-        const message = detail && typeof detail === 'object'
-          ? (detail as { detail?: unknown }).detail
-          : null;
-        throw new Error(typeof message === 'string' ? message : 'Plugin upload failed');
+      const result = await pluginStoreService.uploadPlugin(uploadId, uploadFile);
+      if (result?.success !== true || result.installed !== true || result.enabled !== false) {
+        throw new Error('Plugin upload did not confirm a disabled installation.');
       }
       setUploadFile(null);
       setUploadId('');
@@ -452,6 +452,7 @@ export default function PluginStorePage() {
                 hasPrev={(searchParams.page ?? 1) > 1}
                 onPageChange={handlePageChange}
                 onInstall={handleInstall}
+                onDisable={handleDisable}
                 onDetails={handleDetails}
                 onDiscover={handleDiscover}
                 installingPlugins={installingPlugins}
@@ -506,6 +507,7 @@ export default function PluginStorePage() {
                   plugins={trendingPlugins}
                   loading={loading}
                   onInstall={handleInstall}
+                  onDisable={handleDisable}
                   onDetails={handleDetails}
                   onDiscover={handleDiscover}
                   installingPlugins={installingPlugins}
@@ -562,6 +564,8 @@ export default function PluginStorePage() {
                 <PluginGrid
                   plugins={installedPlugins}
                   loading={loading}
+                  onInstall={handleInstall}
+                  onDisable={handleDisable}
                   onDetails={handleDetails}
                   installingPlugins={installingPlugins}
                   emptyMessage="No installed plugins found"

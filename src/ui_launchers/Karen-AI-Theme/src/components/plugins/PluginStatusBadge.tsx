@@ -19,7 +19,7 @@ import {
 import type { PluginStatus } from '@/types/plugin';
 
 interface PluginStatusBadgeProps {
-  status: PluginStatus;
+  status: PluginStatus | 'disabled' | 'error';
   showIcon?: boolean;
   className?: string;
 }

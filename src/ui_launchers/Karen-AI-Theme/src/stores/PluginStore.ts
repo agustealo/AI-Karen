@@ -21,6 +21,7 @@ interface PluginStoreState {
   refreshPlugins: () => Promise<void>;
   getPluginDetails: (pluginId: string) => Promise<void>;
   installPlugin: (pluginId: string, version?: string) => Promise<void>;
+  disablePlugin: (pluginId: string) => Promise<void>;
   loadCategories: () => Promise<void>;
   loadTrending: () => Promise<void>;
   loadUpdates: (installedPluginIds?: string[]) => Promise<void>;
@@ -131,6 +132,36 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
     if (refreshError) {
       throw new Error(
         'Plugin installation request succeeded, but the plugin list could not be refreshed: ' +
+          refreshError,
+      );
+    }
+  },
+
+  disablePlugin: async (pluginId: string) => {
+    set((state) => ({
+      installingPlugins: new Set([...state.installingPlugins, pluginId]),
+      error: null,
+    }));
+
+    try {
+      await pluginStoreService.disablePlugin(pluginId);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Failed to disable plugin';
+      set({ error: message });
+      throw new Error(message);
+    } finally {
+      set((state) => {
+        const installingPlugins = new Set(state.installingPlugins);
+        installingPlugins.delete(pluginId);
+        return { installingPlugins };
+      });
+    }
+
+    await get().searchPlugins();
+    const refreshError = get().error;
+    if (refreshError) {
+      throw new Error(
+        'Plugin disable request succeeded, but the plugin list could not be refreshed: ' +
           refreshError,
       );
     }

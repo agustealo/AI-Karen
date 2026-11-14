@@ -17,6 +17,7 @@ interface PluginGridProps {
   hasPrev?: boolean;
   onPageChange?: (page: number) => void;
   onInstall?: (pluginId: string, version?: string) => void;
+  onDisable?: (pluginId: string) => void;
   onDetails?: (pluginId: string) => void;
   onDiscover?: (pluginId: string) => void;
   installingPlugins?: Set<string>;
@@ -85,6 +86,7 @@ export function PluginGrid({
   hasPrev = false,
   onPageChange,
   onInstall,
+  onDisable,
   onDetails,
   onDiscover,
   installingPlugins = new Set(),
@@ -152,6 +154,7 @@ export function PluginGrid({
                 key={plugin.id}
                 plugin={plugin}
                 onInstall={onInstall}
+                onDisable={onDisable}
                 onDetails={onDetails}
                 onDiscover={onDiscover}
                 loading={installingPlugins.has(plugin.id)}

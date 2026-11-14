@@ -147,6 +147,29 @@ class PluginStoreService {
     return apiClient.post<PluginInstallResponse>(`${this.baseUrl}/install`, request);
   }
 
+  async uploadPlugin(pluginId: string, archive: File): Promise<{ success: boolean; installed: boolean; enabled: boolean }> {
+    const form = new FormData();
+    form.append('plugin_id', pluginId);
+    form.append('archive', archive);
+    return apiClient.postFormData<{ success: boolean; installed: boolean; enabled: boolean }>(
+      `${this.baseUrl}/upload`,
+      form,
+    );
+  }
+
+  async uninstallPlugin(pluginId: string): Promise<{ success: boolean; uninstalled: boolean }> {
+    return apiClient.delete<{ success: boolean; uninstalled: boolean }>(
+      `${this.baseUrl}/${encodeURIComponent(pluginId)}/installation`,
+    );
+  }
+
+  async disablePlugin(pluginId: string): Promise<{ success: boolean; message: string }> {
+    return apiClient.post<{ success: boolean; message: string }>(
+      `/api/plugins/${encodeURIComponent(pluginId)}/disable`,
+      {},
+    );
+  }
+
   async ratePlugin(request: PluginRatingRequest): Promise<PluginRatingResponse> {
     return apiClient.post<PluginRatingResponse>(`${this.baseUrl}/rate`, request);
   }

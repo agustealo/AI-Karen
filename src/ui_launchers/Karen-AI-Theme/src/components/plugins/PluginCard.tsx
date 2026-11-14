@@ -28,6 +28,7 @@ import { PluginStatusBadge } from './PluginStatusBadge';
 interface PluginCardProps {
   plugin: Plugin;
   onInstall?: (pluginId: string, version?: string) => void;
+  onDisable?: (pluginId: string) => void;
   onDetails?: (pluginId: string) => void;
   onDiscover?: (pluginId: string) => void;
   loading?: boolean;
@@ -132,6 +133,7 @@ const getDownloadLabel = (plugin: Plugin): string => {
 export function PluginCard({
   plugin,
   onInstall,
+  onDisable,
   onDetails,
   onDiscover,
   loading = false,
@@ -154,7 +156,8 @@ export function PluginCard({
   const ratingCountLabel = getRatingCountLabel(plugin);
   const downloadLabel = getDownloadLabel(plugin);
 
-  const canInstall = plugin.status === 'available' && Boolean(onInstall) && pluginId;
+  const canInstall = (plugin.status === 'available' || plugin.runtime_status === 'disabled') && Boolean(onInstall) && pluginId;
+  const canDisable = plugin.status === 'installed' && plugin.runtime_status === 'enabled' && Boolean(onDisable) && pluginId;
   const canOpenDetails = Boolean(onDetails) && pluginId;
   const canDiscover = Boolean(onDiscover) && pluginId;
 
@@ -163,6 +166,13 @@ export function PluginCard({
 
     if (canInstall) {
       onInstall?.(pluginId, cleanString(plugin.version) || undefined);
+    }
+  };
+
+  const handleDisable = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (canDisable) {
+      onDisable?.(pluginId);
     }
   };
 
@@ -248,7 +258,7 @@ export function PluginCard({
             </CardDescription>
           </div>
 
-          <PluginStatusBadge status={plugin.status} />
+          <PluginStatusBadge status={plugin.runtime_status === 'disabled' ? 'disabled' : plugin.status} />
         </div>
       </CardHeader>
 
@@ -318,7 +328,7 @@ export function PluginCard({
       </CardContent>
 
       <CardFooter className="flex gap-2 border-t pt-3">
-        {plugin.status === 'available' ? (
+        {plugin.status === 'available' || plugin.runtime_status === 'disabled' ? (
           <>
             <Button
               type="button"
@@ -353,16 +363,29 @@ export function PluginCard({
             )}
           </>
         ) : plugin.status === 'installed' ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="w-full"
-            onClick={(event) => handleDetails(event)}
-            disabled={!canOpenDetails}
-          >
-            Manage
-          </Button>
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="flex-1"
+              onClick={(event) => handleDetails(event)}
+              disabled={!canOpenDetails}
+            >
+              Manage
+            </Button>
+            {canDisable && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleDisable}
+                disabled={loading}
+              >
+                {loading ? 'Disabling...' : 'Disable'}
+              </Button>
+            )}
+          </>
         ) : (
           <Button
             type="button"
