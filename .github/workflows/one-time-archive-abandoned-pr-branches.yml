@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
           filter: blob:none
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Fetch every current branch tip
         run: git -c protocol.version=2 fetch --no-tags --filter=blob:none origin '+refs/heads/*:refs/remotes/origin/*'
@@ -156,7 +156,7 @@ jobs:
                 for (const e of eligible) {
                   command(['merge-base', '--is-ancestor', e.sha, archiveCommit]);
                 }
-                await github.rest.git.createRef({ owner, repo, ref: 'refs/tags/' + tagName, sha: archiveCommit });
+                command(['push', 'origin', archiveCommit + ':refs/tags/' + tagName]);
                 const verified = await github.rest.git.getRef({ owner, repo, ref: 'tags/' + tagName });
                 if (verified.data.object.sha !== archiveCommit) {
                   throw new Error('Archive tag mismatch: refuse branch deletion');
