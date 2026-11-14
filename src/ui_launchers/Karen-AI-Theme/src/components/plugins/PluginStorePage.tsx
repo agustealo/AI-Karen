@@ -47,6 +47,7 @@ import type { PluginCategory } from '@/types/plugin';
 
 import { CategoryFilter } from './CategoryFilter';
 import { PluginGrid } from './PluginGrid';
+import { PluginDetailsModal } from './PluginDetailsModal';
 import { SearchBar } from './SearchBar';
 
 type PluginStoreTab = 'browse' | 'trending' | 'installed';
@@ -87,6 +88,9 @@ export default function PluginStorePage() {
     trendingStatus,
     trendingError,
     installingPlugins,
+    selectedPlugin,
+    detailsLoading,
+    detailsError,
     setSearchParams,
     searchPlugins,
     loadInstalled,
@@ -96,6 +100,7 @@ export default function PluginStorePage() {
     loadCategories,
     loadTrending,
     getPluginDetails,
+    clearSelectedPlugin,
     clearError,
   } = usePluginStore();
 
@@ -115,6 +120,7 @@ export default function PluginStorePage() {
   const [uploading, setUploading] = useState(false);
   const [uninstallId, setUninstallId] = useState('');
   const [uninstalling, setUninstalling] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const safeCategories = useMemo(() => (Array.isArray(categories) ? categories : []), [categories]);
 
@@ -162,11 +168,13 @@ export default function PluginStorePage() {
 
       try {
         await installPlugin(pluginId, version);
+        setDetailsOpen(false);
+        clearSelectedPlugin();
       } catch (installError) {
         setOperationError(getErrorMessage(installError));
       }
     },
-    [installPlugin],
+    [installPlugin, clearSelectedPlugin],
   );
 
   const handleDisable = useCallback(
@@ -175,29 +183,34 @@ export default function PluginStorePage() {
       setOperationSuccess('');
       try {
         await disablePlugin(pluginId);
+        setDetailsOpen(false);
+        clearSelectedPlugin();
         setOperationSuccess(`Plugin '${pluginId}' disabled successfully.`);
       } catch (cause) {
         setOperationError(getErrorMessage(cause));
       }
     },
-    [disablePlugin],
+    [disablePlugin, clearSelectedPlugin],
   );
 
   const handleDetails = useCallback(
     (pluginId: string) => {
       setOperationError('');
+      setDetailsOpen(true);
       void getPluginDetails(pluginId);
     },
     [getPluginDetails],
   );
 
-  const handleDiscover = useCallback(
-    (pluginId: string) => {
-      setOperationError('');
-      void getPluginDetails(pluginId);
+  const handleDetailsOpenChange = useCallback(
+    (open: boolean) => {
+      setDetailsOpen(open);
+      if (!open) clearSelectedPlugin();
     },
-    [getPluginDetails],
+    [clearSelectedPlugin],
   );
+
+  const handleDiscover = handleDetails;
 
   const handleCategoryChange = useCallback(
     (category: PluginCategory | undefined) => {
@@ -589,6 +602,27 @@ export default function PluginStorePage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <PluginDetailsModal
+        open={detailsOpen}
+        onOpenChange={handleDetailsOpenChange}
+        details={selectedPlugin}
+        loading={detailsLoading}
+        error={detailsError}
+        installing={Boolean(selectedPlugin?.plugin && installingPlugins.has(selectedPlugin.plugin.id))}
+        onInstall={() => {
+          const plugin = selectedPlugin?.plugin;
+          if (plugin) void handleInstall(plugin.id, plugin.version);
+        }}
+        onEnable={() => {
+          const plugin = selectedPlugin?.plugin;
+          if (plugin) void handleInstall(plugin.id);
+        }}
+        onDisable={() => {
+          const plugin = selectedPlugin?.plugin;
+          if (plugin) void handleDisable(plugin.id);
+        }}
+      />
     </div>
   );
 }
