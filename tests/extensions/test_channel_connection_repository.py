@@ -410,9 +410,9 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
     assert "s.connection_revision = d.connection_revision" in query
     assert "s.connection_revision = h.requested_revision" in query
     assert "h.fenced_revision = c.revision" in query
-    assert "NULLIF(BTRIM(d.provider_receipt_id), '') IS NOT NULL" in query
-    assert query.count("NULLIF(BTRIM(s.provider_unlink_receipt_id), '') IS NOT NULL") == 2
-    assert query.count("NULLIF(BTRIM(d.provider_receipt_id), '') IS NOT NULL") == 2
+    assert "d.provider_receipt_id ~ '[^[:space:]]'" in query
+    assert query.count("s.provider_unlink_receipt_id ~ '[^[:space:]]'") == 2
+    assert query.count("d.provider_receipt_id ~ '[^[:space:]]'") == 2
     assert "AS provider_revision_claims_correlated" in query
     assert "b.status NOT IN ('delivered', 'read')" in query
     assert "b.status NOT IN ('sent', 'delivered', 'read')" not in query
@@ -422,7 +422,7 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
         assert secret not in selected
     # A receipt may be checked for non-null inside EXISTS, but must never be
     # selected or returned as a column in this owner-facing review.
-    assert "NULLIF(BTRIM(d.provider_receipt_id), '') IS NOT NULL" in selected
+    assert "d.provider_receipt_id ~ '[^[:space:]]'" in selected
     assert "d.provider_receipt_id AS " not in selected
 
 
