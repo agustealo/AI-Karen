@@ -69,7 +69,15 @@ function verifySessions(payload: unknown): AccountSession[] {
     ) {
       throw new Error("Karen returned an unsafe or incomplete session entry.");
     }
-    return value as AccountSession;
+    return {
+      session_id: value.session_id as string,
+      is_current: value.is_current as boolean,
+      created_at: (value.created_at as string | null) ?? null,
+      last_accessed: (value.last_accessed as string | null) ?? null,
+      expires_at: (value.expires_at as string | null) ?? null,
+      user_agent: (value.user_agent as string | null) ?? null,
+      ip_address: (value.ip_address as string | null) ?? null,
+    };
   });
 }
 
