@@ -18,6 +18,7 @@ from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, Field
 
 from ai_karen_engine.auth.session import get_current_user
+from ai_karen_engine.api_routes.plugins.plugins import _require_plugin_mutation_access
 from ai_karen_engine.core.services.dependencies import get_plugin_service
 from ai_karen_engine.services.audit.audit_logging import get_audit_logger
 from ai_karen_engine.services.plugin_service import PluginService
@@ -233,14 +234,6 @@ def _sort_plugins(
     return sorted(plugins, key=timestamp, reverse=True)
 
 
-def _require_admin(current_user: Dict[str, Any]) -> None:
-    if "admin" not in current_user.get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-
-
 def _unsupported(detail: str) -> None:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -340,7 +333,7 @@ async def uninstall_plugin_endpoint(
     plugin_service: PluginService = Depends(get_plugin_service),
 ) -> Dict[str, Any]:
     """User-initiated removal of the complete installed package."""
-    _require_admin(current_user)
+    _require_plugin_mutation_access(http_request, current_user)
     try:
         result = await plugin_service.uninstall_plugin_package(plugin_id)
     except FileNotFoundError:
@@ -389,7 +382,7 @@ async def upload_plugin_endpoint(
     plugin_service: PluginService = Depends(get_plugin_service),
 ) -> Dict[str, Any]:
     """Explicitly upload a package; never auto-enable it."""
-    _require_admin(current_user)
+    _require_plugin_mutation_access(http_request, current_user)
     if not archive.filename or not archive.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=422, detail="A ZIP plugin archive is required")
     data = await archive.read(20 * 1024 * 1024 + 1)
@@ -434,7 +427,7 @@ async def install_plugin_endpoint(
     current_user: Dict[str, Any] = Depends(get_current_user),
     plugin_service: PluginService = Depends(get_plugin_service),
 ) -> Dict[str, Any]:
-    _require_admin(current_user)
+    _require_plugin_mutation_access(http_request, current_user)
 
     metadata = await plugin_service.get_plugin_info(request.plugin_id)
     if not metadata:
@@ -486,7 +479,7 @@ async def rate_plugin_endpoint(
     request: PluginRatingRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    _require_admin(current_user)
+    _require_plugin_mutation_access(http_request, current_user)
     _audit_plugin_event(
         request=http_request,
         current_user=current_user,
@@ -506,7 +499,11 @@ async def get_statistics_endpoint(
     plugin_service: PluginService = Depends(get_plugin_service),
 ) -> PluginStoreStats:
     plugins = await _catalog(plugin_service)
-    active_count = sum(1 for plugin in plugins if plugin["status"] == "installed")
+    active_count = sum(
+        1
+        for plugin in plugins
+        if plugin["runtime_status"] in {"enabled", "active", "loaded"}
+    )
     return PluginStoreStats(
         total_plugins=len(plugins),
         active_plugins=active_count,
@@ -551,7 +548,7 @@ async def get_updates_endpoint(
     plugin_ids: Optional[List[str]] = Query(None),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
-    _require_admin(current_user)
+    _require_plugin_mutation_access(http_request, current_user)
     _audit_plugin_event(
         request=http_request,
         current_user=current_user,
