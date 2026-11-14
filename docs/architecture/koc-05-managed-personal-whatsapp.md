@@ -591,3 +591,40 @@ not independent current verification, and a read snapshot can become stale
 after the transaction. Governed revision-fenced operator cleanup, external
 verification and retention policy remain NOT_READY; no destructive API or
 provider action was added.
+
+
+## Credential-deletion ledger transition integrity (migration 51)
+
+The canonical provider erasure receipt is only a provider **claim**, not
+independently verified erasure. Migration 51 protects the existing KOC-07
+ledger with one database trigger that rejects any new `verified` request
+on INSERT or UPDATE. The old `verified` label, if present in historical
+rows, stays readable but is not newly authenticated or upgraded. Verified
+status is deliberately **unavailable** pending a distinct, governed,
+independently evidenced verifier.
+
+A persisted request's tenant, owner, connection, revision, provider,
+session reference, credential scope, idempotency key and creation timestamp
+are immutable. Once recorded, a provider receipt identifier cannot be
+substituted. Only the canonical requested -> provider-pending ->
+provider-claimed path and limited fail-closed unknown/verification-pending
+transitions are allowed. No replay from unknown or downgrade to requested
+can manufacture a fresh deletion claim. The existing service can continue
+to persist an authenticated vendor's typed `provider_claimed` receipt
+and return it idempotently, but no receipt equals proof of remote backups
+or retained-message deletion.
+
+These constraints are database-integrity safeguards, not a new verifier,
+provider integration, authorization grant or compliance deletion flow.
+A privileged database administrator can disable triggers or execute a
+reviewed data-recovery procedure; any historical import must explicitly
+account for those privileges and audit rather than silently rewriting
+recorded history. User and tenant erasure retain their existing FK cascade
+semantics. Ordinary deletion of the whole connection remains guarded by
+migration 50.
+
+The disposable PostgreSQL channel acceptance test applies migration 51
+after migrations 35 and 50, rejects forged `verified` inserts/updates,
+rejects request-scope edits and receipt substitution, exercises the
+canonical idempotent provider claim, and confirms the retirement evidence
+still reports the claim as unverified. No consumer-package dependency.
