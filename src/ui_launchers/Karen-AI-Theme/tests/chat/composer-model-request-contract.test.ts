@@ -50,6 +50,10 @@ describe("CopilotKit model request transport", () => {
     expect(dashboard).toContain("setSettingsInitialSection('model')");
     expect(settings).toContain("initialSection = 'behavior'");
     expect(settings).toContain("render: () => <ModelSettings />");
+    const modelSettings = readFileSync(resolve(process.cwd(), "src/components/settings/ModelSettings.tsx"), "utf8");
+    expect(modelSettings).toContain("Provider connections and API credentials are administered by your workspace.");
+    expect(modelSettings).toContain("disabled={!canManageRuntime}");
+    expect(modelSettings).toContain("Configured by administrator");
   });
 
   it("does not retain a dependency on retired assistant-ui transport", () => {
