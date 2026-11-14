@@ -227,6 +227,39 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.setMessages).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { status: 502, code: "BACKEND_UPSTREAM_UNAVAILABLE" },
+    { status: 503, code: "BACKEND_TARGET_NOT_CONFIGURED" },
+  ])("does not confuse an explicit proxy outage with unsupported rich replay ($status)", async ({ status, code }) => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("do not expose upstream target"), {
+        status,
+        details: { error_code: code, detail: "private backend diagnostic" },
+      }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A,
+        messages: [{ id: "m1", role: "assistant", content: "Recovered saved response" }],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+
+    expect(screen.getByRole("alert").textContent).toContain("backend is unavailable");
+    expect(screen.getByRole("alert").textContent).not.toContain("cannot faithfully restore");
+    expect(screen.getByRole("alert").textContent).not.toContain("private backend diagnostic");
+    expect(screen.queryByTestId("karen-read-only-transcript")).toBeNull();
+    expect(screen.queryByTestId("agent-chat")).toBeNull();
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+    expect(backend.agent.subscribe).not.toHaveBeenCalled();
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry verified conversation" }));
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
+      { id: "m1", role: "assistant", content: "Recovered saved response" },
+    ]);
+  });
+
   it.each([502, 503])(
     "preserves owner-verified read-only text when complete rich replay returns %i",
     async (status) => {
