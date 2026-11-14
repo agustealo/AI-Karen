@@ -22,6 +22,9 @@ class Result:
     def one_or_none(self):
         return self.value
 
+    def all(self):
+        return self.value
+
 
 class Session:
     def __init__(self, value):
@@ -123,3 +126,45 @@ async def test_invalid_lifecycle_transition_never_touches_sql(bad_revision, bad_
             tenant_id=TENANT, connection_id="telegram-conn",
             expected_revision=bad_revision, enabled=bad_state,
         )
+
+
+@pytest.mark.asyncio
+async def test_personal_channel_inventory_is_bounded_by_exact_tenant_and_owner(monkeypatch):
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    session = Session([row()])
+    install(monkeypatch, session)
+    connections = await SqlChannelRepository().list_personal_owned_connections(
+        tenant_id=TENANT, user_id=user,
+    )
+    assert len(connections) == 1
+    assert connections[0].connection_id == "telegram-conn"
+    assert connections[0].enabled is False
+    query, args = session.calls[0]
+    assert "JOIN public.channel_connection_owners o" in query
+    assert "o.tenant_id = c.tenant_id" in query
+    assert "o.connection_id = c.connection_id" in query
+    assert "c.tenant_id = CAST(:tenant AS uuid)" in query
+    assert "o.user_id = CAST(:user AS uuid)" in query
+    assert "LIMIT 51" in query
+    assert args == {"tenant": TENANT, "user": user}
+
+
+@pytest.mark.asyncio
+async def test_personal_inventory_does_not_silently_truncate_owner_rows(monkeypatch):
+    session = Session([row()] * 51)
+    install(monkeypatch, session)
+    with pytest.raises(RuntimeError, match="inventory limit exceeded"):
+        await SqlChannelRepository().list_personal_owned_connections(
+            tenant_id=TENANT, user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+
+
+@pytest.mark.asyncio
+async def test_personal_inventory_rejects_untrusted_identity_without_database_work(monkeypatch):
+    session = Session([])
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().list_personal_owned_connections(
+            tenant_id=TENANT, user_id="not-a-uuid",
+        )
+    assert session.calls == []
