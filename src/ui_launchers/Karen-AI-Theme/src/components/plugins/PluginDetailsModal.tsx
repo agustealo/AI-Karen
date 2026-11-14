@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import Image from 'next/image';
 import {
   Calendar,
@@ -25,6 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import type { PluginDetails } from '@/types/plugin';
+import { PluginSettingsForm, PluginSettingsProvider } from '@/plugin_host/plugin-settings';
 import { cn } from '@/lib/utils';
 
 import { PluginStatusBadge } from './PluginStatusBadge';
@@ -190,6 +191,7 @@ export function PluginDetailsModal({
   onDisable,
 }: PluginDetailsModalProps) {
   // All React hooks must be called unconditionally at the top level
+  const [showSettings, setShowSettings] = useState(false);
   const dependencies = useMemo(
     () => getUniqueStrings(details?.plugin?.dependencies),
     [details?.plugin?.dependencies],
@@ -238,7 +240,7 @@ export function PluginDetailsModal({
   // request must never turn Manage into a silent no-op.
   if (!details?.plugin) {
     return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={(next) => { if (!next) setShowSettings(false); onOpenChange(next); }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Plugin details</DialogTitle>
@@ -277,7 +279,7 @@ export function PluginDetailsModal({
    * the resolved data it has been given.
    */
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) setShowSettings(false); onOpenChange(next); }}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <div className="flex items-start gap-4">
@@ -318,6 +320,17 @@ export function PluginDetailsModal({
           <p role="status" className="text-sm text-amber-700 dark:text-amber-400">
             This plugin is installed in quarantine. Activation requires a verified isolated execution runtime.
           </p>
+        )}
+
+        {showSettings && installed && plugin.settings_available && (
+          <section aria-label="Plugin settings" className="border-b pb-5">
+            <PluginSettingsProvider key={plugin.id}>
+              <PluginSettingsForm
+                pluginId={plugin.id}
+                onClose={() => setShowSettings(false)}
+              />
+            </PluginSettingsProvider>
+          </section>
         )}
 
         <div className="space-y-6 py-4">
@@ -488,6 +501,16 @@ export function PluginDetailsModal({
         <DialogFooter>
           {installed ? (
             <div className="flex w-full justify-end gap-2">
+              {plugin.settings_available && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-expanded={showSettings}
+                  onClick={() => setShowSettings((visible) => !visible)}
+                >
+                  {showSettings ? 'Hide settings' : 'Configure'}
+                </Button>
+              )}
               {plugin.runtime_status === 'disabled' && !plugin.activation_blocked_reason && onEnable && (
                 <Button type="button" onClick={onEnable} disabled={installing || loading}>
                   {installing ? 'Enabling...' : 'Enable'}
