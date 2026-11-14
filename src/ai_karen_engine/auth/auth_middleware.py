@@ -375,15 +375,30 @@ class SecureAuthMiddleware:
         return any(path.startswith(pattern) for pattern in public_patterns)
 
     async def validate_token(self, token: str) -> Dict[str, Any]:
+        """Never report JWT signature validity as authenticated session truth."""
         try:
             payload = self._verify_access_token(token)
-            return {"status": TokenStatus.VALID, "payload": payload}
+            canonical = await self._require_active_session(token, payload)
+            return {"status": TokenStatus.VALID, "payload": canonical}
         except AuthenticationError as exc:
-            if "expired" in str(exc).lower():
-                return {"status": TokenStatus.EXPIRED, "error": str(exc)}
-            return {"status": TokenStatus.INVALID, "error": str(exc)}
-        except Exception as exc:
-            return {"status": TokenStatus.INVALID, "error": str(exc)}
+            if "revoked" in exc.message.lower():
+                token_status = TokenStatus.REVOKED
+            elif "expired" in exc.message.lower():
+                token_status = TokenStatus.EXPIRED
+            else:
+                token_status = TokenStatus.INVALID
+            return {
+                "status": token_status,
+                "error": exc.message,
+                "http_status": exc.status_code,
+            }
+        except Exception:
+            logger.exception("auth.session_validation_failed")
+            return {
+                "status": TokenStatus.INVALID,
+                "error": "Session verification unavailable",
+                "http_status": 503,
+            }
 
     def _verify_access_token(self, token: str) -> Dict[str, Any]:
         payload = self._decode_jwt(token)
@@ -452,9 +467,14 @@ class SecureAuthMiddleware:
             token = self._extract_token_from_request(request)
             if token:
                 try:
-                    payload = self._verify_access_token(token)
-                    durable = await self._require_active_session(token, payload)
-                    return self._get_user_from_payload(durable)
+                    token_result = await self.validate_token(token)
+                    if token_result["status"] == TokenStatus.VALID:
+                        return self._get_user_from_payload(token_result["payload"])
+                    if not is_public:
+                        raise AuthenticationError(
+                            token_result.get("error") or "Session unavailable",
+                            token_result.get("http_status", 401),
+                        )
                 except AuthenticationError as exc:
                     if not is_public:
                         logger.warning(
@@ -470,11 +490,14 @@ class SecureAuthMiddleware:
             session_token = self._extract_session_token_from_request(request)
             if session_token and session_token != token:
                 try:
-                    payload = self._verify_access_token(session_token)
-                    durable = await self._require_active_session(
-                        session_token, payload
-                    )
-                    return self._get_user_from_payload(durable)
+                    token_result = await self.validate_token(session_token)
+                    if token_result["status"] == TokenStatus.VALID:
+                        return self._get_user_from_payload(token_result["payload"])
+                    if not is_public:
+                        raise AuthenticationError(
+                            token_result.get("error") or "Session unavailable",
+                            token_result.get("http_status", 401),
+                        )
                 except AuthenticationError:
                     if not is_public:
                         raise
