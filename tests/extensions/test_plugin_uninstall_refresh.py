@@ -211,3 +211,75 @@ async def test_disable_retires_loaded_plugin_once_before_reenable(
     assert kernel.runtime_registry.get("switchable").state is ExtensionLifecycleState.DISABLED
     assert await service.enable_plugin("switchable")
     assert kernel.runtime_registry.get("switchable").state is ExtensionLifecycleState.ENABLED
+
+
+@pytest.mark.asyncio
+async def test_disable_then_enable_resolves_fresh_handler_not_retired_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The surviving registry registration must never retain a dead handler."""
+    from ai_karen_engine.extensions.plugin_kernel import _LazyRuntimeInstanceAdapter
+
+    _write_plugin(tmp_path, "reloaded")
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    registration = kernel.runtime_registry.get("reloaded")
+    assert registration is not None
+    adapter = registration.instance
+    assert isinstance(adapter, _LazyRuntimeInstanceAdapter)
+
+    constructed = []
+
+    class Handler:
+        def __init__(self, version: int) -> None:
+            self.version = version
+            self.context = type("Context", (), {
+                "extension_dir": tmp_path / "reloaded",
+            })()
+            self.started = False
+            self.stopped = False
+
+        async def _initialize(self) -> None:
+            self.started = True
+
+        def is_initialized(self) -> bool:
+            return self.started
+
+        async def _shutdown(self) -> None:
+            self.stopped = True
+
+        def is_shutdown(self) -> bool:
+            return self.stopped
+
+        async def execute(self, payload, context):
+            if self.stopped:
+                raise AssertionError("Shutdown plugin instance executed again")
+            return {"version": self.version}
+
+    def load_plugin(plugin_id: str):
+        assert plugin_id == "reloaded"
+        loaded = kernel.loader._loaded_extensions.get(plugin_id)
+        if loaded is not None:
+            return loaded
+        handler = Handler(len(constructed) + 1)
+        constructed.append(handler)
+        kernel.loader._loaded_extensions[plugin_id] = handler
+        return handler
+
+    monkeypatch.setattr(kernel.loader, "load_extension", load_plugin)
+    assert await adapter.execute({}, None) == {"version": 1}
+    assert constructed[0].started is True
+
+    assert await service.disable_plugin("reloaded") is True
+    assert constructed[0].stopped is True
+    assert kernel.loader.get_loaded_extensions() == {}
+    assert adapter._adapter is None
+
+    assert await service.enable_plugin("reloaded") is True
+    assert kernel.runtime_registry.get("reloaded").instance is adapter
+    assert await adapter.execute({}, None) == {"version": 2}
+    assert constructed[1].started is True
+    assert constructed[1].stopped is False
+    assert constructed[0] is not constructed[1]

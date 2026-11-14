@@ -151,6 +151,16 @@ class _LazyRuntimeInstanceAdapter:
         adapter = await self._resolve()
         return await adapter.execute(payload, context)
 
+    async def forget_resolved_instance(self) -> None:
+        """Revoke a cached handler after governed shutdown and module eviction.
+
+        The kernel owns retirement and guards active executions. Holding the
+        lazy resolver lock also prevents concurrent initialization from
+        restoring the now-retired instance during invalidation.
+        """
+        async with self._lock:
+            self._adapter = None
+
 
 @dataclass(frozen=True)
 class PluginCatalogRecord:
@@ -688,6 +698,13 @@ class PluginKernel:
                 )
                 raise
         self.loader.forget_loaded_extension(plugin_id)
+        registration = self.runtime_registry.get(plugin_id)
+        if registration is not None and isinstance(
+            registration.instance, _LazyRuntimeInstanceAdapter
+        ):
+            # The registry survives explicit disable/enable, so its lazy
+            # adapter must not revive the shutdown filesystem instance.
+            await registration.instance.forget_resolved_instance()
         self._retirement_pending.discard(plugin_id)
 
     def _required_by_enabled_plugin(self, dependency_id: str) -> bool:

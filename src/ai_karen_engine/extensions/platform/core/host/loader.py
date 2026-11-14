@@ -442,22 +442,17 @@ class ExtensionLoader:
             logger.error(f"Failed to check version compatibility: {e}")
 
     def reload_extension(self, extension_name: str) -> ExtensionBase:
+        """Reject the retired synchronous reload bypass.
+
+        This loader cannot authorize a plugin, await asynchronous shutdown,
+        or fence active executions. PluginKernel owns retirement and the
+        application must use PluginService.refresh_plugins().
         """
-        Reload an extension that was previously loaded.
-
-        Args:
-            extension_name: Name of the extension to reload
-
-        Returns:
-            ExtensionBase instance
-
-        Raises:
-            ExtensionLoadError: If extension cannot be reloaded
-        """
-        if extension_name in self._loaded_extensions:
-            del self._loaded_extensions[extension_name]
-
-        return self.load_extension(extension_name)
+        del extension_name
+        raise ExtensionLoadError(
+            "Direct extension reload is unavailable; use "
+            "PluginService.refresh_plugins() through the canonical lifecycle"
+        )
 
     def forget_loaded_extension(self, extension_name: str) -> None:
         """Discard a retired instance and its isolated Python import namespace.
