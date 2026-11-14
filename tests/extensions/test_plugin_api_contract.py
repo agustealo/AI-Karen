@@ -42,7 +42,16 @@ def _manifest(*, with_schema: bool = True) -> ExtensionManifest:
         category="test",
         tags=["contract"],
         entrypoint="handler:MainExtension",
-        config_schema=schema,
+        config_schema={
+            "type": "object",
+            "properties": {
+                "region": {"type": "string"},
+                "api_key": {"type": "string", "writeOnly": True},
+            },
+            "required": ["region", "api_key"],
+            "additional_properties": False,
+        },
+        execution_input_schema=schema,
     )
 
 
@@ -293,6 +302,8 @@ def test_route_projects_dictionary_metadata_and_schema():
     assert response.status == "enabled"
     assert response.enabled is True
     assert response.parameters["query"]["type"] == "string"
+    assert "region" not in response.parameters
+    assert "api_key" not in response.parameters
 
 
 def test_dev_user_does_not_bypass_plugin_manage_permission(monkeypatch):
