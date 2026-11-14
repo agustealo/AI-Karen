@@ -42,6 +42,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
     try:
         # Disposable dedicated DB, with only prerequisites of the migration.
         await raw.execute("""
+            DROP TABLE IF EXISTS public.channel_personal_retirement_holds CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_credential_deletions CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_pairing_state CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_pairing_consents CASCADE;
@@ -89,6 +90,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261114020000_51_channel_personal_deletion_ledger_integrity.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(integrity_migration)
+        hold_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261114040000_52_channel_personal_retirement_hold.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(hold_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -220,7 +226,8 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         )
         assert readiness == [{
             "connection_id": connection_id, "connection_revision": 1,
-            "connection_enabled": True, "active_consent": False,
+            "connection_enabled": True, "retirement_held": False,
+            "active_consent": False,
             "unresolved_pairing": False, "deletion_request_recorded": True,
             "unverified_deletion_request": True, "inbox_not_completed": False,
             "outbound_not_confirmed": True,
@@ -748,6 +755,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                        'session','credentials','purge-test')""",
             erase_tenant, uuid.uuid4(), erase_connection, erase_user,
         )
+        await owner_repo.place_personal_retirement_hold(
+            tenant_id=str(erase_tenant), connection_id=erase_connection,
+            operator_user_id=str(erase_user), expected_revision=1,
+            idempotency_key=str(uuid.uuid4()),
+        )
         assert await raw.execute(
             "DELETE FROM public.tenants WHERE id=$1", erase_tenant,
         ) == "DELETE 1"
@@ -755,6 +767,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "channel_connections", "channel_connection_owners",
             "channel_personal_pairing_consents", "channel_personal_pairing_state",
             "channel_personal_credential_deletions",
+            "channel_personal_retirement_holds",
         ):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public." + evidence_table
@@ -802,6 +815,19 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                        'session','credentials','user-purge-test')""",
             tenant_b, uuid.uuid4(), personal_connection, erase_principal,
         )
+        # An owner-account privacy erasure removes the personal hold row
+        # but never reopens the local connection revision fence.
+        privacy_hold = await owner_repo.place_personal_retirement_hold(
+            tenant_id=str(tenant_b), connection_id=personal_connection,
+            operator_user_id=str(erase_principal), expected_revision=1,
+            idempotency_key=str(uuid.uuid4()),
+        )
+        assert privacy_hold["created_new"] is True
+        assert await raw.fetchval(
+            "SELECT retirement_locked FROM public.channel_connections "
+            "WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_b, personal_connection,
+        ) is True
         assert await raw.execute(
             "DELETE FROM public.auth_users WHERE user_id=$1", erase_principal,
         ) == "DELETE 1"
@@ -809,12 +835,24 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "channel_connection_owners",
             "channel_personal_pairing_consents",
             "channel_personal_credential_deletions",
+            "channel_personal_retirement_holds",
         ):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public." + personal_table
                 + " WHERE tenant_id=$1 AND connection_id=$2",
                 tenant_b, personal_connection,
             ) == 0
+        assert await raw.fetchval(
+            "SELECT retirement_locked FROM public.channel_connections "
+            "WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_b, personal_connection,
+        ) is True
+        with pytest.raises(asyncpg.CheckViolationError):
+            await raw.execute(
+                "UPDATE public.channel_connections SET enabled=true "
+                "WHERE tenant_id=$1 AND connection_id=$2",
+                tenant_b, personal_connection,
+            )
         assert await raw.execute(
             "DELETE FROM public.channel_connections WHERE connection_id=$1",
             personal_connection,
@@ -865,6 +903,192 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_id=str(tenant_a), inbox_id=str(after_revoke),
             lease_seconds=90,
         ) is None
+
+        # Explicit operator hold uses one tenant-row lock and a single SQL
+        # transaction to disable, revision-fence and persist the hold.
+        from ai_karen_engine.persistence.repositories.channel_repository import (
+            ChannelAdmissionDenied,
+            ChannelRetirementConflict,
+        )
+        hold_key = str(uuid.uuid4())
+        args = dict(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            operator_user_id=str(another_user),
+            expected_revision=1, idempotency_key=hold_key,
+        )
+        first = await owner_repo.place_personal_retirement_hold(**args)
+        assert first["created_new"] is True
+        assert first["connection_revision"] == 2
+        assert first["hold_id"]
+        replay = await owner_repo.place_personal_retirement_hold(**args)
+        assert replay == {**first, "created_new": False}
+        with pytest.raises(ChannelRetirementConflict):
+            await owner_repo.place_personal_retirement_hold(
+                **{**args, "idempotency_key": str(uuid.uuid4())},
+            )
+        with pytest.raises(ChannelRetirementConflict):
+            await owner_repo.place_personal_retirement_hold(
+                **{**args, "expected_revision": 2},
+            )
+        with pytest.raises(ChannelAdmissionDenied):
+            await owner_repo.place_personal_retirement_hold(
+                **{**args, "tenant_id": str(tenant_b)},
+            )
+        state = await raw.fetchrow(
+            """SELECT enabled, revision, retirement_locked
+               FROM public.channel_connections
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        )
+        assert state["enabled"] is False
+        assert state["revision"] == 2
+        assert state["retirement_locked"] is True
+        hold_evidence = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        assert hold_evidence[0]["retirement_held"] is True
+        assert hold_evidence[0]["connection_enabled"] is False
+        assert hold_evidence[0]["connection_revision"] == 2
+        assert hold_evidence[0]["unverified_deletion_request"] is True
+
+        # No fresh pairing or risk-consent acceptance may be recorded after
+        # the local retirement fence, even if a privileged actor directly
+        # plants an otherwise valid consent for a new provider.
+        assert not await owner_repo.acknowledge_personal_pairing_risk(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user), provider_id="post-hold-provider",
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_personal_pairing_consents
+               (tenant_id,connection_id,user_id,provider_id,policy_version)
+               VALUES ($1,$2,$3,'post-hold-provider',$4)""",
+            tenant_a, connection_id, user,
+            PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        denied_pairing = PairingObservation(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            provider_id="post-hold-provider", connection_revision=2,
+            sequence=1, event=PairingEvent.QR_ISSUED,
+            observed_at=datetime.now(timezone.utc) - timedelta(seconds=2),
+            authenticated=True,
+            qr_expires_at=datetime.now(timezone.utc) + timedelta(seconds=90),
+        )
+        with pytest.raises(PairingEvidenceDenied):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=denied_pairing, user_id=str(user),
+                provider_vetted_and_enabled=True,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND provider_id='post-hold-provider'""",
+            tenant_a, connection_id,
+        ) == 0
+        for forbidden in (
+            "enabled=true", "retirement_locked=false",
+            "enabled=true, retirement_locked=false",
+        ):
+            with pytest.raises(asyncpg.CheckViolationError):
+                await raw.execute(
+                    "UPDATE public.channel_connections SET " + forbidden
+                    + " WHERE tenant_id=$1 AND connection_id=$2",
+                    tenant_a, connection_id,
+                )
+        with pytest.raises(asyncpg.ForeignKeyViolationError):
+            async with raw.transaction():
+                await raw.execute(
+                    "DELETE FROM public.channel_connections "
+                    "WHERE tenant_id=$1 AND connection_id=$2",
+                    tenant_a, connection_id,
+                )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.channel_personal_retirement_holds "
+            "WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_a, connection_id,
+        ) == 1
+        assert await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_b), user_id=str(user),
+        ) == []
+        # Two operators racing with distinct idempotency keys must not
+        # produce two holds or overwrite the first operator's audit record.
+        race_connection = "race-" + uuid.uuid4().hex
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id,tenant_id,installation_id,provider_account_id,
+                credential_handle,enabled,revision)
+               VALUES ($1,$2,'telegram-bot',$3,'vault://race',true,1)""",
+            race_connection, tenant_a, race_connection,
+        )
+        assert await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=race_connection,
+            user_id=str(user),
+        )
+        async def attempt_hold(key):
+            return await SqlChannelRepository().place_personal_retirement_hold(
+                tenant_id=str(tenant_a), connection_id=race_connection,
+                operator_user_id=str(another_user), expected_revision=1,
+                idempotency_key=key,
+            )
+        race_results = await asyncio.gather(
+            attempt_hold(str(uuid.uuid4())),
+            attempt_hold(str(uuid.uuid4())),
+            return_exceptions=True,
+        )
+        assert sum(isinstance(x, dict) and x["created_new"] for x in race_results) == 1
+        assert sum(isinstance(x, ChannelRetirementConflict) for x in race_results) == 1
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.channel_personal_retirement_holds "
+            "WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_a, race_connection,
+        ) == 1
+
+        # A non-owner role can read only its tenant's hold. Even with table
+        # grants, RLS intentionally supplies no direct UPDATE/DELETE policy.
+        await raw.execute("CREATE ROLE karen_retirement_hold_probe NOLOGIN")
+        await raw.execute(
+            "GRANT USAGE ON SCHEMA public TO karen_retirement_hold_probe"
+        )
+        await raw.execute(
+            "GRANT SELECT, UPDATE, DELETE ON "
+            "public.channel_personal_retirement_holds "
+            "TO karen_retirement_hold_probe"
+        )
+        async with raw.transaction():
+            await raw.execute("SET LOCAL ROLE karen_retirement_hold_probe")
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_a),
+            )
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_retirement_holds"
+            ) == 2
+            assert await raw.execute(
+                "UPDATE public.channel_personal_retirement_holds "
+                "SET status='held' WHERE tenant_id=$1",
+                tenant_a,
+            ) == "UPDATE 0"
+            assert await raw.execute(
+                "DELETE FROM public.channel_personal_retirement_holds "
+                "WHERE tenant_id=$1",
+                tenant_a,
+            ) == "DELETE 0"
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_b),
+            )
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.channel_personal_retirement_holds"
+            ) == 0
+        await raw.execute(
+            "REVOKE SELECT, UPDATE, DELETE ON "
+            "public.channel_personal_retirement_holds "
+            "FROM karen_retirement_hold_probe"
+        )
+        await raw.execute(
+            "REVOKE USAGE ON SCHEMA public FROM karen_retirement_hold_probe"
+        )
+        await raw.execute("DROP ROLE karen_retirement_hold_probe")
     finally:
         if engine is not None:
             await engine.dispose()

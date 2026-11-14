@@ -269,6 +269,88 @@ class ChannelHostServices:
         )
         return assigned
 
+    async def place_personal_retirement_hold(
+        self, *, tenant_id: str, connection_id: str,
+        operator_user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int, idempotency_key: str,
+    ) -> dict[str, str | int | bool]:
+        """Governed local hold only; never imply vendor unlink or erasure.
+
+        Canonical activation policy authorizes the operator. SQL serializes
+        the irreversible revision fence with the hold record, then the host
+        attempts process-local adapter stop. A failed stop is not hidden.
+        Remote provider state remains explicitly unknown.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel retirement authority unavailable")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id not in self._installed
+        ):
+            raise PermissionError("Channel connection not available for retirement")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=operator_user_id,
+            session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.deactivate", plan=authorized_plan,
+        )
+        held = await self.repository.place_personal_retirement_hold(
+            tenant_id=tenant_id, connection_id=connection_id,
+            operator_user_id=operator_user_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+        local_stop_attempted = False
+        local_stop_succeeded = False
+        if held["created_new"]:
+            local_stop_attempted = True
+            try:
+                await self._installed[connection.installation_id].stop(
+                    connection=connection,
+                )
+                local_stop_succeeded = True
+            except Exception as exc:
+                logger.warning(
+                    "channel.personal_retirement.local_stop_failed",
+                    extra={
+                        "tenant_id": tenant_id, "connection_id": connection_id,
+                        "hold_id": held["hold_id"],
+                        "error_type": type(exc).__name__,
+                    },
+                )
+        logger.info(
+            "channel.personal_retirement.hold_committed",
+            extra={
+                "tenant_id": tenant_id, "user_id": operator_user_id,
+                "connection_id": connection_id,
+                "installation_id": connection.installation_id,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+                "hold_id": held["hold_id"],
+                "connection_revision": held["connection_revision"],
+                "created_new": held["created_new"],
+                "local_stop_attempted": local_stop_attempted,
+                "local_stop_succeeded": local_stop_succeeded,
+                "remote_unlink_verified": False,
+                "credential_erasure_verified": False,
+            },
+        )
+        return {
+            "hold_id": held["hold_id"],
+            "connection_revision": held["connection_revision"],
+            "hold_recorded": True,
+            "connection_enabled": False,
+            "created_new": held["created_new"],
+            "local_stop_attempted": local_stop_attempted,
+            "local_stop_succeeded": local_stop_succeeded,
+            "provider_unlinked": False,
+            "credentials_erased": False,
+        }
+
     async def _authorize_personal_pairing_consent(
         self, *, tenant_id: str, connection_id: str,
         user_id: str, session_id: str,

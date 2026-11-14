@@ -10,11 +10,14 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.services.channels.host import ChannelHostServices
+from ai_karen_engine.persistence.repositories.channel_repository import (
+    ChannelRetirementConflict,
+)
 from ai_karen_engine.services.channels.consent_recovery import (
     PersonalConsentRecoveryService,
 )
@@ -102,12 +105,13 @@ async def _authorize(
 
 
 def _translate(
-    exc: Exception, *, operation: Literal["consent", "ownership", "recovery"] = "consent",
+    exc: Exception, *, operation: Literal["consent", "ownership", "recovery", "retirement"] = "consent",
 ) -> HTTPException:
     label = {
         "ownership": "Personal channel ownership",
         "consent": "Personal channel consent",
         "recovery": "Personal channel consent recovery",
+        "retirement": "Personal channel retirement hold",
     }[operation]
     if isinstance(exc, PermissionError):
         return HTTPException(403, f"{label} denied")
@@ -118,6 +122,7 @@ def _translate(
             "ownership": "channel.personal_owner_assignment.unavailable",
             "consent": "channel.personal_consent.unavailable",
             "recovery": "channel.personal_consent.recovery_unavailable",
+            "retirement": "channel.personal_retirement.unavailable",
         }[operation],
         extra={"error_type": type(exc).__name__},
     )
@@ -191,6 +196,70 @@ async def assign_personal_channel_owner(
     return PersonalOwnerAssignmentResult(owner_assigned=True)
 
 
+class PersonalRetirementHoldRequest(BaseModel):
+    """Only optimistic revision and idempotency originate from the client."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1, strict=True)
+    idempotency_key: UUID
+
+
+class PersonalRetirementHoldResult(BaseModel):
+    hold_id: UUID
+    connection_revision: int
+    hold_recorded: bool
+    connection_enabled: bool
+    created_new: bool
+    local_stop_attempted: bool
+    local_stop_succeeded: bool
+    provider_unlinked: bool
+    credentials_erased: bool
+
+
+@router.post(
+    "/{connection_id}/retirement-hold",
+    response_model=PersonalRetirementHoldResult,
+)
+async def place_personal_retirement_hold(
+    connection_id: UUID,
+    payload: PersonalRetirementHoldRequest,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> PersonalRetirementHoldResult:
+    """Explicit operator hold, never remote unlink or deletion authorization."""
+    host, tenant_id, operator_user_id = _host_and_actor(request, user)
+    try:
+        connection = await host.repository.get_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != str(connection_id)
+        ):
+            raise PermissionError("Retirement connection outside operator tenant")
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=operator_user_id,
+            session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.deactivate",
+        )
+        outcome = await host.place_personal_retirement_hold(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            operator_user_id=operator_user_id, session_id=session_id,
+            authorized_plan=plan,
+            expected_revision=payload.expected_revision,
+            idempotency_key=str(payload.idempotency_key),
+        )
+    except ChannelRetirementConflict:
+        raise HTTPException(409, "Personal channel retirement revision conflict") from None
+    except Exception as exc:
+        raise _translate(exc, operation="retirement") from None
+    return PersonalRetirementHoldResult(**outcome)
+
+
 class PersonalPairingStatus(BaseModel):
     availability: str
     last_observed_phase: str | None = None
@@ -244,6 +313,7 @@ class PersonalRetirementEvidenceItem(BaseModel):
     connection_id: str
     connection_revision: int
     connection_enabled: bool
+    retirement_held: bool
     active_consent: bool
     unresolved_pairing: bool
     deletion_request_recorded: bool

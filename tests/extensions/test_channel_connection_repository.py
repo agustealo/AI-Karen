@@ -25,6 +25,9 @@ class Result:
     def all(self):
         return self.value
 
+    def scalar_one_or_none(self):
+        return self.value
+
 
 class Session:
     def __init__(self, value):
@@ -368,6 +371,7 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
     connection = "cccccccc-cccc-cccc-cccc-cccccccccccc"
     stored = {
         "connection_id": connection, "revision": 7, "enabled": False,
+        "retirement_locked": True,
         "active_consent": True, "unresolved_pairing": True,
         "deletion_request_recorded": True, "unverified_deletion_request": True,
         "inbox_not_completed": False, "outbound_not_confirmed": True,
@@ -380,7 +384,8 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
     )
     assert result == [{
         "connection_id": connection, "connection_revision": 7,
-        "connection_enabled": False, "active_consent": True,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": True,
         "unresolved_pairing": True, "deletion_request_recorded": True,
         "unverified_deletion_request": True, "inbox_not_completed": False,
         "outbound_not_confirmed": True,
@@ -423,3 +428,135 @@ async def test_retirement_evidence_denies_overflow_and_invalid_identity(monkeypa
             tenant_id=TENANT, user_id="invalid-actor",
         )
     assert session.calls == []
+
+
+class RetirementSession:
+    """Deterministic repository SQL transcript, without inventing DB success."""
+
+    def __init__(self, *, connection=None, existing=None, revision=2):
+        self.connection = connection if connection is not None else {
+            "revision": 1, "enabled": True, "retirement_locked": False,
+            "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        }
+        self.existing = existing
+        self.revision = revision
+        self.calls = []
+
+    async def execute(self, statement, params):
+        sql = str(statement)
+        self.calls.append((sql, dict(params)))
+        if "SELECT c.revision, c.enabled, c.retirement_locked" in sql:
+            return Result(self.connection)
+        if "SELECT hold_id, requested_revision" in sql:
+            return Result(self.existing)
+        if "UPDATE public.channel_connections" in sql:
+            return Result(self.revision)
+        if "INSERT INTO public.channel_personal_retirement_holds" in sql:
+            return Result("dddddddd-dddd-dddd-dddd-dddddddddddd")
+        raise AssertionError("Unexpected retirement repository SQL")
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_atomically_fences_revision_and_persists_actor(monkeypatch):
+    session = RetirementSession()
+    install(monkeypatch, session)
+    operator = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    idem = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    result = await SqlChannelRepository().place_personal_retirement_hold(
+        tenant_id=TENANT, connection_id="personal-connection",
+        operator_user_id=operator, expected_revision=1, idempotency_key=idem,
+    )
+    assert result == {
+        "hold_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "connection_revision": 2, "created_new": True,
+    }
+    assert len(session.calls) == 4
+    assert "FOR UPDATE OF c" in session.calls[0][0]
+    assert "JOIN public.channel_connection_owners o" in session.calls[0][0]
+    assert "actor.is_verified = true" in session.calls[0][0]
+    assert "retirement_locked = true" in session.calls[2][0]
+    assert "revision = revision + 1" in session.calls[2][0]
+    assert "enabled = false" in session.calls[2][0]
+    assert session.calls[3][1]["operator"] == operator
+    assert session.calls[3][1]["owner"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    assert session.calls[3][1]["idempotency"] == idem
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_exact_replay_is_idempotent_and_never_rewrites(monkeypatch):
+    operator = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    idem = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    session = RetirementSession(
+        connection={
+            "revision": 2, "enabled": False, "retirement_locked": True,
+            "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        },
+        existing={
+            "hold_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            "owner_user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "operator_user_id": operator, "idempotency_key": idem,
+            "requested_revision": 1, "fenced_revision": 2,
+        },
+    )
+    install(monkeypatch, session)
+    args = dict(tenant_id=TENANT, connection_id="personal-connection",
+                operator_user_id=operator, expected_revision=1,
+                idempotency_key=idem)
+    result = await SqlChannelRepository().place_personal_retirement_hold(**args)
+    assert result["created_new"] is False
+    assert len(session.calls) == 2
+
+    from ai_karen_engine.persistence.repositories.channel_repository import (
+        ChannelRetirementConflict,
+    )
+    with pytest.raises(ChannelRetirementConflict):
+        await SqlChannelRepository().place_personal_retirement_hold(
+            **{**args, "idempotency_key": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+        )
+    assert len(session.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_wrong_scope_stale_revision_and_invalid_inputs_denied(monkeypatch):
+    from ai_karen_engine.persistence.repositories.channel_repository import (
+        ChannelAdmissionDenied, ChannelRetirementConflict,
+    )
+    operator = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    idem = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    args = dict(tenant_id=TENANT, connection_id="personal-connection",
+                operator_user_id=operator, expected_revision=1,
+                idempotency_key=idem)
+    session = RetirementSession()
+    install(monkeypatch, session)
+    for change in (
+        {"expected_revision": True},
+        {"expected_revision": 0},
+        {"operator_user_id": "not-a-uuid"},
+        {"idempotency_key": "not-a-uuid"},
+        {"connection_id": " "},
+    ):
+        with pytest.raises(ValueError):
+            await SqlChannelRepository().place_personal_retirement_hold(
+                **{**args, **change},
+            )
+    assert session.calls == []
+
+    session.connection = None
+    with pytest.raises(ChannelAdmissionDenied):
+        await SqlChannelRepository().place_personal_retirement_hold(**args)
+    assert len(session.calls) == 1
+
+    session.calls.clear()
+    session.connection = {
+        "revision": 2, "enabled": True, "retirement_locked": False,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    }
+    with pytest.raises(ChannelRetirementConflict, match="Stale"):
+        await SqlChannelRepository().place_personal_retirement_hold(**args)
+    assert len(session.calls) == 2
+
+    session.calls.clear()
+    session.connection["retirement_locked"] = True
+    with pytest.raises(ChannelRetirementConflict, match="already"):
+        await SqlChannelRepository().place_personal_retirement_hold(**args)
+    assert len(session.calls) == 2

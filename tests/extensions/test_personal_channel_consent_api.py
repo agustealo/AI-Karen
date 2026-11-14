@@ -49,6 +49,13 @@ def host_context(*, owner=True):
         "live_connected": False, "qr_available": False,
         "provider_unlinked": False,
     })
+    host.place_personal_retirement_hold = AsyncMock(return_value={
+        "hold_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "connection_revision": 2, "hold_recorded": True,
+        "connection_enabled": False, "created_new": True,
+        "local_stop_attempted": True, "local_stop_succeeded": False,
+        "provider_unlinked": False, "credentials_erased": False,
+    })
     host.acknowledge_personal_pairing_risk = AsyncMock(return_value=True)
     host.revoke_personal_pairing_risk = AsyncMock(return_value=True)
     return host, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
@@ -584,7 +591,8 @@ def retired_recovery_context(monkeypatch, *, consents=None, revoked=True):
         revoke=AsyncMock(return_value=revoked),
         list_retirement_evidence=AsyncMock(return_value=[{
             "connection_id": CONNECTION, "connection_revision": 2,
-            "connection_enabled": False, "active_consent": False,
+            "connection_enabled": False, "retirement_held": False,
+            "active_consent": False,
             "unresolved_pairing": True, "deletion_request_recorded": True,
             "unverified_deletion_request": True,
             "inbox_not_completed": False, "outbound_not_confirmed": True,
@@ -762,3 +770,137 @@ async def test_retirement_evidence_api_requires_identity_and_never_claims_deleti
         await api.list_retired_channel_evidence(user=actor())
     assert unavailable.value.status_code == 503
     assert "vault://" not in unavailable.value.detail
+
+
+@pytest.mark.asyncio
+async def test_operator_retirement_hold_is_explicit_scoped_and_never_provider_erasure():
+    host, request = host_context()
+    payload = api.PersonalRetirementHoldRequest(
+        expected_revision=1,
+        idempotency_key=api.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+    )
+    response = await api.place_personal_retirement_hold(
+        connection_id=api.UUID(CONNECTION), payload=payload,
+        request=request, user=actor(roles=["admin"]),
+    )
+    assert response.hold_recorded is True
+    assert response.connection_enabled is False
+    assert response.connection_revision == 2
+    assert response.local_stop_attempted is True
+    assert response.local_stop_succeeded is False
+    assert response.provider_unlinked is False
+    assert response.credentials_erased is False
+    grant = host.activation.issue_action_plan.await_args.kwargs
+    assert grant["action"] == "channel.deactivate"
+    assert grant["tenant_id"] == TENANT and grant["user_id"] == USER
+    host.place_personal_retirement_hold.assert_awaited_once_with(
+        tenant_id=TENANT, connection_id=CONNECTION,
+        operator_user_id=USER, session_id=grant["session_id"],
+        authorized_plan="trusted-plan", expected_revision=1,
+        idempotency_key="ffffffff-ffff-ffff-ffff-ffffffffffff",
+    )
+    for secret in ("credential_handle", "session_reference", "provider_account_id",
+                   "retirement_authorized", "vendor_erasure_verified"):
+        assert secret not in response.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_canonical_policy_denial_never_reaches_repository():
+    host, request = host_context()
+    host.activation.issue_action_plan.side_effect = PermissionError("private RBAC")
+    with pytest.raises(HTTPException) as err:
+        await api.place_personal_retirement_hold(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalRetirementHoldRequest(
+                expected_revision=1,
+                idempotency_key=api.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+            ),
+            request=request, user=actor(roles=["user"]),
+        )
+    assert err.value.status_code == 403
+    assert "RBAC" not in err.value.detail
+    host.place_personal_retirement_hold.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_rejects_cross_tenant_or_invalid_principal():
+    host, request = host_context()
+    payload = api.PersonalRetirementHoldRequest(
+        expected_revision=1,
+        idempotency_key=api.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+    )
+    host.repository.get_connection.return_value = ChannelConnection(
+        connection_id=CONNECTION, tenant_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        installation_id="whatsapp-cloud",
+        provider_account_id="private", credential_handle="vault://private",
+        revision=1, enabled=True,
+    )
+    with pytest.raises(HTTPException) as err:
+        await api.place_personal_retirement_hold(
+            connection_id=api.UUID(CONNECTION), payload=payload,
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.place_personal_retirement_hold.assert_not_awaited()
+    with pytest.raises(HTTPException) as err:
+        await api.place_personal_retirement_hold(
+            connection_id=api.UUID(CONNECTION), payload=payload,
+            request=request, user=actor(is_verified=False),
+        )
+    assert err.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_revision_conflict_and_error_redaction():
+    from ai_karen_engine.persistence.repositories.channel_repository import (
+        ChannelRetirementConflict,
+    )
+    host, request = host_context()
+    payload = api.PersonalRetirementHoldRequest(
+        expected_revision=1,
+        idempotency_key=api.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+    )
+    host.place_personal_retirement_hold.side_effect = ChannelRetirementConflict(
+        "private stale revision",
+    )
+    with pytest.raises(HTTPException) as err:
+        await api.place_personal_retirement_hold(
+            connection_id=api.UUID(CONNECTION), payload=payload,
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 409
+    assert "private" not in err.value.detail
+    host.place_personal_retirement_hold.side_effect = RuntimeError("vault://private")
+    with pytest.raises(HTTPException) as err:
+        await api.place_personal_retirement_hold(
+            connection_id=api.UUID(CONNECTION), payload=payload,
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 503
+    assert "vault://" not in err.value.detail
+
+
+def test_retirement_hold_api_contract_is_authenticated_and_strict():
+    routes = [
+        route for route in api.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/api/channels/personal/{connection_id}/retirement-hold"
+    ]
+    assert len(routes) == 1
+    assert routes[0].methods == {"POST"}
+    assert any(
+        dependency.call is api.get_current_user
+        for dependency in routes[0].dependant.dependencies
+    )
+    with pytest.raises(ValidationError):
+        api.PersonalRetirementHoldRequest(
+            expected_revision=True,
+            idempotency_key="ffffffff-ffff-ffff-ffff-ffffffffffff",
+        )
+    with pytest.raises(ValidationError):
+        api.PersonalRetirementHoldRequest(
+            expected_revision=1,
+            idempotency_key="ffffffff-ffff-ffff-ffff-ffffffffffff",
+            operator_user_id=USER,
+        )
