@@ -1,0 +1,295 @@
+"""Durable active-session enforcement for every protected auth request.
+
+Run against the canonical AuthService and SecureAuthMiddleware with controlled
+database/session fixtures. No network, login bypass, or fabricated JWT success.
+"""
+
+from __future__ import annotations
+
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import jwt
+import pytest
+
+from ai_karen_engine.auth import auth_service as auth_facade
+from ai_karen_engine.auth.auth_middleware import (
+    AuthenticationError,
+    SecureAuthMiddleware,
+)
+from ai_karen_engine.services.auth.auth_service import AuthService
+
+
+USER_ID = "11111111-1111-1111-1111-111111111111"
+TENANT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+OTHER_TENANT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+JWT_SECRET = "session-contract-test-secret"
+
+
+def token(tenant_id: str = TENANT_ID) -> str:
+    return jwt.encode(
+        {
+            "sub": USER_ID,
+            "tenant_id": tenant_id,
+            "roles": ["admin"],
+            "permissions": ["legacy:grant"],
+            "email": "old@example.org",
+            "iss": "ai-karen",
+            "aud": "ai-karen-users",
+            "iat": int(datetime.utcnow().timestamp()),
+            "exp": int((datetime.utcnow() + timedelta(minutes=15)).timestamp()),
+        },
+        JWT_SECRET,
+        algorithm="HS256",
+    )
+
+
+def account(tenant_id: str = TENANT_ID):
+    return SimpleNamespace(
+        id=USER_ID,
+        tenant_id=tenant_id,
+        roles=["user"],
+        email="current@example.org",
+    )
+
+
+class FakeResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class FakeDbSession:
+    def __init__(self, *rows):
+        self.rows = list(rows)
+        self.statements = []
+        self.flushed = False
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        if not self.rows:
+            raise AssertionError("Unexpected extra database query")
+        return FakeResult(self.rows.pop(0))
+
+    async def flush(self):
+        self.flushed = True
+
+
+def session_service(db: FakeDbSession):
+    service = object.__new__(AuthService)
+    service._initialized = True
+    service._config = SimpleNamespace(
+        jwt_secret_key=JWT_SECRET,
+        jwt_algorithm="HS256",
+    )
+    service._user_cache = {}
+
+    @asynccontextmanager
+    async def scope():
+        yield db
+
+    service._session_scope = scope
+    service._build_user_account = lambda user: account(str(user.tenant_id))
+    return service
+
+
+@pytest.mark.asyncio
+async def test_revoked_session_rejects_still_signed_access_token():
+    db = FakeDbSession(None)
+    svc = session_service(db)
+
+    assert await svc.validate_session(token()) is None
+    assert len(db.statements) == 1
+    sql = str(db.statements[0])
+    assert "auth_sessions.user_id" in sql
+    assert "auth_sessions.is_active" in sql
+    assert "auth_sessions.access_token" in sql
+
+
+@pytest.mark.asyncio
+async def test_active_session_returns_only_matching_durable_tenant():
+    active = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        access_token=token(),
+        is_active=True,
+        device_fingerprint=None,
+        expires_in=3600,
+        created_at=datetime.utcnow(),
+        last_accessed=None,
+    )
+    principal = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        tenant_id=uuid.UUID(TENANT_ID),
+        is_active=True,
+        is_verified=True,
+    )
+    db = FakeDbSession(active, principal)
+    svc = session_service(db)
+
+    result = await svc.validate_session(token())
+    assert result is not None
+    assert result.tenant_id == TENANT_ID
+    assert db.flushed
+    assert len(db.statements) == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_tenant_claim_is_rejected_even_with_active_database_row():
+    active = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        is_active=True,
+        device_fingerprint=None,
+        expires_in=3600,
+        created_at=datetime.utcnow(),
+    )
+    user = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        tenant_id=uuid.UUID(OTHER_TENANT_ID),
+        is_active=True,
+        is_verified=True,
+    )
+    db = FakeDbSession(active, user)
+    svc = session_service(db)
+
+    assert await svc.validate_session(token()) is None
+    assert not db.flushed
+
+
+@pytest.mark.asyncio
+async def test_database_error_never_falls_back_to_jwt_only_access():
+    class Down:
+        async def execute(self, statement):
+            raise OSError("database offline")
+
+    svc = session_service(Down())
+    assert await svc.validate_session(token()) is None
+
+
+@pytest.mark.asyncio
+async def test_login_denied_when_durable_session_persistence_fails():
+    svc = object.__new__(AuthService)
+    svc._initialized = True
+    svc._active_sessions = {}
+    existing = SimpleNamespace(
+        id=USER_ID,
+        tenant_id=TENANT_ID,
+        status=SimpleNamespace(value="active"),
+        locked_until=None,
+        is_verified=True,
+        password_hash="irrelevant",
+    )
+
+    # Real canonical login path, with side effects controlled, must refuse to
+    # return an access token when PostgreSQL persistence is unavailable.
+    from ai_karen_engine.services.auth.auth_service import UserStatus
+    existing.status = UserStatus.ACTIVE
+    svc.get_user = AsyncMock(return_value=existing)
+    svc._verify_password = lambda *_: True
+    svc._reset_failed_login_attempts = AsyncMock()
+    svc._update_last_login = AsyncMock()
+    svc._generate_access_token = lambda *_: "would-be-access-token"
+    svc._generate_refresh_token = lambda: "would-be-refresh-token"
+    svc._generate_device_fingerprint = lambda *_: "fingerprint"
+    svc._persist_auth_session = AsyncMock(
+        side_effect=RuntimeError("Durable session persistence unavailable")
+    )
+
+    user, access, error = await svc.authenticate_user("user@example.org", "secret")
+    assert user is None and access is None
+    assert error == "Authentication failed"
+    assert svc._active_sessions == {}
+
+
+def middleware():
+    instance = object.__new__(SecureAuthMiddleware)
+    instance.is_public_endpoint = lambda path: path.startswith("/api/auth/login")
+    instance._extract_token_from_request = lambda request: "signed-token"
+    instance._extract_session_token_from_request = lambda request: None
+    instance._verify_access_token = lambda value: {
+        "sub": USER_ID,
+        "tenant_id": TENANT_ID,
+        "roles": ["admin"],
+        "email": "old@example.org",
+        "permissions": ["legacy:grant"],
+    }
+    return instance
+
+
+@pytest.mark.asyncio
+async def test_middleware_uses_backend_roles_not_stale_jwt_claims(monkeypatch):
+    authoritative = SimpleNamespace(validate_session=AsyncMock(return_value=account()))
+
+    async def auth_svc():
+        return authoritative
+
+    monkeypatch.setattr(auth_facade, "get_auth_service", auth_svc)
+    result = await middleware().get_current_user(
+        SimpleNamespace(url=SimpleNamespace(path="/api/auth/me"))
+    )
+    assert result["user_id"] == USER_ID
+    assert result["tenant_id"] == TENANT_ID
+    assert result["roles"] == ["user"]
+    assert result["permissions"] == []
+    assert result["email"] == "current@example.org"
+    authoritative.validate_session.assert_awaited_once_with("signed-token")
+
+
+@pytest.mark.asyncio
+async def test_middleware_refuses_revoked_or_rotated_token(monkeypatch):
+    async def auth_svc():
+        return SimpleNamespace(validate_session=AsyncMock(return_value=None))
+
+    monkeypatch.setattr(auth_facade, "get_auth_service", auth_svc)
+
+    with pytest.raises(AuthenticationError, match="Session expired or revoked") as exc:
+        await middleware().get_current_user(
+            SimpleNamespace(url=SimpleNamespace(path="/api/auth/me"))
+        )
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_middleware_refuses_cross_tenant_active_session(monkeypatch):
+    async def auth_svc():
+        return SimpleNamespace(
+            validate_session=AsyncMock(return_value=account(OTHER_TENANT_ID))
+        )
+
+    monkeypatch.setattr(auth_facade, "get_auth_service", auth_svc)
+    with pytest.raises(AuthenticationError, match="identity or tenant mismatch") as exc:
+        await middleware().get_current_user(
+            SimpleNamespace(url=SimpleNamespace(path="/api/auth/me"))
+        )
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_middleware_fails_closed_when_database_unavailable(monkeypatch):
+    async def auth_svc():
+        raise OSError("private database detail")
+
+    monkeypatch.setattr(auth_facade, "get_auth_service", auth_svc)
+    with pytest.raises(AuthenticationError, match="Session verification unavailable") as exc:
+        await middleware().get_current_user(
+            SimpleNamespace(url=SimpleNamespace(path="/api/auth/me"))
+        )
+    assert exc.value.status_code == 503
+    assert "private" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_public_login_remains_unauthenticated_without_valid_session(monkeypatch):
+    async def auth_svc():
+        return SimpleNamespace(validate_session=AsyncMock(return_value=None))
+
+    monkeypatch.setattr(auth_facade, "get_auth_service", auth_svc)
+    result = await middleware().get_current_user(
+        SimpleNamespace(url=SimpleNamespace(path="/api/auth/login"))
+    )
+    assert result["authenticated"] is False
+    assert result["tenant_id"] is None
