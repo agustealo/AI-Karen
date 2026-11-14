@@ -51,6 +51,8 @@ import VoiceSettings from './VoiceSettings';
 interface SettingsDialogProps {
   inSheet?: boolean;
   adminMode?: boolean;
+  /** Optional consumer navigation target; the panel still owns its reads/writes. */
+  initialSection?: 'behavior' | 'model';
 }
 
 type SettingsSectionId =
@@ -114,6 +116,7 @@ const findCategoryBySectionId = (
 export default function SettingsDialog({
   inSheet = false,
   adminMode = false,
+  initialSection = 'behavior',
 }: SettingsDialogProps) {
   const categories = useMemo<SettingsCategory[]>(() => {
     const runtimeSections: SettingsSection[] = [
@@ -242,9 +245,16 @@ export default function SettingsDialog({
   );
 
   const [activeCategoryId, setActiveCategoryId] =
-    useState<SettingsCategoryId>(DEFAULT_CATEGORY_ID);
+    useState<SettingsCategoryId>(initialSection === 'model' ? 'runtime' : DEFAULT_CATEGORY_ID);
   const [activeSectionId, setActiveSectionId] =
-    useState<SettingsSectionId>('behavior');
+    useState<SettingsSectionId>(initialSection);
+
+  useEffect(() => {
+    // Navigation handoff only. Provider configuration and persistence remain
+    // exclusively owned by the existing ModelSettings panel and backend.
+    setActiveCategoryId(initialSection === 'model' ? 'runtime' : DEFAULT_CATEGORY_ID);
+    setActiveSectionId(initialSection);
+  }, [initialSection]);
 
   const activeCategory = useMemo(() => {
     return (
