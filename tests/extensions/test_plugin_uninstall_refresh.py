@@ -13,7 +13,7 @@ def _write_plugin(root: Path, plugin_id: str) -> None:
     directory = root / plugin_id
     directory.mkdir()
     (directory / "handler.py").write_text(
-        "class MainExtension:\\n    pass\\n", encoding="utf-8"
+        "class MainExtension:\n    pass\n", encoding="utf-8"
     )
     (directory / "plugin_manifest.json").write_text(
         json.dumps({
