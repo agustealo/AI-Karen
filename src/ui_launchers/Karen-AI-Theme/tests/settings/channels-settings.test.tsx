@@ -388,3 +388,154 @@ describe('KOC-05 disabled-provider and obsolete-policy consent revocation', () =
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 });
+
+
+describe('KOC-05 host-independent stored consent recovery', () => {
+  const recoveryEndpoint = '/api/channels/personal/consent-recovery';
+  const retired = {
+    connection_id: configuredChannel.connection_id,
+    provider_id: 'retired-provider',
+    policy_version: 'old-unofficial-risk-policy',
+  };
+  const revokeEndpoint = recoveryEndpoint + '/' + retired.connection_id +
+    '/' + retired.provider_id + '/revoke';
+
+  it('loads owner-scoped durable consent when ChannelHost inventory is unavailable', async () => {
+    let withdrawn = false;
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') {
+        throw new ApiError(503, 'Host stopped');
+      }
+      if (path === recoveryEndpoint) {
+        return { consents: withdrawn ? [] : [retired] };
+      }
+      throw new Error('Unexpected recovery URL');
+    });
+    vi.mocked(apiClient.post).mockImplementation(async (path) => {
+      expect(path).toBe(revokeEndpoint);
+      withdrawn = true;
+      return { revoked: true, paired: false, provider_unlinked: false };
+    });
+
+    render(<ChannelsSettings />);
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Channels service is unavailable');
+
+    expect(apiClient.get).not.toHaveBeenCalledWith(recoveryEndpoint);
+    fireEvent.click(screen.getByRole('button', { name: 'Review stored channel consent' }));
+    expect(await screen.findByText('retired-provider')).toBeTruthy();
+    expect(screen.getByText(/Recorded policy: old-unofficial-risk-policy/)).toBeTruthy();
+    expect(screen.getByText(/not proof of provider-side data deletion/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Revoke stored consent for retired-provider',
+    }));
+    expect(await screen.findByText(/Stored consent revocation verified/)).toBeTruthy();
+    expect(screen.queryByRole('button', {
+      name: 'Revoke stored consent for retired-provider',
+    })).toBeNull();
+    expect(apiClient.post).toHaveBeenCalledOnce();
+    expect(apiClient.post).toHaveBeenCalledWith(revokeEndpoint, {});
+    expect(vi.mocked(apiClient.get).mock.calls.filter(([path]) => path === recoveryEndpoint))
+      .toHaveLength(2);
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not automatically replay a recovery mutation after ambiguous outcome', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === recoveryEndpoint) return { consents: [retired] };
+      throw new Error('Unexpected URL');
+    });
+    vi.mocked(apiClient.post).mockRejectedValue(new Error('provider-secret-in-error'));
+    render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review stored channel consent',
+    }));
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Revoke stored consent for retired-provider',
+    }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Revocation outcome unverified');
+    expect(alert.textContent).not.toContain('provider-secret');
+    expect(screen.queryByText(/Stored consent revocation verified/)).toBeNull();
+    expect(apiClient.post).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', {
+      name: 'Revoke stored consent for retired-provider',
+    })).toBeNull();
+  });
+
+  it('rejects mutation success when the old consent remains in the durable re-read', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === recoveryEndpoint) return { consents: [retired] };
+      throw new Error('Unexpected URL');
+    });
+    vi.mocked(apiClient.post).mockResolvedValue({
+      revoked: true, paired: false, provider_unlinked: false,
+    });
+    render(<ChannelsSettings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review stored channel consent' }));
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Revoke stored consent for retired-provider',
+    }));
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Revocation outcome unverified');
+    expect(apiClient.post).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed on malformed or duplicate recovery inventory', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === recoveryEndpoint) return { consents: [retired, retired] };
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review stored channel consent' }));
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Stored channel consent could not be verified');
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', {
+      name: 'Revoke stored consent for retired-provider',
+    })).toBeNull();
+  });
+
+  it('hides recovery mutation when the normal channel card already covers that consent', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') {
+        return { connections: [{
+          ...channel,
+          active_consent_provider_ids: [retired.provider_id],
+        }] };
+      }
+      if (path === '/api/channels/personal/' + channel.connection_id + '/' +
+          retired.provider_id + '/consent') {
+        return {
+          ...currentConsent, has_active_consent: true,
+        };
+      }
+      if (path === recoveryEndpoint) return { consents: [retired] };
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    await screen.findByRole('button', {
+      name: 'Revoke personal WhatsApp risk consent',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review stored channel consent' }));
+    expect(await screen.findByText(/No separate active stored consent/)).toBeTruthy();
+    expect(screen.queryByRole('button', {
+      name: 'Revoke stored consent for retired-provider',
+    })).toBeNull();
+  });
+
+  it('does not fetch private recovery state before authentication', async () => {
+    auth.isAuthenticated = false;
+    render(<ChannelsSettings />);
+    const review = screen.getByRole('button', {
+      name: 'Review stored channel consent',
+    }) as HTMLButtonElement;
+    expect(review.disabled).toBe(true);
+    expect(apiClient.get).not.toHaveBeenCalled();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+});
