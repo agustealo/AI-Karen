@@ -159,13 +159,40 @@ describe("My Account consumer contracts", () => {
     expect(apiClient.put).toHaveBeenCalledWith("/api/auth/me", {
       username: "member",
       full_name: "Member Two",
-      email: "member@example.org",
     });
     expect(apiClient.get).toHaveBeenCalledTimes(2);
     expect(state.syncUser).toHaveBeenCalledWith(expect.objectContaining({
       full_name: "Member Two",
       preferences: saved.preferences,
     }));
+  });
+
+  it("displays email read-only and never includes it in a profile save", async () => {
+    let saved = account();
+    vi.mocked(apiClient.get).mockImplementation(async () => saved);
+    vi.mocked(apiClient.put).mockImplementation(async (_path, payload) => {
+      saved = { ...saved, ...(payload as Record<string, string>) };
+      return saved;
+    });
+    render(<AccountPage />);
+    const emailInput = await screen.findByLabelText("Email address") as HTMLInputElement;
+    expect(emailInput.readOnly).toBe(true);
+    expect(emailInput.value).toBe("member@example.org");
+    expect(screen.getByText(/independently verify ownership/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Display name"), {
+      target: { value: "New Name" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Profile saved",
+    })));
+    expect(apiClient.put).toHaveBeenCalledWith("/api/auth/me", {
+      username: "member",
+      full_name: "New Name",
+    });
+    const payload = vi.mocked(apiClient.put).mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("email");
   });
 
   it("does not claim a save after an ambiguous failed mutation", async () => {
