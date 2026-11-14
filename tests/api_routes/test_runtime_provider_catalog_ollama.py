@@ -145,8 +145,8 @@ async def test_custom_manual_model_is_marked_configured_not_live(
     assert len(provider.models) == 1
     assert provider.models[0].id == "my-inference-model"
     assert provider.models[0].source == "manual_configured"
-    assert provider.models[0].available is True
-    assert catalog.default_model == "my-inference-model"
+    assert provider.models[0].available is False
+    assert catalog.default_model == "auto"
 
 
 
@@ -175,9 +175,9 @@ async def test_saved_custom_model_is_added_alongside_static_catalog(
     assert {model.id for model in provider.models} == {"custom-model", "user-model"}
     saved = next(model for model in provider.models if model.id == "user-model")
     assert saved.source == "manual_configured"
-    assert saved.available is True
+    assert saved.available is False
     assert provider.selected_model == "user-model"
-    assert catalog.default_model == "user-model"
+    assert catalog.default_model == "auto"
 
 
 @pytest.mark.asyncio
@@ -359,3 +359,108 @@ async def test_runtime_catalog_distinguishes_real_failure_from_unknown(
         "ollama": "unavailable", "openai": "unhealthy"
     }
     assert all(entry.healthy is False for entry in catalog.providers)
+
+
+@pytest.mark.asyncio
+async def test_remote_provider_requires_live_models_before_chat_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a healthy connection with provider-reported model IDs is chat ready."""
+    async def payload() -> dict[str, object]:
+        return {
+            "providers": [{
+                "id": "openai",
+                "display_name": "OpenAI",
+                "provider_type": "external",
+                "enabled": True,
+                "is_configured": True,
+                "healthy": True,
+                "health_status": "healthy",
+                "selected_model": "gpt-live",
+                "models": [{"id": "catalog-only", "name": "Catalog", "is_installed": False}],
+            }],
+            "selected_provider": "openai",
+        }
+
+    async def live_models(name: str, *, current_user) -> dict[str, object]:
+        assert name == "openai"
+        assert current_user == {"roles": ["admin"]}
+        return {
+            "models": [
+                {"id": "gpt-live", "name": "Provider observed", "source": "provider_live"},
+                {"id": "catalog-only", "name": "Catalog", "source": "configured_catalog", "is_installed": False},
+            ],
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    monkeypatch.setattr(runtime_api, "get_provider_models", live_models)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    provider = catalog.providers[0]
+    assert provider.healthy is True
+    assert {model.id for model in provider.models if model.available} == {"gpt-live"}
+    assert catalog.default_model == "gpt-live"
+    assert any(model.id == "catalog-only" and not model.available for model in provider.models)
+
+
+@pytest.mark.asyncio
+async def test_remote_catalog_outage_fails_closed_even_after_previous_good_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def payload() -> dict[str, object]:
+        return {
+            "providers": [{
+                "id": "openai",
+                "display_name": "OpenAI",
+                "provider_type": "external",
+                "enabled": True,
+                "is_configured": True,
+                "healthy": True,
+                "health_status": "healthy",
+                "selected_model": "configured-model",
+                "models": [{"id": "configured-model", "name": "Static", "is_installed": False}],
+            }],
+            "selected_provider": "openai",
+        }
+
+    async def unavailable(name: str, *, current_user):
+        raise ConnectionError("Provider unavailable")
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    monkeypatch.setattr(runtime_api, "get_provider_models", unavailable)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    provider = catalog.providers[0]
+    assert provider.healthy is False
+    assert provider.models == []
+    assert provider.health.status == "degraded"
+    assert catalog.default_model == "auto"
+
+
+@pytest.mark.asyncio
+async def test_local_model_cannot_be_chat_ready_without_configured_healthy_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def payload() -> dict[str, object]:
+        return {
+            "providers": [{
+                "id": "builtin_transformers",
+                "display_name": "Transformers",
+                "provider_type": "builtin",
+                "enabled": True,
+                "is_configured": False,
+                "healthy": False,
+                "health_status": "unknown",
+                "models": [{
+                    "id": "weights-on-disk",
+                    "name": "Unverified weights",
+                    "is_installed": True,
+                    "source": "local_runtime",
+                }],
+            }],
+            "selected_provider": "builtin_transformers",
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    provider = catalog.providers[0]
+    assert provider.models[0].available is False
+    assert catalog.default_model == "auto"
