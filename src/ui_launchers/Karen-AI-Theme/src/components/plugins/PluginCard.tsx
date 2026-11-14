@@ -156,7 +156,7 @@ export function PluginCard({
   const ratingCountLabel = getRatingCountLabel(plugin);
   const downloadLabel = getDownloadLabel(plugin);
 
-  const canInstall = (plugin.status === 'available' || plugin.runtime_status === 'disabled') && Boolean(onInstall) && pluginId;
+  const canInstall = (plugin.status === 'available' || plugin.runtime_status === 'disabled') && !plugin.activation_blocked_reason && Boolean(onInstall) && pluginId;
   const canDisable = plugin.status === 'installed' && plugin.runtime_status === 'enabled' && Boolean(onDisable) && pluginId;
   const canOpenDetails = Boolean(onDetails) && pluginId;
   const canDiscover = Boolean(onDiscover) && pluginId;
@@ -336,8 +336,11 @@ export function PluginCard({
               className="flex-1"
               onClick={handleInstall}
               disabled={loading || !canInstall}
+              title={plugin.activation_blocked_reason ? 'Plugin activation requires a verified isolated runtime.' : undefined}
             >
-              {loading ? (
+              {plugin.activation_blocked_reason ? (
+                'Isolation required'
+              ) : loading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                   Enabling...
