@@ -53,6 +53,12 @@ def _write_plugin(
                 "dependencies": dependencies or {},
                 "config_schema": {
                     "type": "object",
+                    "properties": {"region": {"type": "string"}},
+                    "required": ["region"],
+                    "additional_properties": False,
+                },
+                "execution_input_schema": {
+                    "type": "object",
                     "properties": {"message": {"type": "string"}},
                     "required": ["message"],
                     "additional_properties": False,
