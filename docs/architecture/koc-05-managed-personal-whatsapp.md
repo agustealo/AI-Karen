@@ -884,3 +884,37 @@ coercion, conflicting blocker lists and the unchanged legitimate blocked
 report. Independent provider-session authentication, remote credential erasure
 and retention/backup coverage are still unavailable. Finalization remains
 disabled and requires its own security review.
+
+## KOC-05 historical verified-label containment (v2, read-only)
+
+The canonical `SqlChannelRepository.list_owned_personal_retirement_evidence`
+reports `unverified_deletion_request=true` for **every retained credential
+deletion request**, regardless of its historical `status` label. Previous
+SQL used `d.status <> 'verified'`, which could have misrepresented an old
+`verified` row as independently attested erasure even though this runtime
+has no independently authenticated remote erasure verifier or provenance
+ledger. The original immutable history is preserved: no rows are rewritten
+or deleted, no triggers or tenant-RLS policy are bypassed.
+
+Until a genuine source-authenticated verifier exists, the same owner-scoped
+SQL observation reports request existence and unverified status together.
+The pure `assess_retirement_evidence_snapshot` owner rejects contradictory
+`deletion_request_recorded` / `unverified_deletion_request` values and any
+credential-deletion claim without a recorded request. The strict API
+re-evaluates that assessment; the Settings parser rejects an inconsistent
+backend response rather than hiding the `credential_deletion_requests_unverified`
+blocker. A connection with no deletion request still reports the missing
+request blocker, not a fabricated pending request. The API shape and
+`retirement-verification-readiness-v2` contract are unchanged.
+
+This is intentionally conservative: a provider claim or a historical
+`verified` status never establishes remote session identity, erasure,
+retention/backup coverage or any final deletion permission. The
+`cleanup_authorized=false` contract, four mandatory independent-proof
+blockers, immutable retirement hold, tenant RBAC and audit constraints remain.
+
+Existing canonical unit/API/Settings tests cover contradictory flags,
+historical-status projection rules and no-request behavior; the existing
+disposable live PostgreSQL suite continues to exercise real pending and
+provider-claimed requests under tenant isolation, without disabling the
+ledger integrity trigger or pretending a third-party verifier exists.
