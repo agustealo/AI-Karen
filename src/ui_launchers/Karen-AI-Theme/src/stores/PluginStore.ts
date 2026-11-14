@@ -106,6 +106,19 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
       if (response.plugins.some((plugin) => plugin.status !== 'installed')) {
         throw new Error('Installed plugin catalog returned invalid lifecycle data.');
       }
+      // Removing the last item on a later page must not make the entire
+      // installed catalog appear empty while earlier pages still exist.
+      if (
+        response.total > 0 &&
+        response.plugins.length === 0 &&
+        requestedPage > Math.max(1, response.total_pages)
+      ) {
+        await get().loadInstalled(Math.max(1, response.total_pages));
+        return;
+      }
+      if (response.total > 0 && response.plugins.length === 0) {
+        throw new Error('Installed plugin catalog returned an inconsistent empty page.');
+      }
       set({
         installedPlugins: response.plugins,
         installedSearchResponse: response,
