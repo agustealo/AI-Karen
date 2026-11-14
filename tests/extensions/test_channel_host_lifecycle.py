@@ -964,3 +964,123 @@ async def test_operator_cannot_assign_owner_to_foreign_connection():
     host.activation._authorize.assert_not_awaited()
     host.repository.assign_personal_connection_owner.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_personal_inventory_host_rechecks_policy_and_projects_no_provider_secrets():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    connection = ChannelConnection(
+        connection_id="assigned-channel",
+        tenant_id=tenant,
+        installation_id="telegram-bot",
+        provider_account_id="external-private-account",
+        credential_handle="vault://private-credential-reference",
+        revision=2,
+        enabled=False,
+    )
+    host.repository.list_personal_owned_connections = AsyncMock(
+        return_value=[connection],
+    )
+    host.activation.issue_action_plan = AsyncMock(return_value="policy-plan")
+    host.get_personal_pairing_status = AsyncMock(return_value={
+        "availability": "unavailable",
+        "last_observed_phase": "connected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": False,
+    })
+
+    inventory = await host.list_owned_personal_channels(
+        tenant_id=tenant, user_id=user,
+    )
+    assert inventory == [{
+        "connection_id": "assigned-channel",
+        "installation_id": "telegram-bot",
+        "provider_id": None,
+        "availability": "unavailable",
+        "last_observed_phase": "connected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": False,
+    }]
+    serialized = repr(inventory)
+    assert "vault://" not in serialized
+    assert "external-private-account" not in serialized
+    assert "credential_handle" not in serialized
+    host.repository.list_personal_owned_connections.assert_awaited_once_with(
+        tenant_id=tenant, user_id=user,
+    )
+    kwargs = host.activation.issue_action_plan.await_args.kwargs
+    assert kwargs["tenant_id"] == tenant and kwargs["user_id"] == user
+    assert kwargs["installation_id"] == "telegram-bot"
+    assert kwargs["action"] == "channel.consent"
+    assert kwargs["session_id"]
+    host.get_personal_pairing_status.assert_awaited_once_with(
+        tenant_id=tenant,
+        connection_id="assigned-channel",
+        provider_id="",
+        user_id=user,
+        session_id=kwargs["session_id"],
+        authorized_plan="policy-plan",
+    )
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_personal_inventory_rejects_forged_tenant_before_policy_read():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.list_personal_owned_connections = AsyncMock(return_value=[
+        ChannelConnection(
+            connection_id="foreign-channel",
+            tenant_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+            installation_id="telegram-bot",
+            provider_account_id="private",
+            credential_handle="vault://private",
+            revision=1,
+            enabled=False,
+        ),
+    ])
+    host.activation.issue_action_plan = AsyncMock()
+    with pytest.raises(PermissionError, match="tenant mismatch"):
+        await host.list_owned_personal_channels(tenant_id=tenant, user_id=user)
+    host.activation.issue_action_plan.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_personal_inventory_refuses_permission_denial_without_partial_success():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, _ = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.list_personal_owned_connections = AsyncMock(return_value=[
+        ChannelConnection(
+            connection_id="assigned-channel",
+            tenant_id=tenant,
+            installation_id="telegram-bot",
+            provider_account_id="private",
+            credential_handle="vault://private",
+            revision=1,
+            enabled=False,
+        ),
+    ])
+    host.activation.issue_action_plan = AsyncMock(
+        side_effect=PermissionError("canonical policy denied"),
+    )
+    host.get_personal_pairing_status = AsyncMock()
+    with pytest.raises(PermissionError, match="canonical policy denied"):
+        await host.list_owned_personal_channels(tenant_id=tenant, user_id=user)
+    host.get_personal_pairing_status.assert_not_awaited()
+    await host.shutdown()
