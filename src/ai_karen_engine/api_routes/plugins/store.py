@@ -41,6 +41,7 @@ class PluginSearchRequest(BaseModel):
         PluginSortOrder.POPULARITY,
         description="Sort order",
     )
+    installed_only: bool = Field(False, description="Show only installed local plugins")
     page: int = Field(1, ge=1, description="Page number")
     per_page: int = Field(20, ge=1, le=100, description="Items per page")
     min_version: Optional[str] = Field(None, description="Minimum version")
@@ -151,7 +152,7 @@ def _plugin_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "description": str(getattr(manifest, "description", "")),
         "author": str(getattr(manifest, "author", "")),
         "version": str(getattr(manifest, "version", "")),
-        "status": "installed" if installed else "available",
+        "status": "installed" if installed else "incompatible" if runtime_status == "error" else "available",
         "runtime_status": runtime_status,
         "category": str(getattr(manifest, "category", "")) or None,
         "downloads": marketplace.get("downloads"),
@@ -261,6 +262,9 @@ async def search_plugins_endpoint(
     plugin_service: PluginService = Depends(get_plugin_service),
 ) -> Dict[str, Any]:
     plugins = await _catalog(plugin_service)
+
+    if request.installed_only:
+        plugins = [plugin for plugin in plugins if plugin["status"] == "installed"]
 
     if request.query:
         query = request.query.casefold()
