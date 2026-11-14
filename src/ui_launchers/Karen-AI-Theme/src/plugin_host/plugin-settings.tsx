@@ -137,6 +137,7 @@ function checkedSettingsResponse(
     !response.schema.every(
       (field) => field && typeof field.key === 'string' && typeof field.type === 'string',
     ) ||
+    typeof response.revision !== 'number' ||
     !Number.isSafeInteger(response.revision) ||
     (response.revision ?? -1) < 0 ||
     typeof response.stored !== 'boolean'
