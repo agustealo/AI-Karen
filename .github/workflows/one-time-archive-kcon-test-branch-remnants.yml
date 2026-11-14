@@ -1,0 +1,162 @@
+name: One-time archive KCON test branch remnants
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-archive-kcon-test-branch-remnants.yml
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: one-time-archive-kcon-test-branch-remnants
+  cancel-in-progress: false
+
+jobs:
+  archive-and-delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Read full Git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: true
+      - name: Fetch current branch refs
+        run: git -c protocol.version=2 fetch --no-tags --filter=blob:none origin '+refs/heads/*:refs/remotes/origin/*'
+      - name: Archive and verify superseded test branches before removal
+        uses: actions/github-script@v7
+        with:
+          script: |
+            
+            const fs=require('fs');
+            const path=require('path');
+            const {execFileSync}=require('child_process');
+            const owner=context.repo.owner,repo=context.repo.repo;
+            const repoFull=owner+'/'+repo;
+            const targets=[{"name":"test/kcon490-live-cron-reclaim-fencing-20261113","sha":"cc73e281b47053a93f6ffe76ca311e013d8dc0d2","mergedPr":770},{"name":"test/kcon490-stream-incomplete-diagnostic-20261113","sha":"8e5fe0cf71e50f4fb97694b5487a40bedb53bb05","mergedPr":777},{"name":"test/kcon771-presentation-layout-evidence-invariance-20261110","sha":"4f7aef3512a98093a3c3e63783fc77e292821c0a","mergedPr":717}];
+            const tag='branch-archive/2026-11-14-superseded-kcon490-kcon771-test-branches';
+            const manifestPath='.branch-archives/2026-11-14-superseded-kcon490-kcon771-test-branches.json';
+            const run=(args, env)=>execFileSync('git',args,{encoding:'utf8',maxBuffer:16*1024*1024,
+             stdio:['ignore','pipe','pipe'], ...(env?{env}:{})}).trim();
+            const defaultBranch=(await github.rest.repos.get({owner,repo})).data.default_branch;
+            const baseSha=run(['rev-parse','refs/remotes/origin/'+defaultBranch]);
+            const allPulls=await github.paginate(github.rest.pulls.list,{owner,repo,state:'all',per_page:100});
+            const selected=[],deleted=[],withheld=[],failures=[];
+            for(const item of targets){
+             try {
+              if(item.name===defaultBranch || item.name.startsWith('release/') || item.name.startsWith('hotfix/')) {
+               withheld.push({name:item.name,why:'reserved'});continue;
+              }
+              const [branch,pr]=await Promise.all([
+               github.rest.repos.getBranch({owner,repo,branch:item.name}),
+               github.rest.pulls.get({owner,repo,pull_number:item.mergedPr})
+              ]);
+              if(branch.data.protected || branch.data.commit.sha!==item.sha){
+               withheld.push({name:item.name,why:'branch_changed_or_protected'});continue;
+              }
+              if(!pr.data.merged_at || pr.data.state!=='closed' ||
+                pr.data.base?.repo?.full_name!==repoFull || pr.data.base?.ref!==defaultBranch){
+               withheld.push({name:item.name,why:'superseder_unverified'});continue;
+              }
+              if(allPulls.some(p=>p.state==='open' && (
+               (p.head?.repo?.full_name===repoFull && p.head?.ref===item.name) ||
+               (p.base?.repo?.full_name===repoFull && p.base?.ref===item.name)
+              ))){withheld.push({name:item.name,why:'active_pull_request'});continue;}
+              let hasActiveConfigRef=false;
+              try {
+                const out=run(['grep','-F','-l','-e',item.name,'--','.github',
+                 ':(exclude).github/workflows/one-time-archive-kcon-test-branch-remnants.yml']);
+                hasActiveConfigRef=Boolean(out);
+              }catch(e){if(e.status!==1)throw e;}
+              if(hasActiveConfigRef){withheld.push({name:item.name,why:'active_workflow_references_branch'});continue;}
+              run(['cat-file','-e',item.sha+'^{commit}']);
+              const mergeBase=run(['merge-base',baseSha,item.sha]);
+              const unique=Number(run(['rev-list','--count',baseSha+'..'+item.sha]));
+              if(!Number.isSafeInteger(unique)||unique<1) {
+                withheld.push({name:item.name,why:'unexpected_unique_commit_count',unique});continue;
+              }
+              const touched=run(['diff','--name-only',mergeBase,item.sha]).split('\n').filter(Boolean);
+              if(touched.length>60){withheld.push({name:item.name,why:'unexpectedly_large_file_surface',count:touched.length});continue;}
+              selected.push({...item,unique_commits:unique,changed_files:touched,tip_commit_date:run(['show','-s','--format=%cI',item.sha]),
+                superseder:{number:pr.data.number,merged_at:pr.data.merged_at,merge_commit_sha:pr.data.merge_commit_sha}});
+             }catch(e){failures.push({stage:'preflight',name:item.name,status:e.status??null,message:e.message});}
+            }
+            let archive=null;
+            if(selected.length===targets.length && !withheld.length && !failures.length) {
+             try {
+              try {
+               const prior=await github.rest.git.getRef({owner,repo,ref:'tags/'+tag});
+               throw new Error('Ref already exists: '+prior.data.object.sha);
+              }catch(e){if(e.status!==404)throw e;}
+              const doc={
+               repository:repoFull,base_branch:defaultBranch,base_sha:baseSha,
+               archived_at:new Date().toISOString(),tag,
+               guarantee:'Exact historical commit objects are reachable from this tag. Not a claim all historical changes are identical to main.',
+               recovery_command:'git fetch origin tag '+tag+'; git show '+tag+':'+manifestPath+'; git branch RECOVERY_NAME COMMIT_SHA',
+               branches:selected
+              };
+              fs.mkdirSync(path.dirname(manifestPath),{recursive:true});
+              fs.writeFileSync(manifestPath,JSON.stringify(doc,null,2)+'\n');
+              run(['add','--',manifestPath]);
+              const tree=run(['write-tree']);
+              const env={...process.env,
+                GIT_AUTHOR_NAME:'AI-Karen Branch Archive',GIT_AUTHOR_EMAIL:'actions@users.noreply.github.com',
+                GIT_COMMITTER_NAME:'AI-Karen Branch Archive',GIT_COMMITTER_EMAIL:'actions@users.noreply.github.com'};
+              archive=run(['commit-tree',tree,'-p',baseSha,...selected.flatMap(t=>['-p',t.sha]),
+                '-m','Archive superseded KCON-490/KCON-771 branch tips without changing main'],env);
+              for(const item of selected){run(['merge-base','--is-ancestor',item.sha,archive]);}
+              run(['push','origin',archive+':refs/tags/'+tag]);
+              const remoteRef=(await github.rest.git.getRef({owner,repo,ref:'tags/'+tag})).data;
+              if(remoteRef.object.sha!==archive)throw new Error('Archive remote ref differs');
+              const remoteManifest=(await github.rest.repos.getContent({owner,repo,path:manifestPath,ref:tag})).data;
+              if(Array.isArray(remoteManifest)||remoteManifest.type!=='file')throw new Error('Remote manifest unavailable');
+              const remote=JSON.parse(Buffer.from(remoteManifest.content,'base64').toString('utf8'));
+              if(remote.branches.length!==selected.length ||
+                selected.some((t,i)=>remote.branches[i].name!==t.name||remote.branches[i].sha!==t.sha)){
+                throw new Error('Archive manifest failed integrity check');
+              }
+              core.info('Verified archive '+tag+' at '+archive);
+             }catch(e){failures.push({stage:'archive',message:e.message});archive=null;}
+            }
+            if(archive && failures.length===0){
+             for(const item of selected) {
+              try {
+               const fresh=(await github.rest.repos.getBranch({owner,repo,branch:item.name})).data;
+               if(fresh.protected||fresh.commit.sha!==item.sha) {
+                withheld.push({name:item.name,why:'fresh_branch_changed_or_protected'});continue;
+               }
+               const active=await github.rest.pulls.list({owner,repo,state:'open',head:owner+':'+item.name,per_page:100});
+               if(active.data.length){withheld.push({name:item.name,why:'new_active_pr'});continue;}
+               run(['merge-base','--is-ancestor',item.sha,archive]);
+               await github.rest.git.deleteRef({owner,repo,ref:'heads/'+item.name});
+               deleted.push(item);
+              }catch(e){failures.push({stage:'deletion',name:item.name,status:e.status??null,message:e.message});}
+             }
+            }
+            const report={repo:repoFull,base:baseSha,planned:targets.length,selected:selected.length,
+             archive_tag:archive?tag:null,archive_sha:archive,
+             deleted_count:deleted.length,withheld_count:withheld.length,failed_count:failures.length,
+             deleted,withheld,failures};
+            fs.writeFileSync('kcon-test-branch-remnants-audit.json',JSON.stringify(report,null,2));
+            core.info(JSON.stringify({selected:report.selected,deleted:report.deleted_count,withheld:report.withheld_count,
+             failed:report.failed_count,archive:report.archive_tag}));
+            await core.summary.addHeading('KCON test-branch ref cleanup').addTable([
+             [{data:'Metric',header:true},{data:'Count',header:true}],
+             ['Archived',String(report.selected)],
+             ['Deleted',String(report.deleted_count)],
+             ['Withheld',String(report.withheld_count)],
+             ['Failures',String(report.failed_count)]
+            ]).write();
+            if(failures.length)core.setFailed('Branch archival/deletion incomplete; see evidence artifact.');
+      - name: Publish recovery audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcon-test-branch-remnants-audit
+          path: kcon-test-branch-remnants-audit.json
+          if-no-files-found: warn
+          retention-days: 60
