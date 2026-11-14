@@ -85,6 +85,7 @@ PROVIDER_DOC_URLS = {
     "siliconflow": "https://docs.siliconflow.cn/en/api-reference/chat-completions/chat-completions",
     "together": "https://docs.together.ai/docs/chat-overview",
     "fireworks": "https://docs.fireworks.ai/api-reference/post-chatcompletions",
+    "nous": "https://portal.nousresearch.com/api-docs",
     "deepinfra": "https://deepinfra.com/docs/openai_api",
     "huggingface": "https://huggingface.co/docs/api-inference/index",
     "cohere": "https://docs.cohere.com/docs/chat-api",
@@ -110,6 +111,7 @@ SECRET_NAMES = {
     "siliconflow": "SILICONFLOW_API_KEY",
     "together": "TOGETHER_API_KEY",
     "fireworks": "FIREWORKS_API_KEY",
+    "nous": "NOUS_API_KEY",
 }
 
 
