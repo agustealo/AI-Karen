@@ -986,6 +986,9 @@ async def test_personal_inventory_host_rechecks_policy_and_projects_no_provider_
     host.repository.list_personal_owned_connections = AsyncMock(
         return_value=[connection],
     )
+    host.repository.list_active_personal_consent_providers = AsyncMock(
+        return_value=["disabled-managed-operator"],
+    )
     host.activation.issue_action_plan = AsyncMock(return_value="policy-plan")
     host.get_personal_pairing_status = AsyncMock(return_value={
         "availability": "unavailable",
@@ -1002,6 +1005,7 @@ async def test_personal_inventory_host_rechecks_policy_and_projects_no_provider_
         "connection_id": "assigned-channel",
         "installation_id": "telegram-bot",
         "provider_id": None,
+        "active_consent_provider_ids": ["disabled-managed-operator"],
         "availability": "unavailable",
         "last_observed_phase": "connected",
         "live_connected": False,
@@ -1014,6 +1018,9 @@ async def test_personal_inventory_host_rechecks_policy_and_projects_no_provider_
     assert "credential_handle" not in serialized
     host.repository.list_personal_owned_connections.assert_awaited_once_with(
         tenant_id=tenant, user_id=user,
+    )
+    host.repository.list_active_personal_consent_providers.assert_awaited_once_with(
+        tenant_id=tenant, connection_id="assigned-channel", user_id=user,
     )
     kwargs = host.activation.issue_action_plan.await_args.kwargs
     assert kwargs["tenant_id"] == tenant and kwargs["user_id"] == user

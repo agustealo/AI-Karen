@@ -38,6 +38,7 @@ Project: https://github.com/evolution-foundation/evolution-api
 - [ ] Live pairing, QR expiry/replay, reconnect, tenant, unlink and deletion proof.
 - [x] Read-only personal Channels inventory/settings driven by backend connection state (no pairing controls).
 - [x] Versioned consumer risk notice, explicit consent acknowledgement and revocation UI, with backend-confirmed reads (no session or QR).
+- [x] Owner-scoped legacy consent discovery and revoke-only UI after managed provider removal from configuration or consent-policy rollover.
 - [ ] Full governed Connect → Verify → Enable → Connected → Disconnect UI with live provider evidence.
 
 Policy assessment is NOT an external pairing token. The governed activation path must still revalidate before side effects.
@@ -296,10 +297,12 @@ Channels system or extension manager.
   service. It reuses `get_personal_pairing_status` and its exact SQL
   owner/policy validation, not an independent state machine.
 - HTTP returns only `connection_id`, `installation_id`, configured
-  `provider_id` (if any), `availability`, `last_observed_phase`,
-  `live_connected`, `qr_available`, and `provider_unlinked`. Credentials,
-  provider account identifiers, native events, QR payload and internal
-  authorization plans are never serialized.
+  `provider_id` (if any), `active_consent_provider_ids` (the owner's
+  exact active unrevoked, possibly disabled managed-provider identifiers),
+  `availability`, `last_observed_phase`, `live_connected`,
+  `qr_available`, and `provider_unlinked`. Credentials, provider account
+  identifiers, native events, QR payload and internal authorization plans
+  are never serialized.
 - Unauthenticated/unverified principals or denied policy fail closed.
   Disabled/missing host remains an explicit error, **not** an empty
   connection list. A valid empty list means no owner-assigned connections
@@ -343,17 +346,31 @@ tenant/actor identity, provider availability or accepted status.
   version and acknowledged=true. An ambiguous write or failed verification
   clears the displayed prior state and requires explicit status refresh;
   no automatic replay or optimistic success.
-- For an acknowledged configured provider, the user can select **Revoke
-  consent**, using the existing authenticated `POST .../revoke`. The UI only
-  displays revoked after a successful receipt and fresh GET reports false.
-  Revocation never claims remote unlink or provider-data erasure.
-- Disabled or unconfigured managed providers cannot initiate acceptance,
-  even if an owned connection exists. The API continues to permit reads and
-  revocations of previously accepted consent after provider disablement when
-  the original provider ID is known. The inventory currently omits historical
-  provider IDs after disablement, so **UI-based legacy consent revocation
-  after removal of provider configuration remains incomplete**. Do not claim
-  a fully connected or disconnect-ready consumer experience from this slice.
+- For any owner-scoped unrevoked consent, the user can select **Revoke
+  consent**, using the existing authenticated `POST .../revoke`. The UI
+  displays revoked only after a successful receipt and fresh GET confirms
+  `has_active_consent=false` and `acknowledged=false`. Revocation never
+  claims remote unlink or provider-data erasure.
+- The existing tenant-RLS repository lists at most 16 distinct currently
+  active consent provider IDs for each owner-assigned connection. It joins
+  active/verified tenant principals, exact connection ownership and
+  unrevoked consent, and rejects over-limit results instead of silently
+  truncating. ChannelHost performs the usual fresh `channel.consent`
+  RuntimePolicy authorization *before* this read.
+- The consent GET now distinguishes `acknowledged` (current policy-version
+  consent) from `has_active_consent` (any unrevoked consent, including
+  previous policy versions). An obsolete consent can be revoked but does not
+  count as acceptance of the current policy. Users must revoke the obsolete
+  record before any new acknowledgement.
+- When the managed provider is removed from its **personal-provider mapping**
+  but its canonical channel installation remains authorized and loaded,
+  the UI offers **revoke-only** controls for each unrevoked provider ID.
+  Neither acknowledgement nor pairing can be initiated in this mode.
+  A provider that has been fully uninstalled or a disabled ChannelHost still
+  prevents the ordinary consumer API from serving this inventory; an
+  independent governed retirement/data-erasure path remains a separate
+  lifecycle requirement. Do not claim a complete disconnect or provider
+  data-deletion experience from this slice.
 - Consent display, mutations and error states remain scoped to the existing
   Channels panel. Official WhatsApp Business Cloud API is separate.
 

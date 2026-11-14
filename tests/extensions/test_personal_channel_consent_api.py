@@ -146,6 +146,7 @@ async def test_consent_status_is_unacknowledged_when_sql_has_no_active_record():
         request=request, user=actor(),
     )
     assert result.acknowledged is False
+    assert result.has_active_consent is False
     assert result.paired is False
     assert result.provider_unlinked is False
     host.get_personal_pairing_risk.assert_awaited_once()
@@ -198,6 +199,7 @@ async def test_consent_status_requires_current_scoped_unrevoked_evidence():
         request=request, user=actor(),
     )
     assert response.acknowledged is True
+    assert response.has_active_consent is True
     assert response.paired is False
     host.get_personal_pairing_risk.return_value = PersonalPairingConsent(
         tenant_id=TENANT, user_id=USER, connection_id=CONNECTION,
@@ -210,6 +212,39 @@ async def test_consent_status_requires_current_scoped_unrevoked_evidence():
         request=request, user=actor(),
     )
     assert response.acknowledged is False
+    assert response.has_active_consent is False
+
+
+@pytest.mark.asyncio
+async def test_active_old_version_consent_is_not_current_but_remains_revocable():
+    from datetime import datetime, timezone
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PersonalPairingConsent,
+    )
+    host, request = host_context()
+    host.get_personal_pairing_risk.return_value = PersonalPairingConsent(
+        tenant_id=TENANT,
+        connection_id=CONNECTION,
+        user_id=USER,
+        provider_id=PROVIDER,
+        policy_version="whatsapp-personal-risk-obsolete",
+        accepted_at=datetime(2026, 10, 18, tzinfo=timezone.utc),
+    )
+    status = await api.get_personal_whatsapp_risk_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert status.acknowledged is False
+    assert status.has_active_consent is True
+    assert status.paired is False
+    assert status.provider_unlinked is False
+    revoked = await api.revoke_personal_whatsapp_risk(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert revoked.revoked is True
+    assert revoked.provider_unlinked is False
+    host.revoke_personal_pairing_risk.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -453,6 +488,7 @@ async def test_owner_inventory_uses_authenticated_principal_only():
         "connection_id": CONNECTION,
         "installation_id": "whatsapp-cloud",
         "provider_id": PROVIDER,
+        "active_consent_provider_ids": ["disabled-provider"],
         "availability": "unavailable",
         "last_observed_phase": "connected",
         "live_connected": False,
@@ -468,6 +504,7 @@ async def test_owner_inventory_uses_authenticated_principal_only():
     assert len(result.connections) == 1
     channel = result.connections[0]
     assert channel.connection_id == CONNECTION
+    assert channel.active_consent_provider_ids == ["disabled-provider"]
     assert channel.last_observed_phase == "connected"
     assert channel.live_connected is False
     assert channel.qr_available is False

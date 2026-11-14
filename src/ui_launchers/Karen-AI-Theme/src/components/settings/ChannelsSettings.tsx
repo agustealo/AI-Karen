@@ -27,6 +27,7 @@ type PersonalChannel = {
   connection_id: string;
   installation_id: string;
   provider_id: string | null;
+  active_consent_provider_ids: string[];
   availability: 'configured' | 'unavailable';
   last_observed_phase: string | null;
   live_connected: boolean;
@@ -47,6 +48,15 @@ function isPersonalChannel(value: unknown): value is PersonalChannel {
     typeof record.connection_id === 'string' &&
     typeof record.installation_id === 'string' &&
     (record.provider_id === null || typeof record.provider_id === 'string') &&
+    Array.isArray(record.active_consent_provider_ids) &&
+    record.active_consent_provider_ids.length <= 16 &&
+    record.active_consent_provider_ids.every(
+      (provider): provider is string =>
+        typeof provider === 'string' &&
+        provider.trim().length > 0 &&
+        provider.length <= 128,
+    ) &&
+    new Set(record.active_consent_provider_ids).size === record.active_consent_provider_ids.length &&
     (record.availability === 'configured' || record.availability === 'unavailable') &&
     (record.last_observed_phase === null || typeof record.last_observed_phase === 'string') &&
     typeof record.live_connected === 'boolean' &&
@@ -85,6 +95,7 @@ function readableFailure(error: unknown): string {
 
 type ConsentStatus = {
   acknowledged: boolean;
+  has_active_consent: boolean;
   policy_version: string;
   notice_title: string;
   notice_text: string;
@@ -106,6 +117,8 @@ function verifyConsentStatus(value: unknown): ConsentStatus {
   const record = value as Record<string, unknown>;
   if (
     typeof record.acknowledged !== 'boolean' ||
+    typeof record.has_active_consent !== 'boolean' ||
+    (record.acknowledged && !record.has_active_consent) ||
     typeof record.policy_version !== 'string' ||
     !record.policy_version.trim() ||
     record.policy_version.length > 128 ||
@@ -124,9 +137,11 @@ function verifyConsentStatus(value: unknown): ConsentStatus {
 function PersonalChannelRiskConsent({
   connectionId,
   providerId,
+  allowAcknowledgement,
 }: {
   connectionId: string;
   providerId: string;
+  allowAcknowledgement: boolean;
 }) {
   const [status, setStatus] = useState<ConsentStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -191,8 +206,8 @@ function PersonalChannelRiskConsent({
   const mutateConsent = async (action: 'accept' | 'revoke') => {
     if (
       loading || busy || !status ||
-      (action === 'accept' && (status.acknowledged || !checked)) ||
-      (action === 'revoke' && !status.acknowledged)
+      (action === 'accept' && (!allowAcknowledgement || status.has_active_consent || !checked)) ||
+      (action === 'revoke' && !status.has_active_consent)
     ) return;
 
     const expectedVersion = status.policy_version;
@@ -221,6 +236,7 @@ function PersonalChannelRiskConsent({
       // A mutation receipt alone is not persisted truth. Always re-read.
       const fresh = await readConsent();
       if (
+        fresh.has_active_consent !== (action === 'accept') ||
         fresh.acknowledged !== (action === 'accept') ||
         (action === 'accept' && fresh.policy_version !== expectedVersion)
       ) {
@@ -252,8 +268,19 @@ function PersonalChannelRiskConsent({
         <>
           <p role="status" className="text-sm">
             <strong>Stored consent:</strong>{' '}
-            {status.acknowledged ? 'Acknowledged' : 'Not acknowledged'}
+            {status.acknowledged
+              ? 'Acknowledged'
+              : status.has_active_consent
+                ? 'Previous-policy acknowledgement still active'
+                : 'Not acknowledged'}
           </p>
+          {!allowAcknowledgement && (
+            <p className="text-xs text-muted-foreground">
+              This managed provider is no longer configured. Only revocation
+              of existing consent is available; pairing and acknowledgement
+              are disabled.
+            </p>
+          )}
           <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
             <p className="font-semibold text-sm">{status.notice_title}</p>
             <p className="text-sm whitespace-pre-wrap">{status.notice_text}</p>
@@ -261,7 +288,7 @@ function PersonalChannelRiskConsent({
               Current policy version: {status.policy_version}
             </p>
           </div>
-          {!status.acknowledged && (
+          {allowAcknowledgement && !status.has_active_consent && (
             <>
               <label className="flex items-start gap-2 text-sm">
                 <input
@@ -282,7 +309,7 @@ function PersonalChannelRiskConsent({
               </Button>
             </>
           )}
-          {status.acknowledged && (
+          {status.has_active_consent && (
             <Button
               type="button"
               variant="outline"
@@ -480,8 +507,22 @@ export default function ChannelsSettings() {
                   <PersonalChannelRiskConsent
                     connectionId={channel.connection_id}
                     providerId={channel.provider_id}
+                    allowAcknowledgement
                   />
                 )}
+                {channel.active_consent_provider_ids
+                  .filter((providerId) =>
+                    channel.availability !== 'configured' ||
+                    providerId !== channel.provider_id,
+                  )
+                  .map((providerId) => (
+                    <PersonalChannelRiskConsent
+                      key={providerId}
+                      connectionId={channel.connection_id}
+                      providerId={providerId}
+                      allowAcknowledgement={false}
+                    />
+                  ))}
               </CardContent>
             </Card>
           ))}

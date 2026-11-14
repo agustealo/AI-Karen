@@ -332,10 +332,22 @@ class ChannelHostServices:
                 session_id=session_id,
                 authorized_plan=plan,
             )
+            # The user must retain a revocation path when a previously
+            # approved provider disappears from managed-provider settings.
+            # This SQL read only follows the fresh channel.consent policy
+            # check above and never implies a live provider or pairing.
+            active_consent_provider_ids = (
+                await self.repository.list_active_personal_consent_providers(
+                    tenant_id=tenant_id,
+                    connection_id=connection.connection_id,
+                    user_id=user_id,
+                )
+            )
             inventory.append({
                 "connection_id": connection.connection_id,
                 "installation_id": connection.installation_id,
                 "provider_id": provider_id,
+                "active_consent_provider_ids": active_consent_provider_ids,
                 **status,
             })
         return inventory

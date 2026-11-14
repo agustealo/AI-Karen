@@ -187,6 +187,7 @@ class PersonalChannelInventoryItem(PersonalPairingStatus):
     connection_id: str
     installation_id: str
     provider_id: str | None = None
+    active_consent_provider_ids: list[str]
 
 
 class PersonalChannelInventoryResponse(BaseModel):
@@ -241,6 +242,7 @@ async def get_personal_whatsapp_pairing_status(
 
 class ConsentStatus(BaseModel):
     acknowledged: bool
+    has_active_consent: bool
     policy_version: str
     notice_title: str
     notice_text: str
@@ -271,17 +273,17 @@ async def get_personal_whatsapp_risk_status(
         )
     except Exception as exc:
         raise _translate(exc) from None
-    valid = (
+    active = (
         consent is not None
         and consent.tenant_id == tenant_id
         and consent.user_id == user_id
         and consent.connection_id == str(connection_id)
         and consent.provider_id == provider_id
-        and consent.policy_version == PERSONAL_WHATSAPP_CONSENT_VERSION
         and consent.revoked_at is None
     )
     return ConsentStatus(
-        acknowledged=valid,
+        acknowledged=active and consent.policy_version == PERSONAL_WHATSAPP_CONSENT_VERSION,
+        has_active_consent=active,
         policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
         notice_title=PERSONAL_WHATSAPP_RISK_NOTICE_TITLE,
         notice_text=PERSONAL_WHATSAPP_RISK_NOTICE_TEXT,
