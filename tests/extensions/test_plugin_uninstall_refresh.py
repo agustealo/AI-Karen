@@ -125,7 +125,24 @@ async def test_changed_plugin_retired_and_failure_fails_closed(
         await service.refresh_plugins()
     assert kernel.runtime_registry.get("replaced").state is ExtensionLifecycleState.DISABLED
     assert kernel.loader.get_loaded_extensions()["replaced"] is instance
+    assert "replaced" in kernel._retirement_pending
     instance._shutdown.assert_awaited_once()
+
+    # The failed shutdown cannot be forgotten when catalog fingerprints now
+    # match the replaced files. An enable request cannot resurrect old code.
+    with pytest.raises(RuntimeError, match="retirement incomplete"):
+        await service.enable_plugin("replaced")
+    with pytest.raises(RuntimeError, match="private handler failure"):
+        await service.refresh_plugins()
+    assert kernel.runtime_registry.get("replaced").state is ExtensionLifecycleState.DISABLED
+
+    instance._shutdown.side_effect = None
+    await service.refresh_plugins()
+    assert kernel.loader.get_loaded_extensions() == {}
+    assert "replaced" not in kernel._retirement_pending
+    assert kernel.runtime_registry.get("replaced").state is ExtensionLifecycleState.DISABLED
+    await service.refresh_plugins()
+    assert kernel.runtime_registry.get("replaced").state is ExtensionLifecycleState.ENABLED
 
 
 @pytest.mark.asyncio
