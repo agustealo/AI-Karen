@@ -84,6 +84,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261114010000_50_channel_retirement_evidence_guard.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(retirement_migration)
+        integrity_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261114020000_51_channel_personal_deletion_ledger_integrity.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(integrity_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -244,6 +249,90 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert await owner_repo.list_owned_personal_credential_deletion_requests(
             tenant_id=str(tenant_a), user_id=str(user),
         ) == recovered
+
+        # A vendor claim is NOT independent verification. This real SQL
+        # trigger must reject forged verified states and identity tampering.
+        request_uuid = uuid.UUID(deletion["request_id"])
+        with pytest.raises(asyncpg.CheckViolationError):
+            await raw.execute(
+                """UPDATE public.channel_personal_credential_deletions
+                   SET status='verified', provider_receipt_id='forged-erasure'
+                   WHERE tenant_id=$1 AND request_id=$2""",
+                tenant_a, request_uuid,
+            )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await raw.execute(
+                """UPDATE public.channel_personal_credential_deletions
+                   SET credential_scope='other-session'
+                   WHERE tenant_id=$1 AND request_id=$2""",
+                tenant_a, request_uuid,
+            )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await raw.execute(
+                """INSERT INTO public.channel_personal_credential_deletions
+                    (tenant_id,request_id,connection_id,provider_id,user_id,
+                     connection_revision,session_reference,credential_scope,
+                     idempotency_key,status,provider_receipt_id)
+                    VALUES ($1,$2,$3,'retired-operator',$4,1,
+                            'opaque-session','companion-credentials',
+                            'forged-verification','verified','fabricated')""",
+                tenant_a, uuid.uuid4(), connection_id, user,
+            )
+
+        assert await raw.execute(
+            """UPDATE public.channel_personal_credential_deletions
+               SET status='provider_pending', updated_at=clock_timestamp()
+               WHERE tenant_id=$1 AND request_id=$2""",
+            tenant_a, request_uuid,
+        ) == "UPDATE 1"
+
+        # Exercise the canonical repository's provider claim path. This
+        # synthetic test receipt is NOT authentication of an actual vendor,
+        # and the stored state must stop at provider_claimed.
+        from ai_karen_engine.extensions.channels.contracts import (
+            PersonalCredentialErasureReceipt,
+        )
+        claim = PersonalCredentialErasureReceipt(
+            provider_id="retired-operator",
+            connection_id=connection_id,
+            connection_revision=1,
+            session_reference="opaque-session",
+            deletion_request_id=deletion["request_id"],
+            provider_receipt_id="synthetic-test-claim",
+            credential_scope="companion-credentials",
+            erased_at=datetime.now(timezone.utc),
+        )
+        assert await owner_repo.record_personal_credential_deletion_claim(
+            tenant_id=str(tenant_a), request_id=deletion["request_id"],
+            connection_id=connection_id, user_id=str(user), receipt=claim,
+        )
+        assert await owner_repo.record_personal_credential_deletion_claim(
+            tenant_id=str(tenant_a), request_id=deletion["request_id"],
+            connection_id=connection_id, user_id=str(user), receipt=claim,
+        )
+        assert await raw.fetchval(
+            """SELECT status FROM public.channel_personal_credential_deletions
+               WHERE tenant_id=$1 AND request_id=$2""",
+            tenant_a, request_uuid,
+        ) == "provider_claimed"
+        for altered_sql in (
+            "SET status='verified'",
+            "SET status='requested'",
+            "SET provider_receipt_id='forged-later-receipt'",
+            "SET provider_id='different-provider'",
+        ):
+            with pytest.raises(asyncpg.CheckViolationError):
+                await raw.execute(
+                    "UPDATE public.channel_personal_credential_deletions "
+                    + altered_sql
+                    + " WHERE tenant_id=$1 AND request_id=$2",
+                    tenant_a, request_uuid,
+                )
+        evidence_after_claim = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        assert evidence_after_claim[0]["unverified_deletion_request"] is True
+        assert evidence_after_claim[0]["deletion_request_recorded"] is True
 
         # Ordinary unowned connections remain deletable when no personal
         # retirement ledger has ever existed.
