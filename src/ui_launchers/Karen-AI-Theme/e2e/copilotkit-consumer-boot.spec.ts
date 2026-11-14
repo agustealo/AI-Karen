@@ -516,30 +516,9 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       "The live chat must render the persisted assistant reply before reload",
     ).toBeVisible({ timeout: 30_000 });
 
-    await page.reload();
-    const restored = page.getByTestId("karen-copilot-consumer-chat");
-    if (!(await restored.isVisible().catch(() => false)) &&
-        await launch.isVisible().catch(() => false)) {
-      await launch.click();
-    }
-    await expect(restored).toHaveAttribute("data-conversation-id", id!);
-    await expect(restored.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
-      timeout: 30_000,
-    });
-    await expectRealCopilotKitStyles(page);
-    await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
-    await expect(restored.getByTestId("karen-copilot-rail-unverified")).toHaveCount(0, {
-      timeout: 30_000,
-    });
-    await expect(restored.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(
-      restored.getByTestId("karen-copilot-assistant-message").filter({ hasText: persistedAnswer }).last(),
-      "The actual persisted assistant reply must be rendered after reload",
-    ).toBeVisible({ timeout: 30_000 });
-    expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
-
     // KCON-490: real multi-turn regression in the SAME authenticated browser,
-    // verified revision and owner-scoped conversation. Explicit opt-in only.
+    // immediately AFTER first model reply, BEFORE any reload can reset SDK
+    // state or hide a second-send draft CAS race. Explicit opt-in only.
     if (personalContextAcceptance) {
       await test.step("KCON-490 real multi-turn personal context", async () => {
         const active = page.getByTestId("karen-copilot-consumer-chat");
@@ -719,6 +698,29 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         expect(browserErrors).toEqual([]);
       });
     }
+    await page.reload();
+    const restored = page.getByTestId("karen-copilot-consumer-chat");
+    if (!(await restored.isVisible().catch(() => false)) &&
+        await launch.isVisible().catch(() => false)) {
+      await launch.click();
+    }
+    await expect(restored).toHaveAttribute("data-conversation-id", id!);
+    await expect(restored.getByTestId("karen-copilot-controlled-chat")).toBeVisible({
+      timeout: 30_000,
+    });
+    await expectRealCopilotKitStyles(page);
+    await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
+    await expect(restored.getByTestId("karen-copilot-rail-unverified")).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await expect(restored.getByText(prompt, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(
+      restored.getByTestId("karen-copilot-assistant-message").filter({ hasText: persistedAnswer }).last(),
+      "The actual persisted assistant reply must be rendered after reload",
+    ).toBeVisible({ timeout: 30_000 });
+    expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
+
+
   });
 
   for (const scenario of [
