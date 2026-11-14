@@ -90,9 +90,12 @@ export function KarenCopilotControlledChat({
       setError("Draft exceeds the supported message length.");
       return;
     }
+    // CopilotKit may echo the existing controlled value after send or stream
+    // teardown. Only a real edit may dismiss a visible persistence/run error.
+    if (value === readDraftText()) return;
     setError(null);
     setDraftText(value);
-  }, [setDraftText]);
+  }, [readDraftText, setDraftText]);
   const draftPort: KarenVoiceDraftPort = {
     readText: readDraftText,
     writeText: onDraftChange,
