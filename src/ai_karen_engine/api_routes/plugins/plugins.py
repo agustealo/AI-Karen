@@ -21,6 +21,7 @@ from ai_karen_engine.services.error_response_schemas import (
     create_service_error_response,
     get_http_status_for_error_code,
 )
+from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
 logger = get_logger(__name__)
@@ -138,18 +139,9 @@ def _not_found(plugin_name: str) -> HTTPException:
 
 
 def _manifest_parameters(manifest: Any) -> Dict[str, Any]:
-    """Project only the schema explicitly declared by the manifest."""
-    schema = getattr(manifest, "config_schema", None)
-    if schema is None:
-        return {}
-    data = (
-        schema.model_dump()
-        if hasattr(schema, "model_dump")
-        else schema
-        if isinstance(schema, dict)
-        else {}
-    )
-    properties = data.get("properties", {}) if isinstance(data, dict) else {}
+    """Expose action parameter definitions, never stored configuration fields."""
+    schema = PluginKernel.execution_input_schema(manifest)
+    properties = schema.get("properties", {})
     return dict(properties) if isinstance(properties, dict) else {}
 
 

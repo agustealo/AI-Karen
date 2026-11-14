@@ -223,3 +223,28 @@ Before production rollout, apply and verify migration 51 in the same
 PostgreSQL schema used by the runtime. Tests and source checks alone do not
 prove that migrations have been deployed, or that existing plugin secrets
 were migrated into Identity Vault.
+
+
+## 11. Explicit action inputs are not persistent plugin configuration
+
+The canonical platform ExtensionManifest declares two distinct contracts:
+
+- \`config_schema\` is the tenant-specific persisted configuration contract.
+  It governs the Plugin Store settings form and Identity Vault secret fields.
+  It is never an invocation payload schema.
+- \`execution_input_schema\` is the caller-supplied invocation contract.
+  The PluginKernel projects only this schema into the typed runtime
+  ExtensionManifest and ExtensionCapability input validator.
+
+When a plugin declares config_schema but omits execution_input_schema,
+execution accepts only an empty parameter object. This is intentional:
+request parameters must not impersonate saved configuration or supply
+credentials. If the plugin needs action parameters, it must explicitly
+declare their schema. Configuration keys cannot be declared again as action
+keys; plugins with configuration must have a closed action-input schema.
+
+Existing plugins with no config_schema and no execution_input_schema retain
+their historical permissive action-parameter path. The canonical input
+contract does NOT load, apply or expose stored settings or Vault credentials.
+Executable configuration-readiness verification and secret injection are
+separate host-owned gates; neither is inferred from a request payload.

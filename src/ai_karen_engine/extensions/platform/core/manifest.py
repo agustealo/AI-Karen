@@ -335,6 +335,26 @@ class ExtensionManifest(BaseModel):
     # Configuration schema (from base.py)
     config_schema: Optional[ExtensionConfigSchema] = None
 
+    # Invocation parameters are a separate contract. A saved configuration
+    # schema must never implicitly authorize caller-provided action arguments.
+    execution_input_schema: Optional[ExtensionConfigSchema] = None
+
+    @model_validator(mode="after")
+    def validate_configuration_invocation_separation(self) -> "ExtensionManifest":
+        config = self.config_schema
+        invocation = self.execution_input_schema
+        if config is not None and invocation is not None:
+            collision = set(config.properties) & set(invocation.properties)
+            if collision:
+                raise ValueError(
+                    "Execution inputs must not reuse persistent configuration field names"
+                )
+            if invocation.additional_properties:
+                raise ValueError(
+                    "Plugins with configuration must declare closed execution input schemas"
+                )
+        return self
+
     # UI and API configuration (from manifest.py)
     ui: ExtensionUIConfig = Field(default_factory=ExtensionUIConfig)
     api: ExtensionAPIConfig = Field(default_factory=ExtensionAPIConfig)
@@ -390,6 +410,7 @@ class ExtensionManifest(BaseModel):
             "hook_points",
             "prompt_files",
             "config_schema",
+            "execution_input_schema",
             "ui",
             "api",
             "background_tasks",

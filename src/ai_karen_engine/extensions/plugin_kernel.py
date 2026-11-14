@@ -532,14 +532,34 @@ class PluginKernel:
 
         return declared
 
+    @staticmethod
+    def execution_input_schema(manifest: CatalogExtensionManifest) -> Dict[str, Any]:
+        """Projection of action parameters, never the persistent config schema.
+
+        If a plugin declares configuration but no invocation schema, it can
+        only receive an empty action payload until it declares a separate
+        input contract. Existing plugins without configuration preserve
+        their legacy parameter behavior.
+        """
+        if manifest.execution_input_schema is not None:
+            schema = manifest.execution_input_schema.model_dump()
+            schema["additionalProperties"] = schema.pop("additional_properties")
+            if manifest.config_schema is not None:
+                schema["additionalProperties"] = False
+            return schema
+        if manifest.config_schema is not None:
+            return {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+        return {}
+
     def _project_runtime_manifest(
         self, manifest: CatalogExtensionManifest, *, plugin_id: str | None = None
     ) -> RuntimeExtensionManifest:
-        schema: Dict[str, Any] = {}
-        if manifest.config_schema is not None:
-            schema = manifest.config_schema.model_dump()
-            if "additional_properties" in schema:
-                schema["additionalProperties"] = schema.pop("additional_properties")
+        schema = self.execution_input_schema(manifest)
 
         roles = [
             getattr(role, "value", str(role))
