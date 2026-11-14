@@ -35,6 +35,7 @@ def _manifest():
         author="Tests",
         license="MIT",
         category="test",
+        entrypoint="handler:MainExtension",
         config_schema={
             "type": "object",
             "properties": {
@@ -350,7 +351,7 @@ async def test_route_uses_authenticated_tenant_and_maps_stale_revision():
 
 def test_settings_routes_require_real_plugin_manager_rbac():
     endpoints = {
-        (route.path, route.methods.pop() if len(route.methods) == 1 else "MULTI"): route
+        (route.path, next(iter(route.methods)) if len(route.methods) == 1 else "MULTI"): route
         for route in routes.router.routes if getattr(route, "methods", None)
     }
     for path, verb in (
