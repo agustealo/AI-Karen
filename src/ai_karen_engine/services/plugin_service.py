@@ -359,6 +359,10 @@ class PluginService:
         manifest = record.get("manifest")
         if manifest is None or record.get("error_message") or record.get("is_valid") is False:
             raise PluginSettingsNotConfigured("Plugin has no valid settings manifest")
+        if record.get("activation_blocked_reason"):
+            raise PluginSettingsNotConfigured(
+                "Quarantined plugin settings require a verified isolated runtime"
+            )
         return PluginSettingsRepository.contract(manifest)
 
     @staticmethod
