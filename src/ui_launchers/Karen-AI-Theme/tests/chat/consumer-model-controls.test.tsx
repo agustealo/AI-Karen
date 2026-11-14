@@ -38,6 +38,7 @@ const inventory = {
 beforeEach(() => {
   vi.clearAllMocks();
   api.getRuntimeProviderCatalog.mockResolvedValue(inventory);
+  api.get.mockResolvedValue({ agents: [] });
 });
 afterEach(cleanup);
 
@@ -70,8 +71,13 @@ describe("consumer provider and model controls", () => {
     expect(screen.queryByRole("option", { name: /Restricted provider/ })).toBeNull();
     expect(screen.getByText(/provider hidden from chat selection/)).not.toBeNull();
     const disclosure = screen.getByText("Advanced provider and agent details");
+    const panel = disclosure.closest("details");
+    expect(panel).not.toBeNull();
     fireEvent.click(disclosure);
-    // The advanced list mounts only after React processes the native toggle.
+    // JSDOM changes <details>.open without reliably dispatching its toggle.
+    // Fire the native event so React can mount diagnostic-only content.
+    panel!.open = true;
+    fireEvent(panel!, new Event("toggle"));
     expect(await screen.findByText("Unconfigured provider")).not.toBeNull();
     expect(screen.getByText("Not configured")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Configure providers" }));
