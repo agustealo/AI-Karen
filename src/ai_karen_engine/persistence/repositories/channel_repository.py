@@ -413,6 +413,53 @@ class SqlChannelRepository:
             )).scalar_one_or_none()
         return found is not None
 
+    async def list_owned_active_personal_consents(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict[str, str]]:
+        """Recovery-only active consent inventory, independent of ChannelHost.
+
+        Returned fields are scoped consent identifiers, not connection secrets
+        or evidence that any external transport exists. A bounded, tenant-RLS
+        owner join enforces scope even when plugin registration is gone.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT p.connection_id, p.provider_id, p.policy_version
+                    FROM public.channel_personal_pairing_consents p
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = p.tenant_id
+                     AND o.connection_id = p.connection_id
+                     AND o.user_id = p.user_id
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = o.tenant_id
+                     AND c.connection_id = o.connection_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = p.tenant_id
+                     AND u.user_id = p.user_id
+                    WHERE p.tenant_id = CAST(:tenant AS uuid)
+                      AND p.user_id = CAST(:user AS uuid)
+                      AND p.revoked_at IS NULL
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ORDER BY p.connection_id, p.provider_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id, "user": user_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise RuntimeError("Personal consent recovery inventory limit exceeded")
+        return [
+            {
+                "connection_id": str(row["connection_id"]),
+                "provider_id": str(row["provider_id"]),
+                "policy_version": str(row["policy_version"]),
+            }
+            for row in rows
+        ]
+
     async def list_active_personal_consent_providers(
         self, *, tenant_id: str, connection_id: str, user_id: str,
     ) -> list[str]:
