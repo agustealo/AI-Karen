@@ -305,10 +305,10 @@ describe('runtime provider model availability and recovery', () => {
     });
   });
 
-  it('does not mistake degraded but available models for disconnected ones', () => {
+  it('does not offer a degraded provider even when its inventory says models are available', () => {
     const inventory = catalog(true, false);
     expect(inventory.providers[0].healthy).toBe(false);
-    expect(inventory.selectableProviders.map((provider) => provider.id)).toEqual(['ollama']);
+    expect(inventory.selectableProviders).toEqual([]);
   });
 
   it('never treats unknown health as an observed degraded provider', () => {
@@ -367,7 +367,7 @@ describe('consumer provider health presentation', () => {
       ...base,
       healthy: true,
       health: { status: 'healthy' },
-    })).toBe('1 available models');
+    })).toBe('1 ready models');
     expect(getRuntimeProviderStatusLabel({
       ...base,
       healthy: false,

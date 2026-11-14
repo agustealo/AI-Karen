@@ -51,6 +51,20 @@ describe('managed provider model discovery', () => {
 
 
 describe('saved model identifiers are not runtime inventory', () => {
+  it('does not invent a default or unsaved draft when the workspace uses automatic routing', () => {
+    const response = normalizeModelSettingsResponse({
+      selected_provider: 'openai',
+      selected_model: 'auto',
+      providers: [{
+        id: 'openai', display_name: 'OpenAI', provider_type: 'external',
+        models: [{ id: 'catalog-model', name: 'Catalog only' }],
+      }],
+    });
+    expect(response.selected_provider).toBe('openai');
+    expect(response.selected_model).toBe('');
+    expect(response.providers[0].models.map((model) => model.id)).toEqual(['catalog-model']);
+  });
+
   it('does not offer a previously selected Ollama model before live discovery', () => {
     const response = normalizeModelSettingsResponse({
       selected_provider: 'ollama',
