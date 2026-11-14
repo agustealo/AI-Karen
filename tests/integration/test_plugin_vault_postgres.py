@@ -8,6 +8,7 @@ and proves real encryption, no-readback, CAS, revocation and audit rollback.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -216,7 +217,19 @@ async def test_live_plugin_secret_enrollment_rotation_revoke_and_audit_rollback(
         assert "this-must-roll-back" not in str(audit)
         assert "test-secret-after-revocation" not in str(audit)
         assert all(
-            set(row["audit_metadata"]) <= {"plugin_id", "field_key"}
+            set(
+                json.loads(row["audit_metadata"])
+                if isinstance(row["audit_metadata"], str)
+                else row["audit_metadata"]
+            ) <= {"plugin_id", "field_key"}
+            for row in audit
+        )
+        assert all(
+            (
+                json.loads(row["audit_metadata"])
+                if isinstance(row["audit_metadata"], str)
+                else row["audit_metadata"]
+            ).get("plugin_id") == plugin_id
             for row in audit
         )
     finally:
