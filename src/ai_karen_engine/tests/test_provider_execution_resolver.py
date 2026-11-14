@@ -158,10 +158,22 @@ def test_nous_can_enter_canonical_chat_registry_only_with_approved_credentials(
         registry.effective_endpoint_capabilities(endpoint)
     )
     assert registry.get_provider_status("nous").has_api_key is True
+    assert registry.select_best_target(
+        {"chat_completion"}, preferred_target_id="nous", healthy_only=False,
+    ).provider_id == "nous"
+    assert registry.select_best_target(
+        {"chat_completion"}, kind=EndpointKind.CLOUD_PROVIDER,
+        healthy_only=False,
+    ) is None
 
     secret["value"] = None
     assert registry.get_provider_endpoint("nous") is None
     assert registry.get_provider_status("nous") is None
+    assert "nous" not in {
+        endpoint.provider_id for endpoint in registry.resolve_capable_targets(
+            {"chat_completion"}, healthy_only=False,
+        )
+    }
 
     secret["value"] = "restored"
     assert registry.get_provider_endpoint("nous") is not None
