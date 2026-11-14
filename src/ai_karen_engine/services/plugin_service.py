@@ -36,6 +36,11 @@ from ai_karen_engine.extensions.contracts import (
     ExtensionExecutionResult,
 )
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+from ai_karen_engine.services.plugin_settings_repository import (
+    PluginSettingsContract,
+    PluginSettingsNotConfigured,
+    PluginSettingsRepository,
+)
 
 logger = logging.getLogger(__name__)
 _ENABLED_STATES = {"registered", "enabled", "loaded", "active"}
@@ -106,6 +111,7 @@ class PluginService:
         self.initialized = False
         self._policy_enforcer = RuntimePolicyEnforcer()
         self._history: List[PluginExecutionResult] = []
+        self._settings_repository = PluginSettingsRepository()
 
     def _resolve_root(self) -> Path:
         marketplace = Path(self.marketplace_path) if self.marketplace_path else None
@@ -347,6 +353,93 @@ class PluginService:
         finally:
             if not published and staged.exists():
                 shutil.rmtree(staged)
+
+    @staticmethod
+    def _settings_contract(record: Dict[str, Any]) -> PluginSettingsContract:
+        manifest = record.get("manifest")
+        if manifest is None or record.get("error_message") or record.get("is_valid") is False:
+            raise PluginSettingsNotConfigured("Plugin has no valid settings manifest")
+        return PluginSettingsRepository.contract(manifest)
+
+    @staticmethod
+    def _settings_response(
+        plugin_id: str, contract: PluginSettingsContract, persisted: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {
+            "plugin_id": plugin_id,
+            "settings": contract.present(persisted["settings"]),
+            "schema": [dict(field) for field in contract.fields],
+            "revision": persisted["revision"],
+            "stored": persisted["revision"] > 0,
+        }
+
+    async def read_plugin_settings(
+        self, plugin_id: str, tenant_id: str
+    ) -> Dict[str, Any]:
+        record = await self.get_plugin_info(plugin_id)
+        if record is None:
+            raise LookupError("Plugin does not exist in the canonical catalog")
+        contract = self._settings_contract(record)
+        persisted = await self._settings_repository.get(tenant_id, plugin_id)
+        return self._settings_response(plugin_id, contract, persisted)
+
+    async def list_plugin_settings(
+        self, tenant_id: str
+    ) -> List[Dict[str, Any]]:
+        records = await self.list_plugins()
+        contracts: Dict[str, PluginSettingsContract] = {}
+        for record in records:
+            try:
+                contract = self._settings_contract(record)
+            except PluginSettingsNotConfigured:
+                continue
+            plugin_id = str(record["manifest"].name)
+            contracts[plugin_id] = contract
+        stored = await self._settings_repository.list_tenant(tenant_id)
+        return [
+            self._settings_response(
+                plugin_id,
+                contracts[plugin_id],
+                stored.get(plugin_id, {"settings": {}, "revision": 0}),
+            )
+            for plugin_id in sorted(contracts)
+        ]
+
+    async def write_plugin_settings(
+        self,
+        *,
+        plugin_id: str,
+        tenant_id: str,
+        actor_user_id: str,
+        settings: Dict[str, Any],
+        revision: int,
+        request_id: str,
+        correlation_id: str,
+        reset: bool = False,
+    ) -> Dict[str, Any]:
+        record = await self.get_plugin_info(plugin_id)
+        if record is None:
+            raise LookupError("Plugin does not exist in the canonical catalog")
+        contract = self._settings_contract(record)
+        verified = contract.validate({} if reset else settings)
+        new_revision = await self._settings_repository.write(
+            tenant_id=tenant_id,
+            plugin_id=plugin_id,
+            actor_user_id=actor_user_id,
+            operation="reset" if reset else "save",
+            settings=verified,
+            expected_revision=revision,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+        return {
+            **self._settings_response(
+                plugin_id, contract, {"settings": verified, "revision": new_revision}
+            ),
+            "success": True,
+            "saved": not reset,
+            "reset": reset,
+        }
 
     async def refresh_plugins(self) -> int:
         await self._ensure_initialized()
