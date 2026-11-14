@@ -69,7 +69,7 @@ jobs:
                withheld.push({name:t.name,reason:'young_or_unverifiable_tip',committed_at:committedAt});continue;
               }
               let referenced=false;
-              try{referenced=Boolean(git(['grep','-F','-l','-e',t.name,'--','.github']));}
+              try{referenced=Boolean(git(['grep','-F','-l','-e',t.name,'--','.github',':(exclude).github/workflows/one-time-archive-unique-historical-branches.yml']));}
               catch(error){if(error.status!==1)throw error;}
               if(referenced){withheld.push({name:t.name,reason:'referenced_in_active_ci_config'});continue;}
               git(['cat-file','-e',t.sha+'^{commit}']);
