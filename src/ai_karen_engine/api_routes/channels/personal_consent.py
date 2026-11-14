@@ -6,10 +6,11 @@ from HTTP input. No QR, linked device, or provider session is created here.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -31,6 +32,21 @@ class ConsentResult(BaseModel):
     acknowledged: bool = False
     revoked: bool = False
     paired: bool = False
+    provider_unlinked: bool = False
+
+
+class PersonalOwnerAssignment(BaseModel):
+    """Only the target owner is supplied; actor and tenant come from auth."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    owner_user_id: UUID
+
+
+class PersonalOwnerAssignmentResult(BaseModel):
+    owner_assigned: bool
+    paired: bool = False
+    qr_available: bool = False
     provider_unlinked: bool = False
 
 
@@ -74,16 +90,87 @@ async def _authorize(
     return session_id, plan
 
 
-def _translate(exc: Exception) -> HTTPException:
+def _translate(
+    exc: Exception, *, operation: Literal["consent", "ownership"] = "consent",
+) -> HTTPException:
+    label = "Personal channel ownership" if operation == "ownership" else "Personal channel consent"
     if isinstance(exc, PermissionError):
-        return HTTPException(403, "Personal channel consent denied")
+        return HTTPException(403, f"{label} denied")
     if isinstance(exc, ValueError):
-        return HTTPException(422, "Invalid personal channel consent request")
+        return HTTPException(422, f"Invalid {label.lower()} request")
     logger.error(
-        "channel.personal_consent.unavailable",
+        "channel.personal_owner_assignment.unavailable"
+        if operation == "ownership" else "channel.personal_consent.unavailable",
         extra={"error_type": type(exc).__name__},
     )
-    return HTTPException(503, "Personal channel consent unavailable")
+    return HTTPException(503, f"{label} unavailable")
+
+
+@router.post(
+    "/{connection_id}/owner",
+    status_code=201,
+    response_model=PersonalOwnerAssignmentResult,
+)
+async def assign_personal_channel_owner(
+    connection_id: UUID,
+    payload: PersonalOwnerAssignment,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> PersonalOwnerAssignmentResult:
+    """Assign an existing connection once through canonical operator authority.
+
+    No provider pairing, QR issuance, transport activation or secret handling.
+    The session actor and tenant are derived only from authenticated identity;
+    the target owner is independently checked as active and verified by SQL.
+    """
+    host, tenant_id, operator_user_id = _host_and_actor(request, user)
+    try:
+        connection = await host.repository.get_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != str(connection_id)
+        ):
+            raise PermissionError("Connection outside operator tenant")
+
+        # The personal endpoint cannot assign owners to generic channel
+        # installations. The managed operator must be explicitly allowlisted
+        # with a Vault-backed signing-secret contract before provisioning.
+        # This is an eligibility gate, not evidence of a live paired session.
+        installation_id = connection.installation_id
+        if (
+            not host.settings.personal_pairing_providers.get(installation_id)
+            or "pairing_webhook_secret"
+            not in host.settings.installations.get(installation_id, frozenset())
+        ):
+            raise PermissionError("Managed personal provider unavailable")
+
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id,
+            user_id=operator_user_id,
+            session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.provision",
+        )
+        assigned = await host.assign_personal_connection_owner(
+            tenant_id=tenant_id,
+            connection_id=str(connection_id),
+            owner_user_id=str(payload.owner_user_id),
+            operator_user_id=operator_user_id,
+            session_id=session_id,
+            authorized_plan=plan,
+        )
+    except Exception as exc:
+        raise _translate(exc, operation="ownership") from None
+
+    # SQL returns False for an existing, conflicting, or ineligible owner.
+    # Never claim reassignment, connection success or provider unlink.
+    if assigned is not True:
+        raise HTTPException(409, "Connection owner not assigned")
+    return PersonalOwnerAssignmentResult(owner_assigned=True)
 
 
 class PersonalPairingStatus(BaseModel):

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
+from pydantic import ValidationError
 
 from ai_karen_engine.api_routes.channels import personal_consent as api
 from ai_karen_engine.auth.models import UserData
@@ -28,6 +30,10 @@ def actor(**changes):
 def host_context(*, owner=True):
     host = object.__new__(ChannelHostServices)
     host.activation = SimpleNamespace(issue_action_plan=AsyncMock(return_value="trusted-plan"))
+    host.settings = SimpleNamespace(
+        personal_pairing_providers={"whatsapp-cloud": PROVIDER},
+        installations={"whatsapp-cloud": frozenset({"pairing_webhook_secret"})},
+    )
     host.repository = SimpleNamespace(
         get_connection=AsyncMock(return_value=ChannelConnection(
             connection_id=CONNECTION, tenant_id=TENANT,
@@ -217,3 +223,197 @@ async def test_foreign_owner_cannot_query_pairing_status():
         )
     assert exc.value.status_code == 403
     host.get_personal_pairing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operator_assigns_existing_tenant_connection_only_via_fresh_provision_plan():
+    host, request = host_context()
+    host.assign_personal_connection_owner = AsyncMock(return_value=True)
+    operator = actor(roles=["admin"])
+
+    response = await api.assign_personal_channel_owner(
+        connection_id=api.UUID(CONNECTION),
+        payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+        request=request,
+        user=operator,
+    )
+
+    assert response.owner_assigned is True
+    assert response.paired is False
+    assert response.qr_available is False
+    assert response.provider_unlinked is False
+    host.repository.get_connection.assert_awaited_once_with(
+        tenant_id=TENANT, connection_id=CONNECTION,
+    )
+    host.activation.issue_action_plan.assert_awaited_once()
+    grant = host.activation.issue_action_plan.await_args.kwargs
+    assert grant["tenant_id"] == TENANT
+    assert grant["user_id"] == USER
+    assert grant["session_id"]
+    assert grant["installation_id"] == "whatsapp-cloud"
+    assert grant["action"] == "channel.provision"
+
+    host.assign_personal_connection_owner.assert_awaited_once_with(
+        tenant_id=TENANT,
+        connection_id=CONNECTION,
+        owner_user_id=USER,
+        operator_user_id=USER,
+        session_id=grant["session_id"],
+        authorized_plan="trusted-plan",
+    )
+    host.acknowledge_personal_pairing_risk.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operator_assignment_denied_when_canonical_policy_rejects_fresh_principal():
+    host, request = host_context()
+    host.activation.issue_action_plan.side_effect = PermissionError(
+        "Canonical RBAC denies channel action"
+    )
+    host.assign_personal_connection_owner = AsyncMock()
+
+    with pytest.raises(HTTPException) as err:
+        await api.assign_personal_channel_owner(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+            request=request,
+            user=actor(roles=["user"]),
+        )
+    assert err.value.status_code == 403
+    assert "RBAC" not in err.value.detail
+    host.assign_personal_connection_owner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operator_assignment_fails_without_cross_tenant_connection_scope():
+    host, request = host_context()
+    host.repository.get_connection.return_value = ChannelConnection(
+        connection_id=CONNECTION,
+        tenant_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        installation_id="whatsapp-cloud",
+        provider_account_id="account",
+        credential_handle="vault://ref",
+        revision=1,
+        enabled=False,
+    )
+    host.assign_personal_connection_owner = AsyncMock()
+
+    with pytest.raises(HTTPException) as err:
+        await api.assign_personal_channel_owner(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+            request=request,
+            user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.assign_personal_connection_owner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operator_assignment_cannot_reassign_owner_or_claim_accepted_session():
+    host, request = host_context()
+    host.assign_personal_connection_owner = AsyncMock(return_value=False)
+
+    with pytest.raises(HTTPException) as err:
+        await api.assign_personal_channel_owner(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+            request=request,
+            user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 409
+    assert err.value.detail == "Connection owner not assigned"
+    host.assign_personal_connection_owner.assert_awaited_once()
+    host.get_personal_pairing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operator_assignment_exposes_no_internal_database_or_provider_failure():
+    host, request = host_context()
+    host.assign_personal_connection_owner = AsyncMock(
+        side_effect=RuntimeError("private vendor session token must stay hidden")
+    )
+
+    with pytest.raises(HTTPException) as err:
+        await api.assign_personal_channel_owner(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+            request=request,
+            user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 503
+    assert err.value.detail == "Personal channel ownership unavailable"
+    assert "private vendor" not in err.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"tenant_id": "default"},
+    {"user_id": ""},
+    {"is_active": False},
+    {"is_verified": False},
+])
+async def test_operator_assignment_refuses_unverified_session_principal(changes):
+    host, request = host_context()
+    host.assign_personal_connection_owner = AsyncMock()
+    with pytest.raises(HTTPException) as err:
+        await api.assign_personal_channel_owner(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+            request=request,
+            user=actor(roles=["admin"], **changes),
+        )
+    assert err.value.status_code == 403
+    host.repository.get_connection.assert_not_awaited()
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.assign_personal_connection_owner.assert_not_awaited()
+
+
+def test_operator_assignment_schema_forbids_actor_tenant_or_provider_claims():
+    for forbidden in ("operator_user_id", "tenant_id", "session_id", "provider_id", "authorized_plan"):
+        with pytest.raises(ValidationError):
+            api.PersonalOwnerAssignment.model_validate({
+                "owner_user_id": USER,
+                forbidden: "forged",
+            })
+    with pytest.raises(ValidationError):
+        api.PersonalOwnerAssignment.model_validate({"owner_user_id": "not-a-uuid"})
+
+
+def test_operator_assignment_route_requires_canonical_session_authentication():
+    paths = [
+        route for route in api.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/api/channels/personal/{connection_id}/owner"
+    ]
+    assert len(paths) == 1
+    route = paths[0]
+    assert route.methods == {"POST"}
+    assert route.status_code == 201
+    assert any(
+        dependency.call is api.get_current_user
+        for dependency in route.dependant.dependencies
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unapproved", ["missing_provider", "missing_signing_secret"])
+async def test_operator_assignment_requires_configured_managed_personal_provider(unapproved):
+    host, request = host_context()
+    host.assign_personal_connection_owner = AsyncMock()
+    if unapproved == "missing_provider":
+        host.settings.personal_pairing_providers = {}
+    else:
+        host.settings.installations = {"whatsapp-cloud": frozenset({"access_token"})}
+    with pytest.raises(HTTPException) as err:
+        await api.assign_personal_channel_owner(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+            request=request,
+            user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.assign_personal_connection_owner.assert_not_awaited()
+
