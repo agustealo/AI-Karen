@@ -550,11 +550,9 @@ export function PluginSettingsForm({
     const success = await savePluginSettings(pluginId);
     setSaving(false);
     if (success) {
+      // Never auto-close: an edit entered while the save was in flight
+      // must remain visible and unsaved rather than being discarded.
       setSaveSuccess(true);
-      setTimeout(() => {
-        setSaveSuccess(false);
-        onClose?.();
-      }, 1500);
     }
   };
 
@@ -605,7 +603,7 @@ export function PluginSettingsForm({
 
   return (
     <div className="space-y-6">
-      {saveSuccess && (
+      {saveSuccess && !modified && (
         <Alert>
           <CheckCircle2 className="h-4 w-4" />
           <AlertDescription>Settings saved successfully!</AlertDescription>
@@ -643,6 +641,11 @@ export function PluginSettingsForm({
           <RotateCcw className="mr-2 h-4 w-4" />
           {resetting ? 'Resetting...' : 'Reset to Defaults'}
         </Button>
+        {onClose && (
+          <Button variant="outline" onClick={onClose} disabled={saving || resetting || modified}>
+            Done
+          </Button>
+        )}
         <Button onClick={handleSave} disabled={saving || !modified}>
           <Save className="mr-2 h-4 w-4" />
           {saving ? 'Saving...' : 'Save Settings'}
