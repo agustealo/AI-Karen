@@ -286,7 +286,7 @@ export default function PluginStorePage() {
       setUploadId('');
       try {
         await refreshPlugins();
-        setOperationSuccess('Plugin package installed. It remains disabled until explicitly enabled.');
+        setOperationSuccess('Plugin package installed safely in quarantine. A verified isolated runtime is required before activation.');
       } catch (refreshError) {
         setOperationError('Plugin package was installed disabled, but the plugin list could not be refreshed: ' + getErrorMessage(refreshError));
       }
@@ -360,8 +360,8 @@ export default function PluginStorePage() {
         <CardHeader>
           <CardTitle>Upload a Plugin</CardTitle>
           <CardDescription>
-            Upload a ZIP package manually. Karen validates the package and installs it disabled.
-            Enabling it is a separate action.
+            Upload a ZIP package manually. Karen validates the archive and installs it in quarantine.
+            Activation remains unavailable until an isolated plugin execution runtime is verified.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-end gap-3">
