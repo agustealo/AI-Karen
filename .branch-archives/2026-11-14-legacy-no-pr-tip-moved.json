@@ -1,0 +1,365 @@
+{
+  "repository": "agustealo/AI-Karen",
+  "main_at_audit": "76a58725226867b118b0693e39fc5d3b979a0212",
+  "archive_tag": "branch-archive/2026-11-14-legacy-no-pr-tip-moved",
+  "created_at": "2026-11-14T19:10:33.296Z",
+  "minimum_age_days": 21,
+  "recovery_commands": {
+    "fetch": "git fetch origin tag branch-archive/2026-11-14-legacy-no-pr-tip-moved",
+    "inspect": "git show branch-archive/2026-11-14-legacy-no-pr-tip-moved:.branch-archives/2026-11-14-legacy-no-pr-tip-moved.json",
+    "recover": "git branch RECOVERED_NAME COMMIT_SHA"
+  },
+  "branches": [
+    {
+      "name": "audit/kari-os-methodology-burn",
+      "sha": "36cf36c79753ccaa992ba1ac6e6bbfe0d9cb62c0",
+      "classification": "merged_pr_tip_moved",
+      "committed_at": "2026-09-14T20:28:04-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "73f6113caa34d6e158cee01ec7039bf76f91f34d",
+      "previous_prs": [
+        {
+          "number": 58,
+          "merged_at": "2026-09-15T00:23:40Z",
+          "pr_head_sha": "73f6113caa34d6e158cee01ec7039bf76f91f34d"
+        }
+      ]
+    },
+    {
+      "name": "ci/converge-presentation-merge-governance",
+      "sha": "46e72a0174842fd14a6617a655fad38431da8dfe",
+      "classification": "no_pr_record",
+      "committed_at": "2026-09-25T03:33:15-04:00",
+      "unique_commits_vs_main": 1,
+      "merge_base": "e95a09e33c7e7dd4dfd4f59ba030d986a0cd4f82",
+      "previous_prs": []
+    },
+    {
+      "name": "feat/admin-intelligence-training-control-plane",
+      "sha": "69b393dd3edd40c41f84171d334b94e194190702",
+      "classification": "merged_pr_tip_moved",
+      "committed_at": "2026-10-09T21:28:02-04:00",
+      "unique_commits_vs_main": 134,
+      "merge_base": "14196dd6479a772b9e355e1d4e9ff39507ab2bc8",
+      "previous_prs": [
+        {
+          "number": 243,
+          "merged_at": "2026-10-09T23:49:13Z",
+          "pr_head_sha": "772db9d9d842fb7bf24f636e7b0139f431d22106"
+        }
+      ]
+    },
+    {
+      "name": "feat/chat-intelligence-sidecar",
+      "sha": "1c7683e91dd9c0e7ae03bb77866fcfaef77c80ef",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-06T05:10:01-04:00",
+      "unique_commits_vs_main": 13,
+      "merge_base": "6c2755990d680bd6c70308af96045963212cd69f",
+      "previous_prs": []
+    },
+    {
+      "name": "feat/continuity-next-action-planning",
+      "sha": "cd5b7bfc32613c61e15eb3d53b69a37f62289f84",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-05T18:15:24-04:00",
+      "unique_commits_vs_main": 35,
+      "merge_base": "bb40de8f2303baf68df77e2a21757bf53a1bd18f",
+      "previous_prs": []
+    },
+    {
+      "name": "feat/durable-runtime-approvals",
+      "sha": "82e96de1127f7856206faa3384600c46b03fddc2",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-06T05:56:14-04:00",
+      "unique_commits_vs_main": 29,
+      "merge_base": "6c2755990d680bd6c70308af96045963212cd69f",
+      "previous_prs": []
+    },
+    {
+      "name": "feat/governed-generative-weather-20261021",
+      "sha": "7feda9e8197b70a4b77c8bea1a2d2932f8edb177",
+      "classification": "merged_pr_tip_moved",
+      "committed_at": "2026-10-23T18:33:44-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "fac9c07d88f5f69a62e3214a774962a3ba802bba",
+      "previous_prs": [
+        {
+          "number": 502,
+          "merged_at": "2026-10-22T14:19:18Z",
+          "pr_head_sha": "25830db5733f5903e1f72eca5894da55685c657d"
+        }
+      ]
+    },
+    {
+      "name": "feat/kchat-agui-native-event-bridge-20261018",
+      "sha": "a0625e0717c86395433998ee90a9ca665ea4a022",
+      "classification": "merged_pr_tip_moved",
+      "committed_at": "2026-10-22T05:55:19-04:00",
+      "unique_commits_vs_main": 1,
+      "merge_base": "348d299a342829268f8d5d9dd72d6e11e02a36cb",
+      "previous_prs": [
+        {
+          "number": 494,
+          "merged_at": "2026-10-21T00:08:07Z",
+          "pr_head_sha": "348d299a342829268f8d5d9dd72d6e11e02a36cb"
+        }
+      ]
+    },
+    {
+      "name": "feat/koc04b-governed-channel-admission",
+      "sha": "691371b5bdad7265a51b6ef4c81219acd5d08307",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-17T02:41:09-04:00",
+      "unique_commits_vs_main": 32,
+      "merge_base": "a89a0ca13f75685fabf5d8274e31a45666d4587e",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/agent-consumer-reliability-closure-20261013",
+      "sha": "40f498d4a0a5c58ffa04d960e76a4db6ad3b5ebb",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-13T22:53:17-04:00",
+      "unique_commits_vs_main": 18,
+      "merge_base": "228f2f6e127e80b5918f2cf3c3bf3b456c87cded",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/consumer-identity-2i-request-size-config",
+      "sha": "d9fda3c193afc70af2524ebdd5fc5c98c36614fc",
+      "classification": "no_pr_record",
+      "committed_at": "2026-09-20T12:25:58-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "6ab6b57e16534b689276544d9aff5e170a783915",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/continuity-planning-authority",
+      "sha": "454b26a252bc3d7a4b87903a714a11ac9c746cb7",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-05T17:19:17-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "6323fb8b217df2eeaeaa57dcfeda8b400121fa1c",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/learning-authority-closure",
+      "sha": "8dd2548338eacd79040b25545a73c682374ecae2",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-05T14:59:04-04:00",
+      "unique_commits_vs_main": 6,
+      "merge_base": "db729e1fce4da36532c1ad6227c9b6d05f9977f6",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a01-refresh-staging-20261010",
+      "sha": "51c9c8be20dac65124aeb783bc7f35d1ecf04891",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-10T19:01:03-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "208861633c1925169428b33003a5d435852e663e",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a01-stage-519795-20261010",
+      "sha": "cda56b9cbc67ee170bf7eceff9be976222d0e2ce",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-10T19:34:48-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "519795dc113d812ccbed2061af27dbade6aa557d",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a01-staging-70fa-20261010",
+      "sha": "d96a2460744bd2a95563a09ac6979595236d554c",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-10T19:19:21-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "70fa0d24f8398d23d55cc9fbf33dc4e917ba086b",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a02-stage-20261012",
+      "sha": "bc75c5708dd345ff81b40c1243ee5510efca4014",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-12T16:05:47-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "12b00a1acf9ef5b8e2044da090f00a2f19d4c70c",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a02-stage-after-a03-20261012",
+      "sha": "2b2417d6bfba790fc98e875bfe87098a3c9ccfb0",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-12T16:37:11-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "0330b833d1f8ec5b5e118cfa5467881d9527cdbc",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a03-stage-20261012b",
+      "sha": "26d1b95470a38df8080c2a440f231a45fe9d4e41",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-12T16:20:08-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "c4d8f32cd5c06f07cb8f768b5c64e5ec458d7a76",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a03-staging-after-a01-20261012",
+      "sha": "6048d977c363e0de84521043ae5c5fe2074d7710",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-12T16:02:24-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "267467b600a0a9757df9d84ebc478eb0dc0aec29",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/medusa-a04-converge-a01-20261012",
+      "sha": "77227daac82719981787a4b3665b8c31ca6ce6c7",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-12T16:15:45-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "c4d8f32cd5c06f07cb8f768b5c64e5ec458d7a76",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/mi07-govern-profile-belief-transitions",
+      "sha": "9bcc7fa62a4ec563d9703404c884abf1d8a796c4",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-15T20:20:53-04:00",
+      "unique_commits_vs_main": 8,
+      "merge_base": "1d86376a1462d668c430def762dfbeeeaff4daa9",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/model-download-terminal-cleanup-recovery",
+      "sha": "71b687e1e2806d6aeacc685998d3d328c01d4827",
+      "classification": "no_pr_record",
+      "committed_at": "2026-09-24T22:09:01-04:00",
+      "unique_commits_vs_main": 9,
+      "merge_base": "40a30ce64bd6931bee7f046cee2f07c289ec6de5",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/model-download-terminal-retention",
+      "sha": "b6e79b402574f10f41c94da04907731e04dad120",
+      "classification": "no_pr_record",
+      "committed_at": "2026-09-25T03:53:19-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "e95a09e33c7e7dd4dfd4f59ba030d986a0cd4f82",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/model-removal-durable-saga",
+      "sha": "13cb503dec74f583d5706207845071b97d5e55d9",
+      "classification": "no_pr_record",
+      "committed_at": "2026-09-25T04:56:02-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "97080eb51202559677cada0792c2e0492af458d5",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/personal-location-query-semantics-20261009",
+      "sha": "32bb59e4d0a182871b5152b2a810543e0b2a46f9",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-09T15:13:55-04:00",
+      "unique_commits_vs_main": 1,
+      "merge_base": "8b06c4a30fd9828a1d2d9f2575239bfe2eb55385",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/plugin-lifecycle-authority",
+      "sha": "5309c29ba3cd04e0b61c7868908802b9164a2d8b",
+      "classification": "no_pr_record",
+      "committed_at": "2026-09-16T01:47:54-04:00",
+      "unique_commits_vs_main": 1,
+      "merge_base": "de1f7b31f01f3f7e7282801565d72c26629a08f3",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/runtime-continuity-formation",
+      "sha": "d8df0df05ed53052d5ac26308087cf918ef1fc03",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-05T20:57:41-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "7c47d68e699fc42da41e5f9be9b3459193f13ec6",
+      "previous_prs": []
+    },
+    {
+      "name": "fix/supabase-current-env-contract-20261009",
+      "sha": "a6b177db3d96ab6b6a87708b7bafaa3e0084dc6a",
+      "classification": "merged_pr_tip_moved",
+      "committed_at": "2026-10-09T07:25:19-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "c8c0d93413a84f83fe21efade14bf5e08e8c87f3",
+      "previous_prs": [
+        {
+          "number": 203,
+          "merged_at": "2026-10-09T11:08:13Z",
+          "pr_head_sha": "d6e556c10908a5b7fab2a26bd1b4d9ca4e9200dc"
+        }
+      ]
+    },
+    {
+      "name": "fix/web-eslint-typed-reconcile-20261009",
+      "sha": "e68ddf7ae79a80cee4fecbea52fe790e7793b1f8",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-09T09:04:17-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "503c1d843fdb645d2620707cecd5e50c06097e63",
+      "previous_prs": []
+    },
+    {
+      "name": "reconcile/pr460-gate-20261018",
+      "sha": "4c3e78018f7e7fa1df766fc8446551db73a25b6e",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-18T08:11:36-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "2fc9668d217b71fb8cdeab357e1c8cbf7168ae4f",
+      "previous_prs": []
+    },
+    {
+      "name": "reconcile/pr460-main-20261018b",
+      "sha": "db9cb412c20799a59f7d4c29ba2f1847f56350fd",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-18T08:44:12-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "76c684e065fee1fce02990c5523760d8e5517e25",
+      "previous_prs": []
+    },
+    {
+      "name": "reconcile/pr471-main-20261018",
+      "sha": "64d99a611622f4067e453612673a27a2a0102850",
+      "classification": "no_pr_record",
+      "committed_at": "2026-10-18T06:53:40-04:00",
+      "unique_commits_vs_main": 10,
+      "merge_base": "baa9d04bfa5c8fe0e16cd749423b21d388509ab1",
+      "previous_prs": []
+    },
+    {
+      "name": "refactor/plugin-platform-authority-retirement",
+      "sha": "0c38f5e562395a523bd79f7d8eb371c133c2fe47",
+      "classification": "no_pr_record",
+      "committed_at": "2026-09-19T20:20:36-04:00",
+      "unique_commits_vs_main": 16,
+      "merge_base": "3ca0ce820c22d8e99dfd9342c924bd24aa1bbe1e",
+      "previous_prs": []
+    },
+    {
+      "name": "runtime-authority/llm-router-selection-only",
+      "sha": "5692641f68b3f38b66e8848cfe9fe0f5842af7a5",
+      "classification": "merged_pr_tip_moved",
+      "committed_at": "2026-09-15T23:13:14-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "ad551e1e391aca39e04a775ba4a48d84fc4eaa7e",
+      "previous_prs": [
+        {
+          "number": 62,
+          "merged_at": "2026-09-16T02:37:41Z",
+          "pr_head_sha": "a086cac6d6ef73c1317248e052ec11892861e995"
+        }
+      ]
+    }
+  ]
+}
