@@ -183,3 +183,24 @@ def test_revoked_consent_still_allows_confirmed_session_teardown():
             ),
             now=NOW, consent_current=False, provider_vetted_and_enabled=False,
         )
+
+
+@pytest.mark.parametrize("receipt", [" ", " \t ", "x" * 257, 42])
+@pytest.mark.parametrize("kind", [
+    PairingEvent.LINK_CONFIRMED,
+    PairingEvent.UNLINK_CONFIRMED,
+])
+def test_blank_oversized_and_untyped_provider_receipt_rejected(receipt, kind):
+    qr = advance(
+        initial(), PairingEvent.QR_ISSUED,
+        qr_expires_at=NOW + timedelta(minutes=1),
+    )
+    state = qr
+    if kind is PairingEvent.UNLINK_CONFIRMED:
+        linked = advance(
+            qr, PairingEvent.LINK_CONFIRMED,
+            provider_receipt_id="valid-link-receipt",
+        )
+        state = advance(linked, PairingEvent.DISCONNECT_REQUESTED)
+    with pytest.raises(PairingEvidenceDenied, match="receipt identifier is invalid"):
+        advance(state, kind, provider_receipt_id=receipt)
