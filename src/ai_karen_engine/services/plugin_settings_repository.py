@@ -55,7 +55,9 @@ class PluginSettingsContract:
             **{key: value for key, value in stored.items() if key in self.rules},
         }
 
-    def validate(self, incoming: Mapping[str, Any]) -> dict[str, Any]:
+    def validate(
+        self, incoming: Mapping[str, Any], *, require_configured: bool = True
+    ) -> dict[str, Any]:
         if not isinstance(incoming, dict):
             raise PluginSettingsValidationError("Plugin settings must be a JSON object")
         unknown = set(incoming) - set(self.rules)
@@ -67,7 +69,7 @@ class PluginSettingsContract:
         schema = {
             "type": "object",
             "properties": self.rules,
-            "required": list(self.required),
+            "required": list(self.required) if require_configured else [],
             "additionalProperties": False,
         }
         try:
