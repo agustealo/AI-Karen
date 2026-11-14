@@ -23,7 +23,7 @@ export function getRuntimeProviderStatusLabel(provider: RuntimeProviderCatalogPr
   if (status === "unhealthy") return "Unhealthy";
   if (status !== "healthy" || provider.healthy !== true) return "Unverified";
   const available = (provider.models ?? []).filter((model) => model.available === true).length;
-  return `${available} available models`;
+  return available > 0 ? `${available} ready models` : "No verified models";
 }
 
 export type ComposerModelRequest = { provider: string; model: string } | null;
@@ -125,16 +125,29 @@ export function KarenComposerRuntimeCatalog({
     return () => { cancelled = true; };
   }, [showAdvanced]);
 
-  const providers = useMemo(
+  // The conversation picker offers executable choices only. Keep other
+  // authorized providers visible in the diagnostics and Settings panels.
+  const inspectableProviders = useMemo(
     () => (catalog?.providers ?? []).filter((provider) =>
       provider.allowed_for_current_user !== false &&
       typeof provider.id === "string" && provider.id.length > 0,
     ),
     [catalog],
   );
+  const providers = useMemo(
+    () => inspectableProviders.filter((provider) => selectableModels(provider).length > 0),
+    [inspectableProviders],
+  );
+  const notReadyCount = inspectableProviders.length - providers.length;
   const displayedProvider = providers.find((provider) => provider.id === browsedProvider);
   const models = selectableModels(displayedProvider);
-  const hasSelectableModels = providers.some((provider) => selectableModels(provider).length > 0);
+  const hasSelectableModels = providers.length > 0;
+
+  useEffect(() => {
+    if (catalog && browsedProvider && !providers.some((provider) => provider.id === browsedProvider)) {
+      setBrowsedProvider("");
+    }
+  }, [catalog, browsedProvider, providers]);
   const validCatalog = Boolean(catalog && catalog.catalog_version !== "bootstrap");
   const modelValue = selection?.provider === browsedProvider &&
     models.some((model) => model.id === selection.model)
@@ -233,6 +246,13 @@ export function KarenComposerRuntimeCatalog({
         </p>
       )}
 
+      {validCatalog && notReadyCount > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {notReadyCount} provider{notReadyCount === 1 ? "" : "s"} hidden from chat selection because setup, health, or live model verification is incomplete.
+          Use Configure providers to inspect or repair connections.
+        </p>
+      )}
+
       {validCatalog && (
         <details
           onToggle={(event) => setShowAdvanced(event.currentTarget.open)}
@@ -247,11 +267,11 @@ export function KarenComposerRuntimeCatalog({
                 Provider availability and agent registration are reported by the backend.
                 They do not grant execution access.
               </p>
-              {providers.length === 0 ? (
+              {inspectableProviders.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No providers were returned for this user.</p>
               ) : (
                 <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
-                  {providers.map((provider) => (
+                  {inspectableProviders.map((provider) => (
                     <li key={provider.id} className="rounded-lg border border-border/60 px-2 py-1.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="min-w-0 truncate font-medium">{provider.label}</span>

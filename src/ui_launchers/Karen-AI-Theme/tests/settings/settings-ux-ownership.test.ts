@@ -29,12 +29,27 @@ describe('settings UX ownership contract', () => {
     expect(models).toContain('Your saved provider and model selection have not been changed');
   });
 
+  it('cannot claim a stored key or a legacy validation response is verified', () => {
+    expect(models).toContain("setApiKeyValidationState('idle')");
+    expect(models).toContain('key is stored, but has not been verified in this session');
+    expect(models).toContain("response.status === 'verified'");
+    expect(models).toContain("response.status !== 'verified'");
+    expect(models).not.toContain("setApiKeyValidationState(selectedProviderDetails?.api_key_configured ? 'valid' : 'idle')");
+    expect(models).not.toContain("if (!response.valid) {");
+  });
+
   it('distinguishes saved provider selection from runtime health and draft changes', () => {
     expect(models).toContain('const hasUnsavedSelection');
-    expect(models).toContain("Saved model:");
-    expect(models).toContain("not proof of a currently executing model");
-    expect(models).toContain("Provider or model selection changed locally");
+    expect(models).toContain("Workspace default:");
+    expect(models).toContain("Browsing a provider below does not change the workspace default");
+    expect(models).toContain("New default chosen but not saved");
     expect(models).toContain("Registered provider details");
+    expect(models).toContain("Save provider connection");
+    expect(models).toContain("Set as workspace default");
+    expect(models).toContain("canSetWorkspaceDefault");
+    expect(models).toContain("not verified for chat");
+    expect(models).toContain("Ready for chat");
+    expect(models).not.toContain("Finalize Intelligence Settings");
     expect(models).not.toContain("Active Node Status");
     expect(models).not.toContain("Active Model</span>");
   });
@@ -126,7 +141,8 @@ describe('settings UX ownership contract', () => {
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
     expect(models).toContain("apiClient.get<ModelSettingsResponse>('/api/settings/model')");
     expect(models).toContain("normalizeModelSettingsResponse");
-    expect(models).toContain("canSaveProviderModelSelection");
+    expect(models).toContain("canSetWorkspaceDefault");
+    expect(models).toContain("verifiedModels.some((model) => model.id === selectedModel)");
     expect(models).not.toContain("localStorage.setItem");
   });
 });

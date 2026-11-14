@@ -41,10 +41,7 @@ import {
 import {
   normalizeModelSettingsResponse,
   type RuntimeSettingsResponse,
-  sortProviderModels,
   normalizeDiscoveredProviderModels,
-  reconcileDiscoveredModelSelection,
-  canSaveProviderModelSelection,
   getProviderModelDiscoveryNotice,
 } from '@/lib/model-runtime-inventory';
 
@@ -184,13 +181,11 @@ export default function ModelSettings() {
     [settings],
   );
 
-  const canSelectProvider = useCallback((provider?: { selectable?: boolean; requires_api_key?: boolean } | null) => {
-    if (!provider) return false;
-    if (provider.selectable !== false) return true;
-    return Boolean(provider.requires_api_key);
-  }, []);
+  // Settings is a configuration and diagnostic surface. Browsing a disabled
+  // or unconfigured registered provider never grants chat execution.
+  const canSelectProvider = useCallback((provider?: { id: string } | null) => Boolean(provider?.id), []);
 
-  const hasUnsavedSelection = Boolean(normalizedSettings && (
+  const hasUnsavedSelection = Boolean(normalizedSettings && selectedModel && (
     selectedProvider !== normalizedSettings.selected_provider ||
     selectedModel !== normalizedSettings.selected_model
   ));
@@ -203,6 +198,23 @@ export default function ModelSettings() {
     () => (normalizedSettings?.thirdPartyProviders || []).filter((provider) => canSelectProvider(provider)),
     [normalizedSettings?.thirdPartyProviders, canSelectProvider],
   );
+
+  const verifiedModels = useMemo(() => availableModels.filter((model) =>
+    model.source === 'provider_live' ||
+    (model.is_installed === true && (model.source === 'ollama_native' || model.source === 'local_runtime')),
+  ), [availableModels]);
+
+  const providerReadyForChat = Boolean(
+    selectedProviderDetails?.enabled === true &&
+    selectedProviderDetails?.is_configured === true &&
+    selectedProviderDetails?.healthy === true &&
+    selectedProviderDetails?.health_status === 'healthy' &&
+    verifiedModels.length > 0 &&
+    !isLoadingModels &&
+    !modelDiscoveryError,
+  );
+  const canSetWorkspaceDefault = providerReadyForChat &&
+    verifiedModels.some((model) => model.id === selectedModel);
 
   const selectedProviderLabel = useMemo(() => {
     if (!selectedProviderDetails) return '';
@@ -270,7 +282,6 @@ export default function ModelSettings() {
   const loadProviderModels = useCallback(async (
     providerId: string,
     providerBaseUrl?: string,
-    manualEntryAllowed = false,
   ) => {
     if (!providerId) return;
     const requestId = ++modelDiscoveryRequestId.current;
@@ -284,7 +295,8 @@ export default function ModelSettings() {
       const discovered = normalizeDiscoveredProviderModels(providerId, response.models || []);
       setModelDiscoveryNotice(getProviderModelDiscoveryNotice(response));
       setAvailableModels(discovered);
-      setSelectedModel((previous) => reconcileDiscoveredModelSelection(previous, discovered));
+      // Discovery refresh is read-only. It must not silently select a new
+      // workspace default or turn an unavailable saved model into a draft.
     } catch (error) {
       if (requestId !== modelDiscoveryRequestId.current) return;
       const message = formatErrorMessage(error, `Karen could not refresh models for ${providerId}.`);
@@ -292,7 +304,8 @@ export default function ModelSettings() {
       // A failed endpoint is never evidence that a managed model is
       // available, regardless of its saved or catalog-selected ID.
       setAvailableModels([]);
-      if (!manualEntryAllowed) setSelectedModel('');
+      // Preserve the user's draft and report the discovery error. It must
+      // never silently become a different model.
       toast({
         title: 'Model discovery failed',
         description: message,
@@ -309,7 +322,7 @@ export default function ModelSettings() {
 
   useEffect(() => {
     if (!selectedProviderDetails) return;
-    const providerDefaultModel = selectedProviderDetails.selected_model || selectedProviderDetails.default_model || selectedProviderDetails.models[0]?.id || '';
+    // No provider-model combination is chosen merely by opening Settings.
     const selectedSource = selectedProviderDetails.runtime_source === 'container' ? 'container' : 'host';
     const runtimeEndpoint = usesRuntimeOptions
       ? selectedProviderDetails.runtime_options?.find((option) => option.source === selectedSource)?.base_url
@@ -328,9 +341,13 @@ export default function ModelSettings() {
     setApiKeyHeader(selectedProviderDetails.api_key_header || 'Authorization');
     setApiKeyPrefix(selectedProviderDetails.api_key_prefix ?? 'Bearer');
     setAvailableModels(requiresLiveModelInventory ? [] : fallbackProviderModels);
-    setSelectedModel(providerDefaultModel);
-    void loadProviderModels(selectedProviderDetails.id, providerBaseUrl, canEnterModelManually);
-  }, [canEnterModelManually, fallbackProviderModels, loadProviderModels, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
+    setSelectedModel(
+      selectedProviderDetails.id === normalizedSettings?.selected_provider
+        ? normalizedSettings.selected_model
+        : '',
+    );
+    void loadProviderModels(selectedProviderDetails.id, providerBaseUrl);
+  }, [canEnterModelManually, fallbackProviderModels, loadProviderModels, normalizedSettings?.selected_model, normalizedSettings?.selected_provider, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
 
   useEffect(() => {
     if (!usesRuntimeOptions) return;
@@ -340,17 +357,17 @@ export default function ModelSettings() {
 
   useEffect(() => {
     if (!selectedProviderDetails?.requires_api_key || !isEditingApiKey) {
-      setApiKeyValidationState(selectedProviderDetails?.api_key_configured ? 'valid' : 'idle');
+      setApiKeyValidationState('idle');
       setApiKeyValidationMessage(
         selectedProviderDetails?.api_key_configured
-          ? `${selectedProviderLabel || selectedProviderDetails?.display_name} key is stored.`
+          ? `${selectedProviderLabel || selectedProviderDetails?.display_name} key is stored, but has not been verified in this session.`
           : '',
       );
       return;
     }
     const candidateKey = apiKey.trim();
     if (!candidateKey) {
-      setApiKeyValidationState(selectedProviderDetails.api_key_configured ? 'valid' : 'idle');
+      setApiKeyValidationState('idle');
       setApiKeyValidationMessage('');
       return;
     }
@@ -360,16 +377,16 @@ export default function ModelSettings() {
 
     const timeoutId = window.setTimeout(async () => {
       try {
-        const response = await apiClient.post<{ valid: boolean; message: string; }>('/api/settings/model/validate', {
+        const response = await apiClient.post<{ valid: boolean; status: string; message: string; }>('/api/settings/model/validate', {
           provider: selectedProviderDetails.id,
           model: selectedModel,
           api_key: candidateKey,
           base_url: selectedProviderDetails.supports_base_url_override ? baseUrl.trim() || undefined : undefined,
         });
         if (validationRequestId.current !== currentRequestId) return;
-        setApiKeyValidationState(response.valid ? 'valid' : 'invalid');
+        setApiKeyValidationState(response.valid === true && response.status === 'verified' ? 'valid' : 'invalid');
         setApiKeyValidationMessage(
-          response.valid
+          response.valid === true && response.status === 'verified'
             ? response.message
             : formatProviderCredentialMessage(selectedProviderLabel || selectedProviderDetails.display_name, response.message),
         );
@@ -399,14 +416,14 @@ export default function ModelSettings() {
     }
 
     try {
-      const response = await apiClient.post<{ valid: boolean; message: string; }>('/api/settings/model/validate', {
+      const response = await apiClient.post<{ valid: boolean; status: string; message: string; }>('/api/settings/model/validate', {
         provider: selectedProviderDetails.id,
         model: selectedModel.trim(),
         api_key: apiKey.trim() || undefined,
         base_url: selectedProviderDetails.supports_base_url_override ? baseUrl.trim() || undefined : undefined,
       });
 
-      if (!response.valid) {
+      if (response.valid !== true || response.status !== 'verified') {
         const message = formatProviderCredentialMessage(selectedProviderLabel || selectedProviderDetails.display_name, response.message);
         setApiKeyValidationState('invalid');
         setApiKeyValidationMessage(message);
@@ -439,22 +456,17 @@ export default function ModelSettings() {
     }
   };
 
-  const handleSave = async () => {
-    if (!canManageRuntime) return;
-    if (!selectedProviderDetails) return;
-    if (!canSaveProviderModelSelection(selectedModel, availableModels, {
-      isLoading: isLoadingModels,
-      manualEntryAllowed: canEnterModelManually,
-    })) {
+  const handleSave = async (setWorkspaceDefault: boolean) => {
+    if (!canManageRuntime || !selectedProviderDetails) return;
+    if (setWorkspaceDefault && !canSetWorkspaceDefault) {
       toast({
-        title: 'Model not available',
-        description: isLoadingModels
-          ? 'Model discovery is still running. Save after the inventory is available.'
-          : 'Choose a model from the current provider inventory before saving.',
+        title: 'Model is not ready for chat',
+        description: 'Verify the connection and choose a live, healthy model before setting the workspace default.',
         variant: 'destructive',
       });
       return;
     }
+
     setIsSaving(true);
     try {
       const submittedApiKey = isEditingApiKey ? apiKey.trim() : '';
@@ -465,11 +477,14 @@ export default function ModelSettings() {
           if (!credentialsValid) return;
         }
       } else if (submittedApiKey && apiKeyValidationState === 'invalid') {
-        throw new Error(apiKeyValidationMessage || `${selectedProviderLabel || selectedProviderDetails.display_name} API key validation failed.`);
+        throw new Error(apiKeyValidationMessage || 'Credential validation failed.');
       }
+
+      // Connection edits never send a model identifier: the existing API
+      // preserves the saved global choice until "Set as default" is explicit.
       const response = await apiClient.put<ModelSettingsResponse>('/api/settings/model', {
         provider: selectedProvider,
-        model: selectedModel.trim(),
+        model: setWorkspaceDefault ? selectedModel.trim() : undefined,
         base_url: selectedProviderDetails.supports_base_url_override ? baseUrl.trim() : undefined,
         runtime_source: usesRuntimeOptions ? runtimeSource : undefined,
         api_key: submittedApiKey || undefined,
@@ -477,8 +492,22 @@ export default function ModelSettings() {
         api_key_prefix: selectedProviderDetails.supports_custom_auth ? apiKeyPrefix : undefined,
         chat_response_mode: chatResponseMode,
       });
-      applyNormalizedSettings(response);
-      toast({ title: 'Model settings saved', description: `Karen confirmed the saved configuration for ${selectedProviderLabel || selectedProviderDetails.display_name}. Runtime health is checked separately.` });
+      if (setWorkspaceDefault) {
+        applyNormalizedSettings(response);
+      } else {
+        setSettings(response);
+        setApiKey('');
+        setIsEditingApiKey(false);
+        setApiKeyValidationState('idle');
+        setApiKeyValidationMessage('');
+        void loadProviderModels(selectedProvider, baseUrl);
+      }
+      toast({
+        title: setWorkspaceDefault ? 'Workspace default updated' : 'Provider connection settings saved',
+        description: setWorkspaceDefault
+          ? 'The backend confirmed the saved default. Karen will still report the actual model for each response.'
+          : 'Connection details were saved. Refresh the provider inventory and confirm health before selecting it for chat.',
+      });
     } catch (error) {
       const message = formatProviderCredentialMessage(
         selectedProviderLabel || selectedProviderDetails.display_name,
@@ -487,8 +516,10 @@ export default function ModelSettings() {
       setApiKeyValidationState('invalid');
       setApiKeyValidationMessage(message);
       setIsEditingApiKey(true);
-      toast({ title: `Save failed for ${selectedProviderLabel || selectedProviderDetails.display_name}`, description: message, variant: 'destructive' });
-    } finally { setIsSaving(false); }
+      toast({ title: 'Save failed', description: message, variant: 'destructive' });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleClearApiKey = async () => {
@@ -498,7 +529,6 @@ export default function ModelSettings() {
     try {
       const response = await apiClient.put<ModelSettingsResponse>('/api/settings/model', {
         provider: selectedProvider,
-        model: selectedModel.trim(),
         runtime_source: usesRuntimeOptions ? runtimeSource : undefined,
         clear_api_key: true,
       });
@@ -530,7 +560,7 @@ export default function ModelSettings() {
       applyNormalizedSettings(response);
       setIsCustomDialogOpen(false);
       setCustomProviderForm({ name: '', displayName: '', description: '', baseUrl: '', model: '', authHeader: 'Authorization', authPrefix: 'Bearer' });
-      toast({ title: 'Custom provider added', description: `${customProviderForm.displayName} is now available.` });
+      toast({ title: 'Custom provider registered', description: `${customProviderForm.displayName} must be verified before it is available in chat.` });
     } catch (error) {
       toast({ title: 'Failed to add provider', description: formatErrorMessage(error, 'Could not create provider.'), variant: 'destructive' });
     } finally { setIsAddingCustom(false); }
@@ -578,11 +608,13 @@ export default function ModelSettings() {
         </Alert>
       )}
       <div role="status" className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 text-sm">
-        <p className="font-semibold">Saved model: {normalizedSettings?.selected_model || 'None configured'}</p>
+        <p className="font-semibold">Workspace default: {normalizedSettings?.selected_model
+            ? `${normalizedSettings.selected_provider} / ${normalizedSettings.selected_model}`
+            : 'Automatic routing (no model preference)'}</p>
         <p className="mt-1 text-muted-foreground">
           {hasUnsavedSelection
-            ? 'Provider or model selection changed locally. Save to request an update; Karen must confirm the saved configuration.'
-            : 'This is your saved selection, not proof of a currently executing model. Runtime availability is reported separately.'}
+            ? 'New default chosen but not saved. Use Set as workspace default after this model becomes ready.'
+            : 'Browsing a provider below does not change the workspace default. Only live-ready models are offered for chat.'}
         </p>
       </div>
       <div className={cn("grid gap-8 pb-32", !isMobile && "grid-cols-12")}>
@@ -593,9 +625,9 @@ export default function ModelSettings() {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-xl font-bold flex items-center gap-2">
-                    <Bot className="h-5 w-5 text-primary" /> Model Selection
+                    <Bot className="h-5 w-5 text-primary" /> Provider setup and workspace default
                   </CardTitle>
-                  <CardDescription>Choose a provider and model from Karen’s registered inventory. Saving does not guarantee the runtime is healthy.</CardDescription>
+                  <CardDescription>Connect a provider, verify its health and live models, then choose the workspace default.</CardDescription>
                 </div>
                 <TooltipProvider>
                   <Tooltip>
@@ -612,10 +644,29 @@ export default function ModelSettings() {
               </div>
             </CardHeader>
             <CardContent className="pt-6 space-y-8">
+              {selectedProviderDetails && (
+                <div role="status" className="rounded-xl border border-border/60 px-4 py-3 text-sm">
+                  <p className="font-semibold">
+                    {selectedProviderLabel}: {providerReadyForChat ? 'Ready for chat' : 'Setup or verification required'}
+                  </p>
+                  <p className="mt-1 text-muted-foreground">
+                    {selectedProviderDetails.enabled !== true
+                      ? 'This provider is disabled.'
+                      : selectedProviderDetails.is_configured !== true
+                        ? 'Connection is not configured. Add credentials or a reachable local runtime, then save the connection.'
+                        : selectedProviderDetails.health_status !== 'healthy'
+                          ? 'Connection is saved, but runtime health is not confirmed. Check the provider and refresh its inventory.'
+                          : verifiedModels.length === 0
+                            ? 'No live-verified models yet. Refresh model discovery; catalog entries are not chat-ready.'
+                            : 'Live model inventory is available. Select a verified model to set the workspace default.'}
+                  </p>
+                </div>
+              )}
+
               {/* Provider Selection */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="ai-provider" className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Select Provider</Label>
+                  <Label htmlFor="ai-provider" className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Provider to inspect or configure</Label>
                   {canManageRuntime && <Dialog open={isCustomDialogOpen} onOpenChange={setIsCustomDialogOpen}>
                     <DialogTrigger asChild>
                       <Button variant="ghost" size="sm" className="h-8 text-primary hover:text-primary hover:bg-primary/5">
@@ -667,7 +718,7 @@ export default function ModelSettings() {
                   <Alert className="border-border/60 bg-muted/20 text-muted-foreground">
                     <Info className="h-4 w-4" />
                     <AlertDescription>
-                      No active cloud providers are configured. Built-in runtimes are still available.
+                      No cloud providers are registered. Add a provider or configure a local runtime.
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -772,7 +823,7 @@ export default function ModelSettings() {
                         ))
                       ) : (
                         <div className="rounded-xl border border-dashed border-border/50 bg-muted/5 px-3 py-2 text-xs text-muted-foreground">
-                          No active cloud providers are configured. Built-in runtimes are still available.
+                          No cloud providers are registered. Add a provider or configure a local runtime.
                         </div>
                       )}
                     </SelectGroup>
@@ -892,7 +943,6 @@ export default function ModelSettings() {
                                   void loadProviderModels(
                                     selectedProviderDetails.id,
                                     nextBaseUrl,
-                                    canEnterModelManually,
                                   );
                                 }
                               }}
@@ -975,7 +1025,7 @@ export default function ModelSettings() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                onClick={() => loadProviderModels(selectedProvider, baseUrl, canEnterModelManually)}
+                                onClick={() => loadProviderModels(selectedProvider, baseUrl)}
                                 disabled={isLoadingModels}
                                 className="h-7 w-7"
                                 title="Refresh model discovery"
@@ -988,10 +1038,17 @@ export default function ModelSettings() {
                           {availableModels.length > 0 ? (
                             <Select value={selectedModel} onValueChange={setSelectedModel}>
                               <SelectTrigger id="model-picker" className="h-11 bg-muted/20">
-                                <SelectValue placeholder="Discovering models..." />
+                                <SelectValue placeholder={isLoadingModels ? "Checking live models..." : "Choose a verified model"} />
                               </SelectTrigger>
                               <SelectContent>
-                                {availableModels.map(m => <SelectItem key={m.id} value={m.id}>{m.name}{m.source === 'configured_catalog' ? ' (catalog)' : ''}</SelectItem>)}
+                                {availableModels.map((model) => {
+                                  const ready = verifiedModels.some((item) => item.id === model.id);
+                                  return (
+                                    <SelectItem key={model.id} value={model.id} disabled={!ready}>
+                                      {model.name}{ready ? '' : ' (not verified for chat)'}
+                                    </SelectItem>
+                                  );
+                                })}
                               </SelectContent>
                             </Select>
                           ) : canEnterModelManually ? (
@@ -1081,10 +1138,22 @@ export default function ModelSettings() {
                       )}
                     </div>
 
-                  <div className="flex justify-end pt-4">
-                    <Button onClick={handleSave} disabled={!canManageRuntime || isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
-                      {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-5 w-5" />}
-                      Finalize Intelligence Settings
+                  <div className="flex flex-wrap justify-end gap-3 pt-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleSave(false)}
+                      disabled={!canManageRuntime || isSaving}
+                      className="h-11 w-full sm:w-auto"
+                    >
+                      {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                      Save provider connection
+                    </Button>
+                    <Button
+                      onClick={() => void handleSave(true)}
+                      disabled={!canManageRuntime || isSaving || !canSetWorkspaceDefault}
+                      className="h-11 w-full sm:w-auto px-6 font-semibold"
+                    >
+                      Set as workspace default
                     </Button>
                   </div>
                 </div>

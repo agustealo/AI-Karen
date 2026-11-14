@@ -5,12 +5,16 @@ Provides a single source of truth for LLM providers, models, and execution statu
 Consumed by both settings and chat interfaces to ensure architectural alignment.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.api_routes.models.settings import build_model_settings_payload
+from ai_karen_engine.api_routes.models.settings import (
+    build_model_settings_payload,
+    get_provider_models,
+)
 from ai_karen_engine.core.model_runtime.ollama_model_inventory import (
     resolve_ollama_inventory_endpoint,
 )
@@ -36,7 +40,7 @@ class ProviderHealthInfo(BaseModel):
 class RuntimeModel(BaseModel):
     id: str
     label: str
-    available: bool = True
+    available: bool = False
     source: str = "configured_catalog"
     default: bool = False
     capabilities: List[str] = Field(default_factory=list)
@@ -86,7 +90,9 @@ class RuntimeProviderCatalog(BaseModel):
 
 
 def _build_bootstrap_runtime_catalog(error: Optional[Exception] = None) -> RuntimeProviderCatalog:
-    error_message = str(error) if error else "Provider catalog booted from fallback because settings payload failed."
+    # Never reflect raw backend exception text into a consumer-facing catalog:
+    # provider errors may embed credentials, tokens or endpoint query strings.
+    error_message = "Provider settings unavailable; model availability is unverified."
     providers = [
         RuntimeProvider(
             id="builtin_transformers",
@@ -184,6 +190,35 @@ async def get_runtime_provider_catalog(
                         "runtime_catalog_ollama_inventory_failed",
                         extra={"provider_id": provider_id, "error_type": type(exc).__name__},
                     )
+            # Chat availability is grounded in both a healthy configured
+            # provider and an actual model inventory, not a static catalog.
+            # Reuse the same live discovery implementation as Settings.
+            provider_ready = (
+                provider.get("enabled", True) is True
+                and provider.get("is_configured") is True
+                and provider.get("healthy") is True
+                # Legacy test/inventory callers may omit a health status,
+                # but the real settings payload always reports observed status.
+                and provider.get("health_status", "healthy") == "healthy"
+                and discovery_error is None
+                and provider.get("user_selectable", True) is not False
+                and provider.get("policy_allowed", True) is not False
+            )
+            if provider_ready and category in {"external", "custom"}:
+                try:
+                    live_inventory = await asyncio.wait_for(
+                        get_provider_models(provider_id, current_user=current_user),
+                        timeout=5.0,
+                    )
+                    raw_models = live_inventory.get("models") or []
+                except Exception as exc:
+                    raw_models = []
+                    discovery_error = "Live provider model inventory unavailable"
+                    logger.warning(
+                        "runtime_catalog_remote_inventory_failed",
+                        extra={"provider_id": provider_id, "error_type": type(exc).__name__},
+                    )
+
             models = []
             for model_obj in raw_models:
                 model = model_obj.model_dump() if hasattr(model_obj, "model_dump") else (model_obj.dict() if hasattr(model_obj, "dict") else model_obj)
@@ -191,7 +226,16 @@ async def get_runtime_provider_catalog(
                     models.append(RuntimeModel(
                         id=str(model.get("id") or ""),
                         label=str(model.get("name") or model.get("label") or model.get("id") or ""),
-                        available=bool(model.get("is_installed", model.get("available", True))),
+                        available=bool(
+                            provider_ready
+                            and (
+                                model.get("source") == "provider_live"
+                                or (
+                                    model.get("is_installed") is True
+                                    and model.get("source") in {"local_runtime", "ollama_native"}
+                                )
+                            )
+                        ),
                         source=str(model.get("source") or "configured_catalog"),
                         default=str(model.get("id") or "") == str(provider.get("selected_model") or ""),
                         capabilities=list(model.get("capabilities") or []),
@@ -209,7 +253,9 @@ async def get_runtime_provider_catalog(
                 models.append(RuntimeModel(
                     id=selected_manual_model,
                     label=selected_manual_model,
-                    available=bool(provider.get("healthy", False)),
+                    # Configured manual IDs are useful for setup but not
+                    # confirmed as runnable until live model discovery.
+                    available=False,
                     source="manual_configured",
                     default=True,
                     capabilities=list(safe_metadata.get("capabilities") or ["chat"]),
@@ -222,7 +268,7 @@ async def get_runtime_provider_catalog(
                 category=category,
                 enabled=bool(provider.get("enabled", True)),
                 configured=bool(provider.get("is_configured", False)),
-                healthy=bool(provider.get("healthy", False)) and discovery_error is None,
+                healthy=provider_ready and discovery_error is None,
                 runtime_engine=runtime_engine,
                 transport=transport,
                 compatibility_profile=safe_metadata.get("compatibility_profile"),
@@ -262,9 +308,14 @@ async def get_runtime_provider_catalog(
         # A registry fallback is not the user's selected model.
         default_provider = settings_response.get("selected_provider") or settings_response.get("default_provider") or "builtin_transformers"
         selected = next((item for item in catalog_providers if item.id == default_provider), None)
+        selectable_models = [
+            model.id for model in (selected.models if selected else [])
+            if model.available is True
+        ]
         default_model = (
-            selected.selected_model or selected.models[0].id
-            if selected and selected.models
+            selected.selected_model
+            if selected and selected.selected_model in selectable_models
+            else selectable_models[0] if selectable_models
             else "auto"
         )
         fallback_order = settings_response.get("fallback_hierarchy") or ["builtin_transformers", "openai", "gemini"]
@@ -280,7 +331,10 @@ async def get_runtime_provider_catalog(
             runtime_config_hash=runtime_config_hash,
         )
     except Exception as e:
-        logger.error(f"Error building runtime provider catalog: {e}")
+        logger.error(
+            "runtime_provider_catalog_failed",
+            extra={"error_type": type(e).__name__},
+        )
         return _build_bootstrap_runtime_catalog(e)
 
 

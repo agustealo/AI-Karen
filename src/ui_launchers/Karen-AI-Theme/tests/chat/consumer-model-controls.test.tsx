@@ -38,6 +38,7 @@ const inventory = {
 beforeEach(() => {
   vi.clearAllMocks();
   api.getRuntimeProviderCatalog.mockResolvedValue(inventory);
+  api.get.mockResolvedValue({ agents: [] });
 });
 afterEach(cleanup);
 
@@ -60,18 +61,47 @@ describe("consumer provider and model controls", () => {
     expect(api.get).not.toHaveBeenCalled();
   });
 
-  it("lets consumers inspect an unconfigured provider but never request its unverified model", async () => {
+  it("shows unconfigured providers only in diagnostics, never the chat picker", async () => {
     const change = vi.fn();
     const setup = vi.fn();
     render(<KarenComposerRuntimeCatalog selection={null} onSelectionChange={change} onOpenProviders={setup} />);
     const provider = await screen.findByRole("combobox", { name: "Requested model provider" });
     await waitFor(() => expect((provider as HTMLSelectElement).disabled).toBe(false));
-    fireEvent.change(provider, { target: { value: "unconfigured" } });
-    expect(screen.getByText(/Unconfigured provider: Not configured/)).not.toBeNull();
-    expect((screen.getByRole("combobox", { name: "Requested model" }) as HTMLSelectElement).disabled).toBe(true);
-    expect(change).toHaveBeenLastCalledWith(null);
+    expect(screen.queryByRole("option", { name: /Unconfigured provider/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Restricted provider/ })).toBeNull();
+    expect(screen.getByText(/provider hidden from chat selection/)).not.toBeNull();
+    const disclosure = screen.getByText("Advanced provider and agent details");
+    const panel = disclosure.closest("details");
+    expect(panel).not.toBeNull();
+    fireEvent.click(disclosure);
+    // JSDOM changes <details>.open without reliably dispatching its toggle.
+    // Fire the native event so React can mount diagnostic-only content.
+    panel!.open = true;
+    fireEvent(panel!, new Event("toggle"));
+    expect(await screen.findByText("Unconfigured provider")).not.toBeNull();
+    expect(screen.getByText("Not configured")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Configure providers" }));
     expect(setup).toHaveBeenCalledTimes(1);
+    expect(change).not.toHaveBeenCalled();
+  });
+
+  it("hides unverified and degraded providers even if their catalog marks a model available", async () => {
+    api.getRuntimeProviderCatalog.mockResolvedValueOnce({
+      catalog_version: "live",
+      providers: [{
+        id: "degraded-remote", label: "Degraded remote",
+        enabled: true, configured: true, healthy: false,
+        health: { status: "degraded" },
+        allowed_for_current_user: true,
+        models: [{ id: "model-claimed-ready", available: true }],
+      }],
+    });
+    const change = vi.fn();
+    render(<KarenComposerRuntimeCatalog selection={null} onSelectionChange={change} />);
+    await screen.findByText(/No selectable models are verified/);
+    expect(screen.queryByRole("option", { name: /Degraded remote/ })).toBeNull();
+    expect((screen.getByRole("combobox", { name: "Requested model" }) as HTMLSelectElement).disabled).toBe(true);
+    expect(change).not.toHaveBeenCalled();
   });
 
   it("revalidates a previously selected model on refresh instead of forwarding a stale pair", async () => {
