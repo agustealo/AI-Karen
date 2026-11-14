@@ -113,6 +113,9 @@ def test_forgetting_loaded_extension_clears_relative_import_modules(
         for name in sys.modules
     )
     # The next import no longer reuses a prior relative-imported helper.
-    _plugin(tmp_path, "replaceable", "substantially-new-code")
+    (directory / "handlers" / "clock.py").write_text(
+        "def read_value():\n    return 'substantially-new-code'\n",
+        encoding="utf-8",
+    )
     fresh = loader._import_handler(directory)
     assert fresh.execute() == "substantially-new-code"
