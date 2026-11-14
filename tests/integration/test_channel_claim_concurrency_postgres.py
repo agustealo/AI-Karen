@@ -1309,6 +1309,46 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert matching[0]["deletion_request_recorded"] is True
         assert matching[0]["credential_deletion_claim_recorded"] is True
         assert matching[0]["provider_revision_claims_correlated"] is True
+
+        # The older pairing-state schema permits non-null whitespace receipt
+        # IDs. A malformed or imported historical row must never be counted
+        # as a provider unlink claim or as correlated retirement evidence.
+        assert await raw.execute(
+            """UPDATE public.channel_personal_pairing_state
+               SET provider_unlink_receipt_id='   '
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND provider_id='approved-managed-connector'""",
+            tenant_a, terminal_connection,
+        ) == "UPDATE 1"
+        blank_rows = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        blank = next(
+            entry for entry in blank_rows
+            if entry["connection_id"] == terminal_connection
+        )
+        assert blank["provider_unlink_claim_recorded"] is False
+        assert blank["credential_deletion_claim_recorded"] is True
+        assert blank["provider_revision_claims_correlated"] is False
+        blank_assessment = assess_retirement_evidence_snapshot(blank)[
+            "retirement_assessment"
+        ]
+        assert "provider_unlink_claim_missing" in blank_assessment["blocking_reasons"]
+        assert blank_assessment["cleanup_authorized"] is False
+        assert await raw.execute(
+            """UPDATE public.channel_personal_pairing_state
+               SET provider_unlink_receipt_id='terminal-vendor-claim'
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND provider_id='approved-managed-connector'""",
+            tenant_a, terminal_connection,
+        ) == "UPDATE 1"
+        restored = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        assert next(
+            entry for entry in restored
+            if entry["connection_id"] == terminal_connection
+        )["provider_revision_claims_correlated"] is True
         assert matching[0]["unverified_deletion_request"] is True
         assessment = assess_retirement_evidence_snapshot(matching[0])[
             "retirement_assessment"
