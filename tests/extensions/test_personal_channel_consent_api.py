@@ -42,6 +42,7 @@ def host_context(*, owner=True):
         )),
         is_personal_connection_owner=AsyncMock(return_value=owner),
     )
+    host.list_owned_personal_channels = AsyncMock(return_value=[])
     host.get_personal_pairing_risk = AsyncMock(return_value=None)
     host.get_personal_pairing_status = AsyncMock(return_value={
         "availability": "unavailable", "last_observed_phase": None,
@@ -417,3 +418,93 @@ async def test_operator_assignment_requires_configured_managed_personal_provider
     host.activation.issue_action_plan.assert_not_awaited()
     host.assign_personal_connection_owner.assert_not_awaited()
 
+
+
+@pytest.mark.asyncio
+async def test_owner_inventory_uses_authenticated_principal_only():
+    host, request = host_context()
+    host.list_owned_personal_channels.return_value = [{
+        "connection_id": CONNECTION,
+        "installation_id": "whatsapp-cloud",
+        "provider_id": PROVIDER,
+        "availability": "unavailable",
+        "last_observed_phase": "connected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": False,
+    }]
+    result = await api.list_personal_channel_connections(
+        request=request, user=actor(),
+    )
+    host.list_owned_personal_channels.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+    assert len(result.connections) == 1
+    channel = result.connections[0]
+    assert channel.connection_id == CONNECTION
+    assert channel.last_observed_phase == "connected"
+    assert channel.live_connected is False
+    assert channel.qr_available is False
+    assert "credential_handle" not in channel.model_dump()
+    assert "provider_account_id" not in channel.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_owner_inventory_handles_empty_backend_without_synthetic_connections():
+    host, request = host_context()
+    result = await api.list_personal_channel_connections(
+        request=request, user=actor(),
+    )
+    assert result.connections == []
+    host.list_owned_personal_channels.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"tenant_id": "default"},
+    {"user_id": ""},
+    {"is_active": False},
+    {"is_verified": False},
+])
+async def test_owner_inventory_refuses_invalid_session_principal(changes):
+    host, request = host_context()
+    with pytest.raises(HTTPException) as exc:
+        await api.list_personal_channel_connections(
+            request=request, user=actor(**changes),
+        )
+    assert exc.value.status_code == 403
+    host.list_owned_personal_channels.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owner_inventory_rejects_host_policy_denial_and_hides_internal_exception():
+    host, request = host_context()
+    host.list_owned_personal_channels.side_effect = PermissionError("denied")
+    with pytest.raises(HTTPException) as exc:
+        await api.list_personal_channel_connections(
+            request=request, user=actor(),
+        )
+    assert exc.value.status_code == 403
+    host.list_owned_personal_channels.side_effect = RuntimeError(
+        "vault://private-ref"
+    )
+    with pytest.raises(HTTPException) as unavailable:
+        await api.list_personal_channel_connections(
+            request=request, user=actor(),
+        )
+    assert unavailable.value.status_code == 503
+    assert "vault://" not in unavailable.value.detail
+
+
+def test_owner_inventory_api_is_authenticated_and_get_only():
+    routes = [
+        route for route in api.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/api/channels/personal/connections"
+    ]
+    assert len(routes) == 1
+    assert routes[0].methods == {"GET"}
+    assert any(
+        dependency.call is api.get_current_user
+        for dependency in routes[0].dependant.dependencies
+    )
