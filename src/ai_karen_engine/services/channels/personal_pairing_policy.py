@@ -13,6 +13,17 @@ from typing import Final
 
 
 PERSONAL_WHATSAPP_CONSENT_VERSION: Final[str] = "whatsapp-personal-risk-v1"
+PERSONAL_WHATSAPP_RISK_NOTICE_TITLE: Final[str] = "Connect personal WhatsApp (unofficial integration)"
+PERSONAL_WHATSAPP_RISK_NOTICE_TEXT: Final[str] = (
+    "This connection is not supported or endorsed by WhatsApp/Meta. "
+    "Your account may be restricted or permanently banned. "
+    "An unofficial linked client may technically access messages and metadata "
+    "outside conversations that Karen is authorized to process. "
+    "Sensitive session credentials can be abused if compromised. "
+    "Protocol changes can interrupt connectivity. "
+    "A third-party operator adds a data recipient and security dependency. "
+    "Disconnect does not guarantee deletion of previously collected provider data."
+)
 
 
 class PersonalPairingState(StrEnum):
