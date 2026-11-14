@@ -27,6 +27,7 @@ const channel = {
   connection_id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
   installation_id: 'whatsapp-cloud',
   provider_id: null,
+  active_consent_provider_ids: [] as string[],
   availability: 'unavailable' as const,
   last_observed_phase: 'connected',
   live_connected: false,
@@ -47,6 +48,7 @@ const revokePath = consentPath.replace(/\/consent$/, '/revoke');
 
 const currentConsent = {
   acknowledged: false,
+  has_active_consent: false,
   policy_version: 'whatsapp-personal-risk-v2',
   notice_title: 'Connect personal WhatsApp (unofficial integration)',
   notice_text: 'This connection is unofficial and may expose private metadata and cause account suspension.',
@@ -165,6 +167,7 @@ describe('KOC-05 versioned risk acknowledgement and revocation', () => {
         return {
           ...currentConsent,
           acknowledged: vi.mocked(apiClient.post).mock.calls.length > 0,
+          has_active_consent: vi.mocked(apiClient.post).mock.calls.length > 0,
         };
       }
       throw new Error('Unexpected backend request');
@@ -207,6 +210,7 @@ describe('KOC-05 versioned risk acknowledgement and revocation', () => {
         return {
           ...currentConsent,
           acknowledged: vi.mocked(apiClient.post).mock.calls.length === 0,
+          has_active_consent: vi.mocked(apiClient.post).mock.calls.length === 0,
         };
       }
       throw new Error('Unexpected backend request');
@@ -279,5 +283,108 @@ describe('KOC-05 versioned risk acknowledgement and revocation', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Current consent could not be verified');
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Acknowledge risks' })).toBeNull();
+  });
+});
+
+
+describe('KOC-05 disabled-provider and obsolete-policy consent revocation', () => {
+  it('retains revocation-only controls after the managed provider is disabled', async () => {
+    const disabled = {
+      ...channel,
+      active_consent_provider_ids: ['managed-operator'],
+    };
+    let revoked = false;
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') {
+        return { connections: [disabled] };
+      }
+      if (path === consentPath) {
+        return {
+          ...currentConsent,
+          acknowledged: false,
+          has_active_consent: !revoked,
+        };
+      }
+      throw new Error('Unexpected request');
+    });
+    vi.mocked(apiClient.post).mockImplementation(async (path) => {
+      expect(path).toBe(revokePath);
+      revoked = true;
+      return { revoked: true, paired: false, provider_unlinked: false };
+    });
+
+    render(<ChannelsSettings />);
+    expect(await screen.findByText('Previous-policy acknowledgement still active')).toBeTruthy();
+    expect(screen.getByText(/no longer configured/)).toBeTruthy();
+    expect(screen.getByText('Unavailable')).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Acknowledge risks' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Revoke personal WhatsApp risk consent',
+    }));
+    expect(await screen.findByText(/Risk acknowledgement revoked in Karen/)).toBeTruthy();
+    expect(screen.getByText('Not acknowledged')).toBeTruthy();
+    expect(screen.getByText('Not verified connected')).toBeTruthy();
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(apiClient.post).toHaveBeenCalledWith(revokePath, {});
+    expect(vi.mocked(apiClient.get).mock.calls.filter(([p]) => p === consentPath)).toHaveLength(2);
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it('shows a revocation action for an obsolete policy even when the provider is configured', async () => {
+    mockInventoryAndConsent({ connections: [configuredChannel] }, {
+      ...currentConsent,
+      acknowledged: false,
+      has_active_consent: true,
+    });
+    render(<ChannelsSettings />);
+    expect(await screen.findByText('Previous-policy acknowledgement still active')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: 'Revoke personal WhatsApp risk consent',
+    })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Acknowledge risks' })).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('fails closed when a disabled-provider consent status cannot be verified', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') {
+        return { connections: [{
+          ...channel, active_consent_provider_ids: ['managed-operator'],
+        }] };
+      }
+      throw new Error('Consent backend unavailable');
+    });
+    render(<ChannelsSettings />);
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Current consent could not be verified');
+    expect(screen.queryByRole('button', {
+      name: 'Revoke personal WhatsApp risk consent',
+    })).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing or malformed active-consent inventory instead of inventing no consents', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({
+      connections: [{ ...channel, active_consent_provider_ids: ['managed-operator', 'managed-operator'] }],
+    });
+    render(<ChannelsSettings />);
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('could not verify your channel connections');
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('refuses to accept risks for an inactive provider when no consent exists', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({
+      connections: [{ ...channel, active_consent_provider_ids: [] }],
+    });
+    render(<ChannelsSettings />);
+    await screen.findByText('whatsapp-cloud');
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Acknowledge risks' })).toBeNull();
+    expect(screen.queryByRole('button', {
+      name: 'Revoke personal WhatsApp risk consent',
+    })).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
   });
 });
