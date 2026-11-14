@@ -80,8 +80,12 @@ unlink still require separate release gates.
   The schema rejects tenant, operator, session, provider and policy-plan
   overrides.
 - Requires the existing authenticated get_current_user dependency with a
-  verified active durable principal, an existing tenant-scoped connection,
-  fresh channel.provision RuntimePolicy/RBAC authorization and
+  verified active durable principal and an existing tenant-scoped connection.
+  The connection's installation must also be explicitly allowlisted in
+  KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON and declare the
+  pairing_webhook_secret Vault type. A generic installed channel cannot use
+  this personal owner-assignment API without those gates.
+- Requires fresh channel.provision RuntimePolicy/RBAC authorization and
   ChannelHost.assign_personal_connection_owner revalidation.
 - The existing SQL transaction assigns the active, verified target user only
   once. A conflicting owner, repeated assignment, missing target or other
