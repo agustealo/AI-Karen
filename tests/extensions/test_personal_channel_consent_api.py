@@ -1020,3 +1020,47 @@ def test_retirement_api_rejects_unsupported_correlated_claim_downgrade():
                 ],
             },
         })
+
+
+def test_retirement_response_validator_rejects_fake_correlation_or_missing_mismatch():
+    from ai_karen_engine.services.channels.consent_recovery import (
+        assess_retirement_evidence_snapshot,
+    )
+    raw = {
+        "connection_id": CONNECTION, "connection_revision": 8,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": False, "unresolved_pairing": False,
+        "provider_unlink_claim_recorded": True,
+        "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": True,
+        "provider_revision_claims_correlated": False,
+        "unverified_deletion_request": True,
+        "inbox_not_completed": False, "outbound_not_confirmed": True,
+    }
+    mismatched = assess_retirement_evidence_snapshot(raw)
+    assert api.PersonalRetirementEvidenceItem(**mismatched).retirement_assessment.cleanup_authorized is False
+    for malicious in (
+        {
+            **mismatched,
+            "retirement_assessment": {
+                **mismatched["retirement_assessment"],
+                "blocking_reasons": [
+                    code for code in mismatched["retirement_assessment"]["blocking_reasons"]
+                    if code != "provider_revision_claims_mismatched"
+                ],
+            },
+        },
+        {**mismatched, "provider_revision_claims_correlated": True},
+        {
+            **mismatched,
+            "provider_revision_claims_correlated": True,
+            "credential_deletion_claim_recorded": False,
+        },
+    ):
+        with pytest.raises(ValidationError):
+            api.PersonalRetirementEvidenceItem(**malicious)
+
+    legitimate = assess_retirement_evidence_snapshot({
+        **raw, "provider_revision_claims_correlated": True,
+    })
+    assert api.PersonalRetirementEvidenceItem(**legitimate).provider_revision_claims_correlated is True
