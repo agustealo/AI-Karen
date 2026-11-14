@@ -435,7 +435,10 @@ async def update_model_settings(
         if request.base_url and _discovery_url_key(request.base_url, ollama=True) != _discovery_url_key(option.base_url, ollama=True):
             raise HTTPException(status_code=400, detail="Runtime source and endpoint do not match")
 
-    if request.provider:
+    # Connection edits identify their target provider but must not silently
+    # replace the workspace's default model. Only a complete model choice
+    # requests a new default.
+    if request.provider and request.model:
         normalized_provider = _normalize_provider_id(request.provider)
         settings.set_setting("provider", normalized_provider, save=False)
 
@@ -487,9 +490,15 @@ async def update_model_settings(
 
         if secret_name:
             if request.clear_api_key:
-                secret_manager.delete_secret(secret_name)
+                persisted = secret_manager.delete_secret(secret_name)
             else:
-                secret_manager.set_secret(secret_name, request.api_key, description=f"{provider_id} API key")
+                persisted = secret_manager.set_secret(
+                    secret_name, request.api_key, description=f"{provider_id} API key"
+                )
+            if not persisted:
+                raise HTTPException(
+                    status_code=503, detail="Credential persistence unavailable"
+                )
             
             # CRITICAL: Invalidate the registry cache so the new key is picked up immediately
             try:
