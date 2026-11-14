@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 
 from ai_karen_engine.extensions.contracts import (
     DataClassification,
+    ExecutionIsolationMode,
     ExtensionCapability,
     ExtensionExecutionContext,
     ExtensionExecutionRequest,
@@ -187,6 +188,9 @@ class PluginKernel:
     """One bridge from catalog discovery to typed, governed execution."""
 
     EXECUTE_CAPABILITY = "execute"
+    # Durable provenance is independent of the user-controlled disabled gate.
+    # Uploading into the built-in root must never promote uploaded code to first-party.
+    UPLOADED_ORIGIN_MARKER = ".karen-upload-origin"
 
     def __init__(
         self,
@@ -232,6 +236,12 @@ class PluginKernel:
             return self.extensions_root.resolve() == _CANONICAL_PLUGIN_ROOT.resolve()
         except OSError:
             return False
+
+    def _is_uploaded_plugin(self, plugin_id: str) -> bool:
+        """Detect a package published by the governed manual upload path."""
+        marker = self.extensions_root / plugin_id / self.UPLOADED_ORIGIN_MARKER
+        # A marker changed into a symlink is suspicious, not a trust upgrade.
+        return marker.is_file() or marker.is_symlink() or marker.is_dir()
 
     async def initialize(self, *, auto_discover: bool = True) -> None:
         if self._initialized:
@@ -386,6 +396,7 @@ class PluginKernel:
                 and metadata.is_valid
                 and plugin_id not in self._disabled
                 and plugin_id not in self._retirement_pending
+                and not self._is_uploaded_plugin(plugin_id)
                 and manifest.capabilities.communication_channel is None
                 and manifest.rbac.default_enabled
             )
@@ -409,7 +420,7 @@ class PluginKernel:
                 continue
 
             registration = ExtensionRegistration(
-                manifest=self._project_runtime_manifest(catalog_manifest),
+                manifest=self._project_runtime_manifest(catalog_manifest, plugin_id=plugin_id),
                 state=ExtensionLifecycleState.DISCOVERED,
                 checksum=metadata.file_hash,
                 instance=_LazyRuntimeInstanceAdapter(self.loader, plugin_id),
@@ -488,7 +499,7 @@ class PluginKernel:
         return declared
 
     def _project_runtime_manifest(
-        self, manifest: CatalogExtensionManifest
+        self, manifest: CatalogExtensionManifest, *, plugin_id: str | None = None
     ) -> RuntimeExtensionManifest:
         schema: Dict[str, Any] = {}
         if manifest.config_schema is not None:
@@ -548,8 +559,11 @@ class PluginKernel:
         }
         if channel is not None:
             metadata["communication_channel"] = channel.model_dump()
+        origin_plugin_id = plugin_id or manifest.name
         trust_tier = (
-            TrustTier.FIRST_PARTY if self._is_builtin_root() else TrustTier.UNTRUSTED
+            TrustTier.FIRST_PARTY
+            if self._is_builtin_root() and not self._is_uploaded_plugin(origin_plugin_id)
+            else TrustTier.UNTRUSTED
         )
         return RuntimeExtensionManifest(
             id=manifest.name,
@@ -567,6 +581,7 @@ class PluginKernel:
             enabled_by_default=manifest.rbac.default_enabled and channel is None,
             trusted_ui=False,
             trust_tier=trust_tier,
+            isolation_mode=ExecutionIsolationMode.IN_PROCESS,
             metadata=metadata,
             risk_class=RiskClass.HIGH if channel is not None else RiskClass.LOW,
             data_classification=(
@@ -740,6 +755,10 @@ class PluginKernel:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
+        if self._is_uploaded_plugin(plugin_id):
+            raise ValueError(
+                "Uploaded plugin execution requires a verified isolated runtime"
+            )
         manifest = self._catalog_manifests.get(plugin_id)
         if manifest is not None:
             missing = [
