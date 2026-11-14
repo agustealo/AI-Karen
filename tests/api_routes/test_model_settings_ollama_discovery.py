@@ -456,6 +456,23 @@ async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
     monkeypatch.setattr(
         openai_compatible_provider, "OpenAICompatibleProvider", NousInventory
     )
+    from ai_karen_engine.core.model_runtime import provider_registry_service
+    from ai_karen_engine.core.model_runtime.runtime_engine import EndpointKind
+
+    health_events: list[tuple[str, bool]] = []
+    monitored_registry = SimpleNamespace(
+        get_provider_endpoint=lambda name: SimpleNamespace(kind=EndpointKind.CLOUD_PROVIDER),
+        health_monitor=SimpleNamespace(
+            update_provider_health=lambda name, *, is_healthy: health_events.append(
+                (name, is_healthy)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        provider_registry_service,
+        "get_provider_registry_service",
+        lambda: monitored_registry,
+    )
     response = await settings_routes.get_provider_models(
         "nous", current_user={"roles": ["admin"]}
     )
@@ -466,6 +483,7 @@ async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
     assert by_id["Hermes-4.3-36B"].source == "provider_live"
     assert by_id["Hermes-4-405B"].source == "provider_live"
     assert by_id["Hermes-4-70B"].source == "configured_catalog"
+    assert health_events == [("nous", True)]
     assert key not in repr(response)
 
     with pytest.raises(HTTPException) as exc:
