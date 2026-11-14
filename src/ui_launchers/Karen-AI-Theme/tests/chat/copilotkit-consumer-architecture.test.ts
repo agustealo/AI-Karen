@@ -129,6 +129,36 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).not.toContain('testInfo.attach("kcon490-personal-transcript"');
   });
 
+  it("requires authenticated follow-up CAS and SDK failure receipts without private transcript attachments", () => {
+    expect(liveBrowser).toContain('let expectedDraftRevision = 2;');
+    expect(liveBrowser).toContain('const beforeCas = draftCas.length;');
+    expect(liveBrowser).toContain('const beforeRuns = observedRunRequests.length;');
+    expect(liveBrowser).toContain('expect(draftCas.slice(beforeCas)).toEqual([');
+    expect(liveBrowser).toContain('{ clearing: false, status: 200, revision: expectedDraftRevision + 1 }');
+    expect(liveBrowser).toContain('{ clearing: true, status: 200, revision: expectedDraftRevision + 2 }');
+    expect(liveBrowser).toContain('observedRunRequests.length - beforeRuns,');
+    expect(liveBrowser).toContain('(body as { revision?: unknown }).revision === expectedDraftRevision');
+    expect(liveBrowser).toContain('await testInfo.attach("kcon490-followup-failure-receipt", {');
+    expect(liveBrowser).toContain('schema: "karen.followup_send_failure.v1"');
+    expect(liveBrowser).toContain('draft_cas: draftCas.slice(beforeCas).slice(-8)');
+    expect(liveBrowser).toContain('run_http_responses: observedRunResponses.slice(beforeResponses).slice(-8)');
+    expect(liveBrowser).toContain('run_transport_failures:');
+    expect(liveBrowser).toContain('persisted_assistant_confirmed: persistedAssistantConfirmed');
+    const firstLiveFollowup = liveBrowser.indexOf(
+      'await test.step("KCON-490 real multi-turn personal context"',
+    );
+    const firstReload = liveBrowser.indexOf(
+      '    await page.reload();\n    const restored = page.getByTestId("karen-copilot-consumer-chat");',
+    );
+    expect(firstLiveFollowup).toBeGreaterThan(0);
+    expect(firstReload).toBeGreaterThan(firstLiveFollowup);
+    expect(liveBrowser).toContain('throw error;');
+    // No raw request/response bodies or user-text snapshots in the receipt.
+    expect(liveBrowser).not.toContain('testInfo.attach("kcon490-followup-transcript"');
+    expect(liveBrowser).not.toContain('submitted_text: utterance');
+    expect(liveBrowser).not.toContain('assistant_text: answer');
+  });
+
   it("requires a live non-cacheable backend before approved browser sign-in", () => {
     // Each independent real-browser scenario must verify backend readiness
     // before credentials are used. Do not hardcode the number of scenarios:

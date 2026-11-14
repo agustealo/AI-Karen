@@ -16,6 +16,7 @@ on:
           - copilotkit-native
           - copilotkit-native-stop
           - copilotkit-consumer
+          - copilotkit-context
           - copilotkit-failure
           - copilotkit-persona
       target_sha:
@@ -247,7 +248,7 @@ jobs:
   # consumer suite includes multiple first-turn live source/reload checks;
   # leave enough job time for all scenarios without changing test deadlines.
   authenticated-copilotkit-protocol:
-    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-failure' || inputs.scenario == 'copilotkit-persona') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'copilotkit-protocol' || inputs.scenario == 'copilotkit-native' || inputs.scenario == 'copilotkit-native-stop' || inputs.scenario == 'copilotkit-consumer' || inputs.scenario == 'copilotkit-context' || inputs.scenario == 'copilotkit-failure' || inputs.scenario == 'copilotkit-persona') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: karen-sanitized-browser-acceptance
@@ -316,7 +317,7 @@ jobs:
           test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved CopilotKit protocol deployment URL"; exit 1; }
           test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing acceptance identity"; exit 1; }
           test -n "$KAREN_UX_PASSWORD" || { echo "::error::Missing acceptance credential"; exit 1; }
-          if test "${{ inputs.scenario }}" != "copilotkit-persona" && test "${{ inputs.scenario }}" != "copilotkit-failure"; then
+          if test "${{ inputs.scenario }}" != "copilotkit-persona" && test "${{ inputs.scenario }}" != "copilotkit-failure" && test "${{ inputs.scenario }}" != "copilotkit-context"; then
             test -n "$KAREN_HISTORY_CONVERSATION_ID" || { echo "::error::Missing approved conversation"; exit 1; }
           fi
           if test "${{ inputs.scenario }}" = "copilotkit-protocol"; then
@@ -425,6 +426,29 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright test e2e/copilotkit-consumer-boot.spec.ts \
+            --config=e2e/playwright.config.ts --project=chromium \
+            --reporter=list --retries=0
+
+      # Explicit opt-in, real six-turn follow-up proof on a reviewed main SHA.
+      # Reuse the same backend health and independent deployment provenance
+      # preflights as normal consumer acceptance. A missing model/backend MUST
+      # fail before sign-in, not skip or substitute canned answers.
+      - name: Prove real signed-in follow-up draft CAS and personal context
+        if: inputs.scenario == 'copilotkit-context'
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          KAREN_CHAT_BOOT_ACCEPTANCE: "1"
+          KAREN_PERSONAL_CONTEXT_ACCEPTANCE: "1"
+          KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test "$KAREN_CHAT_BOOT_ACCEPTANCE" = "1"
+          test "$KAREN_PERSONAL_CONTEXT_ACCEPTANCE" = "1"
+          npx playwright test e2e/copilotkit-consumer-boot.spec.ts \
+            --grep 'persists a real user message and a real assistant reply' \
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
