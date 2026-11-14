@@ -297,11 +297,9 @@ class PluginKernel:
 
     async def _refresh_unlocked(self) -> int:
         """Rebuild a complete execution projection without publishing partial state."""
-        self._disabled.update(
-            registration.manifest.id
-            for registration in self.runtime_registry.list_registered()
-            if registration.state is ExtensionLifecycleState.DISABLED
-        )
+        # Only an explicit user disable is persisted through the marker.
+        # Default-disabled, channel-gated and dependency-blocked states are
+        # derived, never promoted into permanent manual disablement.
         await self.catalog_registry.refresh()
         # Uninstalled IDs must not retain in-memory lifecycle state. An
         # installed plugin's persisted disabled marker is read below.
