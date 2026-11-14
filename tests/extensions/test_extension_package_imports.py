@@ -119,3 +119,35 @@ def test_forgetting_loaded_extension_clears_relative_import_modules(
     )
     fresh = loader._import_handler(directory)
     assert fresh.execute() == "substantially-new-code"
+
+
+def test_direct_legacy_reload_fails_closed_without_import_or_eviction(
+    tmp_path: Path,
+) -> None:
+    """Synchronous reload cannot skip kernel shutdown or active-turn fencing."""
+    from types import SimpleNamespace
+    from ai_karen_engine.extensions.platform.core.host.errors import ExtensionLoadError
+
+    directory = _plugin(tmp_path, "loaded", "original")
+    loader = ExtensionLoader(str(tmp_path))
+    module = loader._import_handler(directory)
+    instance = SimpleNamespace(context=SimpleNamespace(extension_dir=directory))
+    loader._loaded_extensions["loaded"] = instance
+    namespace = module.__package__
+    cached = {
+        name: value for name, value in sys.modules.items()
+        if name == namespace or name.startswith(namespace + ".")
+    }
+
+    with pytest.raises(ExtensionLoadError, match="PluginService.refresh_plugins"):
+        loader.reload_extension("loaded")
+    assert loader.get_loaded_extensions()["loaded"] is instance
+    assert module.execute() == "original"
+    assert {
+        name: value for name, value in sys.modules.items()
+        if name == namespace or name.startswith(namespace + ".")
+    } == cached
+
+    with pytest.raises(ExtensionLoadError, match="PluginService.refresh_plugins"):
+        loader.reload_extension("not-loaded")
+    assert loader.get_loaded_extensions()["loaded"] is instance
