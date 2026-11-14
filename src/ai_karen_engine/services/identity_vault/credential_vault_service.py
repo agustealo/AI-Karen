@@ -1911,4 +1911,21 @@ class CredentialVaultService(BaseService):
             return list(result.scalars().all())
 
 
-__all__ = ["CredentialVaultService", "IdentityVaultConfig"]
+_vault_service: CredentialVaultService | None = None
+
+
+def get_credential_vault_service() -> CredentialVaultService:
+    """One process-local Identity Vault service for all authenticated API ingress."""
+    global _vault_service
+    if _vault_service is None:
+        _vault_service = CredentialVaultService()
+    return _vault_service
+
+
+__all__ = [
+    "CredentialVaultService",
+    "IdentityVaultConfig",
+    "PluginCredentialConflict",
+    "PluginCredentialDenied",
+    "get_credential_vault_service",
+]
