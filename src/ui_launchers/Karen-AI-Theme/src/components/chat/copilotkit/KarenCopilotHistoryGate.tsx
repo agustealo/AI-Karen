@@ -293,20 +293,33 @@ export function KarenCopilotHistoryGate({
             if (cancelled || restoreQueued) continue;
             const status = error && typeof error === "object" && "status" in error
               ? (error as { status?: unknown }).status : undefined;
-            // A 502 may mean the bounded full replay exceeds 500 messages;
-            // 503 can mean the governed event journal is unavailable. Neither
-            // authorizes an SDK replay, but an INDEPENDENT owner-verified text
-            // projection can still be shown read-only. Never recover 401/404.
+            const details = error && typeof error === "object" && "details" in error
+              ? (error as { details?: unknown }).details : undefined;
+            const errorCode = details && typeof details === "object" &&
+              !Array.isArray(details) && "error_code" in details
+              ? (details as { error_code?: unknown }).error_code : undefined;
+            // A proxy 502/503 is not evidence that saved rich content cannot
+            // replay. Distinguish explicit connection failures from canonical
+            // replay failures before offering a second, read-only history GET.
+            const backendUnavailable = (status === 502 || status === 503) &&
+              (errorCode === "BACKEND_UPSTREAM_UNAVAILABLE" ||
+               errorCode === "BACKEND_TARGET_NOT_CONFIGURED");
+            // Other 502 responses may mean the bounded replay exceeds 500
+            // messages; 503 may mean the event journal is unavailable. Those
+            // remain eligible only for an independent owner-verified text view.
+            // Never recover 401/404.
             const continuationDenied = textContinuationRequested.current;
             if (continuationDenied) {
               textContinuationRequested.current = false;
               setTextContinuationActive(false);
               setContinuationWindowHasOlder(false);
             }
-            const replayUnsupported = continuationDenied ||
+            const replayUnsupported = !backendUnavailable && (
+              continuationDenied ||
               status === 409 || status === 502 || status === 503 || (
                 error instanceof Error && /^Unsupported verified /.test(error.message)
-              );
+              )
+            );
             if (replayUnsupported) {
               // A fresh authenticated request to the canonical owned snapshot
               // is the only authority for text recovery. Never reuse an
@@ -330,9 +343,11 @@ export function KarenCopilotHistoryGate({
                   "Karen could not authorize text-only continuation. Verified saved text remains read-only.",
                 );
               }
-              setError(replayUnsupported
-                ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available."
-                : "Karen could not verify or restore this conversation.");
+              setError(backendUnavailable
+                ? "Karen's backend is unavailable. Saved conversation history could not be verified or opened. Retry when the connection returns."
+                : replayUnsupported
+                  ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available."
+                  : "Karen could not verify or restore this conversation.");
               restored = false;
             }
           }
