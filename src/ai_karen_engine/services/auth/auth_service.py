@@ -300,7 +300,7 @@ class AuthService(BaseService):
         user_agent: str,
         device_fingerprint: str,
     ) -> None:
-        """Persist a session record to the database when possible."""
+        """Commit the access/refresh session before returning login credentials."""
         try:
             user_uuid = uuid.UUID(str(user_id))
         except ValueError as exc:
@@ -323,6 +323,10 @@ class AuthService(BaseService):
                     )
                 )
                 await db_session.flush()
+                # Yield-based request dependencies may finalize after the HTTP
+                # response starts. A login must not send JWTs before the durable
+                # session commit succeeds, including the first-run admin case.
+                await db_session.commit()
         except Exception as exc:
             logger.exception("Failed to persist authentication session")
             raise RuntimeError("Durable session persistence unavailable") from exc
