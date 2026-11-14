@@ -173,14 +173,8 @@ const getUniqueStrings = (values: unknown): string[] => {
 };
 
 const isPluginCompatible = (plugin: NonNullable<PluginDetails['plugin']>): boolean => {
-  const compatibilityInfo = plugin.compatibility;
-
-  if (!compatibilityInfo) {
-    return true;
-  }
-
-  // The backend owns compatibility decisions; the client does not compare
-  // Karen versions or invent a more restrictive result from manifest text.
+  // Only the backend catalog decides compatibility. Do not reinterpret
+  // manifest version bounds in the presentation layer.
   return plugin.status !== 'incompatible';
 };
 
