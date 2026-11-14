@@ -8,11 +8,67 @@ import { proxyToBackend } from "@/app/api/_lib/backend-proxy";
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
+  vi.useRealTimers();
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });
 
 describe("Canonical backend proxy execution redirects", () => {
+  it("does not repeat a GET after the canonical proxy deadline expires", async () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchSpy = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Timed out", "AbortError"));
+        }, { once: true });
+      }),
+    );
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    const request = new NextRequest("http://localhost:3000/api/auth/first-run");
+    const resultPromise = proxyToBackend(request, "/api/auth/first-run", {
+      retryAttempts: 3,
+      retryDelayMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(30000);
+    const result = await resultPromise;
+
+    expect(result.status).toBe(502);
+    expect(await result.json()).toMatchObject({
+      error_code: "BACKEND_UPSTREAM_UNAVAILABLE",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(
+      "[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({
+        upstream_path: "/api/auth/first-run",
+        abort_origin: "proxy_deadline",
+      }),
+    );
+  });
+
+  it("still retries a fast connection reset on a safe GET without retrying POST", async () => {
+    const failure = Object.assign(new Error("Connection reset"), {
+      code: "ECONNRESET",
+    });
+    const fetchSpy = vi.fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(new Response("Recovered", { status: 200 }));
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    const request = new NextRequest("http://localhost:3000/api/auth/first-run");
+    const response = await proxyToBackend(request, "/api/auth/first-run", {
+      retryAttempts: 3,
+      retryDelayMs: 0,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("Recovered");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls.every((call) => call[1]?.method === "GET")).toBe(true);
+  });
+
   it("does not repeat an execution POST after an upstream 307 redirect", async () => {
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response("Execution was not completed", {
