@@ -252,9 +252,12 @@ class PluginService:
                     relative = Path(member.filename)
                     if (
                         not member.filename
-                        or relative.name in (
-                            PluginKernel.UPLOADED_ORIGIN_MARKER,
-                            ".karen-manual-disabled",
+                        or any(
+                            part in {
+                                PluginKernel.UPLOADED_ORIGIN_MARKER,
+                                ".karen-manual-disabled",
+                            }
+                            for part in relative.parts
                         )
                         or relative.is_absolute()
                         or ".." in relative.parts
