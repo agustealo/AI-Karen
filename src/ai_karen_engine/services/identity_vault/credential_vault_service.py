@@ -10,6 +10,8 @@ simulated by this service.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -33,6 +35,7 @@ from ai_karen_engine.database.identity_vault_schema import (
     CredentialSecret,
     ExternalAccount,
     LoginAttempt,
+    PluginCredentialSlot,
     ProviderDefinition,
     TokenLease,
 )
@@ -69,6 +72,14 @@ class IdentityVaultConfig(ServiceConfig):
     version: str = "1.1.0"
     rate_limit_per_minute: int = 60
     audit_retention_days: int = 365
+
+
+class PluginCredentialConflict(RuntimeError):
+    """The plugin credential slot has changed since it was read."""
+
+
+class PluginCredentialDenied(PermissionError):
+    """Plugin secret scope is invalid or no longer authorized."""
 
 
 class CredentialVaultService(BaseService):
@@ -539,6 +550,408 @@ class CredentialVaultService(BaseService):
             # the transport. A persistence failure denies the operation.
             await session.commit()
             return plaintext
+
+    @staticmethod
+    def _plugin_secret_scope(
+        tenant_id: uuid.UUID,
+        plugin_id: str,
+        field_key: str | None = None,
+    ) -> uuid.UUID:
+        """Validate bounded, canonical scope before any database or vault access."""
+        try:
+            tenant = uuid.UUID(str(tenant_id))
+        except (ValueError, TypeError, AttributeError):
+            raise PluginCredentialDenied("Plugin credential tenant is required") from None
+        pattern = r"[A-Za-z0-9][A-Za-z0-9_-]{0,49}"
+        if not isinstance(plugin_id, str) or re.fullmatch(pattern, plugin_id) is None:
+            raise PluginCredentialDenied("Invalid plugin identifier")
+        if field_key is not None and (
+            not isinstance(field_key, str)
+            or re.fullmatch(pattern, field_key) is None
+        ):
+            raise PluginCredentialDenied("Invalid plugin credential field")
+        return tenant
+
+    @staticmethod
+    async def _plugin_tenant_scope(session: AsyncSession, tenant_id: uuid.UUID) -> None:
+        await session.execute(
+            text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(tenant_id)},
+        )
+
+    @staticmethod
+    def _plugin_vault_provider_id(plugin_id: str) -> str:
+        return "plugin:" + plugin_id
+
+    async def _get_plugin_credential_provider(
+        self,
+        session: AsyncSession,
+        tenant_id: uuid.UUID,
+        plugin_id: str,
+        *,
+        provision: bool,
+    ) -> ProviderDefinition | None:
+        canonical_id = self._plugin_vault_provider_id(plugin_id)
+        marker = {"managed_for": "plugin_credentials", "plugin_id": plugin_id}
+        if provision:
+            # Stable provider namespace and unique tenant/provider index from
+            # Identity Vault migration 8. ON CONFLICT serializes concurrent
+            # first-time enrollment without creating an alternate vault owner.
+            await session.execute(
+                text(
+                    "INSERT INTO public.identity_providers "
+                    "(id, tenant_id, provider_id, display_name, provider_type, "
+                    "config, supported_capabilities, enabled, is_system) "
+                    "VALUES (CAST(:id AS uuid), CAST(:tenant_id AS uuid), "
+                    ":provider_id, :display_name, 'api_key', "
+                    "CAST(:config AS json), '[]'::json, true, true) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "tenant_id": str(tenant_id),
+                    "provider_id": canonical_id,
+                    "display_name": plugin_id + " plugin credentials",
+                    "config": json.dumps(marker, separators=(",", ":")),
+                },
+            )
+        query = self._tenant_query(ProviderDefinition, tenant_id).where(
+            ProviderDefinition.provider_id == canonical_id,
+        )
+        if provision:
+            query = query.with_for_update()
+        provider = (await session.execute(query)).scalar_one_or_none()
+        if provider is None:
+            return None
+        if (
+            provider.tenant_id != tenant_id
+            or not provider.enabled
+            or not provider.is_system
+            or provider.provider_type != "api_key"
+            or provider.config != marker
+        ):
+            raise PluginCredentialDenied("Plugin credential provider scope denied")
+        return provider
+
+    @staticmethod
+    def _plugin_secret_receipt(
+        *, status: str, revision: int,
+    ) -> Dict[str, Any]:
+        return {
+            "configured": status == CredentialStatus.ACTIVE.value,
+            "status": status,
+            "revision": revision,
+        }
+
+    async def list_plugin_credential_status(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        plugin_id: str,
+        field_keys: frozenset[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return status and revision only. Never load/decrypt a credential value."""
+        tenant = self._plugin_secret_scope(tenant_id, plugin_id)
+        if not field_keys or len(field_keys) > 64:
+            raise PluginCredentialDenied("Plugin credential manifest scope denied")
+        for key in field_keys:
+            self._plugin_secret_scope(tenant, plugin_id, key)
+        result = {
+            key: self._plugin_secret_receipt(status="missing", revision=0)
+            for key in sorted(field_keys)
+        }
+        async with self._session_scope() as session:
+            await self._plugin_tenant_scope(session, tenant)
+            rows = (await session.execute(
+                select(PluginCredentialSlot, Credential)
+                .join(
+                    Credential,
+                    Credential.id == PluginCredentialSlot.credential_id,
+                )
+                .where(
+                    PluginCredentialSlot.tenant_id == tenant,
+                    PluginCredentialSlot.plugin_id == plugin_id,
+                    PluginCredentialSlot.field_key.in_(field_keys),
+                    Credential.tenant_id == tenant,
+                )
+            )).all()
+            for slot, credential in rows:
+                if (
+                    credential.credential_metadata != {
+                        "managed_for": "plugin_credentials",
+                        "plugin_id": plugin_id,
+                        "field_key": slot.field_key,
+                    }
+                ):
+                    raise PluginCredentialDenied("Plugin credential binding integrity denied")
+                provider = await self._get_plugin_credential_provider(
+                    session, tenant, plugin_id, provision=False
+                )
+                if provider is None or credential.provider_id != provider.id:
+                    raise PluginCredentialDenied("Plugin credential binding integrity denied")
+                if credential.status == CredentialStatus.ACTIVE.value:
+                    # EXISTS projection does not return secret contents.
+                    exists = await session.execute(
+                        select(CredentialSecret.id).where(
+                            CredentialSecret.tenant_id == tenant,
+                            CredentialSecret.credential_id == credential.id,
+                            CredentialSecret.secret_type == slot.field_key,
+                        ).limit(1)
+                    )
+                    status = (
+                        CredentialStatus.ACTIVE.value
+                        if exists.scalar_one_or_none() is not None
+                        else "unavailable"
+                    )
+                else:
+                    status = str(credential.status)
+                result[slot.field_key] = self._plugin_secret_receipt(
+                    status=status, revision=int(slot.revision),
+                )
+        return result
+
+    async def write_plugin_credential(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        actor_user_id: str,
+        plugin_id: str,
+        field_key: str,
+        secret_value: str,
+        expected_revision: int,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Atomically create/rotate a plugin's encrypted vault secret and slot."""
+        tenant = self._plugin_secret_scope(tenant_id, plugin_id, field_key)
+        if (
+            not isinstance(actor_user_id, str)
+            or not actor_user_id.strip()
+            or len(actor_user_id) > 255
+            or not isinstance(correlation_id, str)
+            or not correlation_id
+            or len(correlation_id) > 128
+            or not isinstance(expected_revision, int)
+            or isinstance(expected_revision, bool)
+            or expected_revision < 0
+        ):
+            raise PluginCredentialDenied("Invalid plugin credential write authority")
+        if (
+            not isinstance(secret_value, str)
+            or not secret_value.strip()
+            or len(secret_value.encode("utf-8")) > 4096
+        ):
+            raise PluginCredentialDenied("Plugin credential must be a nonempty bounded secret")
+        await self._check_rate_limit(tenant, actor_user_id, "plugin_credential_write")
+        encrypted = encrypt_data(secret_value).decode("ascii")
+        metadata = {
+            "managed_for": "plugin_credentials",
+            "plugin_id": plugin_id,
+            "field_key": field_key,
+        }
+        async with self._session_scope() as session:
+            await self._plugin_tenant_scope(session, tenant)
+            slot = (await session.execute(
+                self._tenant_query(PluginCredentialSlot, tenant)
+                .where(
+                    PluginCredentialSlot.plugin_id == plugin_id,
+                    PluginCredentialSlot.field_key == field_key,
+                ).with_for_update()
+            )).scalar_one_or_none()
+            if slot is None:
+                if expected_revision != 0:
+                    raise PluginCredentialConflict("Plugin credential changed; refresh required")
+                provider = await self._get_plugin_credential_provider(
+                    session, tenant, plugin_id, provision=True
+                )
+                if provider is None:
+                    raise PluginCredentialDenied("Plugin credential provider unavailable")
+                credential = Credential(
+                    tenant_id=tenant,
+                    name=f"{plugin_id}/{field_key}",
+                    provider_id=provider.id,
+                    credential_type="plugin_secret",
+                    credential_metadata=metadata,
+                    status=CredentialStatus.ACTIVE.value,
+                    created_by=actor_user_id,
+                )
+                session.add(credential)
+                await session.flush()
+                session.add(CredentialSecret(
+                    tenant_id=tenant,
+                    credential_id=credential.id,
+                    secret_type=field_key,
+                    encrypted_value=encrypted,
+                ))
+                inserted = await session.execute(
+                    text(
+                        "INSERT INTO public.plugin_credential_slots "
+                        "(tenant_id, plugin_id, field_key, credential_id, revision) "
+                        "VALUES (CAST(:tenant_id AS uuid), :plugin_id, :field_key, "
+                        "CAST(:credential_id AS uuid), 1) "
+                        "ON CONFLICT DO NOTHING RETURNING revision"
+                    ),
+                    {
+                        "tenant_id": str(tenant),
+                        "plugin_id": plugin_id,
+                        "field_key": field_key,
+                        "credential_id": str(credential.id),
+                    },
+                )
+                if inserted.scalar_one_or_none() is None:
+                    raise PluginCredentialConflict("Plugin credential changed; refresh required")
+                new_revision = 1
+                event = AuditEventType.CREATED
+                operation = "plugin_credential_created"
+            else:
+                if expected_revision != slot.revision:
+                    raise PluginCredentialConflict("Plugin credential changed; refresh required")
+                credential = (await session.execute(
+                    self._tenant_query(Credential, tenant)
+                    .where(Credential.id == slot.credential_id)
+                    .with_for_update()
+                )).scalar_one_or_none()
+                provider = await self._get_plugin_credential_provider(
+                    session, tenant, plugin_id, provision=False
+                )
+                if (
+                    credential is None
+                    or provider is None
+                    or credential.provider_id != provider.id
+                    or credential.credential_metadata != metadata
+                ):
+                    raise PluginCredentialDenied("Plugin credential binding integrity denied")
+                existing = (await session.execute(
+                    self._tenant_query(CredentialSecret, tenant).where(
+                        CredentialSecret.credential_id == credential.id
+                    )
+                )).scalars().all()
+                if len(existing) > 1 or any(
+                    entry.secret_type != field_key for entry in existing
+                ):
+                    raise PluginCredentialDenied("Plugin credential secret integrity denied")
+                for entry in existing:
+                    await session.delete(entry)
+                session.add(CredentialSecret(
+                    tenant_id=tenant,
+                    credential_id=credential.id,
+                    secret_type=field_key,
+                    encrypted_value=encrypted,
+                ))
+                credential.status = CredentialStatus.ACTIVE.value
+                credential.updated_at = datetime.now(timezone.utc)
+                slot.revision += 1
+                slot.updated_at = datetime.now(timezone.utc)
+                new_revision = int(slot.revision)
+                event = AuditEventType.ROTATED
+                operation = "plugin_credential_rotated"
+            await self._audit(
+                session,
+                tenant_id=tenant,
+                user_id=actor_user_id,
+                event_type=event,
+                action=operation,
+                resource_type="credential",
+                resource_id=str(credential.id),
+                credential_id=credential.id,
+                provider_id=provider.id,
+                correlation_id=correlation_id,
+                metadata={"plugin_id": plugin_id, "field_key": field_key},
+            )
+            # Secret, binding, status and audit must commit together, or NONE do.
+            await session.commit()
+            return self._plugin_secret_receipt(
+                status=CredentialStatus.ACTIVE.value,
+                revision=new_revision,
+            )
+
+    async def revoke_plugin_credential(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        actor_user_id: str,
+        plugin_id: str,
+        field_key: str,
+        expected_revision: int,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Revoke access and erase encrypted secret bytes; retain audited tombstone."""
+        tenant = self._plugin_secret_scope(tenant_id, plugin_id, field_key)
+        if (
+            not isinstance(actor_user_id, str)
+            or not actor_user_id.strip()
+            or not isinstance(correlation_id, str)
+            or not correlation_id
+            or len(correlation_id) > 128
+            or not isinstance(expected_revision, int)
+            or isinstance(expected_revision, bool)
+            or expected_revision < 1
+        ):
+            raise PluginCredentialDenied("Invalid plugin credential revocation authority")
+        async with self._session_scope() as session:
+            await self._plugin_tenant_scope(session, tenant)
+            slot = (await session.execute(
+                self._tenant_query(PluginCredentialSlot, tenant)
+                .where(
+                    PluginCredentialSlot.plugin_id == plugin_id,
+                    PluginCredentialSlot.field_key == field_key,
+                ).with_for_update()
+            )).scalar_one_or_none()
+            if slot is None or slot.revision != expected_revision:
+                raise PluginCredentialConflict("Plugin credential changed; refresh required")
+            credential = (await session.execute(
+                self._tenant_query(Credential, tenant)
+                .where(Credential.id == slot.credential_id)
+                .with_for_update()
+            )).scalar_one_or_none()
+            provider = await self._get_plugin_credential_provider(
+                session, tenant, plugin_id, provision=False
+            )
+            if (
+                credential is None
+                or provider is None
+                or credential.provider_id != provider.id
+                or credential.credential_metadata != {
+                    "managed_for": "plugin_credentials",
+                    "plugin_id": plugin_id,
+                    "field_key": field_key,
+                }
+            ):
+                raise PluginCredentialDenied("Plugin credential binding integrity denied")
+            if credential.status == CredentialStatus.REVOKED.value:
+                raise PluginCredentialConflict("Plugin credential is already revoked")
+            secrets = (await session.execute(
+                self._tenant_query(CredentialSecret, tenant).where(
+                    CredentialSecret.credential_id == credential.id
+                )
+            )).scalars().all()
+            if len(secrets) > 1 or any(
+                entry.secret_type != field_key for entry in secrets
+            ):
+                raise PluginCredentialDenied("Plugin credential secret integrity denied")
+            for secret in secrets:
+                await session.delete(secret)
+            credential.status = CredentialStatus.REVOKED.value
+            credential.updated_at = datetime.now(timezone.utc)
+            slot.revision += 1
+            slot.updated_at = datetime.now(timezone.utc)
+            await self._audit(
+                session,
+                tenant_id=tenant,
+                user_id=actor_user_id,
+                event_type=AuditEventType.REVOKED,
+                action="plugin_credential_revoked",
+                resource_type="credential",
+                resource_id=str(credential.id),
+                credential_id=credential.id,
+                provider_id=provider.id,
+                correlation_id=correlation_id,
+                metadata={"plugin_id": plugin_id, "field_key": field_key},
+            )
+            await session.commit()
+            return self._plugin_secret_receipt(
+                status=CredentialStatus.REVOKED.value,
+                revision=int(slot.revision),
+            )
 
     async def get_credential(self, credential_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[Credential]:
         async with self._session_scope() as session:
