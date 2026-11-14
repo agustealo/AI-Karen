@@ -182,3 +182,47 @@ async def test_manual_upload_cannot_supply_or_spoof_lifecycle_markers(
         await service.install_uploaded_archive("demo", data)
 
     assert not (tmp_path / "demo").exists()
+
+
+@pytest.mark.asyncio
+async def test_real_kernel_quarantines_uploaded_plugin_without_loading_handler(
+    tmp_path,
+) -> None:
+    root = tmp_path / "plugins"
+    root.mkdir()
+    service = PluginService(root, root)
+    await service.initialize()
+
+    manifest = {
+        "id": "manual-demo",
+        "name": "manual-demo",
+        "version": "1.0.0",
+        "display_name": "Manual Demo",
+        "description": "Untrusted upload integration fixture",
+        "author": "Tests",
+        "license": "MIT",
+        "category": "integration",
+        "entrypoint": "handler:MainExtension",
+    }
+    archive = _archive({
+        "manifest.json": json.dumps(manifest),
+        "handler.py": "class MainExtension:\\n    def execute(self, payload):\\n        raise RuntimeError('should never load')\\n",
+    })
+    receipt = await service.install_uploaded_archive("manual-demo", archive)
+
+    assert receipt == {"plugin_id": "manual-demo", "installed": True, "enabled": False}
+    assert (root / "manual-demo/.karen-upload-origin").is_file()
+    record = await service.get_plugin_info("manual-demo")
+    assert record is not None
+    assert record["status"] == "disabled"
+    assert record["activation_blocked_reason"] == "isolated_runtime_required"
+    registration = service.kernel.runtime_registry.get("manual-demo")
+    assert registration is not None
+    assert registration.manifest.trust_tier.value == "untrusted"
+    assert service.kernel.loader.get_loaded_extensions() == {}
+
+    with pytest.raises(ValueError, match="verified isolated runtime"):
+        await service.enable_plugin("manual-demo")
+
+    assert (root / "manual-demo/.karen-manual-disabled").is_file()
+    assert service.kernel.runtime_registry.get("manual-demo").state.value == "disabled"
