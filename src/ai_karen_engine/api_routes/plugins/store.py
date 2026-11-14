@@ -154,6 +154,7 @@ def _plugin_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "version": str(getattr(manifest, "version", "")),
         "status": "installed" if installed else "incompatible" if runtime_status == "error" else "available",
         "runtime_status": runtime_status,
+        "activation_blocked_reason": metadata.get("activation_blocked_reason"),
         "category": str(getattr(manifest, "category", "")) or None,
         "downloads": marketplace.get("downloads"),
         "rating": marketplace.get("rating"),
