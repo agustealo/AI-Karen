@@ -425,7 +425,9 @@ class PluginService:
         if record is None:
             raise LookupError("Plugin does not exist in the canonical catalog")
         contract = self._settings_contract(record)
-        verified = contract.validate({} if reset else settings)
+        verified = contract.validate(
+            {} if reset else settings, require_configured=not reset
+        )
         new_revision = await self._settings_repository.write(
             tenant_id=tenant_id,
             plugin_id=plugin_id,
