@@ -27,6 +27,8 @@ export interface RuntimeProviderDetails {
   api_key_env_var?: string | null;
   is_configured?: boolean;
   healthy?: boolean;
+  /** Settings projects canonical runtime health as a scalar; chat has health.status. */
+  health_status?: string | null;
   /** Observed state is not interchangeable with an absent health probe. */
   health?: { status?: string; last_checked_at?: string | null } | null;
   user_selectable?: boolean;
