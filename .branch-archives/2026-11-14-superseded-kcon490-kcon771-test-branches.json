@@ -1,0 +1,64 @@
+{
+  "repository": "agustealo/AI-Karen",
+  "base_branch": "main",
+  "base_sha": "37794c194d01d89e5cfc9a68f8f3dba320c402f4",
+  "archived_at": "2026-11-14T19:54:53.653Z",
+  "tag": "branch-archive/2026-11-14-superseded-kcon490-kcon771-test-branches",
+  "guarantee": "Exact historical commit objects are reachable from this tag. Not a claim all historical changes are identical to main.",
+  "recovery_command": "git fetch origin tag branch-archive/2026-11-14-superseded-kcon490-kcon771-test-branches; git show branch-archive/2026-11-14-superseded-kcon490-kcon771-test-branches:.branch-archives/2026-11-14-superseded-kcon490-kcon771-test-branches.json; git branch RECOVERY_NAME COMMIT_SHA",
+  "branches": [
+    {
+      "name": "test/kcon490-live-cron-reclaim-fencing-20261113",
+      "sha": "cc73e281b47053a93f6ffe76ca311e013d8dc0d2",
+      "mergedPr": 770,
+      "unique_commits": 5,
+      "changed_files": [
+        "docs/capabilities/copilotkit-execution-plan.md",
+        "src/ai_karen_engine/api_routes/automation/cron.py",
+        "tests/integration/test_live_automation_task_claims.py",
+        "tests/services/automation/test_cron_lease.py"
+      ],
+      "tip_commit_date": "2026-11-13T11:24:51-05:00",
+      "superseder": {
+        "number": 770,
+        "merged_at": "2026-11-13T16:33:58Z",
+        "merge_commit_sha": "320c5c5da8f43d8accdf9f9fa1a1e0e7d400b270"
+      }
+    },
+    {
+      "name": "test/kcon490-stream-incomplete-diagnostic-20261113",
+      "sha": "8e5fe0cf71e50f4fb97694b5487a40bedb53bb05",
+      "mergedPr": 777,
+      "unique_commits": 9,
+      "changed_files": [
+        "docs/capabilities/copilotkit-execution-plan.md",
+        "src/ai_karen_engine/api_routes/chat/runtime.py",
+        "src/ui_launchers/Karen-AI-Theme/src/app/api/chat/ag-ui/route.ts",
+        "src/ui_launchers/Karen-AI-Theme/tests/chat/ag-ui-stream-proxy-response.test.ts",
+        "tests/api_routes/test_chat_run_event_journal.py"
+      ],
+      "tip_commit_date": "2026-11-13T14:16:04-05:00",
+      "superseder": {
+        "number": 777,
+        "merged_at": "2026-11-13T19:37:04Z",
+        "merge_commit_sha": "284edfc9336234d0977abc927cc50cb533acd5d3"
+      }
+    },
+    {
+      "name": "test/kcon771-presentation-layout-evidence-invariance-20261110",
+      "sha": "4f7aef3512a98093a3c3e63783fc77e292821c0a",
+      "mergedPr": 717,
+      "unique_commits": 2,
+      "changed_files": [
+        "docs/capabilities/copilotkit-execution-plan.md",
+        "tests/core/runtime/test_presentation_contract.py"
+      ],
+      "tip_commit_date": "2026-11-10T12:27:41-05:00",
+      "superseder": {
+        "number": 717,
+        "merged_at": "2026-11-10T18:26:01Z",
+        "merge_commit_sha": "c9b2f7fcca21dd8b8eee174440d27ce0152db4bd"
+      }
+    }
+  ]
+}
