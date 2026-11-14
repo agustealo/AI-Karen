@@ -148,7 +148,7 @@ describe("canonical CopilotKit chat ownership", () => {
       'await test.step("KCON-490 real multi-turn personal context"',
     );
     const firstReload = liveBrowser.indexOf(
-      '    await page.reload();\\n    const restored = page.getByTestId("karen-copilot-consumer-chat");',
+      '    await page.reload();\n    const restored = page.getByTestId("karen-copilot-consumer-chat");',
     );
     expect(firstLiveFollowup).toBeGreaterThan(0);
     expect(firstReload).toBeGreaterThan(firstLiveFollowup);
