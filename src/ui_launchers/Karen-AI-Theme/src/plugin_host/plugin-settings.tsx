@@ -532,7 +532,7 @@ type CredentialStatus = {
   revision: number;
 };
 
-function checkedCredentialStatus(value: unknown): CredentialStatus {
+function checkedCredentialStatus(value: unknown, receipt = false): CredentialStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Identity Vault returned an invalid credential receipt.');
   }
@@ -548,12 +548,17 @@ function checkedCredentialStatus(value: unknown): CredentialStatus {
   ) {
     throw new Error('Identity Vault returned an invalid credential receipt.');
   }
-  if (Object.keys(record).some((key) =>
-    !['configured', 'status', 'revision'].includes(key)
-  )) {
+  const allowed = receipt
+    ? ['configured', 'status', 'revision', 'plugin_id', 'field_key']
+    : ['configured', 'status', 'revision'];
+  if (Object.keys(record).some((key) => !allowed.includes(key))) {
     throw new Error('Identity Vault returned an invalid credential receipt.');
   }
-  return record as CredentialStatus;
+  return {
+    configured: record.configured,
+    status: record.status,
+    revision: record.revision,
+  } as CredentialStatus;
 }
 
 function CredentialField({
@@ -594,7 +599,7 @@ function CredentialField({
       ) {
         throw new Error('Identity Vault did not confirm credential persistence.');
       }
-      const checked = checkedCredentialStatus(response);
+      const checked = checkedCredentialStatus(response, true);
       if (!checked.configured || checked.revision <= status.revision) {
         throw new Error('Identity Vault did not confirm credential persistence.');
       }
@@ -625,7 +630,7 @@ function CredentialField({
       ) {
         throw new Error('Identity Vault did not confirm credential revocation.');
       }
-      const checked = checkedCredentialStatus(response);
+      const checked = checkedCredentialStatus(response, true);
       if (checked.configured || checked.status !== 'revoked' || checked.revision <= status.revision) {
         throw new Error('Identity Vault did not confirm credential revocation.');
       }
