@@ -780,7 +780,14 @@ class _DefaultSchemaValidator:
             value = payload[key]
             expected_type = field_schema.get("type")
             if expected_type:
-                type_map = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict}
+                type_map: Dict[str, type | tuple[type, ...]] = {
+                    "string": str,
+                    "integer": int,
+                    "number": (int, float),
+                    "boolean": bool,
+                    "array": list,
+                    "object": dict,
+                }
                 expected = type_map.get(expected_type)
                 if expected and not isinstance(value, expected):
                     errors.append(f"Field '{key}' must be {expected_type}, got {type(value).__name__}")

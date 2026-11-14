@@ -105,8 +105,20 @@ jobs:
             src/ai_karen_engine/extensions/ \
             src/ai_karen_engine/api_routes/plugins/
 
-      - name: Run MyPy type checker
-        run: mypy src/ai_karen_engine/extensions/ --ignore-missing-imports --no-error-summary || true
+      - name: Enforce MyPy on canonical plugin authorities
+        run: |
+          mypy --ignore-missing-imports --follow-imports=skip --no-error-summary \
+            src/ai_karen_engine/extensions/contracts.py \
+            src/ai_karen_engine/extensions/executor.py \
+            src/ai_karen_engine/extensions/plugin_kernel.py \
+            src/ai_karen_engine/services/plugin_service.py
+
+      - name: Enforce high-severity plugin security checks
+        run: |
+          bandit -q -lll -iii \
+            src/ai_karen_engine/extensions/executor.py \
+            src/ai_karen_engine/extensions/plugin_kernel.py \
+            src/ai_karen_engine/services/plugin_service.py
 
       - name: Generate Bandit report
         run: bandit -r src/ai_karen_engine/extensions/ -f json -o bandit-report.json || true
