@@ -14,6 +14,8 @@ const sdk = vi.hoisted(() => ({
   },
   isReady: true,
   draftSynced: true,
+  draftStatus: "ready" as "ready" | "conflict" | "unavailable",
+  draftFailureStatus: null as number | null,
   runAgent: vi.fn(),
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
@@ -63,8 +65,9 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
         setDraft(value);
       },
       readText: () => text.current,
-      status: "ready",
+      status: sdk.draftStatus,
       synced: sdk.draftSynced,
+      failureStatus: sdk.draftFailureStatus,
       prepareSubmission: (...args: unknown[]) => sdk.clearDraft(...args),
       retry: vi.fn(),
       discardAndReload: vi.fn(),
@@ -93,6 +96,8 @@ beforeEach(() => {
   sdk.useAgentOptions.length = 0;
   sdk.isReady = true;
   sdk.draftSynced = true;
+  sdk.draftStatus = "ready";
+  sdk.draftFailureStatus = null;
   sdk.agent.isRunning = false;
   sdk.agent.threadId = THREAD;
   sdk.agent.messages = [
@@ -165,6 +170,31 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.views.at(-1)?.autoScroll).toBe(true);
     expect((sdk.views.at(-1)?.messageView as Record<string, unknown>).assistantMessage)
       .toBeDefined();
+  });
+
+  it("never shows a saving claim when the canonical draft is unavailable or conflicting", () => {
+    sdk.draftSynced = false;
+    sdk.draftStatus = "unavailable";
+    sdk.draftFailureStatus = 503;
+    const view = render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(screen.getByText("Draft not saved")).toBeTruthy();
+    expect(screen.getByText(/Draft service is temporarily unavailable/)).toBeTruthy();
+    expect(screen.queryByText("Draft changes pending save…")).toBeNull();
+
+    sdk.draftStatus = "conflict";
+    sdk.draftFailureStatus = 409;
+    view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(screen.getByText("Draft conflict")).toBeTruthy();
+    expect(screen.queryByText("Draft changes pending save…")).toBeNull();
+
+    sdk.draftStatus = "ready";
+    sdk.draftFailureStatus = null;
+    view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(screen.queryByText("Draft not saved")).toBeNull();
+    expect(screen.queryByText("Draft conflict")).toBeNull();
+    expect(screen.getByText("Draft changes pending save…")).toBeTruthy();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
   });
 
   it("keeps an unsent native draft controlled and never starts inference while typing", () => {
