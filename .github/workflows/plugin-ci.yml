@@ -7,6 +7,11 @@ on:
       - 'src/ai_karen_engine/extensions/**'
       - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/**'
+      - 'src/ai_karen_engine/api_routes/extensions/extensions.py'
+      - 'src/ai_karen_engine/services/plugin_service.py'
+      - 'src/ai_karen_engine/services/plugin_settings_repository.py'
+      - 'src/ui_launchers/Karen-AI-Theme/src/plugin_host/plugin-settings.tsx'
+      - 'supabase/migrations/*plugin_settings*.sql'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/api.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
@@ -16,6 +21,7 @@ on:
       - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
       - 'tests/integration/test_channel_claim_concurrency_postgres.py'
+      - 'tests/integration/test_plugin_settings_postgres.py'
       - 'supabase/migrations/*channel*.sql'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'src/ai_karen_engine/services/search/article_document_service.py'
@@ -40,6 +46,11 @@ on:
       - 'src/ai_karen_engine/extensions/**'
       - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/**'
+      - 'src/ai_karen_engine/api_routes/extensions/extensions.py'
+      - 'src/ai_karen_engine/services/plugin_service.py'
+      - 'src/ai_karen_engine/services/plugin_settings_repository.py'
+      - 'src/ui_launchers/Karen-AI-Theme/src/plugin_host/plugin-settings.tsx'
+      - 'supabase/migrations/*plugin_settings*.sql'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/api.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
@@ -49,6 +60,7 @@ on:
       - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
       - 'tests/integration/test_channel_claim_concurrency_postgres.py'
+      - 'tests/integration/test_plugin_settings_postgres.py'
       - 'supabase/migrations/*channel*.sql'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'src/ai_karen_engine/services/search/article_document_service.py'
@@ -111,14 +123,16 @@ jobs:
             src/ai_karen_engine/extensions/contracts.py \
             src/ai_karen_engine/extensions/executor.py \
             src/ai_karen_engine/extensions/plugin_kernel.py \
-            src/ai_karen_engine/services/plugin_service.py
+            src/ai_karen_engine/services/plugin_service.py \
+            src/ai_karen_engine/services/plugin_settings_repository.py
 
       - name: Enforce high-severity plugin security checks
         run: |
           bandit -q -lll -iii \
             src/ai_karen_engine/extensions/executor.py \
             src/ai_karen_engine/extensions/plugin_kernel.py \
-            src/ai_karen_engine/services/plugin_service.py
+            src/ai_karen_engine/services/plugin_service.py \
+            src/ai_karen_engine/services/plugin_settings_repository.py
 
       - name: Generate Bandit report
         run: bandit -r src/ai_karen_engine/extensions/ -f json -o bandit-report.json || true
@@ -221,6 +235,15 @@ jobs:
           # Dedicated disposable DB: the live proof recreates its own schema.
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE karen_channel_test'
           pytest tests/integration/test_channel_claim_concurrency_postgres.py -q --timeout=120 --tb=short
+
+      - name: Live PostgreSQL plugin settings tenant RLS and revision proof
+        env:
+          PGPASSWORD: postgres
+          PLUGIN_SETTINGS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/karen_plugin_settings_test
+        run: |
+          # Dedicated throwaway DB, never a production tenant or shared test DB.
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE karen_plugin_settings_test'
+          pytest tests/integration/test_plugin_settings_postgres.py -q --timeout=120 --tb=short
 
       - name: Upload coverage reports
         if: always()

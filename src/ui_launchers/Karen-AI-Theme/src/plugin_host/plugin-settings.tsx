@@ -14,7 +14,7 @@
  * Requirements: 4.3
  */
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -82,6 +82,9 @@ export interface PluginSettingsConfig {
   modified: boolean;
   /** Error state */
   error: string | null;
+  /** Revision returned by the tenant-scoped database. */
+  revision: number;
+  stored: boolean;
 }
 
 /** Settings context value */
@@ -106,8 +109,66 @@ const PluginSettingsContext = createContext<PluginSettingsContextValue | null>(n
 
 // ─── Provider ──────────────────────────────────────────────────────────────────
 
+type PluginSettingsApiResponse = {
+  plugin_id: string;
+  settings: Record<string, unknown>;
+  schema: SettingSchema[];
+  revision: number;
+  stored: boolean;
+  success?: boolean;
+  saved?: boolean;
+  reset?: boolean;
+};
+
+function checkedSettingsResponse(
+  value: unknown,
+  pluginId: string,
+): PluginSettingsApiResponse {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Plugin settings API returned an invalid response.');
+  }
+  const response = value as Partial<PluginSettingsApiResponse>;
+  if (
+    response.plugin_id !== pluginId ||
+    !response.settings ||
+    typeof response.settings !== 'object' ||
+    Array.isArray(response.settings) ||
+    !Array.isArray(response.schema) ||
+    !response.schema.every(
+      (field) => field && typeof field.key === 'string' && typeof field.type === 'string',
+    ) ||
+    typeof response.revision !== 'number' ||
+    !Number.isSafeInteger(response.revision) ||
+    (response.revision ?? -1) < 0 ||
+    typeof response.stored !== 'boolean'
+  ) {
+    throw new Error('Plugin settings API returned an invalid response.');
+  }
+  return response as PluginSettingsApiResponse;
+}
+
+function configFromBackend(response: PluginSettingsApiResponse): PluginSettingsConfig {
+  return {
+    pluginId: response.plugin_id,
+    values: Object.fromEntries(
+      Object.entries(response.settings).filter(([key]) =>
+        response.schema.some((field) =>
+          field.key === key && !field.readOnly && field.type !== 'password' && field.type !== 'json',
+        ),
+      ),
+    ),
+    schema: response.schema,
+    revision: response.revision,
+    stored: response.stored,
+    loaded: true,
+    modified: false,
+    error: null,
+  };
+}
+
 export function PluginSettingsProvider({ children }: { children: React.ReactNode }) {
   const [pluginSettings, setPluginSettings] = useState<Map<string, PluginSettingsConfig>>(new Map());
+  const latestLoads = useRef(new Map<string, number>());
 
   const getPluginSettings = useCallback((pluginId: string): PluginSettingsConfig | undefined => {
     return pluginSettings.get(pluginId);
@@ -116,151 +177,152 @@ export function PluginSettingsProvider({ children }: { children: React.ReactNode
   const updateSetting = useCallback((pluginId: string, key: string, value: unknown) => {
     setPluginSettings((prev) => {
       const config = prev.get(pluginId);
-      if (!config) return prev;
+      if (!config || !config.loaded || config.schema.length === 0) return prev;
+      const field = config.schema.find((item) => item.key === key);
+      // The UI is never an authority for credential storage.
+      if (!field || field.readOnly || field.type === 'password' || field.type === 'json') return prev;
 
       return new Map(prev).set(pluginId, {
         ...config,
         values: { ...config.values, [key]: value },
         modified: true,
+        error: null,
       });
     });
   }, []);
 
   const refreshSettings = useCallback(async (pluginId: string) => {
+    const sequence = (latestLoads.current.get(pluginId) ?? 0) + 1;
+    latestLoads.current.set(pluginId, sequence);
+    setPluginSettings((prev) => {
+      const current = prev.get(pluginId);
+      return new Map(prev).set(pluginId, {
+        pluginId,
+        schema: current?.schema ?? [],
+        values: current?.values ?? {},
+        revision: current?.revision ?? 0,
+        stored: current?.stored ?? false,
+        loaded: false,
+        modified: current?.modified ?? false,
+        error: null,
+      });
+    });
     try {
-      setPluginSettings((prev) => {
-        const config = prev.get(pluginId);
-        if (config) {
-          return new Map(prev).set(pluginId, { ...config, loaded: false, error: null });
-        }
-        return prev;
-      });
-
-      const response = await apiClient.get<{
-        plugin_id: string;
-        settings: Record<string, unknown>;
-        schema: SettingSchema[];
-      }>(`/api/extensions/${pluginId}/settings`);
-
-      const settings = response || { plugin_id: pluginId, settings: {}, schema: [] };
-
-      setPluginSettings((prev) => {
-        const newConfig: PluginSettingsConfig = {
-          pluginId: settings.plugin_id || pluginId,
-          schema: settings.schema || [],
-          values: settings.settings || {},
-          loaded: true,
-          modified: false,
-          error: null,
-        };
-        return new Map(prev).set(pluginId, newConfig);
-      });
+      const response: unknown = await apiClient.get(
+        "/api/extensions/" + encodeURIComponent(pluginId) + "/settings",
+      );
+      const checked = checkedSettingsResponse(response, pluginId);
+      if (latestLoads.current.get(pluginId) !== sequence) return;
+      setPluginSettings((prev) => new Map(prev).set(pluginId, configFromBackend(checked)));
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load settings';
-      setPluginSettings((prev) => {
-        const config = prev.get(pluginId);
-        if (config) {
-          return new Map(prev).set(pluginId, { ...config, loaded: true, error: message });
-        }
-        return prev;
-      });
+      if (latestLoads.current.get(pluginId) !== sequence) return;
+      const message = err instanceof Error ? err.message : 'Failed to load plugin settings';
+      setPluginSettings((prev) => new Map(prev).set(pluginId, {
+        pluginId,
+        schema: [],
+        values: {},
+        revision: 0,
+        stored: false,
+        loaded: true,
+        modified: false,
+        error: message,
+      }));
     }
   }, []);
 
   const savePluginSettings = useCallback(async (pluginId: string): Promise<boolean> => {
     const config = pluginSettings.get(pluginId);
-    if (!config || !config.modified) return true;
+    if (!config || !config.loaded || config.schema.length === 0) return false;
+    if (!config.modified) return true;
 
+    const values = { ...config.values };
+    const revision = config.revision;
     try {
-      await apiClient.post(`/api/extensions/${pluginId}/settings`, {
-        settings: config.values,
-      });
-
+      const result: unknown = await apiClient.post(
+        "/api/extensions/" + encodeURIComponent(pluginId) + "/settings",
+        { settings: values, revision },
+      );
+      const checked = checkedSettingsResponse(result, pluginId);
+      if (
+        checked.success !== true ||
+        checked.saved !== true ||
+        checked.revision <= revision ||
+        checked.stored !== true
+      ) {
+        throw new Error('The backend did not confirm durable settings persistence.');
+      }
       setPluginSettings((prev) => {
-        const updated = prev.get(pluginId);
-        if (updated) {
-          return new Map(prev).set(pluginId, { ...updated, modified: false });
-        }
-        return prev;
+        const current = prev.get(pluginId);
+        if (!current || current.revision !== revision) return prev;
+        // New keystrokes during the request remain unsaved, not silently lost.
+        const sameValues = JSON.stringify(current.values) === JSON.stringify(values);
+        return new Map(prev).set(pluginId, {
+          ...current,
+          ...(sameValues ? configFromBackend(checked) : {
+            revision: checked.revision,
+            stored: checked.stored,
+            error: null,
+          }),
+        });
       });
-
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings';
       setPluginSettings((prev) => {
-        const updated = prev.get(pluginId);
-        if (updated) {
-          return new Map(prev).set(pluginId, { ...updated, error: message });
-        }
-        return prev;
+        const current = prev.get(pluginId);
+        return current ? new Map(prev).set(pluginId, { ...current, error: message }) : prev;
       });
       return false;
     }
   }, [pluginSettings]);
 
   const resetPluginSettings = useCallback(async (pluginId: string): Promise<boolean> => {
+    const config = pluginSettings.get(pluginId);
+    if (!config || !config.loaded) return false;
+    const revision = config.revision;
     try {
-      await apiClient.delete(`/api/extensions/${pluginId}/settings`);
-
+      const result: unknown = await apiClient.delete(
+        "/api/extensions/" + encodeURIComponent(pluginId) + "/settings?revision=" + revision,
+      );
+      const checked = checkedSettingsResponse(result, pluginId);
+      if (
+        checked.success !== true ||
+        checked.reset !== true ||
+        checked.revision <= revision
+      ) {
+        throw new Error('The backend did not confirm a durable settings reset.');
+      }
       setPluginSettings((prev) => {
-        const config = prev.get(pluginId);
-        if (config) {
-          const defaultValues: Record<string, unknown> = {};
-          config.schema.forEach((s) => {
-            if (s.defaultValue !== undefined) {
-              defaultValues[s.key] = s.defaultValue;
-            }
-          });
-          return new Map(prev).set(pluginId, {
-            ...config,
-            values: defaultValues,
-            modified: false,
-            error: null,
-          });
-        }
-        return prev;
+        const current = prev.get(pluginId);
+        return current && current.revision === revision
+          ? new Map(prev).set(pluginId, configFromBackend(checked))
+          : prev;
       });
-
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to reset settings';
       setPluginSettings((prev) => {
-        const config = prev.get(pluginId);
-        if (config) {
-          return new Map(prev).set(pluginId, { ...config, error: message });
-        }
-        return prev;
+        const current = prev.get(pluginId);
+        return current ? new Map(prev).set(pluginId, { ...current, error: message }) : prev;
       });
       return false;
     }
-  }, []);
+  }, [pluginSettings]);
 
   const loadAllSettings = useCallback(async () => {
-    try {
-      const response = await apiClient.get<Array<{
-        plugin_id: string;
-        settings: Record<string, unknown>;
-        schema: SettingSchema[];
-      }>>('/api/extensions/settings');
-
-      const settingsList = response || [];
-      const newMap = new Map<string, PluginSettingsConfig>();
-
-      for (const item of settingsList) {
-        newMap.set(item.plugin_id, {
-          pluginId: item.plugin_id,
-          schema: item.schema || [],
-          values: item.settings || {},
-          loaded: true,
-          modified: false,
-          error: null,
-        });
-      }
-
-      setPluginSettings(newMap);
-    } catch (err) {
-      console.error('Failed to load all settings:', err);
+    const response: unknown = await apiClient.get('/api/extensions/settings');
+    if (!Array.isArray(response)) {
+      throw new Error('Plugin settings list API returned an invalid response.');
     }
+    const next = new Map<string, PluginSettingsConfig>();
+    for (const record of response) {
+      if (!record || typeof record !== 'object' || typeof record.plugin_id !== 'string') {
+        throw new Error('Plugin settings list API returned an invalid response.');
+      }
+      const checked = checkedSettingsResponse(record, record.plugin_id);
+      next.set(checked.plugin_id, configFromBackend(checked));
+    }
+    setPluginSettings(next);
   }, []);
 
   const value: PluginSettingsContextValue = {
@@ -292,6 +354,8 @@ export function usePluginSettings(pluginId: string): PluginSettingsConfig {
       loaded: false,
       modified: false,
       error: 'Settings not loaded',
+      revision: 0,
+      stored: false,
     };
   }
 
@@ -470,8 +534,12 @@ export function PluginSettingsForm({
   pluginId: string;
   onClose?: () => void;
 }) {
-  const { values: settings, schema, loaded, modified, error } = usePluginSettings(pluginId);
-  const { updateSetting, savePluginSettings, resetPluginSettings } = usePluginSettingsManager();
+  const { values: settings, schema, loaded, modified, error, stored } = usePluginSettings(pluginId);
+  const { updateSetting, savePluginSettings, resetPluginSettings, refreshSettings } = usePluginSettingsManager();
+
+  useEffect(() => {
+    void refreshSettings(pluginId);
+  }, [pluginId, refreshSettings]);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -482,11 +550,9 @@ export function PluginSettingsForm({
     const success = await savePluginSettings(pluginId);
     setSaving(false);
     if (success) {
+      // Never auto-close: an edit entered while the save was in flight
+      // must remain visible and unsaved rather than being discarded.
       setSaveSuccess(true);
-      setTimeout(() => {
-        setSaveSuccess(false);
-        onClose?.();
-      }, 1500);
     }
   };
 
@@ -537,7 +603,7 @@ export function PluginSettingsForm({
 
   return (
     <div className="space-y-6">
-      {saveSuccess && (
+      {saveSuccess && !modified && (
         <Alert>
           <CheckCircle2 className="h-4 w-4" />
           <AlertDescription>Settings saved successfully!</AlertDescription>
@@ -570,11 +636,16 @@ export function PluginSettingsForm({
         <Button
           variant="outline"
           onClick={handleReset}
-          disabled={resetting || !modified}
+          disabled={resetting || (!stored && !modified)}
         >
           <RotateCcw className="mr-2 h-4 w-4" />
           {resetting ? 'Resetting...' : 'Reset to Defaults'}
         </Button>
+        {onClose && (
+          <Button variant="outline" onClick={onClose} disabled={saving || resetting || modified}>
+            Done
+          </Button>
+        )}
         <Button onClick={handleSave} disabled={saving || !modified}>
           <Save className="mr-2 h-4 w-4" />
           {saving ? 'Saving...' : 'Save Settings'}

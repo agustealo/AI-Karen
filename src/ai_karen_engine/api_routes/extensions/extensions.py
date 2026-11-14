@@ -7,9 +7,19 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import sys
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from fastapi import Query
+
+from ai_karen_engine.core.services.dependencies import get_plugin_service
+from ai_karen_engine.services.plugin_service import PluginService
+from ai_karen_engine.services.plugin_settings_repository import (
+    PluginSettingsNotConfigured,
+    PluginSettingsRevisionConflict,
+    PluginSettingsValidationError,
+)
 
 from ai_karen_engine.utils.dependency_checks import import_fastapi
 
@@ -274,6 +284,115 @@ async def get_extension_ui_state(
     if not isinstance(state, dict):
         raise HTTPException(status_code=503, detail="Extension UI state unavailable")
     return {"plugin_id": extension_name, "ui": state}
+
+
+class PluginSettingsUpdateRequest(BaseModel):
+    """Client supplies the last observed revision to prevent stale overwrites."""
+
+    model_config = ConfigDict(extra="forbid")
+    settings: Dict[str, Any] = Field(default_factory=dict)
+    revision: int = Field(ge=0)
+
+
+def _settings_receipt_ids(request: Request) -> tuple[str, str]:
+    request_id = (
+        getattr(request.state, "request_id", None)
+        or request.headers.get("X-Request-Id")
+        or str(uuid.uuid4())
+    )
+    correlation_id = (
+        getattr(request.state, "correlation_id", None)
+        or request.headers.get("X-Correlation-Id")
+        or request_id
+    )
+    # These are audit identifiers, not arbitrary unbounded user input.
+    return str(request_id), str(correlation_id)
+
+
+def _settings_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail="Plugin not found")
+    if isinstance(exc, PluginSettingsNotConfigured):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, PluginSettingsValidationError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, PluginSettingsRevisionConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    logger.error("plugin.settings.unavailable error_type=%s", type(exc).__name__)
+    return HTTPException(status_code=503, detail="Plugin settings persistence unavailable")
+
+
+@router.get("/settings")
+async def list_extension_settings(
+    user: dict[str, Any] = Depends(require_extension_mutation_access),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> List[Dict[str, Any]]:
+    """Only authorized tenant plugin managers may inspect settings."""
+    try:
+        return await plugin_service.list_plugin_settings(str(user["tenant_id"]))
+    except Exception as exc:
+        raise _settings_error(exc) from exc
+
+
+@router.get("/{extension_name}/settings")
+async def get_extension_settings(
+    extension_name: str,
+    user: dict[str, Any] = Depends(require_extension_mutation_access),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    try:
+        return await plugin_service.read_plugin_settings(
+            extension_name, str(user["tenant_id"])
+        )
+    except Exception as exc:
+        raise _settings_error(exc) from exc
+
+
+@router.post("/{extension_name}/settings")
+async def save_extension_settings(
+    extension_name: str,
+    body: PluginSettingsUpdateRequest,
+    request: Request,
+    user: dict[str, Any] = Depends(require_extension_mutation_access),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    request_id, correlation_id = _settings_receipt_ids(request)
+    try:
+        return await plugin_service.write_plugin_settings(
+            plugin_id=extension_name,
+            tenant_id=str(user["tenant_id"]),
+            actor_user_id=str(user["user_id"]),
+            settings=body.settings,
+            revision=body.revision,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+    except Exception as exc:
+        raise _settings_error(exc) from exc
+
+
+@router.delete("/{extension_name}/settings")
+async def reset_extension_settings(
+    extension_name: str,
+    request: Request,
+    revision: int = Query(..., ge=0),
+    user: dict[str, Any] = Depends(require_extension_mutation_access),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    request_id, correlation_id = _settings_receipt_ids(request)
+    try:
+        return await plugin_service.write_plugin_settings(
+            plugin_id=extension_name,
+            tenant_id=str(user["tenant_id"]),
+            actor_user_id=str(user["user_id"]),
+            settings={},
+            revision=revision,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            reset=True,
+        )
+    except Exception as exc:
+        raise _settings_error(exc) from exc
 
 
 @router.get("/{extension_name}")
