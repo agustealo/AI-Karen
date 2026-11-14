@@ -526,6 +526,243 @@ function SettingField({
   }
 }
 
+type CredentialStatus = {
+  configured: boolean;
+  status: string;
+  revision: number;
+};
+
+function checkedCredentialStatus(value: unknown): CredentialStatus {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Identity Vault returned an invalid credential receipt.');
+  }
+  const record = value as Partial<CredentialStatus>;
+  if (
+    typeof record.configured !== 'boolean' ||
+    typeof record.status !== 'string' ||
+    !['missing', 'active', 'revoked', 'unavailable'].includes(record.status) ||
+    !Number.isSafeInteger(record.revision) ||
+    typeof record.revision !== 'number' ||
+    record.revision < 0 ||
+    record.configured !== (record.status === 'active')
+  ) {
+    throw new Error('Identity Vault returned an invalid credential receipt.');
+  }
+  return record as CredentialStatus;
+}
+
+function CredentialField({
+  pluginId,
+  setting,
+  status,
+  onReceipt,
+}: {
+  pluginId: string;
+  setting: SettingSchema;
+  status: CredentialStatus;
+  onReceipt: (status: CredentialStatus) => void;
+}) {
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [completed, setCompleted] = useState<string | null>(null);
+  const path = '/api/extensions/' + encodeURIComponent(pluginId) +
+    '/credentials/' + encodeURIComponent(setting.key);
+
+  const write = async () => {
+    if (!value || busy) return;
+    const submitted = value;
+    setValue(''); // Never preserve entered credential after an API request.
+    setBusy(true);
+    setCompleted(null);
+    setError(null);
+    try {
+      const response: unknown = await apiClient.post(path, {
+        value: submitted,
+        revision: status.revision,
+      });
+      if (
+        !response || typeof response !== 'object' ||
+        (response as { plugin_id?: unknown }).plugin_id !== pluginId ||
+        (response as { field_key?: unknown }).field_key !== setting.key
+      ) {
+        throw new Error('Identity Vault did not confirm credential persistence.');
+      }
+      const checked = checkedCredentialStatus(response);
+      if (!checked.configured || checked.revision <= status.revision) {
+        throw new Error('Identity Vault did not confirm credential persistence.');
+      }
+      onReceipt(checked);
+      setCompleted('Credential saved in Identity Vault.');
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : 'Credential write failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async () => {
+    if (!confirmRevoke || busy) return;
+    setValue('');
+    setBusy(true);
+    setError(null);
+    setCompleted(null);
+    setConfirmRevoke(false);
+    try {
+      const response: unknown = await apiClient.delete(
+        path + '?revision=' + status.revision,
+      );
+      if (
+        !response || typeof response !== 'object' ||
+        (response as { plugin_id?: unknown }).plugin_id !== pluginId ||
+        (response as { field_key?: unknown }).field_key !== setting.key
+      ) {
+        throw new Error('Identity Vault did not confirm credential revocation.');
+      }
+      const checked = checkedCredentialStatus(response);
+      if (checked.configured || checked.status !== 'revoked' || checked.revision <= status.revision) {
+        throw new Error('Identity Vault did not confirm credential revocation.');
+      }
+      onReceipt(checked);
+      setCompleted('Credential revoked and encrypted value erased.');
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : 'Credential revocation failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={'credential-' + setting.key}>{setting.label}</Label>
+        <span role="status" className="text-xs text-muted-foreground">
+          {status.configured ? 'Configured in Identity Vault' :
+            status.status === 'revoked' ? 'Revoked' :
+            status.status === 'unavailable' ? 'Unavailable' : 'Not configured'}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        The stored value is never displayed. Re-enter a complete replacement to rotate.
+      </p>
+      <Input
+        id={'credential-' + setting.key}
+        type="password"
+        autoComplete="new-password"
+        value={value}
+        disabled={busy}
+        maxLength={4096}
+        onChange={(event) => {
+          setValue(event.target.value);
+          setCompleted(null);
+          setError(null);
+        }}
+      />
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" disabled={busy || !value} onClick={() => { void write(); }}>
+          {busy ? 'Working...' : status.configured ? 'Rotate credential' : 'Save credential'}
+        </Button>
+        {status.configured && (
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            disabled={busy}
+            onClick={() => {
+              if (!confirmRevoke) {
+                setConfirmRevoke(true);
+              } else {
+                void revoke();
+              }
+            }}
+          >
+            {confirmRevoke ? 'Confirm revoke' : 'Revoke credential'}
+          </Button>
+        )}
+        {confirmRevoke && (
+          <Button type="button" size="sm" variant="outline" onClick={() => setConfirmRevoke(false)}>
+            Cancel
+          </Button>
+        )}
+      </div>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {completed && <p role="status" className="text-sm">{completed}</p>}
+    </div>
+  );
+}
+
+function PluginCredentialsManager({
+  pluginId,
+  fields,
+}: {
+  pluginId: string;
+  fields: SettingSchema[];
+}) {
+  const [statuses, setStatuses] = useState<Record<string, CredentialStatus> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setStatuses(null);
+    setError(null);
+    void (async () => {
+      try {
+        const response: unknown = await apiClient.get(
+          '/api/extensions/' + encodeURIComponent(pluginId) + '/credentials',
+        );
+        if (
+          !response || typeof response !== 'object' ||
+          (response as { plugin_id?: unknown }).plugin_id !== pluginId
+        ) {
+          throw new Error('Identity Vault credential inventory is unavailable.');
+        }
+        const records = (response as { fields?: unknown }).fields;
+        if (!records || typeof records !== 'object' || Array.isArray(records)) {
+          throw new Error('Identity Vault credential inventory is unavailable.');
+        }
+        const result: Record<string, CredentialStatus> = {};
+        for (const field of fields) {
+          result[field.key] = checkedCredentialStatus(
+            (records as Record<string, unknown>)[field.key],
+          );
+        }
+        if (active) setStatuses(result);
+      } catch (exception) {
+        if (active) {
+          setError(exception instanceof Error
+            ? exception.message : 'Identity Vault credential inventory is unavailable.');
+        }
+      }
+    })();
+    return () => { active = false; };
+  }, [pluginId, fields]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Credentials</CardTitle>
+        <CardDescription>Managed by Identity Vault. Ordinary plugin settings never contain secrets.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        {!statuses && !error && <p role="status">Checking credential status...</p>}
+        {statuses && fields.map((field) => (
+          <CredentialField
+            key={field.key}
+            pluginId={pluginId}
+            setting={field}
+            status={statuses[field.key]}
+            onReceipt={(next) => setStatuses((previous) =>
+              previous ? { ...previous, [field.key]: next } : previous
+            )}
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 /** Form for editing a plugin's settings */
 export function PluginSettingsForm({
   pluginId,
@@ -566,6 +803,7 @@ export function PluginSettingsForm({
   const groupedSettings = React.useMemo(() => {
     const groups: Record<string, SettingSchema[]> = {};
     for (const s of schema) {
+      if (s.type === 'password') continue;
       const category = s.category || 'General';
       if (!groups[category]) groups[category] = [];
       groups[category].push(s);
@@ -631,6 +869,13 @@ export function PluginSettingsForm({
           </CardContent>
         </Card>
       ))}
+
+      {schema.some((field) => field.type === 'password') && (
+        <PluginCredentialsManager
+          pluginId={pluginId}
+          fields={schema.filter((field) => field.type === 'password')}
+        />
+      )}
 
       <div className="flex items-center justify-between">
         <Button
