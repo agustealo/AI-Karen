@@ -35,6 +35,51 @@ type AccountUser = {
   avatarUrl?: string;
 };
 type AccountPrincipal = { user_id: string; tenant_id: string };
+type AccountSession = {
+  session_id: string;
+  is_current: boolean;
+  created_at: string | null;
+  last_accessed: string | null;
+  expires_at: string | null;
+  user_agent: string | null;
+  ip_address: string | null;
+};
+
+function verifySessions(payload: unknown): AccountSession[] {
+  if (!payload || typeof payload !== "object" || !("sessions" in payload)) {
+    throw new Error("Karen did not return a valid session inventory.");
+  }
+  const items = (payload as { sessions: unknown }).sessions;
+  if (!Array.isArray(items) || items.length > 50) {
+    throw new Error("The session inventory could not be verified.");
+  }
+  return items.map((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("The session inventory contains an invalid entry.");
+    }
+    const value = item as Record<string, unknown>;
+    if (
+      "access_token" in value || "refresh_token" in value ||
+      "device_fingerprint" in value || "session_token" in value ||
+      typeof value.session_id !== "string" ||
+      !/^[a-f0-9-]{36}$/i.test(value.session_id) ||
+      typeof value.is_current !== "boolean" ||
+      !["created_at", "last_accessed", "expires_at", "user_agent", "ip_address"]
+        .every((key) => value[key] == null || typeof value[key] === "string")
+    ) {
+      throw new Error("Karen returned an unsafe or incomplete session entry.");
+    }
+    return {
+      session_id: value.session_id as string,
+      is_current: value.is_current as boolean,
+      created_at: (value.created_at as string | null) ?? null,
+      last_accessed: (value.last_accessed as string | null) ?? null,
+      expires_at: (value.expires_at as string | null) ?? null,
+      user_agent: (value.user_agent as string | null) ?? null,
+      ip_address: (value.ip_address as string | null) ?? null,
+    };
+  });
+}
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -136,6 +181,12 @@ export default function AccountPage() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [isPasswordSaving, setIsPasswordSaving] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [sessionsExpanded, setSessionsExpanded] = useState(false);
+  const [sessions, setSessions] = useState<AccountSession[] | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [revokingSession, setRevokingSession] = useState<string | null>(null);
+  const sessionVersion = useRef(0);
   const loadVersion = useRef(0);
 
   const applyAccount = useCallback((verified: AccountUser) => {
@@ -186,6 +237,62 @@ export default function AccountPage() {
     return () => { loadVersion.current += 1; };
   }, [loadProfile]);
 
+  useEffect(() => {
+    sessionVersion.current += 1;
+    setSessionsExpanded(false);
+    setSessions(null);
+    setSessionsError(null);
+  }, [principal]);
+
+  const refreshSessions = async () => {
+    if (!principal) return;
+    const version = ++sessionVersion.current;
+    setSessionsLoading(true);
+    setSessionsError(null);
+    try {
+      const verified = verifySessions(await apiClient.get<unknown>("/api/auth/me/sessions"));
+      requireCurrentPrincipal(principal);
+      if (sessionVersion.current === version) setSessions(verified);
+    } catch (error) {
+      if (sessionVersion.current === version) {
+        setSessions(null);
+        setSessionsError(errorMessage(error, "Karen could not verify your sessions."));
+      }
+    } finally {
+      if (sessionVersion.current === version) setSessionsLoading(false);
+    }
+  };
+
+  const handleRemoteSessionRevoke = async (sessionId: string) => {
+    if (!principal || !sessions || isMutating || sessionsLoading ||
+      !sessions.some((session) => session.session_id === sessionId && !session.is_current)) return;
+    const version = ++sessionVersion.current;
+    setRevokingSession(sessionId);
+    setSessionsError(null);
+    try {
+      const receipt = await apiClient.post<{ session_id: string; revoked: boolean }>(
+        "/api/auth/me/sessions/" + sessionId + "/revoke", {},
+      );
+      if (!receipt || receipt.revoked !== true || receipt.session_id !== sessionId) {
+        throw new Error("Karen did not confirm the session revocation.");
+      }
+      const after = verifySessions(await apiClient.get<unknown>("/api/auth/me/sessions"));
+      requireCurrentPrincipal(principal);
+      if (after.some((session) => session.session_id === sessionId)) {
+        throw new Error("The session is still active. Refresh before trying again.");
+      }
+      if (sessionVersion.current !== version) return;
+      setSessions(after);
+      toast({ title: "Session signed out", description: "Karen verified that the other session is no longer active." });
+    } catch (error) {
+      if (sessionVersion.current === version) {
+        setSessionsError(errorMessage(error, "The revocation could not be verified. Refresh the session list."));
+      }
+    } finally {
+      if (sessionVersion.current === version) setRevokingSession(null);
+    }
+  };
+
   const cleanUsername = username.trim();
   const cleanName = fullName.trim();
   const cleanEmail = email.trim().toLowerCase();
@@ -202,7 +309,7 @@ export default function AccountPage() {
     cleanName !== account.full_name ||
     cleanEmail !== account.email.toLowerCase()
   );
-  const isMutating = isProfileSaving || pendingTheme !== null || isPasswordSaving || isLoggingOut;
+  const isMutating = isProfileSaving || pendingTheme !== null || isPasswordSaving || isLoggingOut || revokingSession !== null;
   const accountReady = !!principal && !!account && !loadError && !isLoading;
 
   const handleProfileSave = async (event: FormEvent) => {
@@ -529,6 +636,75 @@ export default function AccountPage() {
                 </Button>
               </CardFooter>
             </form>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Active sessions</CardTitle>
+              <CardDescription>
+                Inspect signed-in sessions and remotely sign out sessions you do not recognize.
+                Browser and network details are informational, not verified device identities.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline"
+                  disabled={isMutating || sessionsLoading}
+                  onClick={() => {
+                    if (!sessionsExpanded) {
+                      setSessionsExpanded(true);
+                      void refreshSessions();
+                    } else {
+                      sessionVersion.current += 1;
+                      setSessionsExpanded(false);
+                      setSessions(null);
+                    }
+                  }}>
+                  {sessionsExpanded ? "Hide sessions" : "View active sessions"}
+                </Button>
+                {sessionsExpanded && (
+                  <Button type="button" variant="outline" disabled={isMutating || sessionsLoading}
+                    onClick={() => void refreshSessions()}>
+                    <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Refresh sessions
+                  </Button>
+                )}
+              </div>
+              {sessionsExpanded && (
+                <div className="space-y-3">
+                  {sessionsLoading && <p role="status" className="text-sm text-muted-foreground">Checking active sessions...</p>}
+                  {sessionsError && <p role="alert" className="text-sm text-destructive">{sessionsError}</p>}
+                  {!sessionsLoading && sessions && sessions.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No sessions were returned. Refresh to check again.</p>
+                  )}
+                  {sessions?.map((session) => (
+                    <div key={session.session_id} className="rounded-lg border p-3 space-y-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <p className="break-words text-sm font-medium">
+                            {session.user_agent || "Unidentified browser"}
+                            {session.is_current && <span className="ml-2 text-xs text-muted-foreground">(current session)</span>}
+                          </p>
+                          <p className="text-xs text-muted-foreground">Network: {session.ip_address || "Not available"}</p>
+                          <p className="text-xs text-muted-foreground">First seen: {formatDate(session.created_at)}</p>
+                          <p className="text-xs text-muted-foreground">Last activity: {formatDate(session.last_accessed)}</p>
+                        </div>
+                        {!session.is_current && (
+                          <Button type="button" size="sm" variant="destructive"
+                            disabled={isMutating || sessionsLoading}
+                            onClick={() => void handleRemoteSessionRevoke(session.session_id)}>
+                            {revokingSession === session.session_id ? "Verifying sign-out..." : "Sign out session"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted-foreground">
+                    Use the regular Sign out action for this browser. Revocations are verified against Karen before success is shown.
+                  </p>
+                </div>
+              )}
+            </CardContent>
           </Card>
 
           <p className="flex items-center gap-2 text-xs text-muted-foreground">

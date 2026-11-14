@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_karen_engine.auth.auth_middleware import get_rate_limiter
+from ai_karen_engine.auth.auth_middleware import get_auth_middleware, get_rate_limiter
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
 from ai_karen_engine.auth.session import get_current_user as get_authenticated_user
@@ -637,6 +637,79 @@ async def get_current_user_info(
     response["authenticated"] = True
     response["last_active"] = datetime.now(timezone.utc).isoformat()
     return response
+
+
+@router.get("/me/sessions")
+async def get_current_account_sessions(
+    http_request: Request,
+    current_user=Depends(get_authenticated_user),
+    auth_svc: CoreAuthService = Depends(get_auth_service),
+) -> Dict[str, Any]:
+    """Show active sessions for the authenticated user, without credentials."""
+    account = await _require_owned_account(current_user, auth_svc)
+    access_token = get_auth_middleware()._extract_token_from_request(http_request)
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated session token required",
+        )
+    try:
+        sessions = await auth_svc.list_account_sessions(
+            account["user_id"],
+            account["tenant_id"],
+            access_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid account session scope",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Session listing temporarily unavailable",
+        ) from exc
+    return {"sessions": sessions}
+
+
+@router.post("/me/sessions/{session_id}/revoke")
+async def revoke_current_account_session(
+    session_id: str,
+    http_request: Request,
+    current_user=Depends(get_authenticated_user),
+    auth_svc: CoreAuthService = Depends(get_auth_service),
+) -> Dict[str, Any]:
+    """Revoke another owned session; current session uses normal sign-out."""
+    account = await _require_owned_account(current_user, auth_svc)
+    access_token = get_auth_middleware()._extract_token_from_request(http_request)
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated session token required",
+        )
+    try:
+        revoked = await auth_svc.revoke_account_session(
+            account["user_id"],
+            account["tenant_id"],
+            session_id,
+            access_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid session or current-session revocation request",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Session revocation temporarily unavailable",
+        ) from exc
+    if not revoked:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active account session not found",
+        )
+    return {"session_id": session_id, "revoked": True}
 
 
 @router.put("/me")

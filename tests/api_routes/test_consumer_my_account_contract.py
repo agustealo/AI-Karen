@@ -48,6 +48,18 @@ class AccountService:
         self.profile_calls: list[dict[str, Any]] = []
         self.password_calls: list[tuple[str, str, str]] = []
         self.password_error: str | None = None
+        self.session_calls: list[tuple[Any, ...]] = []
+        self.session_error = False
+        self.revoke_result = True
+        self.remote_session = {
+            "session_id": "44444444-4444-4444-4444-444444444444",
+            "is_current": False,
+            "created_at": "2026-11-14T12:00:00",
+            "last_accessed": "2026-11-14T12:05:00",
+            "expires_at": "2026-12-14T12:00:00",
+            "ip_address": "192.0.2.1",
+            "user_agent": "Browser",
+        }
 
     async def get_user_by_id(self, user_id: str):
         return self.account if user_id == USER_ID else None
@@ -67,6 +79,20 @@ class AccountService:
     async def change_user_password(self, user_id: str, current: str, new: str):
         self.password_calls.append((user_id, current, new))
         return self.password_error
+
+    async def list_account_sessions(self, user_id: str, tenant_id: str, access_token: str):
+        self.session_calls.append(("list", user_id, tenant_id, access_token))
+        if self.session_error:
+            raise RuntimeError("Session retrieval unavailable")
+        return [dict(self.remote_session)]
+
+    async def revoke_account_session(
+        self, user_id: str, tenant_id: str, session_id: str, access_token: str
+    ):
+        self.session_calls.append(("revoke", user_id, tenant_id, session_id, access_token))
+        if self.session_error:
+            raise RuntimeError("Session revocation unavailable")
+        return self.revoke_result
 
 
 @pytest.mark.asyncio
@@ -201,3 +227,87 @@ async def test_successful_password_change_uses_same_authenticated_owner() -> Non
     )
     assert response.status_code == 200
     assert service.password_calls == [(USER_ID, "CurrentSecret#1", "AnotherSecret#2")]
+
+
+@pytest.mark.asyncio
+async def test_owned_session_ingress_returns_only_canonical_account_data(monkeypatch) -> None:
+    service = AccountService()
+    monkeypatch.setattr(
+        auth_routes,
+        "get_auth_middleware",
+        lambda: SimpleNamespace(_extract_token_from_request=lambda request: "current-access"),
+    )
+    result = await auth_routes.get_current_account_sessions(
+        http_request=SimpleNamespace(),
+        current_user=principal(),
+        auth_svc=service,
+    )
+    assert result == {"sessions": [service.remote_session]}
+    assert service.session_calls == [("list", USER_ID, TENANT_A, "current-access")]
+    assert all("token" not in key for key in result["sessions"][0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "revoke"])
+async def test_session_ingress_rejects_cross_tenant_account_before_service_use(
+    monkeypatch, operation: str
+) -> None:
+    service = AccountService(tenant_id=TENANT_B)
+    monkeypatch.setattr(
+        auth_routes,
+        "get_auth_middleware",
+        lambda: SimpleNamespace(_extract_token_from_request=lambda request: "current-access"),
+    )
+    with pytest.raises(HTTPException) as error:
+        if operation == "list":
+            await auth_routes.get_current_account_sessions(SimpleNamespace(), principal(), service)
+        else:
+            await auth_routes.revoke_current_account_session(
+                service.remote_session["session_id"], SimpleNamespace(), principal(), service
+            )
+    assert error.value.status_code == 401
+    assert not service.session_calls
+
+
+@pytest.mark.asyncio
+async def test_remote_revoke_requires_canonical_backend_confirmation(monkeypatch) -> None:
+    service = AccountService()
+    monkeypatch.setattr(
+        auth_routes,
+        "get_auth_middleware",
+        lambda: SimpleNamespace(_extract_token_from_request=lambda request: "current-access"),
+    )
+    result = await auth_routes.revoke_current_account_session(
+        service.remote_session["session_id"], SimpleNamespace(), principal(), service
+    )
+    assert result == {"session_id": service.remote_session["session_id"], "revoked": True}
+    assert service.session_calls == [(
+        "revoke", USER_ID, TENANT_A, service.remote_session["session_id"], "current-access"
+    )]
+
+    service.revoke_result = False
+    with pytest.raises(HTTPException) as error:
+        await auth_routes.revoke_current_account_session(
+            service.remote_session["session_id"], SimpleNamespace(), principal(), service
+        )
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "revoke"])
+async def test_session_backend_outage_is_never_success(monkeypatch, operation: str) -> None:
+    service = AccountService()
+    service.session_error = True
+    monkeypatch.setattr(
+        auth_routes,
+        "get_auth_middleware",
+        lambda: SimpleNamespace(_extract_token_from_request=lambda request: "current-access"),
+    )
+    with pytest.raises(HTTPException) as error:
+        if operation == "list":
+            await auth_routes.get_current_account_sessions(SimpleNamespace(), principal(), service)
+        else:
+            await auth_routes.revoke_current_account_session(
+                service.remote_session["session_id"], SimpleNamespace(), principal(), service
+            )
+    assert error.value.status_code == 503
