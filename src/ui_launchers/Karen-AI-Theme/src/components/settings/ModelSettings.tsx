@@ -43,8 +43,6 @@ import {
   type RuntimeSettingsResponse,
   sortProviderModels,
   normalizeDiscoveredProviderModels,
-  reconcileDiscoveredModelSelection,
-  canSaveProviderModelSelection,
   getProviderModelDiscoveryNotice,
 } from '@/lib/model-runtime-inventory';
 
@@ -284,7 +282,6 @@ export default function ModelSettings() {
   const loadProviderModels = useCallback(async (
     providerId: string,
     providerBaseUrl?: string,
-    manualEntryAllowed = false,
   ) => {
     if (!providerId) return;
     const requestId = ++modelDiscoveryRequestId.current;
@@ -349,7 +346,7 @@ export default function ModelSettings() {
         ? normalizedSettings.selected_model
         : '',
     );
-    void loadProviderModels(selectedProviderDetails.id, providerBaseUrl, canEnterModelManually);
+    void loadProviderModels(selectedProviderDetails.id, providerBaseUrl);
   }, [canEnterModelManually, fallbackProviderModels, loadProviderModels, normalizedSettings?.selected_model, normalizedSettings?.selected_provider, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
 
   useEffect(() => {
@@ -563,7 +560,7 @@ export default function ModelSettings() {
       applyNormalizedSettings(response);
       setIsCustomDialogOpen(false);
       setCustomProviderForm({ name: '', displayName: '', description: '', baseUrl: '', model: '', authHeader: 'Authorization', authPrefix: 'Bearer' });
-      toast({ title: 'Custom provider added', description: `${customProviderForm.displayName} is now available.` });
+      toast({ title: 'Custom provider registered', description: `${customProviderForm.displayName} must be verified before it is available in chat.` });
     } catch (error) {
       toast({ title: 'Failed to add provider', description: formatErrorMessage(error, 'Could not create provider.'), variant: 'destructive' });
     } finally { setIsAddingCustom(false); }
@@ -611,11 +608,13 @@ export default function ModelSettings() {
         </Alert>
       )}
       <div role="status" className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 text-sm">
-        <p className="font-semibold">Saved model: {normalizedSettings?.selected_model || 'None configured'}</p>
+        <p className="font-semibold">Workspace default: {normalizedSettings?.selected_model
+            ? `${normalizedSettings.selected_provider} / ${normalizedSettings.selected_model}`
+            : 'Automatic routing (no model preference)'}</p>
         <p className="mt-1 text-muted-foreground">
           {hasUnsavedSelection
-            ? 'Provider or model selection changed locally. Save to request an update; Karen must confirm the saved configuration.'
-            : 'This is your saved selection, not proof of a currently executing model. Runtime availability is reported separately.'}
+            ? 'New default chosen but not saved. Use Set as workspace default after this model becomes ready.'
+            : 'Browsing a provider below does not change the workspace default. Only live-ready models are offered for chat.'}
         </p>
       </div>
       <div className={cn("grid gap-8 pb-32", !isMobile && "grid-cols-12")}>
@@ -626,9 +625,9 @@ export default function ModelSettings() {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-xl font-bold flex items-center gap-2">
-                    <Bot className="h-5 w-5 text-primary" /> Model Selection
+                    <Bot className="h-5 w-5 text-primary" /> Provider setup and workspace default
                   </CardTitle>
-                  <CardDescription>Choose a provider and model from Karen’s registered inventory. Saving does not guarantee the runtime is healthy.</CardDescription>
+                  <CardDescription>Connect a provider, verify its health and live models, then choose the workspace default.</CardDescription>
                 </div>
                 <TooltipProvider>
                   <Tooltip>
@@ -645,10 +644,29 @@ export default function ModelSettings() {
               </div>
             </CardHeader>
             <CardContent className="pt-6 space-y-8">
+              {selectedProviderDetails && (
+                <div role="status" className="rounded-xl border border-border/60 px-4 py-3 text-sm">
+                  <p className="font-semibold">
+                    {selectedProviderLabel}: {canSetWorkspaceDefault ? 'Ready for chat' : 'Setup or verification required'}
+                  </p>
+                  <p className="mt-1 text-muted-foreground">
+                    {selectedProviderDetails.enabled !== true
+                      ? 'This provider is disabled.'
+                      : selectedProviderDetails.is_configured !== true
+                        ? 'Connection is not configured. Add credentials or a reachable local runtime, then save the connection.'
+                        : selectedProviderDetails.health_status !== 'healthy'
+                          ? 'Connection is saved, but runtime health is not confirmed. Check the provider and refresh its inventory.'
+                          : verifiedModels.length === 0
+                            ? 'No live-verified models yet. Refresh model discovery; catalog entries are not chat-ready.'
+                            : 'Live model inventory is available. Select a verified model to set the workspace default.'}
+                  </p>
+                </div>
+              )}
+
               {/* Provider Selection */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="ai-provider" className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Select Provider</Label>
+                  <Label htmlFor="ai-provider" className="text-sm font-semibold uppercase tracking-wider text-muted-foreground/80">Provider to inspect or configure</Label>
                   {canManageRuntime && <Dialog open={isCustomDialogOpen} onOpenChange={setIsCustomDialogOpen}>
                     <DialogTrigger asChild>
                       <Button variant="ghost" size="sm" className="h-8 text-primary hover:text-primary hover:bg-primary/5">
@@ -700,7 +718,7 @@ export default function ModelSettings() {
                   <Alert className="border-border/60 bg-muted/20 text-muted-foreground">
                     <Info className="h-4 w-4" />
                     <AlertDescription>
-                      No active cloud providers are configured. Built-in runtimes are still available.
+                      No cloud providers are registered. Add a provider or configure a local runtime.
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -805,7 +823,7 @@ export default function ModelSettings() {
                         ))
                       ) : (
                         <div className="rounded-xl border border-dashed border-border/50 bg-muted/5 px-3 py-2 text-xs text-muted-foreground">
-                          No active cloud providers are configured. Built-in runtimes are still available.
+                          No cloud providers are registered. Add a provider or configure a local runtime.
                         </div>
                       )}
                     </SelectGroup>
@@ -925,7 +943,6 @@ export default function ModelSettings() {
                                   void loadProviderModels(
                                     selectedProviderDetails.id,
                                     nextBaseUrl,
-                                    canEnterModelManually,
                                   );
                                 }
                               }}
@@ -1008,7 +1025,7 @@ export default function ModelSettings() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                onClick={() => loadProviderModels(selectedProvider, baseUrl, canEnterModelManually)}
+                                onClick={() => loadProviderModels(selectedProvider, baseUrl)}
                                 disabled={isLoadingModels}
                                 className="h-7 w-7"
                                 title="Refresh model discovery"
@@ -1021,10 +1038,17 @@ export default function ModelSettings() {
                           {availableModels.length > 0 ? (
                             <Select value={selectedModel} onValueChange={setSelectedModel}>
                               <SelectTrigger id="model-picker" className="h-11 bg-muted/20">
-                                <SelectValue placeholder="Discovering models..." />
+                                <SelectValue placeholder={isLoadingModels ? "Checking live models..." : "Choose a verified model"} />
                               </SelectTrigger>
                               <SelectContent>
-                                {availableModels.map(m => <SelectItem key={m.id} value={m.id}>{m.name}{m.source === 'configured_catalog' ? ' (catalog)' : ''}</SelectItem>)}
+                                {availableModels.map((model) => {
+                                  const ready = verifiedModels.some((item) => item.id === model.id);
+                                  return (
+                                    <SelectItem key={model.id} value={model.id} disabled={!ready}>
+                                      {model.name}{ready ? '' : ' (not verified for chat)'}
+                                    </SelectItem>
+                                  );
+                                })}
                               </SelectContent>
                             </Select>
                           ) : canEnterModelManually ? (
@@ -1114,10 +1138,22 @@ export default function ModelSettings() {
                       )}
                     </div>
 
-                  <div className="flex justify-end pt-4">
-                    <Button onClick={handleSave} disabled={!canManageRuntime || isSaving || !canSaveProviderModelSelection(selectedModel, availableModels, { isLoading: isLoadingModels, manualEntryAllowed: canEnterModelManually })} className="h-11 w-full sm:w-auto px-8 font-bold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02] active:scale-95">
-                      {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-5 w-5" />}
-                      Finalize Intelligence Settings
+                  <div className="flex flex-wrap justify-end gap-3 pt-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleSave(false)}
+                      disabled={!canManageRuntime || isSaving}
+                      className="h-11 w-full sm:w-auto"
+                    >
+                      {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                      Save provider connection
+                    </Button>
+                    <Button
+                      onClick={() => void handleSave(true)}
+                      disabled={!canManageRuntime || isSaving || !canSetWorkspaceDefault}
+                      className="h-11 w-full sm:w-auto px-6 font-semibold"
+                    >
+                      Set as workspace default
                     </Button>
                   </div>
                 </div>
