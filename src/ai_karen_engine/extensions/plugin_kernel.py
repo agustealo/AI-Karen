@@ -669,7 +669,7 @@ class PluginKernel:
             if metadata.validation_errors
             else None
         )
-        return PluginCatalogRecord(
+        record = PluginCatalogRecord(
             manifest=manifest,
             path=metadata.directory,
             status=status,
@@ -677,6 +677,9 @@ class PluginKernel:
             error_message=error_message,
             is_valid=bool(metadata.is_valid),
         ).as_dict()
+        if self._is_uploaded_plugin(plugin_id):
+            record["activation_blocked_reason"] = "isolated_runtime_required"
+        return record
 
     def list_records(self) -> list[Dict[str, Any]]:
         records: list[Dict[str, Any]] = []
