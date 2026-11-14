@@ -729,6 +729,39 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.draftWrites).toEqual(["A new user edit"]);
   });
 
+  it("reports SDK RUN_ERROR before RUN_STARTED without inventing a run ID", async () => {
+    sdk.runAgent.mockImplementationOnce(async () => {
+      sdk.lifecycle?.onRunFailed();
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Follow-up message");
+      input().onSubmitMessage("Follow-up message");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("Karen could not complete the request"));
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.agent.messages).toHaveLength(2);
+    expect(sdk.post).not.toHaveBeenCalled();
+    expect(sdk.stopAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not attribute unrelated preflight errors to a model run before SDK invocation", async () => {
+    sdk.clearDraft.mockImplementationOnce(async () => {
+      sdk.lifecycle?.onRunFailed();
+      return true;
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("One pending question");
+      input().onSubmitMessage("One pending question");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("shows an honest failure when SDK reports RUN_ERROR without rejecting runAgent", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     act(() => sdk.lifecycle?.onRunStartedEvent({
