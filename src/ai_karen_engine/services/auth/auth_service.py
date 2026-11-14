@@ -614,16 +614,10 @@ class AuthService(BaseService):
                 db_auth_session.refresh_token = new_refresh_token
                 db_auth_session.last_accessed = datetime.utcnow()
                 user_id_for_audit = str(auth_user.user_id)
+                session_id_for_audit = str(db_auth_session.session_token)
                 await db_session.flush()
-                await self._emit_audit_event(
-                    action="auth.session.refresh_rotated",
-                    actor_user_id=str(auth_user.user_id),
-                    target_user_id=str(auth_user.user_id),
-                    status="success",
-                    session_id=str(db_auth_session.session_token),
-                )
-                # Do not send a rotated token pair until the consumed-token
-                # history and new session tokens are durably committed.
+                # Do not send a rotated token pair or report successful audit
+                # until the consumed-token history is durably committed.
                 await db_session.commit()
 
                 for cached_session in self._active_sessions.values():
@@ -633,6 +627,13 @@ class AuthService(BaseService):
                         cached_session.last_used = datetime.utcnow()
                         break
 
+                await self._emit_audit_event(
+                    action="auth.session.refresh_rotated",
+                    actor_user_id=user_id_for_audit,
+                    target_user_id=user_id_for_audit,
+                    status="success",
+                    session_id=session_id_for_audit,
+                )
                 logger.info("Refresh token rotated for user %s", user_id_for_audit)
                 return new_access_token, new_refresh_token, None
 
@@ -1125,6 +1126,13 @@ class AuthService(BaseService):
                     db_session.invalidated_at = now
                     db_session.invalidation_reason = "password_changed"
                 await session.flush()
+                # Password and every revoked session commit atomically before
+                # the API reports success and clears browser credentials.
+                await session.commit()
+                self._user_cache.pop(user_id, None)
+                for cached_session in self._active_sessions.values():
+                    if cached_session.user_id == user_id:
+                        cached_session.is_active = False
                 await self._emit_audit_event(
                     action="auth.password.change",
                     actor_user_id=user_id,
@@ -1133,13 +1141,6 @@ class AuthService(BaseService):
                     reason_code="password_changed",
                     metadata={"revoked_session_count": len(active_sessions)},
                 )
-                # Password and every revoked session commit atomically before
-                # the API reports success and clears browser credentials.
-                await session.commit()
-                self._user_cache.pop(user_id, None)
-                for cached_session in self._active_sessions.values():
-                    if cached_session.user_id == user_id:
-                        cached_session.is_active = False
                 return None
         except Exception as exc:
             logger.error("Password change failed for user %s: %s", user_id, exc)
