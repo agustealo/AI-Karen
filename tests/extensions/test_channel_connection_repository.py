@@ -360,3 +360,66 @@ async def test_retired_deletion_request_inventory_rejects_forged_identity_before
             tenant_id=TENANT, user_id="not-an-authenticated-user",
         )
     assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(monkeypatch):
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    connection = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    stored = {
+        "connection_id": connection, "revision": 7, "enabled": False,
+        "active_consent": True, "unresolved_pairing": True,
+        "deletion_request_recorded": True, "unverified_deletion_request": True,
+        "inbox_not_completed": False, "outbound_not_confirmed": True,
+        "credential_handle": "vault://private",
+    }
+    session = Session([stored])
+    install(monkeypatch, session)
+    result = await SqlChannelRepository().list_owned_personal_retirement_evidence(
+        tenant_id=TENANT, user_id=user,
+    )
+    assert result == [{
+        "connection_id": connection, "connection_revision": 7,
+        "connection_enabled": False, "active_consent": True,
+        "unresolved_pairing": True, "deletion_request_recorded": True,
+        "unverified_deletion_request": True, "inbox_not_completed": False,
+        "outbound_not_confirmed": True,
+    }]
+    query, args = session.calls[0]
+    for term in ("JOIN public.channel_connection_owners o",
+                 "JOIN public.auth_users u", "u.is_active = true",
+                 "u.is_verified = true", "c.tenant_id = CAST(:tenant AS uuid)",
+                 "o.user_id = CAST(:user AS uuid)", "LIMIT 51",
+                 "channel_personal_pairing_state",
+                 "channel_personal_credential_deletions",
+                 "channel_inbox", "channel_outbox"):
+        assert term in query
+    assert args == {"tenant": TENANT, "user": user}
+    selected = query.split("FROM public.channel_connections c")[0]
+    for secret in ("credential_handle", "provider_account_id",
+                   "session_reference", "provider_receipt_id", "message_text"):
+        assert secret not in selected
+
+
+@pytest.mark.asyncio
+async def test_retirement_evidence_denies_overflow_and_invalid_identity(monkeypatch):
+    session = Session([])
+    install(monkeypatch, session)
+    tenant_user = {
+        "tenant_id": TENANT,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    }
+    assert await SqlChannelRepository().list_owned_personal_retirement_evidence(
+        **tenant_user,
+    ) == []
+    session.value = [object()] * 51
+    with pytest.raises(RuntimeError, match="inventory limit exceeded"):
+        await SqlChannelRepository().list_owned_personal_retirement_evidence(
+            **tenant_user,
+        )
+    session.calls.clear()
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().list_owned_personal_retirement_evidence(
+            tenant_id=TENANT, user_id="invalid-actor",
+        )
+    assert session.calls == []

@@ -582,6 +582,13 @@ def retired_recovery_context(monkeypatch, *, consents=None, revoked=True):
             "policy_version": "obsolete-policy",
         }]),
         revoke=AsyncMock(return_value=revoked),
+        list_retirement_evidence=AsyncMock(return_value=[{
+            "connection_id": CONNECTION, "connection_revision": 2,
+            "connection_enabled": False, "active_consent": False,
+            "unresolved_pairing": True, "deletion_request_recorded": True,
+            "unverified_deletion_request": True,
+            "inbox_not_completed": False, "outbound_not_confirmed": True,
+        }]),
         list_deletion_requests=AsyncMock(return_value=[{
             "request_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
             "connection_id": CONNECTION, "provider_id": PROVIDER,
@@ -689,6 +696,7 @@ def test_retired_consent_recovery_routes_are_authenticated_and_not_activation_ro
     for path, method in (
         ("/api/channels/personal/consent-recovery", "GET"),
         ("/api/channels/personal/consent-recovery/deletion-requests", "GET"),
+        ("/api/channels/personal/consent-recovery/retirement-evidence", "GET"),
         ("/api/channels/personal/consent-recovery/{connection_id}/{provider_id}/revoke", "POST"),
     ):
         matches = [route for route in routes if route.path == path]
@@ -729,5 +737,28 @@ async def test_retired_deletion_requests_denied_and_errors_redacted(monkeypatch)
     recovery.list_deletion_requests.side_effect = RuntimeError("vault://secret-token")
     with pytest.raises(HTTPException) as unavailable:
         await api.list_retired_credential_deletion_requests(user=actor())
+    assert unavailable.value.status_code == 503
+    assert "vault://" not in unavailable.value.detail
+
+
+@pytest.mark.asyncio
+async def test_retirement_evidence_api_requires_identity_and_never_claims_deletion(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    result = await api.list_retired_channel_evidence(user=actor())
+    item = result.connections[0].model_dump()
+    assert item["unresolved_pairing"] is True
+    assert item["outbound_not_confirmed"] is True
+    for secret in ("credential_handle", "session_reference", "provider_receipt_id",
+                   "message_text", "retirement_authorized", "provider_unlinked"):
+        assert secret not in item
+    recovery.list_retirement_evidence.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+    with pytest.raises(HTTPException) as forbidden:
+        await api.list_retired_channel_evidence(user=actor(is_verified=False))
+    assert forbidden.value.status_code == 403
+    recovery.list_retirement_evidence.side_effect = RuntimeError("vault://private")
+    with pytest.raises(HTTPException) as unavailable:
+        await api.list_retired_channel_evidence(user=actor())
     assert unavailable.value.status_code == 503
     assert "vault://" not in unavailable.value.detail

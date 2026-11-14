@@ -460,6 +460,91 @@ class SqlChannelRepository:
             for row in rows
         ]
 
+    async def list_owned_personal_retirement_evidence(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict[str, str | int | bool]]:
+        """Inspect bounded owner-only retirement blockers, never permit deletion.
+
+        These are SQL observations, not current vendor health or erasure proof.
+        Keep provider account identifiers, credentials and messages internal.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT c.connection_id, c.revision, c.enabled,
+                           EXISTS (
+                               SELECT 1 FROM public.channel_personal_pairing_consents p
+                               WHERE p.tenant_id = c.tenant_id
+                                 AND p.connection_id = c.connection_id
+                                 AND p.user_id = o.user_id
+                                 AND p.revoked_at IS NULL
+                           ) AS active_consent,
+                           EXISTS (
+                               SELECT 1 FROM public.channel_personal_pairing_state s
+                               WHERE s.tenant_id = c.tenant_id
+                                 AND s.connection_id = c.connection_id
+                                 AND s.phase NOT IN ('ready', 'disconnected')
+                           ) AS unresolved_pairing,
+                           EXISTS (
+                               SELECT 1 FROM public.channel_personal_credential_deletions d
+                               WHERE d.tenant_id = c.tenant_id
+                                 AND d.connection_id = c.connection_id
+                                 AND d.user_id = o.user_id
+                           ) AS deletion_request_recorded,
+                           EXISTS (
+                               SELECT 1 FROM public.channel_personal_credential_deletions d
+                               WHERE d.tenant_id = c.tenant_id
+                                 AND d.connection_id = c.connection_id
+                                 AND d.user_id = o.user_id
+                                 AND d.status <> 'verified'
+                           ) AS unverified_deletion_request,
+                           EXISTS (
+                               SELECT 1 FROM public.channel_inbox i
+                               WHERE i.tenant_id = c.tenant_id
+                                 AND i.connection_id = c.connection_id
+                                 AND i.status <> 'completed'
+                           ) AS inbox_not_completed,
+                           EXISTS (
+                               SELECT 1 FROM public.channel_outbox b
+                               WHERE b.tenant_id = c.tenant_id
+                                 AND b.connection_id = c.connection_id
+                                 AND b.status NOT IN ('sent', 'delivered', 'read')
+                           ) AS outbound_not_confirmed
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = o.tenant_id
+                     AND u.user_id = o.user_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND o.user_id = CAST(:user AS uuid)
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ORDER BY c.connection_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id, "user": user_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise RuntimeError("Personal retirement evidence inventory limit exceeded")
+        return [
+            {
+                "connection_id": str(row["connection_id"]),
+                "connection_revision": int(row["revision"]),
+                "connection_enabled": bool(row["enabled"]),
+                "active_consent": bool(row["active_consent"]),
+                "unresolved_pairing": bool(row["unresolved_pairing"]),
+                "deletion_request_recorded": bool(row["deletion_request_recorded"]),
+                "unverified_deletion_request": bool(row["unverified_deletion_request"]),
+                "inbox_not_completed": bool(row["inbox_not_completed"]),
+                "outbound_not_confirmed": bool(row["outbound_not_confirmed"]),
+            }
+            for row in rows
+        ]
+
     async def list_owned_personal_credential_deletion_requests(
         self, *, tenant_id: str, user_id: str,
     ) -> list[dict[str, str | int]]:

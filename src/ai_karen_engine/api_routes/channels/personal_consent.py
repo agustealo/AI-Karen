@@ -240,6 +240,40 @@ class PersonalConsentRecoveryInventory(BaseModel):
     consents: list[PersonalConsentRecoveryItem]
 
 
+class PersonalRetirementEvidenceItem(BaseModel):
+    connection_id: str
+    connection_revision: int
+    connection_enabled: bool
+    active_consent: bool
+    unresolved_pairing: bool
+    deletion_request_recorded: bool
+    unverified_deletion_request: bool
+    inbox_not_completed: bool
+    outbound_not_confirmed: bool
+
+
+class PersonalRetirementEvidenceInventory(BaseModel):
+    connections: list[PersonalRetirementEvidenceItem]
+
+
+@router.get(
+    "/consent-recovery/retirement-evidence",
+    response_model=PersonalRetirementEvidenceInventory,
+)
+async def list_retired_channel_evidence(
+    user: UserData = Depends(get_current_user),
+) -> PersonalRetirementEvidenceInventory:
+    """Owner-scoped SQL observations, never a retirement authorization."""
+    tenant_id, user_id = _verified_actor(user)
+    try:
+        rows = await PersonalConsentRecoveryService().list_retirement_evidence(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+    except Exception as exc:
+        raise _translate(exc, operation="recovery") from None
+    return PersonalRetirementEvidenceInventory(connections=rows)
+
+
 class PersonalCredentialDeletionRequestItem(BaseModel):
     request_id: UUID
     connection_id: str

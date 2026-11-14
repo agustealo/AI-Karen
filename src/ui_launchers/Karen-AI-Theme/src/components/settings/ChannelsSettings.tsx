@@ -673,6 +673,164 @@ function RetiredCredentialDeletionHistory({ authenticated }: { authenticated: bo
   );
 }
 
+type PersonalRetirementEvidence = {
+  connection_id: string;
+  connection_revision: number;
+  connection_enabled: boolean;
+  active_consent: boolean;
+  unresolved_pairing: boolean;
+  deletion_request_recorded: boolean;
+  unverified_deletion_request: boolean;
+  inbox_not_completed: boolean;
+  outbound_not_confirmed: boolean;
+};
+
+function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Missing channel retirement evidence');
+  }
+  const rows = (value as { connections?: unknown }).connections;
+  if (!Array.isArray(rows) || rows.length > 50) {
+    throw new Error('Invalid retirement evidence inventory');
+  }
+  const seen = new Set<string>();
+  const booleanFields = [
+    'connection_enabled', 'active_consent', 'unresolved_pairing',
+    'deletion_request_recorded', 'unverified_deletion_request',
+    'inbox_not_completed', 'outbound_not_confirmed',
+  ] as const;
+  for (const entry of rows) {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error('Untrusted retirement evidence');
+    }
+    const row = entry as Record<string, unknown>;
+    if (
+      typeof row.connection_id !== 'string' || !row.connection_id.trim() ||
+      row.connection_id.length > 256 || seen.has(row.connection_id) ||
+      typeof row.connection_revision !== 'number' ||
+      !Number.isSafeInteger(row.connection_revision) || row.connection_revision < 1 ||
+      booleanFields.some((field) => typeof row[field] !== 'boolean')
+    ) {
+      throw new Error('Incomplete retirement evidence');
+    }
+    seen.add(row.connection_id);
+  }
+  return rows as PersonalRetirementEvidence[];
+}
+
+function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const [records, setRecords] = useState<PersonalRetirementEvidence[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failure, setFailure] = useState(false);
+
+  useEffect(() => {
+    if (!authenticated) {
+      setExpanded(false);
+      setRecords(null);
+      setFailure(false);
+    }
+  }, [authenticated]);
+
+  const review = async () => {
+    if (!authenticated || loading) return;
+    setExpanded(true);
+    setLoading(true);
+    setRecords(null);
+    setFailure(false);
+    try {
+      const response = await apiClient.get<{ connections: PersonalRetirementEvidence[] }>(
+        '/api/channels/personal/consent-recovery/retirement-evidence',
+      );
+      setRecords(parseRetirementEvidence(response));
+    } catch {
+      setFailure(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="space-y-3 border-t border-border/60 pt-4"
+      aria-label="Personal channel retirement evidence">
+      <p className="text-sm font-semibold">Channel retirement evidence</p>
+      <p className="text-xs text-muted-foreground">
+        Review persisted consent, pairing observations, deletion requests and unfinished
+        channel work. These are historical SQL observations, not live provider verification.
+        This review never authorizes unlink, credential erasure or connection deletion.
+      </p>
+      <Button type="button" size="sm" variant="outline"
+        aria-label="Review channel retirement evidence"
+        disabled={!authenticated || loading}
+        onClick={() => void review()}>
+        {expanded ? 'Refresh retirement evidence' : 'Review retirement evidence'}
+      </Button>
+      {loading && <p role="status" className="text-sm">Reading retirement evidence...</p>}
+      {!loading && failure && authenticated && (
+        <Alert role="alert" variant="destructive">
+          <AlertCircle className="h-4 w-4" aria-hidden="true" />
+          <AlertTitle>Retirement evidence unavailable</AlertTitle>
+          <AlertDescription>
+            Stored retirement evidence could not be verified. No change was made.
+          </AlertDescription>
+        </Alert>
+      )}
+      {!loading && authenticated && records?.length === 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          No owned connections were found. This does not verify remote unlink
+          or deletion of retained provider data.
+        </p>
+      )}
+      {!loading && authenticated && records && records.length > 0 && (
+        <div className="space-y-3">
+          {records.map((record) => (
+            <div key={record.connection_id}
+              className="space-y-1 rounded-md border border-border/60 p-3">
+              <p className="break-all text-sm font-semibold">
+                Connection {record.connection_id}, revision {record.connection_revision}
+              </p>
+              <p className="text-xs">
+                {record.connection_enabled ? 'Connection still enabled' : 'Connection disabled'}
+              </p>
+              <p className="text-xs">
+                {record.active_consent ? 'Active consent remains' : 'No active consent observed'}
+              </p>
+              <p className="text-xs">
+                {record.unresolved_pairing
+                  ? 'Unresolved pairing observation remains'
+                  : 'No unresolved pairing observation recorded'}
+              </p>
+              <p className="text-xs">
+                {record.deletion_request_recorded
+                  ? 'Credential deletion request recorded'
+                  : 'No credential deletion request recorded'}
+              </p>
+              <p className="text-xs">
+                {record.unverified_deletion_request
+                  ? 'Credential deletion request not verified'
+                  : 'No pending unverified request observed'}
+              </p>
+              <p className="text-xs">
+                {record.inbox_not_completed
+                  ? 'Unfinished inbound work exists'
+                  : 'No unfinished inbound work observed'}
+              </p>
+              <p className="text-xs">
+                {record.outbound_not_confirmed
+                  ? 'Outbound delivery not confirmed'
+                  : 'No unconfirmed outbound delivery observed'}
+              </p>
+              <p className="text-xs font-medium">
+                Retirement is not authorized by this report, regardless of these flags.
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function ChannelsSettings() {
   const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const principalKey = isAuthenticated && user?.tenant_id && user?.user_id
@@ -862,6 +1020,10 @@ export default function ChannelsSettings() {
       />
       <RetiredCredentialDeletionHistory
         key={'deletion:' + principalKey}
+        authenticated={isAuthenticated && !isAuthLoading}
+      />
+      <PersonalRetirementEvidenceReview
+        key={'retirement:' + principalKey}
         authenticated={isAuthenticated && !isAuthLoading}
       />
     </div>

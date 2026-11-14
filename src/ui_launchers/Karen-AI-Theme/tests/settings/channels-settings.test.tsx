@@ -639,3 +639,93 @@ describe('KOC-05 retired provider deletion request evidence', () => {
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 });
+
+
+describe('KOC-05 read-only retirement evidence review', () => {
+  const endpoint = '/api/channels/personal/consent-recovery/retirement-evidence';
+  const evidence = {
+    connection_id: channel.connection_id,
+    connection_revision: 4,
+    connection_enabled: false,
+    active_consent: false,
+    unresolved_pairing: true,
+    deletion_request_recorded: true,
+    unverified_deletion_request: true,
+    inbox_not_completed: false,
+    outbound_not_confirmed: true,
+  };
+
+  it('reads the SQL evidence only on demand even when ChannelHost is retired', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') {
+        throw new ApiError(503, 'Retired host');
+      }
+      if (path === endpoint) return { connections: [evidence] };
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    expect(apiClient.get).not.toHaveBeenCalledWith(endpoint);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Review channel retirement evidence',
+    }));
+    expect(await screen.findByText('Unresolved pairing observation remains')).toBeTruthy();
+    expect(screen.getByText('Outbound delivery not confirmed')).toBeTruthy();
+    expect(screen.getByText(/Retirement is not authorized by this report/)).toBeTruthy();
+    expect(apiClient.delete).not.toHaveBeenCalled();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on malformed evidence rather than declaring safe retirement', async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) {
+        return { connections: [{ ...evidence, connection_enabled: 'false' }] };
+      }
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review channel retirement evidence',
+    }));
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Retirement evidence unavailable');
+    expect(screen.queryByText(/Retirement is not authorized by this report/)).toBeNull();
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it('clears inspected evidence on principal switch and does not auto-replay', async () => {
+    let oldPrincipal = true;
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) return { connections: oldPrincipal ? [evidence] : [] };
+      throw new Error('Unexpected URL');
+    });
+    const view = render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review channel retirement evidence',
+    }));
+    expect(await screen.findByText('Unresolved pairing observation remains')).toBeTruthy();
+    oldPrincipal = false;
+    auth.user.user_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+    view.rerender(<ChannelsSettings />);
+    await waitFor(() => {
+      expect(screen.queryByText('Unresolved pairing observation remains')).toBeNull();
+    });
+    expect(vi.mocked(apiClient.get).mock.calls.filter(([path]) => path === endpoint))
+      .toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Review channel retirement evidence',
+    }));
+    expect(await screen.findByText(/No owned connections were found/)).toBeTruthy();
+  });
+
+  it('never fetches retirement evidence while signed out', () => {
+    auth.isAuthenticated = false;
+    render(<ChannelsSettings />);
+    const button = screen.getByRole('button', {
+      name: 'Review channel retirement evidence',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(apiClient.get).not.toHaveBeenCalledWith(endpoint);
+  });
+});
