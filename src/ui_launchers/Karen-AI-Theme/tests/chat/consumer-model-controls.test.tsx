@@ -69,8 +69,11 @@ describe("consumer provider and model controls", () => {
     expect(screen.queryByRole("option", { name: /Unconfigured provider/ })).toBeNull();
     expect(screen.queryByRole("option", { name: /Restricted provider/ })).toBeNull();
     expect(screen.getByText(/provider hidden from chat selection/)).not.toBeNull();
-    fireEvent.click(screen.getByText("Advanced provider and agent details"));
-    expect(screen.getByText(/Unconfigured provider/)).not.toBeNull();
+    const disclosure = screen.getByText("Advanced provider and agent details");
+    fireEvent.click(disclosure);
+    // The advanced list mounts only after React processes the native toggle.
+    fireEvent.toggle(disclosure.closest("details")!);
+    expect(await screen.findByText("Unconfigured provider")).not.toBeNull();
     expect(screen.getByText("Not configured")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Configure providers" }));
     expect(setup).toHaveBeenCalledTimes(1);
