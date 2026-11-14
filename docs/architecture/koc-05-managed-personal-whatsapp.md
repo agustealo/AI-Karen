@@ -39,6 +39,7 @@ Project: https://github.com/evolution-foundation/evolution-api
 - [x] Read-only personal Channels inventory/settings driven by backend connection state (no pairing controls).
 - [x] Versioned consumer risk notice, explicit consent acknowledgement and revocation UI, with backend-confirmed reads (no session or QR).
 - [x] Owner-scoped legacy consent discovery and revoke-only UI after managed provider removal from configuration or consent-policy rollover.
+- [x] Transport-independent consent recovery for retired ChannelHost or uninstalled adapter, using existing RBAC, RuntimePolicy and SQL revocation lock.
 - [ ] Full governed Connect → Verify → Enable → Connected → Disconnect UI with live provider evidence.
 
 Policy assessment is NOT an external pairing token. The governed activation path must still revalidate before side effects.
@@ -381,6 +382,55 @@ and frontend
 within the existing Main Quality and Plugin Ecosystem workflows. Live
 managed provider/QR/session, signed-in browser and credential erasure
 acceptance remain NOT_RUN.
+
+## Transport-independent consent recovery after ChannelHost retirement
+
+A disabled ChannelHost or unregistered channel installation cannot satisfy
+the ordinary plugin-specific consent authorization. Stored consent must still
+be withdrawable without resurrecting the host or its transport.
+
+Under Settings > Personal > Channels, the user can explicitly select
+Review stored consent. The action works even when normal channel inventory
+is unavailable:
+
+- GET /api/channels/personal/consent-recovery returns a bounded list of at
+  most 50 still-active consent references: connection_id, provider_id and
+  policy_version. It does not return credentials, provider account details,
+  message data or pairing evidence.
+- POST /api/channels/personal/consent-recovery/{connection_id}/{provider_id}/revoke
+  uses the existing SqlChannelRepository.revoke_personal_pairing_consent
+  transaction with its serialized parent-connection lock and owner check.
+  Absent or previously revoked consent returns revoked=false.
+- PersonalConsentRecoveryService is the one retirement lifecycle for this
+  existing consent ledger. It is not a second ChannelHost, provider registry
+  or pairing orchestrator. It rereads fresh active, verified tenant identity
+  and derives channel.consent permission from canonical RBAC. RuntimePolicy
+  issues a new scoped action decision, and the action gate revalidates it.
+  No uninstalled plugin is required or trusted as an authority.
+- Canonical SQL enforces tenant RLS, active/verified user and exact immutable
+  connection ownership before exposing unrevoked consent. Overflow rejects
+  the entire inventory. User, tenant, roles and policy tokens are never
+  accepted as HTTP claims.
+- The frontend never submits a revocation automatically. It requires a
+  successful mutation receipt plus a fresh owned ledger read proving that
+  the consent record is absent. An ambiguous outcome remains unverified,
+  with manual refresh, not an automatic retry. Existing ordinary channel
+  consent controls are not duplicated.
+- Revocation does NOT prove remote WhatsApp unlink, credential deletion,
+  provider data erasure, or the return of a connected transport.
+
+Recovery requires the durable owner, connection and consent rows to still
+exist. Deleting a connection cascades its consent evidence. Provider unlink,
+data retention and remote erasure need a separate governed retirement
+process and verified receipts before destructive connection cleanup.
+Absent SQL or fresh auth is a visible failure, not a fabricated success.
+
+Proof: pytest tests/extensions/test_personal_consent_recovery.py
+tests/extensions/test_personal_channel_consent_api.py
+tests/extensions/test_channel_connection_repository.py, and frontend
+tests/settings/channels-settings.test.tsx through the existing CI rails.
+Live managed-provider QR, session, remote unlink, erasure and signed-in
+consumer browser acceptance remain NOT_RUN.
 
 ## User-visible read-only pairing state
 

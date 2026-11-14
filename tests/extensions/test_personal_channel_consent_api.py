@@ -571,3 +571,124 @@ def test_owner_inventory_api_is_authenticated_and_get_only():
         dependency.call is api.get_current_user
         for dependency in routes[0].dependant.dependencies
     )
+
+
+def retired_recovery_context(monkeypatch, *, consents=None, revoked=True):
+    """A real request can use recovery even when no ChannelHost exists."""
+    recovery = SimpleNamespace(
+        list_active=AsyncMock(return_value=consents if consents is not None else [{
+            "connection_id": CONNECTION,
+            "provider_id": PROVIDER,
+            "policy_version": "obsolete-policy",
+        }]),
+        revoke=AsyncMock(return_value=revoked),
+    )
+    monkeypatch.setattr(api, "PersonalConsentRecoveryService", lambda: recovery)
+    return recovery
+
+
+@pytest.mark.asyncio
+async def test_retired_consent_inventory_needs_only_current_auth_not_channel_host(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    result = await api.list_personal_consent_recovery(user=actor())
+    assert len(result.consents) == 1
+    assert result.consents[0].provider_id == PROVIDER
+    assert result.consents[0].policy_version == "obsolete-policy"
+    recovery.list_active.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+    assert "credential_handle" not in result.consents[0].model_dump()
+    assert "provider_account_id" not in result.consents[0].model_dump()
+
+
+@pytest.mark.asyncio
+async def test_retired_consent_revoke_receipt_never_claims_unlink_or_pairing(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    receipt = await api.revoke_retired_personal_consent(
+        connection_id=api.UUID(CONNECTION),
+        provider_id=PROVIDER,
+        user=actor(),
+    )
+    recovery.revoke.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+        connection_id=CONNECTION, provider_id=PROVIDER,
+    )
+    assert receipt.revoked is True
+    assert receipt.paired is False
+    assert receipt.provider_unlinked is False
+    recovery.revoke.return_value = False
+    receipt = await api.revoke_retired_personal_consent(
+        connection_id=api.UUID(CONNECTION),
+        provider_id=PROVIDER,
+        user=actor(),
+    )
+    assert receipt.revoked is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"user_id": "forged"},
+    {"tenant_id": "default"},
+    {"is_active": False},
+    {"is_verified": False},
+])
+async def test_retired_consent_recovery_rejects_inactive_or_unverified_actor(monkeypatch, changes):
+    recovery = retired_recovery_context(monkeypatch)
+    with pytest.raises(HTTPException) as e:
+        await api.list_personal_consent_recovery(user=actor(**changes))
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException) as e:
+        await api.revoke_retired_personal_consent(
+            connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+            user=actor(**changes),
+        )
+    assert e.value.status_code == 403
+    recovery.list_active.assert_not_awaited()
+    recovery.revoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retired_consent_recovery_denials_and_errors_are_redacted(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    recovery.list_active.side_effect = PermissionError("other tenant owner")
+    with pytest.raises(HTTPException) as e:
+        await api.list_personal_consent_recovery(user=actor())
+    assert e.value.status_code == 403
+    assert "other tenant" not in e.value.detail
+    recovery.revoke.side_effect = RuntimeError("vault://sensitive-token")
+    with pytest.raises(HTTPException) as e:
+        await api.revoke_retired_personal_consent(
+            connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+            user=actor(),
+        )
+    assert e.value.status_code == 503
+    assert "vault://" not in e.value.detail
+
+
+@pytest.mark.asyncio
+async def test_retired_recovery_refuses_invalid_provider_before_service(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    for provider_id in ("", "  ", "x" * 129):
+        with pytest.raises(HTTPException) as e:
+            await api.revoke_retired_personal_consent(
+                connection_id=api.UUID(CONNECTION),
+                provider_id=provider_id,
+                user=actor(),
+            )
+        assert e.value.status_code == 422
+    recovery.revoke.assert_not_awaited()
+
+
+def test_retired_consent_recovery_routes_are_authenticated_and_not_activation_routes():
+    routes = [route for route in api.router.routes if isinstance(route, APIRoute)]
+    for path, method in (
+        ("/api/channels/personal/consent-recovery", "GET"),
+        ("/api/channels/personal/consent-recovery/{connection_id}/{provider_id}/revoke", "POST"),
+    ):
+        matches = [route for route in routes if route.path == path]
+        assert len(matches) == 1
+        assert matches[0].methods == {method}
+        assert any(
+            dep.call is api.get_current_user
+            for dep in matches[0].dependant.dependencies
+        )

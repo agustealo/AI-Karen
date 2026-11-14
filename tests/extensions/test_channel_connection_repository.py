@@ -234,3 +234,62 @@ async def test_active_historical_consent_inventory_rejects_untrusted_identity(mo
             user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
         )
     assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_retired_consent_inventory_uses_exact_owner_active_user_and_tenant_rls(monkeypatch):
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    session = Session([
+        {"connection_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+         "provider_id": "retired-operator", "policy_version": "legacy-v1"},
+    ])
+    install(monkeypatch, session)
+    records = await SqlChannelRepository().list_owned_active_personal_consents(
+        tenant_id=TENANT, user_id=user,
+    )
+    assert records == [{
+        "connection_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "provider_id": "retired-operator",
+        "policy_version": "legacy-v1",
+    }]
+    query, args = session.calls[0]
+    assert "public.channel_personal_pairing_consents p" in query
+    assert "JOIN public.channel_connection_owners o" in query
+    assert "o.user_id = p.user_id" in query
+    assert "JOIN public.channel_connections c" in query
+    assert "JOIN public.auth_users u" in query
+    assert "p.revoked_at IS NULL" in query
+    assert "u.is_active = true" in query
+    assert "u.is_verified = true" in query
+    assert "p.tenant_id = CAST(:tenant AS uuid)" in query
+    assert "p.user_id = CAST(:user AS uuid)" in query
+    assert "LIMIT 51" in query
+    assert args == {"tenant": TENANT, "user": user}
+
+
+@pytest.mark.asyncio
+async def test_retired_consent_inventory_does_not_invent_or_truncate(monkeypatch):
+    session = Session([])
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().list_owned_active_personal_consents(
+        tenant_id=TENANT, user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    ) == []
+    session.value = [
+        {"connection_id": "conn", "provider_id": f"provider-{i}",
+         "policy_version": "v1"} for i in range(51)
+    ]
+    with pytest.raises(RuntimeError, match="inventory limit exceeded"):
+        await SqlChannelRepository().list_owned_active_personal_consents(
+            tenant_id=TENANT, user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+
+
+@pytest.mark.asyncio
+async def test_retired_consent_inventory_rejects_bad_user_before_database(monkeypatch):
+    session = Session([])
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().list_owned_active_personal_consents(
+            tenant_id=TENANT, user_id="forged-user",
+        )
+    assert session.calls == []
