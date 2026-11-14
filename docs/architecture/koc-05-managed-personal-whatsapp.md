@@ -32,6 +32,7 @@ Project: https://github.com/evolution-foundation/evolution-api
 - [x] Tenant-scoped consent store, versioned acknowledgement history and revocation repository.
 - [x] Dedicated channel.consent user permission and operator-assigned connection ownership gate.
 - [x] Operator-gated one-time owner assignment through canonical ChannelHost + SQL, with audit event.
+- [x] Authenticated operator owner-assignment endpoint with fresh channel.provision authority and fail-closed conflicts.
 - [ ] Authenticated consumer endpoint, live provider pairing and proof of operator/owner experience.
 - [ ] Qualified third-party provider and adapter with authenticated inbound webhook.
 - [ ] Live pairing, QR expiry/replay, reconnect, tenant, unlink and deletion proof.
@@ -49,10 +50,12 @@ principal/RuntimePolicy with channel.consent. Consent SQL also joins owner
 assignment before accepting the risk acknowledgement, independently of host
 validation. The owner ledger cannot be created by the consent action.
 
-The owner is still assigned by a separate governed administrative process,
-which must be implemented and audited before a self-service QR UI goes live.
-A persisted acknowledgement is never sufficient to create a QR or claim a
-provider-linked session; no managed Baileys operator has been approved.
+The owner is assigned through the separately authenticated operator-only
+endpoint described below; ChannelHost performs fresh authorization and emits
+the existing owner-assignment audit event. This administrative assignment
+does not make personal QR pairing available. A persisted acknowledgement is
+never sufficient to create a QR or claim a provider-linked session; no
+managed Baileys operator has been approved.
 
 ## Owner assignment authority
 
@@ -63,10 +66,47 @@ owners and duplicate assignments do not overwrite existing owners, thereby
 preserving any consent bound by the foreign key. The user-facing channel.consent
 action only reads the assigned owner and cannot call owner assignment.
 
-Before consumer release, a distinct authenticated API handler must supply the
-verified actor identity/session (not a request body claim) and issue a fresh
-canonical action plan. Provider connection and managed session enrollment need
-independent acceptance gates and can never be assumed from an owner row.
+An authenticated operator owner-assignment handler now supplies the
+verified actor identity and a fresh server-created policy session, never a
+request body claim. The canonical ChannelActivationService issues the
+channel.provision plan, ChannelHost revalidates the decision, and the existing
+SqlChannelRepository verifies an active, verified tenant user before inserting
+an immutable owner row. This is not general channel provisioning, managed
+session enrollment or pairing: provider connection, QR issuance and remote
+unlink still require separate release gates.
+
+### Operator assignment API (implemented, personal provider still disabled)
+
+- POST /api/channels/personal/{connection_id}/owner
+- Request: `{"owner_user_id": "<verified tenant user UUID>"}` only.
+  The schema rejects tenant, operator, session, provider and policy-plan
+  overrides.
+- Requires the existing authenticated get_current_user dependency with a
+  verified active durable principal and an existing tenant-scoped connection.
+  The connection's installation must also be explicitly allowlisted in
+  KAREN_CHANNEL_PERSONAL_PAIRING_PROVIDERS_JSON and declare the
+  pairing_webhook_secret Vault type. A generic installed channel cannot use
+  this personal owner-assignment API without those gates.
+- Requires fresh channel.provision RuntimePolicy/RBAC authorization and
+  ChannelHost.assign_personal_connection_owner revalidation.
+- The existing SQL transaction assigns the active, verified target user only
+  once. A conflicting owner, repeated assignment, missing target or other
+  uncommitted assignment returns HTTP 409, not a false success or overwrite.
+- Successful HTTP 201 reports owner_assigned=true with paired=false,
+  qr_available=false and provider_unlinked=false. No QR, native provider
+  session, credential, activation or send is created by this endpoint.
+- Authorization denial returns HTTP 403; malformed request HTTP 422;
+  unexpected dependency/storage failure HTTP 503 with a redacted error.
+  The host emits the canonical owner-assignment structured audit event.
+- The route does not grant channel.provision to ordinary users: the
+  activation service rereads the current tenant principal, channel manifest
+  operator roles and canonical RBAC, and evaluates RuntimePolicy before
+  invoking the host/repository owner operation.
+
+Proof:
+`pytest -q tests/extensions/test_personal_channel_consent_api.py`
+and the existing owner/tenant SQL and RuntimePolicy contract suites.
+This does not satisfy the separate live managed-vendor or consumer UI checks.
 
 ## Authenticated user risk consent endpoints (implemented, provider still disabled)
 
@@ -85,8 +125,9 @@ independent acceptance gates and can never be assumed from an owner row.
   session and cannot initiate an outbound message.
 - The client must not treat acknowledged=false on repeated acceptance or
   revoked=false on repeated revocation as a provider connection state.
-- A separately authenticated and audited operator provisioning endpoint and
-  vetted managed provider are required before users can begin pairing.
+- Operator owner assignment is authenticated and audited as described above.
+  General connection provisioning, an independently vetted managed provider,
+  and real session pairing are still required before users can begin pairing.
 
 ## Read-only consumer consent status
 
