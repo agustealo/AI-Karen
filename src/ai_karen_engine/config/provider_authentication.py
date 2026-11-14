@@ -19,6 +19,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Union, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 import threading
 
 try:
@@ -534,11 +535,78 @@ class ProviderAuthenticationManager:
                 validated_at=datetime.now()
             )
     
-    async def _validate_api_key_auth(self, config: ProviderConfig) -> AuthenticationResult:
+    async def validate_candidate_api_key(
+        self, provider_name: str, api_key: str
+    ) -> AuthenticationResult:
+        """Probe an unsaved key without reading/storing workspace credentials.
+
+        Uses the configured provider endpoint, never a client-supplied URL,
+        and deliberately bypasses the provider authentication cache.
+        """
+        now = datetime.now()
+        config = self.config_manager.get_provider(provider_name)
+        if not config or not config.enabled:
+            return AuthenticationResult(
+                provider_name=provider_name,
+                status=AuthenticationStatus.INVALID,
+                message="Provider is not configured or enabled",
+                validated_at=now,
+            )
+        if (
+            not config.authentication
+            or config.authentication.type != AuthenticationType.API_KEY
+            or not isinstance(api_key, str)
+            or not api_key.strip()
+        ):
+            return AuthenticationResult(
+                provider_name=provider_name,
+                status=AuthenticationStatus.INVALID,
+                message="An API key is required for this provider",
+                validated_at=now,
+            )
+
+        # Never forward a consumer-supplied credential to plaintext HTTP,
+        # embedded URL credentials, or a noncanonical validation endpoint.
+        base_url = str(getattr(config.endpoint, "base_url", "") or "")
+        endpoint = config.authentication.validation_endpoint or "/models"
+        parsed = urlsplit(base_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or not endpoint.startswith("/")
+            or endpoint.startswith("//")
+            or "?" in endpoint
+            or "#" in endpoint
+            or any(segment in {".", ".."} for segment in endpoint.split("/"))
+        ):
+            return AuthenticationResult(
+                provider_name=provider_name,
+                status=AuthenticationStatus.UNKNOWN,
+                message="Provider has no approved secure validation endpoint",
+                validated_at=now,
+            )
+
+        return await self._validate_api_key_auth(
+            config,
+            candidate_api_key=api_key.strip(),
+            require_models_evidence=True,
+        )
+
+    async def _validate_api_key_auth(
+        self,
+        config: ProviderConfig,
+        *,
+        candidate_api_key: Optional[str] = None,
+        require_models_evidence: bool = False,
+    ) -> AuthenticationResult:
         """Validate API key authentication"""
         
         # Get API key
-        api_key = self.get_api_key(config.name)
+        api_key = candidate_api_key if candidate_api_key is not None else self.get_api_key(config.name)
         if not api_key:
             return AuthenticationResult(
                 provider_name=config.name,
@@ -556,8 +624,9 @@ class ProviderAuthenticationManager:
             
             # Add authentication header
             if config.name == "gemini":
-                # Gemini uses query parameter
-                pass
+                # Candidate probes do not place secrets into URLs or HTTP logs.
+                if candidate_api_key is not None:
+                    headers["x-goog-api-key"] = api_key
             else:
                 headers[config.authentication.api_key_header] = f"{config.authentication.api_key_prefix} {api_key}"
             
@@ -568,18 +637,32 @@ class ProviderAuthenticationManager:
                 url = f"{config.endpoint.base_url}/models"  # Default validation endpoint
             
             # Add API key to URL for Gemini
-            if config.name == "gemini":
+            if config.name == "gemini" and candidate_api_key is None:
                 url += f"?key={api_key}"
             
             # Make validation request
             timeout = aiohttp.ClientTimeout(total=self.validation_timeout)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, allow_redirects=False) as response:
                     
                     if response.status == 200:
                         # Parse response for additional info
                         try:
                             data = await response.json()
+                            if require_models_evidence and (
+                                not isinstance(data, dict)
+                                or data.get("error") is not None
+                                or not (
+                                    isinstance(data.get("data"), list)
+                                    or isinstance(data.get("models"), list)
+                                )
+                            ):
+                                return AuthenticationResult(
+                                    provider_name=config.name,
+                                    status=AuthenticationStatus.UNKNOWN,
+                                    message="Provider did not confirm authenticated model access",
+                                    validated_at=datetime.now(),
+                                )
                             user_info, permissions, rate_limit_info = self._parse_validation_response(config.name, data)
                             
                             return AuthenticationResult(
@@ -593,7 +676,15 @@ class ProviderAuthenticationManager:
                                 user_info=user_info
                             )
                         except Exception:
-                            # Response parsing failed, but auth is valid
+                            # Candidate keys must never be marked valid on a
+                            # non-JSON or malformed successful response.
+                            if require_models_evidence:
+                                return AuthenticationResult(
+                                    provider_name=config.name,
+                                    status=AuthenticationStatus.UNKNOWN,
+                                    message="Provider validation response was not verifiable",
+                                    validated_at=datetime.now(),
+                                )
                             return AuthenticationResult(
                                 provider_name=config.name,
                                 status=AuthenticationStatus.VALID,
@@ -655,7 +746,7 @@ class ProviderAuthenticationManager:
             return AuthenticationResult(
                 provider_name=config.name,
                 status=AuthenticationStatus.NETWORK_ERROR,
-                message=f"Network error: {str(e)}",
+                message="Provider validation network error" if candidate_api_key is not None else f"Network error: {str(e)}",
                 validated_at=datetime.now()
             )
     
