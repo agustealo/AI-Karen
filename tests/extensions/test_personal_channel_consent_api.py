@@ -153,6 +153,32 @@ async def test_consent_status_is_unacknowledged_when_sql_has_no_active_record():
 
 
 @pytest.mark.asyncio
+async def test_consent_read_serves_canonical_versioned_disclosure_without_claiming_pairing():
+    from ai_karen_engine.services.channels.personal_pairing_policy import (
+        PERSONAL_WHATSAPP_RISK_NOTICE_TEXT,
+        PERSONAL_WHATSAPP_RISK_NOTICE_TITLE,
+    )
+
+    host, request = host_context()
+    result = await api.get_personal_whatsapp_risk_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert result.policy_version == api.PERSONAL_WHATSAPP_CONSENT_VERSION
+    assert result.notice_title == PERSONAL_WHATSAPP_RISK_NOTICE_TITLE
+    assert result.notice_text == PERSONAL_WHATSAPP_RISK_NOTICE_TEXT
+    assert "not supported or endorsed by WhatsApp/Meta" in result.notice_text
+    assert "permanently banned" in result.notice_text
+    assert "third-party operator" in result.notice_text
+    assert "Disconnect does not guarantee deletion" in result.notice_text
+    assert not result.acknowledged
+    assert not result.paired
+    assert not result.provider_unlinked
+    assert not hasattr(result, "credential_handle")
+    host.acknowledge_personal_pairing_risk.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_consent_status_requires_current_scoped_unrevoked_evidence():
     from datetime import datetime, timezone
     from ai_karen_engine.services.channels.personal_pairing_policy import (

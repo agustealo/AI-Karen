@@ -17,6 +17,8 @@ from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.services.channels.host import ChannelHostServices
 from ai_karen_engine.services.channels.personal_pairing_policy import (
     PERSONAL_WHATSAPP_CONSENT_VERSION,
+    PERSONAL_WHATSAPP_RISK_NOTICE_TEXT,
+    PERSONAL_WHATSAPP_RISK_NOTICE_TITLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,6 +242,8 @@ async def get_personal_whatsapp_pairing_status(
 class ConsentStatus(BaseModel):
     acknowledged: bool
     policy_version: str
+    notice_title: str
+    notice_text: str
     paired: bool = False
     provider_unlinked: bool = False
 
@@ -279,6 +283,8 @@ async def get_personal_whatsapp_risk_status(
     return ConsentStatus(
         acknowledged=valid,
         policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        notice_title=PERSONAL_WHATSAPP_RISK_NOTICE_TITLE,
+        notice_text=PERSONAL_WHATSAPP_RISK_NOTICE_TEXT,
     )
 
 

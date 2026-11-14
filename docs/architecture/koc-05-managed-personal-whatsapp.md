@@ -37,6 +37,7 @@ Project: https://github.com/evolution-foundation/evolution-api
 - [ ] Qualified third-party provider and adapter with authenticated inbound webhook.
 - [ ] Live pairing, QR expiry/replay, reconnect, tenant, unlink and deletion proof.
 - [x] Read-only personal Channels inventory/settings driven by backend connection state (no pairing controls).
+- [x] Versioned consumer risk notice, explicit consent acknowledgement and revocation UI, with backend-confirmed reads (no session or QR).
 - [ ] Full governed Connect → Verify → Enable → Connected → Disconnect UI with live provider evidence.
 
 Policy assessment is NOT an external pairing token. The governed activation path must still revalidate before side effects.
@@ -321,6 +322,48 @@ and frontend
 tests/settings/settings-ux-ownership.test.ts`
 through existing workflows. Provider, session, live browser, authenticated
 PostgreSQL and release gates remain separate.
+
+## Versioned personal-channel risk consent UI (implemented, provider still gated)
+
+Under **Settings → Personal → Channels**, each authenticated owner-assigned
+connection with a currently configured managed-personal provider can inspect
+the current server-issued `policy_version`, `notice_title` and `notice_text`
+via the existing `GET .../{provider_id}/consent` route. The disclosure copy
+is owned by `services/channels/personal_pairing_policy.py`, alongside its
+policy version. The browser does **not** invent consent text, policy version,
+tenant/actor identity, provider availability or accepted status.
+
+- The user must read the current server notice and explicitly check the
+  unchecked-by-default risk acknowledgement before POSTing
+  `{accepted:true,policy_version:<backend version>}`. A checked browser box
+  is not durable consent. The backend independently verifies current owner,
+  channel.consent RuntimePolicy, provider configuration and SQL scope.
+- The UI claims a saved acknowledgement **only after** a positive mutation
+  receipt **and a fresh GET** that confirms the persisted current policy
+  version and acknowledged=true. An ambiguous write or failed verification
+  clears the displayed prior state and requires explicit status refresh;
+  no automatic replay or optimistic success.
+- For an acknowledged configured provider, the user can select **Revoke
+  consent**, using the existing authenticated `POST .../revoke`. The UI only
+  displays revoked after a successful receipt and fresh GET reports false.
+  Revocation never claims remote unlink or provider-data erasure.
+- Disabled or unconfigured managed providers cannot initiate acceptance,
+  even if an owned connection exists. The API continues to permit reads and
+  revocations of previously accepted consent after provider disablement when
+  the original provider ID is known. The inventory currently omits historical
+  provider IDs after disablement, so **UI-based legacy consent revocation
+  after removal of provider configuration remains incomplete**. Do not claim
+  a fully connected or disconnect-ready consumer experience from this slice.
+- Consent display, mutations and error states remain scoped to the existing
+  Channels panel. Official WhatsApp Business Cloud API is separate.
+
+Proof:
+`pytest -q tests/extensions/test_personal_channel_consent_api.py`
+and frontend
+`vitest run tests/settings/channels-settings.test.tsx`
+within the existing Main Quality and Plugin Ecosystem workflows. Live
+managed provider/QR/session, signed-in browser and credential erasure
+acceptance remain NOT_RUN.
 
 ## User-visible read-only pairing state
 
