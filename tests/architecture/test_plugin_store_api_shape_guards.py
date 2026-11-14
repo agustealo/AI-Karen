@@ -159,3 +159,27 @@ def test_plugin_details_modal_is_mounted_and_handles_errors_without_shadow_routi
     assert "Loading plugin information..." in modal
     assert "plugin.status !== 'incompatible'" in modal
     assert "return null;" not in modal.split("if (!details?.plugin)", 1)[1].split("const plugin =", 1)[0]
+
+
+def test_quarantined_manual_uploads_are_non_actionable_in_plugin_store() -> None:
+    card = (ROOT / "components/plugins/PluginCard.tsx").read_text(encoding="utf-8")
+    modal = (ROOT / "components/plugins/PluginDetailsModal.tsx").read_text(encoding="utf-8")
+    page = PAGE.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
+    types = (ROOT / "types/plugin.ts").read_text(encoding="utf-8")
+    backend = (
+        Path(__file__).resolve().parents[2]
+        / "src/ai_karen_engine/api_routes/plugins/store.py"
+    ).read_text(encoding="utf-8")
+
+    assert "!plugin.activation_blocked_reason" in card
+    assert "'Isolation required'" in card
+    assert "disabled={loading || !canInstall}" in card
+    assert "!plugin.activation_blocked_reason && onEnable" in modal
+    assert "This plugin is installed in quarantine." in modal
+    assert "A verified isolated runtime is required before activation." in page
+    assert "activation_blocked_reason: z.string().nullable().optional()" in types
+    assert "activation_blocked_reason: plugin.activation_blocked_reason" in service
+    assert '"activation_blocked_reason": metadata.get("activation_blocked_reason")' in backend
+    assert 'plugin.get("activation_blocked_reason") == "isolated_runtime_required"' in backend
+    assert "status.HTTP_409_CONFLICT" in backend
