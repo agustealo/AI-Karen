@@ -177,7 +177,7 @@ unsupported fields remain read-only.
 
 CredentialVaultService owns encrypted bytes, provider ownership, credential
 status, audit, rotation, and revocation. Migration
-20261114040000_52_plugin_vault_binding.sql creates only
+20261114050000_53_plugin_vault_binding.sql creates only
 plugin_credential_slots, a tenant/plugin/manifest-field reference to
 existing Identity Vault credentials, with composite tenant/credential
 integrity, revision fencing, forced RLS and revoked Data API permissions.
@@ -215,7 +215,7 @@ a generic plaintext route or let a plugin choose an arbitrary vault handle.
 
 The deployment must set a durable KARI_JOB_ENC_KEY, not rely on an ephemeral
 development encryption key. Before production deployment, apply and verify
-Identity Vault migrations and migrations 51 and 52. Disposable PostgreSQL
+Identity Vault migrations and migrations 51 and 53. Disposable PostgreSQL
 tests prove the contract, not actual production deployment or consumer
 end-to-end readiness.
 
