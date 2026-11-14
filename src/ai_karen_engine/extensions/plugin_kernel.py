@@ -199,6 +199,9 @@ class PluginKernel:
         )
         self._catalog_manifests: Dict[str, CatalogExtensionManifest] = {}
         self._disabled: set[str] = set()
+        # Retained even after a failed refresh updates catalog fingerprints.
+        # Only a verified shutdown and module eviction can clear this fence.
+        self._retirement_pending: set[str] = set()
         self._active: Dict[str, str] = {}
         self._initialized = False
         # Serialize catalog projection and explicit lifecycle mutations so
@@ -300,6 +303,17 @@ class PluginKernel:
         # Only an explicit user disable is persisted through the marker.
         # Default-disabled, channel-gated and dependency-blocked states are
         # derived, never promoted into permanent manual disablement.
+        # Never retire an instance or rebuild registry while any execution is
+        # in flight. The same state lock fences the execution admission.
+        if self._active:
+            raise RuntimeError("Cannot refresh plugins with active executions")
+        previous_hashes = {
+            plugin_id: (
+                metadata.file_hash if metadata is not None else None
+            )
+            for plugin_id in self.catalog_registry.list_discovered()
+            for metadata in [self.catalog_registry.get_metadata(plugin_id)]
+        }
         await self.catalog_registry.refresh()
         # Uninstalled IDs must not retain in-memory lifecycle state. An
         # installed plugin's persisted disabled marker is read below.
@@ -361,6 +375,7 @@ class PluginKernel:
                 (metadata := self.catalog_registry.get_metadata(plugin_id)) is not None
                 and metadata.is_valid
                 and plugin_id not in self._disabled
+                and plugin_id not in self._retirement_pending
                 and manifest.capabilities.communication_channel is None
                 and manifest.rbac.default_enabled
             )
@@ -398,6 +413,20 @@ class PluginKernel:
                 else ExtensionLifecycleState.DISABLED
             )
             await runtime_registry.update_state(plugin_id, target)
+
+        # A successful catalog projection may replace a Python package in
+        # place, or remove it entirely. Retire only invalidated loaded
+        # instances; unchanged loaded plugins retain their resources.
+        for plugin_id, instance in self.loader.get_loaded_extensions().items():
+            metadata = self.catalog_registry.get_metadata(plugin_id)
+            if (
+                metadata is None
+                or not metadata.is_valid
+                or not metadata.file_hash
+                or previous_hashes.get(plugin_id) != metadata.file_hash
+                or plugin_id in self._retirement_pending
+            ):
+                await self._retire_loaded_plugin(plugin_id, instance)
 
         self.runtime_registry = runtime_registry
         self.lifecycle = lifecycle
@@ -632,6 +661,35 @@ class PluginKernel:
                 records.append(record)
         return records
 
+    async def _retire_loaded_plugin(self, plugin_id: str, instance: Any) -> None:
+        """Shutdown a loaded plugin before evicting its Python module cache.
+
+        If cleanup fails, revoke the previous registry's permission to run
+        the stale instance and retain its cache for explicit recovery.
+        """
+        shutdown = getattr(instance, "_shutdown", None)
+        is_shutdown = getattr(instance, "is_shutdown", None)
+        if callable(shutdown) and not (
+            callable(is_shutdown) and is_shutdown()
+        ):
+            try:
+                await shutdown()
+            except BaseException as exc:
+                self._retirement_pending.add(plugin_id)
+                previous = self.runtime_registry.get(plugin_id)
+                if previous is not None:
+                    await self.runtime_registry.update_state(
+                        plugin_id, ExtensionLifecycleState.DISABLED
+                    )
+                logger.error(
+                    "plugin.kernel.retirement_failed",
+                    extra={"plugin_id": plugin_id,
+                           "error_type": type(exc).__name__},
+                )
+                raise
+        self.loader.forget_loaded_extension(plugin_id)
+        self._retirement_pending.discard(plugin_id)
+
     def _required_by_enabled_plugin(self, dependency_id: str) -> bool:
         """Check direct and transitive registered requirements, without imports."""
         for plugin_id, manifest in self._catalog_manifests.items():
@@ -660,6 +718,8 @@ class PluginKernel:
             return await self._enable_unlocked(plugin_id)
 
     async def _enable_unlocked(self, plugin_id: str) -> bool:
+        if plugin_id in self._retirement_pending:
+            raise RuntimeError("Plugin retirement incomplete; cannot enable")
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
@@ -710,6 +770,10 @@ class PluginKernel:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
+        # A running handler cannot be shut down from under its execution.
+        # Explicit disable remains a separate governed operation.
+        if plugin_id in self._active.values():
+            raise RuntimeError("Cannot disable a plugin with active executions")
         # Refuse to break any already-enabled dependent rather than silently
         # leaving it executable against a disabled transitive prerequisite.
         # The refusal happens before touching the durable disabled marker.
@@ -725,15 +789,26 @@ class PluginKernel:
                 handle.write("Plugin disabled explicitly; requires enable\n")
         self._disabled.add(plugin_id)
         await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.DISABLED)
+        # Disabling revokes execution and releases existing plugin resources;
+        # enabling later must initialize a fresh instance.
+        instance = self.loader.get_loaded_extensions().get(plugin_id)
+        if instance is not None:
+            await self._retire_loaded_plugin(plugin_id, instance)
         return True
 
     async def execute(
         self,
         request: ExtensionExecutionRequest,
     ) -> ExtensionExecutionResult:
-        self._active[request.context.request_id] = request.plugin_id
+        # Serialize the admission marker with refresh/disable, not the model
+        # or plugin execution itself. Unrelated plugins may execute in parallel.
+        async with self._state_lock:
+            if request.context.request_id in self._active:
+                raise RuntimeError("Plugin execution request ID already active")
+            self._active[request.context.request_id] = request.plugin_id
+            executor = self.executor
         try:
-            return await self.executor.execute(request)
+            return await executor.execute(request)
         finally:
             self._active.pop(request.context.request_id, None)
 
@@ -741,17 +816,22 @@ class PluginKernel:
         return dict(self._active)
 
     async def cleanup(self) -> None:
-        for instance in self.loader.get_loaded_extensions().values():
-            shutdown = getattr(instance, "_shutdown", None)
-            is_shutdown = getattr(instance, "is_shutdown", None)
-            already_shutdown = bool(is_shutdown()) if callable(is_shutdown) else False
-            if callable(shutdown) and not already_shutdown:
+        async with self._state_lock:
+            if self._active:
+                raise RuntimeError("Cannot shut down plugins with active executions")
+            failed = False
+            for plugin_id, instance in self.loader.get_loaded_extensions().items():
                 try:
-                    await shutdown()
+                    await self._retire_loaded_plugin(plugin_id, instance)
                 except Exception:
-                    logger.exception("Plugin shutdown failed")
-        self._active.clear()
-        self._initialized = False
+                    failed = True
+                    logger.error(
+                        "plugin.kernel.cleanup_incomplete",
+                        extra={"plugin_id": plugin_id},
+                    )
+            self._initialized = False
+            if failed:
+                raise RuntimeError("Plugin cleanup incomplete")
 
     def registry_stats(self) -> Dict[str, Any]:
         records = self.list_records()

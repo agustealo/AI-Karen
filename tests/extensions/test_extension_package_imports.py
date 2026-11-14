@@ -89,3 +89,33 @@ async def test_real_time_query_world_clocks_and_alarms_use_package_loader() -> N
     assert alarms["status"] == "success"
     assert isinstance(alarms["alarms"], list)
 
+
+
+def test_forgetting_loaded_extension_clears_relative_import_modules(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+    from ai_karen_engine.extensions.platform.core.host.loader import ExtensionLoader
+
+    directory = _plugin(tmp_path, "replaceable", "old")
+    loader = ExtensionLoader(str(tmp_path))
+    module = loader._import_handler(directory)
+    assert module.execute() == "old"
+    namespace = module.__package__
+    assert any(name.startswith(namespace + ".") for name in sys.modules)
+    loader._loaded_extensions["replaceable"] = SimpleNamespace(
+        context=SimpleNamespace(extension_dir=directory),
+    )
+    loader.forget_loaded_extension("replaceable")
+    assert loader.get_loaded_extensions() == {}
+    assert not any(
+        name == namespace or name.startswith(namespace + ".")
+        for name in sys.modules
+    )
+    # The next import no longer reuses a prior relative-imported helper.
+    (directory / "handlers" / "clock.py").write_text(
+        "def read_value():\n    return 'substantially-new-code'\n",
+        encoding="utf-8",
+    )
+    fresh = loader._import_handler(directory)
+    assert fresh.execute() == "substantially-new-code"
