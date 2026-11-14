@@ -52,3 +52,28 @@ def test_canonical_extension_health_module_exists() -> None:
 
 def test_legacy_root_extension_health_monitor_is_retired() -> None:
     assert not LEGACY_HEALTH.exists()
+
+
+def test_plugin_ci_enforces_type_and_security_checks_on_canonical_owners() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "plugin-ci.yml").read_text(
+        encoding="utf-8"
+    )
+    type_gate = workflow.split("      - name: Enforce MyPy on canonical plugin authorities", 1)[1].split(
+        "      - name: Enforce high-severity plugin security checks", 1
+    )[0]
+    security_gate = workflow.split("      - name: Enforce high-severity plugin security checks", 1)[1].split(
+        "      - name: Generate Bandit report", 1
+    )[0]
+
+    assert "mypy --ignore-missing-imports --follow-imports=skip" in type_gate
+    assert "src/ai_karen_engine/extensions/contracts.py" in type_gate
+    assert "src/ai_karen_engine/extensions/executor.py" in type_gate
+    assert "src/ai_karen_engine/extensions/plugin_kernel.py" in type_gate
+    assert "src/ai_karen_engine/services/plugin_service.py" in type_gate
+    assert "mypy src/ai_karen_engine/extensions/" not in workflow
+    assert "|| true" not in type_gate
+    assert "bandit -q -lll -iii" in security_gate
+    assert "src/ai_karen_engine/extensions/executor.py" in security_gate
+    assert "src/ai_karen_engine/extensions/plugin_kernel.py" in security_gate
+    assert "src/ai_karen_engine/services/plugin_service.py" in security_gate
+    assert "|| true" not in security_gate
