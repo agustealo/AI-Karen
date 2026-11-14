@@ -30,6 +30,10 @@ def actor(**changes):
 def host_context(*, owner=True):
     host = object.__new__(ChannelHostServices)
     host.activation = SimpleNamespace(issue_action_plan=AsyncMock(return_value="trusted-plan"))
+    host.settings = SimpleNamespace(
+        personal_pairing_providers={"whatsapp-cloud": PROVIDER},
+        installations={"whatsapp-cloud": frozenset({"pairing_webhook_secret"})},
+    )
     host.repository = SimpleNamespace(
         get_connection=AsyncMock(return_value=ChannelConnection(
             connection_id=CONNECTION, tenant_id=TENANT,
@@ -391,4 +395,25 @@ def test_operator_assignment_route_requires_canonical_session_authentication():
         dependency.call is api.get_current_user
         for dependency in route.dependant.dependencies
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unapproved", ["missing_provider", "missing_signing_secret"])
+async def test_operator_assignment_requires_configured_managed_personal_provider(unapproved):
+    host, request = host_context()
+    host.assign_personal_connection_owner = AsyncMock()
+    if unapproved == "missing_provider":
+        host.settings.personal_pairing_providers = {}
+    else:
+        host.settings.installations = {"whatsapp-cloud": frozenset({"access_token"})}
+    with pytest.raises(HTTPException) as err:
+        await api.assign_personal_channel_owner(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.PersonalOwnerAssignment(owner_user_id=api.UUID(USER)),
+            request=request,
+            user=actor(roles=["admin"]),
+        )
+    assert err.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.assign_personal_connection_owner.assert_not_awaited()
 
