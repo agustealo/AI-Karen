@@ -7,6 +7,11 @@ on:
       - 'src/ai_karen_engine/extensions/**'
       - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/**'
+      - 'src/ai_karen_engine/api_routes/extensions/extensions.py'
+      - 'src/ai_karen_engine/services/plugin_service.py'
+      - 'src/ai_karen_engine/services/plugin_settings_repository.py'
+      - 'src/ui_launchers/Karen-AI-Theme/src/plugin_host/plugin-settings.tsx'
+      - 'supabase/migrations/*plugin_settings*.sql'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/api.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
@@ -40,6 +45,11 @@ on:
       - 'src/ai_karen_engine/extensions/**'
       - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/**'
+      - 'src/ai_karen_engine/api_routes/extensions/extensions.py'
+      - 'src/ai_karen_engine/services/plugin_service.py'
+      - 'src/ai_karen_engine/services/plugin_settings_repository.py'
+      - 'src/ui_launchers/Karen-AI-Theme/src/plugin_host/plugin-settings.tsx'
+      - 'supabase/migrations/*plugin_settings*.sql'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/api.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
@@ -111,14 +121,16 @@ jobs:
             src/ai_karen_engine/extensions/contracts.py \
             src/ai_karen_engine/extensions/executor.py \
             src/ai_karen_engine/extensions/plugin_kernel.py \
-            src/ai_karen_engine/services/plugin_service.py
+            src/ai_karen_engine/services/plugin_service.py \
+            src/ai_karen_engine/services/plugin_settings_repository.py
 
       - name: Enforce high-severity plugin security checks
         run: |
           bandit -q -lll -iii \
             src/ai_karen_engine/extensions/executor.py \
             src/ai_karen_engine/extensions/plugin_kernel.py \
-            src/ai_karen_engine/services/plugin_service.py
+            src/ai_karen_engine/services/plugin_service.py \
+            src/ai_karen_engine/services/plugin_settings_repository.py
 
       - name: Generate Bandit report
         run: bandit -r src/ai_karen_engine/extensions/ -f json -o bandit-report.json || true
