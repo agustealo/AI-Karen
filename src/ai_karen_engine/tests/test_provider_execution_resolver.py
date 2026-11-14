@@ -93,3 +93,29 @@ def test_nous_registration_preserves_existing_provider_settings(tmp_path, monkey
     assert provider is not None
     assert provider.enabled is False
     assert provider.priority == 18
+
+
+def test_nous_provider_status_checks_canonical_stored_secret_not_only_env(
+    monkeypatch,
+):
+    """Settings-stored Portal keys must count without leaking or copying keys."""
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+
+    observed = []
+    monkeypatch.setattr(
+        provider_config_module,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            has_api_key=lambda provider_id: (
+                observed.append(provider_id) or True
+            ),
+        ),
+    )
+    assert ProviderRegistryService._check_api_key_availability(
+        object(), "nous"
+    ) is True
+    assert observed == ["nous"]
