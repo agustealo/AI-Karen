@@ -92,7 +92,7 @@ beforeEach(() => {
   state.isAuthenticated = true;
   state.isLoading = false;
   state.theme = "dark";
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   vi.mocked(apiClient.get).mockResolvedValue(account());
   state.logout.mockResolvedValue(undefined);
 });
