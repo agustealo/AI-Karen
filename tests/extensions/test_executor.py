@@ -85,7 +85,10 @@ class FakeCapabilityResolver:
 
 
 def _manifest(
-    *, required_permissions: list[str] | None = None
+    *,
+    required_permissions: list[str] | None = None,
+    trust_tier: TrustTier = TrustTier.FIRST_PARTY,
+    isolation_mode: ExecutionIsolationMode = ExecutionIsolationMode.IN_PROCESS,
 ) -> ExtensionManifest:
     permissions = list(required_permissions or [])
     return ExtensionManifest(
@@ -123,6 +126,8 @@ def _manifest(
         max_retries=1,
         enabled_by_default=False,
         trusted_ui=False,
+        trust_tier=trust_tier,
+        isolation_mode=isolation_mode,
         dependencies=[],
     )
 
@@ -360,3 +365,80 @@ async def test_not_found():
 
     assert result.status == "failed"
     assert result.error_code == "not_found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("trust_tier", "isolation_mode"),
+    [
+        (TrustTier.UNTRUSTED, ExecutionIsolationMode.IN_PROCESS),
+        (TrustTier.SIGNED_THIRD_PARTY, ExecutionIsolationMode.IN_PROCESS),
+        (TrustTier.UNTRUSTED, ExecutionIsolationMode.SUBPROCESS),
+        (TrustTier.REMOTE, ExecutionIsolationMode.REMOTE),
+        (TrustTier.FIRST_PARTY, ExecutionIsolationMode.CONTAINER),
+    ],
+)
+async def test_unavailable_isolation_fails_closed_before_handler_import(
+    trust_tier: TrustTier,
+    isolation_mode: ExecutionIsolationMode,
+) -> None:
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(
+            handler=handler,
+            manifest=_manifest(trust_tier=trust_tier, isolation_mode=isolation_mode),
+        ),
+        lifecycle=FakeLifecycle(),
+    )
+
+    result = await service.execute(_request(plan=_plan()))
+
+    assert result.status == "failed"
+    assert result.error_code == "isolation_unavailable"
+    assert result.source == ResponseSource.UNAVAILABLE
+    assert result.trust_tier == trust_tier
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_capability_resolver_cannot_promote_actual_runtime_trust() -> None:
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(
+            handler=handler,
+            manifest=_manifest(trust_tier=TrustTier.UNTRUSTED),
+        ),
+        lifecycle=FakeLifecycle(),
+        capability_resolver=FakeCapabilityResolver(),
+    )
+    request = CapabilityInvocationRequest(
+        capability_id="echo",
+        payload={"message": "hello"},
+        context=_context(),
+        authorized_plan=_plan(),
+    )
+
+    result = await service.execute_capability(request, request.authorized_plan)
+
+    assert result.status == "failed"
+    assert result.error_code == "isolation_unavailable"
+    assert result.trust_tier is TrustTier.UNTRUSTED
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_builtin_trusted_handler_retains_canonical_execution() -> None:
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(
+            handler=handler,
+            manifest=_manifest(trust_tier=TrustTier.BUILTIN_TRUSTED),
+        ),
+        lifecycle=FakeLifecycle(),
+    )
+
+    result = await service.execute(_request(plan=_plan()))
+
+    assert result.status == "success"
+    assert result.payload == {"echo": "hello"}
+    assert handler.calls == 1
