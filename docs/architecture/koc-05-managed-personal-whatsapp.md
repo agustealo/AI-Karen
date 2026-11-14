@@ -442,3 +442,9 @@ invoke them only **after** native authentication and must enforce current
 consent, RBAC, Vault, one-time QR retrieval and durable CAS separately.
 
 Proof: `pytest -q tests/extensions/test_personal_transport_evidence.py`.
+
+## Channel host teardown failure fencing (2026-11-14)
+
+If the canonical ChannelInboxWorker's shutdown raises, the host must still revoke every remaining process-local transport and close its owned HTTP, Vault and PluginKernel dependencies. The host is already marked closed at shutdown entry and must never permit a second teardown or adapter activation. The host records only the worker exception type, completes the existing best-effort dependency cleanup, and then re-raises the original failure (including cancellation) so operational monitoring is not given a false successful stop. No automatic worker replay, provider reactivation, new host owner, migration, or consumer packaging dependency is introduced.
+
+Proof: `pytest -q tests/extensions/test_channel_host_lifecycle.py`, alongside existing channel and Main Quality gates. This source-level shutdown resilience is independent of Render deployment, vendor integration, and live consumer pairing acceptance.

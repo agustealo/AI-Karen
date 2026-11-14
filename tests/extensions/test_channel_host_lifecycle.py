@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -219,6 +220,44 @@ async def test_failed_host_bind_cannot_leave_http_client_or_transport_running():
     adapter.send.assert_not_awaited()
     client.aclose.assert_awaited_once()
     assert host.ingress is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [
+    RuntimeError("private worker shutdown failure"),
+    asyncio.CancelledError(),
+])
+async def test_worker_shutdown_failure_does_not_skip_channel_host_cleanup(
+    failure, caplog,
+):
+    host, kernel, vault, client, adapter = fake_components()
+    await host.initialize()
+    worker = SimpleNamespace(shutdown=AsyncMock(side_effect=failure))
+    host.worker = worker
+
+    with pytest.raises(type(failure)):
+        await host.shutdown()
+
+    worker.shutdown.assert_awaited_once()
+    adapter.shutdown.assert_awaited_once()
+    client.aclose.assert_awaited_once()
+    vault.stop.assert_awaited_once()
+    kernel.cleanup.assert_awaited_once()
+    assert host._closed is True
+    assert host._initialized is False
+    assert host.worker is None and host.execution is None
+    assert host.delivery is None and host.ingress is None
+    assert host.activation is None
+    assert host._installed == {} and host._resolvers == {}
+    assert "private worker shutdown failure" not in caplog.text
+
+    # The failed first shutdown cannot execute adapter or Vault cleanup again.
+    await host.shutdown()
+    worker.shutdown.assert_awaited_once()
+    adapter.shutdown.assert_awaited_once()
+    client.aclose.assert_awaited_once()
+    vault.stop.assert_awaited_once()
+    kernel.cleanup.assert_awaited_once()
 
 
 @pytest.mark.asyncio
