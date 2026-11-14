@@ -455,7 +455,7 @@ class PluginService:
         record: Dict[str, Any],
     ) -> frozenset[str]:
         """Only canonical manifest-declared string secrets are manageable."""
-        contract = PluginService._settings_contract(record)
+        PluginService._settings_contract(record)
         manifest = record["manifest"]
         config = getattr(manifest, "config_schema", None)
         properties = getattr(config, "properties", None)
@@ -469,6 +469,8 @@ class PluginService:
         )
         if not allowed:
             raise PluginSettingsNotConfigured("Plugin has no credential fields")
+        if any(len(key) > 50 for key in allowed):
+            raise PluginSettingsNotConfigured("Plugin credential field name exceeds Vault limit")
         if len(allowed) > 64:
             raise PluginSettingsNotConfigured("Plugin credential field limit exceeded")
         return allowed
