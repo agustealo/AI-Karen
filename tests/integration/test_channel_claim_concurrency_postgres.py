@@ -79,6 +79,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261018030000_35_channel_personal_credential_deletions.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(deletion_migration)
+        retirement_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261114010000_50_channel_retirement_evidence_guard.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(retirement_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -201,6 +206,39 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert await owner_repo.list_owned_personal_credential_deletion_requests(
             tenant_id=str(tenant_b), user_id=str(user),
         ) == []
+
+        # A direct connection DELETE must fail at transaction commit even when
+        # the connection is disabled or its ChannelHost has retired.
+        with pytest.raises(asyncpg.ForeignKeyViolationError):
+            async with raw.transaction():
+                await raw.execute(
+                    "DELETE FROM public.channel_connections "
+                    "WHERE tenant_id=$1 AND connection_id=$2",
+                    tenant_a, connection_id,
+                )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.channel_connections "
+            "WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_a, connection_id,
+        ) == 1
+        assert await owner_repo.list_owned_personal_credential_deletion_requests(
+            tenant_id=str(tenant_a), user_id=str(user),
+        ) == recovered
+
+        # Ordinary unowned connections remain deletable when no personal
+        # retirement ledger has ever existed.
+        disposable_connection = "generic-" + uuid.uuid4().hex
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id, provider_account_id,
+                credential_handle, enabled, revision)
+               VALUES ($1,$2,'telegram-bot','disposable','vault://test',false,1)""",
+            disposable_connection, tenant_b,
+        )
+        assert await raw.execute(
+            "DELETE FROM public.channel_connections WHERE connection_id=$1",
+            disposable_connection,
+        ) == "DELETE 1"
 
         # Exercise actual SQL consent acceptance, scope and durable revocation.
         from ai_karen_engine.services.channels.personal_pairing_policy import (
@@ -359,6 +397,13 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "public.channel_personal_credential_deletions "
             "TO karen_channel_rls_probe"
         )
+        await raw.execute(
+            "GRANT DELETE ON public.channel_personal_pairing_consents, "
+            "public.channel_connection_owners, "
+            "public.channel_personal_pairing_state, "
+            "public.channel_personal_credential_deletions "
+            "TO karen_channel_rls_probe"
+        )
         async with raw.transaction():
             await raw.execute("SET LOCAL ROLE karen_channel_rls_probe")
             await raw.execute(
@@ -380,6 +425,19 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_personal_credential_deletions"
             ) == 1
+            # The tenant-scoped role has DELETE privileges but no DELETE
+            # policies on governed retirement evidence tables.
+            for protected_table in (
+                "channel_connection_owners",
+                "channel_personal_pairing_consents",
+                "channel_personal_pairing_state",
+                "channel_personal_credential_deletions",
+            ):
+                assert await raw.execute(
+                    "DELETE FROM public." + protected_table
+                    + " WHERE tenant_id=$1",
+                    tenant_a,
+                ) == "DELETE 0"
             await raw.execute(
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_b),
@@ -402,6 +460,13 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         await raw.execute(
             "REVOKE SELECT ON public.channel_inbox, public.channel_outbox, "
             "public.channel_personal_pairing_consents, public.channel_connection_owners, "
+            "public.channel_personal_pairing_state, "
+            "public.channel_personal_credential_deletions "
+            "FROM karen_channel_rls_probe"
+        )
+        await raw.execute(
+            "REVOKE DELETE ON public.channel_personal_pairing_consents, "
+            "public.channel_connection_owners, "
             "public.channel_personal_pairing_state, "
             "public.channel_personal_credential_deletions "
             "FROM karen_channel_rls_probe"
@@ -528,6 +593,69 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert await SqlChannelRepository().list_unattempted_outbound(
             tenant_id=str(tenant_a), connection_id=connection_id,
         ) == []
+
+        # Explicit tenant-account erasure must still cascade through personal
+        # evidence, even though direct connection deletion is now restricted.
+        erase_tenant, erase_user = uuid.uuid4(), uuid.uuid4()
+        erase_connection = "erase-" + uuid.uuid4().hex
+        await raw.execute(
+            "INSERT INTO public.tenants(id) VALUES($1)", erase_tenant,
+        )
+        await raw.execute(
+            "INSERT INTO public.auth_users(user_id,tenant_id,is_active,is_verified) "
+            "VALUES ($1,$2,true,true)",
+            erase_user, erase_tenant,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+                (connection_id,tenant_id,installation_id,provider_account_id,
+                 credential_handle,enabled,revision)
+                VALUES ($1,$2,'telegram-bot','erase-test','vault://test',false,1)""",
+            erase_connection, erase_tenant,
+        )
+        await raw.execute(
+            "INSERT INTO public.channel_connection_owners "
+            "(tenant_id,connection_id,user_id) VALUES ($1,$2,$3)",
+            erase_tenant, erase_connection, erase_user,
+        )
+        await raw.execute(
+            "INSERT INTO public.channel_personal_pairing_consents "
+            "(tenant_id,connection_id,user_id,provider_id,policy_version) "
+            "VALUES ($1,$2,$3,'retired-operator','v1')",
+            erase_tenant, erase_connection, erase_user,
+        )
+        await raw.execute(
+            "INSERT INTO public.channel_personal_pairing_state "
+            "(tenant_id,connection_id,provider_id,connection_revision) "
+            "VALUES ($1,$2,'retired-operator',1)",
+            erase_tenant, erase_connection,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_personal_credential_deletions
+               (tenant_id,request_id,connection_id,provider_id,user_id,
+                connection_revision,session_reference,credential_scope,
+                idempotency_key)
+               VALUES ($1,$2,$3,'retired-operator',$4,1,
+                       'session','credentials','purge-test')""",
+            erase_tenant, uuid.uuid4(), erase_connection, erase_user,
+        )
+        assert await raw.execute(
+            "DELETE FROM public.tenants WHERE id=$1", erase_tenant,
+        ) == "DELETE 1"
+        for evidence_table in (
+            "channel_connections", "channel_connection_owners",
+            "channel_personal_pairing_consents", "channel_personal_pairing_state",
+            "channel_personal_credential_deletions",
+        ):
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public." + evidence_table
+                + " WHERE tenant_id=$1",
+                erase_tenant,
+            ) == 0
+        # This minimal test auth_users table deliberately has no tenant FK.
+        await raw.execute(
+            "DELETE FROM public.auth_users WHERE user_id=$1", erase_user,
+        )
 
         # Independent inbox workers race for a separate pending receipt.
         pending_inbox = uuid.uuid4()

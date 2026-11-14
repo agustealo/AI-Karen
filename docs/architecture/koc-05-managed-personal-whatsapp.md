@@ -532,3 +532,37 @@ Proof: tests/extensions/test_channel_connection_repository.py,
 tests/extensions/test_personal_consent_recovery.py,
 tests/extensions/test_personal_channel_consent_api.py and the existing quality
 and security CI checks. Live provider and consumer acceptance remain NOT_RUN.
+
+
+## KOC-05 connection-retirement evidence guard (migration 50)
+
+The 2026-11-14 migration changes the connection-to-personal-evidence
+foreign keys for owner assignment, risk consent, pairing state and credential
+deletion requests from ON DELETE CASCADE to deferred ON DELETE NO ACTION.
+A direct connection deletion with retained personal evidence therefore fails
+at transaction commit instead of silently erasing consent and deletion history.
+This protects revoked consent history too, not only currently active consents.
+
+The existing tenant-owned tables retain explicit ON DELETE CASCADE tenant
+foreign keys, and the credential-deletion ledger gains an explicit user
+erasure FK, to keep authorized tenant/account erasure separate from
+unreviewed single-connection retirement. PostgreSQL referential actions
+remain internal to the database, while ordinary tenant roles have only
+SELECT, INSERT and UPDATE policies on the four personal-evidence tables.
+There is intentionally no direct DELETE policy for their normal RLS role.
+
+This is a **guard**, not a finished retirement protocol. A privileged SQL
+actor capable of bypassing RLS can still deliberately delete evidence,
+and account/tenant deletion can intentionally cascade privacy data.
+Full retirement still needs separately authenticated provider unlink,
+independent credential/data verification, governed evidence retention,
+operator RBAC, audit receipts and a dedicated revision-fenced cleanup path.
+No provider execution, QR, credential erasure or external-data removal is
+claimed by this migration. Existing user consent withdrawal is an UPDATE,
+so it remains available after provider or ChannelHost retirement.
+
+Proof runs with the existing disposable PostgreSQL channel contract:
+`CHANNEL_TEST_DATABASE_URL=<dedicated karen_channel_test DSN> pytest -q
+tests/integration/test_channel_claim_concurrency_postgres.py`.
+That suite must prove direct deletion rejection, retained consent/deletion
+status, non-owner RLS DELETE denial, and tenant-erasure compatibility.
