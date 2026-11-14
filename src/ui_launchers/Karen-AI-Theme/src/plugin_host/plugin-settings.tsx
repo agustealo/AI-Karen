@@ -541,11 +541,16 @@ function checkedCredentialStatus(value: unknown): CredentialStatus {
     typeof record.configured !== 'boolean' ||
     typeof record.status !== 'string' ||
     !['missing', 'active', 'revoked', 'unavailable'].includes(record.status) ||
-    !Number.isSafeInteger(record.revision) ||
     typeof record.revision !== 'number' ||
+    !Number.isSafeInteger(record.revision) ||
     record.revision < 0 ||
     record.configured !== (record.status === 'active')
   ) {
+    throw new Error('Identity Vault returned an invalid credential receipt.');
+  }
+  if (Object.keys(record).some((key) =>
+    !['configured', 'status', 'revision'].includes(key)
+  )) {
     throw new Error('Identity Vault returned an invalid credential receipt.');
   }
   return record as CredentialStatus;
