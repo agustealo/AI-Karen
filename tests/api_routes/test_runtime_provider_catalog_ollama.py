@@ -483,3 +483,104 @@ async def test_runtime_catalog_outage_does_not_expose_secret_exception_details(
     assert catalog.catalog_version == "bootstrap"
     assert "private-token" not in catalog.model_dump_json()
     assert catalog.errors[0]["error_type"] == "settings_payload_failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "configured", "healthy", "health_status", "expected_ready"),
+    [
+        (True, True, True, "healthy", True),
+        (True, False, True, "healthy", False),
+        (True, True, False, "unknown", False),
+        (True, True, False, "degraded", False),
+        (False, True, True, "healthy", False),
+    ],
+)
+async def test_nous_portal_chat_inventory_requires_verified_configuration_and_health(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    configured: bool,
+    healthy: bool,
+    health_status: str,
+    expected_ready: bool,
+) -> None:
+    """Static Hermes hints must never grant a selectable model without live proof."""
+    async def payload() -> dict[str, object]:
+        return {
+            "selected_provider": "nous",
+            "selected_model": "Hermes-4.3-36B",
+            "providers": [{
+                "id": "nous",
+                "display_name": "Nous Portal (Hermes)",
+                "provider_type": "external",
+                "enabled": enabled,
+                "is_configured": configured,
+                "healthy": healthy,
+                "health_status": health_status,
+                "selected_model": "Hermes-4.3-36B",
+                "models": [{
+                    "id": "Hermes-4.3-36B",
+                    "name": "Hermes 4.3 36B",
+                    "source": "configured_catalog",
+                    "is_installed": False,
+                }],
+            }],
+        }
+
+    observed: list[str] = []
+
+    async def live_models(provider_id: str, *, current_user) -> dict[str, object]:
+        observed.append(provider_id)
+        return {
+            "models": [{
+                "id": "Hermes-4.3-36B",
+                "name": "Hermes 4.3 36B",
+                "source": "provider_live",
+                "is_installed": False,
+            }],
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    monkeypatch.setattr(runtime_api, "get_provider_models", live_models)
+    catalog = await runtime_api.get_runtime_provider_catalog(
+        current_user={"roles": ["admin"]}
+    )
+    provider = next(item for item in catalog.providers if item.id == "nous")
+    assert provider.enabled is enabled
+    assert provider.models[0].available is expected_ready
+    assert catalog.default_model == ("Hermes-4.3-36B" if expected_ready else "auto")
+    assert observed == (["nous"] if expected_ready else [])
+
+
+@pytest.mark.asyncio
+async def test_nous_catalog_does_not_claim_ready_when_live_discovery_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def payload() -> dict[str, object]:
+        return {
+            "selected_provider": "nous",
+            "providers": [{
+                "id": "nous", "display_name": "Nous Portal (Hermes)",
+                "provider_type": "external",
+                "enabled": True, "is_configured": True, "healthy": True,
+                "health_status": "healthy",
+                "selected_model": "Hermes-4.3-36B",
+                "models": [{
+                    "id": "Hermes-4.3-36B", "name": "Hermes 4.3",
+                    "source": "configured_catalog", "is_installed": False,
+                }],
+            }],
+        }
+
+    async def offline(provider_id: str, *, current_user):
+        raise ConnectionError("unavailable")
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    monkeypatch.setattr(runtime_api, "get_provider_models", offline)
+    catalog = await runtime_api.get_runtime_provider_catalog(
+        current_user={"roles": ["admin"]}
+    )
+    provider = catalog.providers[0]
+    assert provider.healthy is False
+    assert not any(model.available for model in provider.models)
+    assert catalog.default_model == "auto"
