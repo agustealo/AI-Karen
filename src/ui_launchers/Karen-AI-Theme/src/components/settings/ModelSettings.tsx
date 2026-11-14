@@ -340,17 +340,17 @@ export default function ModelSettings() {
 
   useEffect(() => {
     if (!selectedProviderDetails?.requires_api_key || !isEditingApiKey) {
-      setApiKeyValidationState(selectedProviderDetails?.api_key_configured ? 'valid' : 'idle');
+      setApiKeyValidationState('idle');
       setApiKeyValidationMessage(
         selectedProviderDetails?.api_key_configured
-          ? `${selectedProviderLabel || selectedProviderDetails?.display_name} key is stored.`
+          ? `${selectedProviderLabel || selectedProviderDetails?.display_name} key is stored, but has not been verified in this session.`
           : '',
       );
       return;
     }
     const candidateKey = apiKey.trim();
     if (!candidateKey) {
-      setApiKeyValidationState(selectedProviderDetails.api_key_configured ? 'valid' : 'idle');
+      setApiKeyValidationState('idle');
       setApiKeyValidationMessage('');
       return;
     }
@@ -360,16 +360,16 @@ export default function ModelSettings() {
 
     const timeoutId = window.setTimeout(async () => {
       try {
-        const response = await apiClient.post<{ valid: boolean; message: string; }>('/api/settings/model/validate', {
+        const response = await apiClient.post<{ valid: boolean; status: string; message: string; }>('/api/settings/model/validate', {
           provider: selectedProviderDetails.id,
           model: selectedModel,
           api_key: candidateKey,
           base_url: selectedProviderDetails.supports_base_url_override ? baseUrl.trim() || undefined : undefined,
         });
         if (validationRequestId.current !== currentRequestId) return;
-        setApiKeyValidationState(response.valid ? 'valid' : 'invalid');
+        setApiKeyValidationState(response.valid === true && response.status === 'verified' ? 'valid' : 'invalid');
         setApiKeyValidationMessage(
-          response.valid
+          response.valid === true && response.status === 'verified'
             ? response.message
             : formatProviderCredentialMessage(selectedProviderLabel || selectedProviderDetails.display_name, response.message),
         );
@@ -399,14 +399,14 @@ export default function ModelSettings() {
     }
 
     try {
-      const response = await apiClient.post<{ valid: boolean; message: string; }>('/api/settings/model/validate', {
+      const response = await apiClient.post<{ valid: boolean; status: string; message: string; }>('/api/settings/model/validate', {
         provider: selectedProviderDetails.id,
         model: selectedModel.trim(),
         api_key: apiKey.trim() || undefined,
         base_url: selectedProviderDetails.supports_base_url_override ? baseUrl.trim() || undefined : undefined,
       });
 
-      if (!response.valid) {
+      if (response.valid !== true || response.status !== 'verified') {
         const message = formatProviderCredentialMessage(selectedProviderLabel || selectedProviderDetails.display_name, response.message);
         setApiKeyValidationState('invalid');
         setApiKeyValidationMessage(message);
