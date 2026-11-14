@@ -480,3 +480,143 @@ async def test_public_login_remains_unauthenticated_without_valid_session(monkey
     )
     assert result["authenticated"] is False
     assert result["tenant_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_consumer_session_listing_never_exposes_credentials():
+    current = token()
+    now = datetime.utcnow()
+    rows = [
+        SimpleNamespace(
+            session_token=uuid.uuid4(),
+            user_id=uuid.UUID(USER_ID),
+            access_token=current,
+            refresh_token="sensitive-current-refresh",
+            device_fingerprint="sensitive-device-hash",
+            created_at=now,
+            last_accessed=now,
+            expires_in=3600,
+            ip_address="192.0.2.10",
+            user_agent="Current browser",
+        ),
+        SimpleNamespace(
+            session_token=uuid.uuid4(),
+            user_id=uuid.UUID(USER_ID),
+            access_token="sensitive-remote-access",
+            refresh_token="sensitive-remote-refresh",
+            device_fingerprint="sensitive-remote-fingerprint",
+            created_at=now,
+            last_accessed=now,
+            expires_in=3600,
+            ip_address="192.0.2.11",
+            user_agent="Another browser",
+        ),
+    ]
+    db = FakeDbSession(rows)
+    svc = session_service(db)
+    listed = await svc.list_account_sessions(USER_ID, TENANT_ID, current, limit=999)
+
+    assert len(listed) == 2
+    assert listed[0]["is_current"] is True
+    assert listed[1]["is_current"] is False
+    assert set(listed[0]) == {
+        "session_id", "is_current", "created_at", "last_accessed",
+        "expires_at", "ip_address", "user_agent",
+    }
+    for entry in listed:
+        assert "access_token" not in entry
+        assert "refresh_token" not in entry
+        assert "device_fingerprint" not in entry
+        assert "user_id" not in entry
+    query = str(db.statements[0])
+    assert "auth_sessions.user_id" in query
+    assert "auth_users.tenant_id" in query
+    assert "auth_users.is_active" in query
+    assert "auth_sessions.is_active" in query
+    assert "LIMIT" in query
+
+
+@pytest.mark.asyncio
+async def test_consumer_session_listing_rejects_database_outage():
+    class Down:
+        async def execute(self, statement):
+            raise OSError("database offline")
+
+    svc = session_service(Down())
+    with pytest.raises(RuntimeError, match="Session retrieval unavailable"):
+        await svc.list_account_sessions(USER_ID, TENANT_ID, token())
+
+
+@pytest.mark.asyncio
+async def test_consumer_session_listing_rejects_missing_tenant():
+    db = FakeDbSession([])
+    svc = session_service(db)
+    with pytest.raises(ValueError, match="Invalid authenticated session scope"):
+        await svc.list_account_sessions(USER_ID, "default", token())
+    assert not db.statements
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commit_fails", [False, True])
+async def test_remote_session_revocation_requires_scoped_committed_write(commit_fails):
+    target = SimpleNamespace(
+        session_token=uuid.uuid4(),
+        user_id=uuid.UUID(USER_ID),
+        access_token="other-session-access-token",
+        is_active=True,
+        invalidated_at=None,
+        invalidation_reason=None,
+    )
+    db = FakeDbSession(target, fail_commit=commit_fails)
+    svc = session_service(db)
+    svc._active_sessions = {}
+    svc._emit_audit_event = AsyncMock()
+
+    if commit_fails:
+        with pytest.raises(RuntimeError, match="Session revocation unavailable"):
+            await svc.revoke_account_session(
+                USER_ID, TENANT_ID, str(target.session_token), token()
+            )
+        svc._emit_audit_event.assert_not_awaited()
+        assert db.committed is False
+    else:
+        assert await svc.revoke_account_session(
+            USER_ID, TENANT_ID, str(target.session_token), token()
+        )
+        assert db.committed is True
+        assert target.is_active is False
+        assert target.invalidation_reason == "account_remote_revoke"
+        svc._emit_audit_event.assert_awaited_once()
+    query = str(db.statements[0])
+    assert "auth_sessions.session_id" in query
+    assert "auth_sessions.user_id" in query
+    assert "auth_users.tenant_id" in query
+    assert "FOR UPDATE" in query
+
+
+@pytest.mark.asyncio
+async def test_remote_session_revocation_refuses_current_and_foreign_targets():
+    current = SimpleNamespace(
+        session_token=uuid.uuid4(),
+        access_token=token(),
+        is_active=True,
+    )
+    db = FakeDbSession(current)
+    svc = session_service(db)
+    svc._active_sessions = {}
+    svc._emit_audit_event = AsyncMock()
+    with pytest.raises(ValueError, match="Use Sign out"):
+        await svc.revoke_account_session(
+            USER_ID, TENANT_ID, str(current.session_token), token()
+        )
+    assert db.committed is False
+    assert current.is_active is True
+    svc._emit_audit_event.assert_not_awaited()
+
+    foreign_db = FakeDbSession(None)
+    foreign_svc = session_service(foreign_db)
+    assert await foreign_svc.revoke_account_session(
+        USER_ID, TENANT_ID, str(uuid.uuid4()), token()
+    ) is False
+    assert foreign_db.committed is False
+    assert "auth_users.tenant_id" in str(foreign_db.statements[0])
