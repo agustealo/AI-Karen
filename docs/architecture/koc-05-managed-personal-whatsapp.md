@@ -498,3 +498,37 @@ Proof: `pytest -q tests/extensions/test_personal_transport_evidence.py`.
 If the canonical ChannelInboxWorker's shutdown raises, the host must still revoke every remaining process-local transport and close its owned HTTP, Vault and PluginKernel dependencies. The host is already marked closed at shutdown entry and must never permit a second teardown or adapter activation. The host records only the worker exception type, completes the existing best-effort dependency cleanup, and then re-raises the original failure (including cancellation) so operational monitoring is not given a false successful stop. No automatic worker replay, provider reactivation, new host owner, migration, or consumer packaging dependency is introduced.
 
 Proof: `pytest -q tests/extensions/test_channel_host_lifecycle.py`, alongside existing channel and Main Quality gates. This source-level shutdown resilience is independent of Render deployment, vendor integration, and live consumer pairing acceptance.
+
+
+## Retired provider credential-deletion request visibility (read-only)
+
+The consent recovery service can inspect the existing KOC-07 credential-deletion
+request ledger after ChannelHost or its adapter is retired. This does not create
+deletion requests, call a provider, verify a vendor claim, or authorize cleanup.
+
+- GET /api/channels/personal/consent-recovery/deletion-requests requires the
+  same fresh, active/verified tenant principal, channel.consent RBAC,
+  RuntimePolicy and ActionExecutionGate as stored-consent recovery.
+- Tenant FORCE RLS, exact immutable connection ownership, active verified user
+  joins, and a hard 50-row cap gate SQL reads. An absent owner or connection
+  cannot be reconstructed from provider-supplied identifiers.
+- Returned fields are only request_id, connection_id, provider_id,
+  connection_revision and persisted status. No session reference, credential
+  scope, Vault handle, provider receipt identifier, contact or message data
+  leaves the SQL owner.
+- `provider_claimed` describes an authenticated provider **claim** recorded
+  by Karen, not independently proven erasure. Even `verified` is only a
+  historical ledger label at this endpoint, not a new live verification or
+  authorization to delete the connection.
+- An empty ledger says only that no retained request exists. Connection
+  deletion currently cascades the request, consent and pairing evidence, so
+  missing records do **not** prove remote unlink, erasure or absence of data.
+- No DELETE route or provider retirement side effect is introduced. Destructive
+  cleanup remains explicitly NOT_READY until independent provider unlink,
+  credential and retained-data verification, revision-safe export/retention
+  and a governed operator deletion transaction exist.
+
+Proof: tests/extensions/test_channel_connection_repository.py,
+tests/extensions/test_personal_consent_recovery.py,
+tests/extensions/test_personal_channel_consent_api.py and the existing quality
+and security CI checks. Live provider and consumer acceptance remain NOT_RUN.

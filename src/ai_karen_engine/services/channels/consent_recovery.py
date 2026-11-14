@@ -132,6 +132,21 @@ class PersonalConsentRecoveryService:
             tenant_id=tenant_id, user_id=user_id,
         )
 
+    async def list_deletion_requests(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict[str, str | int]]:
+        """Read owner-only historical deletion requests without channel startup.
+
+        A provider claim is not independent credential-erasure verification.
+        The returned data is status metadata, not a deletion receipt.
+        """
+        tenant_id, user_id = await self._authorize(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        return await self._repository.list_owned_personal_credential_deletion_requests(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+
     async def revoke(
         self, *, tenant_id: str, user_id: str,
         connection_id: str, provider_id: str,
