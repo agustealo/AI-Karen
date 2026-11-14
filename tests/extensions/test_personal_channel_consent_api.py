@@ -974,7 +974,7 @@ def test_retirement_review_response_schema_never_accepts_destructive_capability(
         "deletion_request_recorded": True,
         "credential_deletion_claim_recorded": True,
         "provider_revision_claims_correlated": True,
-        "unverified_deletion_request": False,
+        "unverified_deletion_request": True,
         "inbox_not_completed": False, "outbound_not_confirmed": False,
     })
     assert api.PersonalRetirementEvidenceItem(**valid).retirement_assessment.cleanup_authorized is False
@@ -1005,7 +1005,7 @@ def test_retirement_api_rejects_unsupported_correlated_claim_downgrade():
         "deletion_request_recorded": True,
         "credential_deletion_claim_recorded": True,
         "provider_revision_claims_correlated": False,
-        "unverified_deletion_request": False,
+        "unverified_deletion_request": True,
         "inbox_not_completed": False, "outbound_not_confirmed": False,
     })
     blockers = complete["retirement_assessment"]["blocking_reasons"]
@@ -1074,7 +1074,7 @@ def test_retirement_response_validator_rejects_fake_correlation_or_missing_misma
     {"connection_enabled": True},
     {"retirement_held": False},
     {"deletion_request_recorded": False},
-    {"unverified_deletion_request": True},
+    {"unverified_deletion_request": False},
     {"provider_unlink_claim_recorded": False},
     {"credential_deletion_claim_recorded": False},
     {"provider_revision_claims_correlated": False},
@@ -1088,7 +1088,7 @@ def test_retirement_response_rejects_local_evidence_blocker_contradictions(chang
         "deletion_request_recorded": True,
         "credential_deletion_claim_recorded": True,
         "provider_revision_claims_correlated": True,
-        "unverified_deletion_request": False,
+        "unverified_deletion_request": True,
         "inbox_not_completed": False,
         "outbound_not_confirmed": False,
     }
@@ -1115,7 +1115,7 @@ def test_retirement_response_disallows_pydantic_type_coercion(changed):
         "deletion_request_recorded": True,
         "credential_deletion_claim_recorded": True,
         "provider_revision_claims_correlated": True,
-        "unverified_deletion_request": False,
+        "unverified_deletion_request": True,
         "inbox_not_completed": False,
         "outbound_not_confirmed": False,
     })
@@ -1132,7 +1132,7 @@ def test_retirement_response_rejects_extra_stale_or_reordered_known_blockers():
         "deletion_request_recorded": True,
         "credential_deletion_claim_recorded": True,
         "provider_revision_claims_correlated": True,
-        "unverified_deletion_request": False,
+        "unverified_deletion_request": True,
         "inbox_not_completed": False,
         "outbound_not_confirmed": False,
     })
@@ -1163,3 +1163,30 @@ async def test_retirement_endpoint_redacts_contradictory_stored_blockers(monkeyp
         await api.list_retired_channel_evidence(user=actor())
     assert error.value.status_code == 503
     assert error.value.detail == "Personal channel retirement evidence unavailable"
+
+
+def test_retirement_api_rejects_forged_historical_verified_status_clearance():
+    valid = assess_retirement_evidence_snapshot({
+        "connection_id": CONNECTION, "connection_revision": 5,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": False, "unresolved_pairing": False,
+        "provider_unlink_claim_recorded": True,
+        "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": True,
+        "provider_revision_claims_correlated": True,
+        "unverified_deletion_request": True,
+        "inbox_not_completed": False, "outbound_not_confirmed": False,
+    })
+    assert "credential_deletion_requests_unverified" in valid["retirement_assessment"]["blocking_reasons"]
+    for changed in (
+        {"unverified_deletion_request": False},
+        {"retirement_assessment": {
+            **valid["retirement_assessment"],
+            "blocking_reasons": [
+                reason for reason in valid["retirement_assessment"]["blocking_reasons"]
+                if reason != "credential_deletion_requests_unverified"
+            ],
+        }},
+    ):
+        with pytest.raises(ValidationError):
+            api.PersonalRetirementEvidenceItem(**{**valid, **changed})
