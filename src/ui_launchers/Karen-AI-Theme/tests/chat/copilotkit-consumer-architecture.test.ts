@@ -54,7 +54,7 @@ describe("canonical CopilotKit chat ownership", () => {
 
 
   it("has exactly one dashboard renderer and no old assistant-ui import", () => {
-    expect(dashboard.match(/<KarenCopilotConsumerChat\\b/g)).toHaveLength(1);
+    expect(dashboard.match(/<KarenCopilotConsumerChat\b/g)).toHaveLength(1);
     expect(dashboard).toContain('onOpenAgents={() => setActiveMainView("agents")}');
     expect(dashboard).toContain("onOpenProviderSettings={() => {");
     expect(dashboard).not.toContain("<KarenAssistantChat");
