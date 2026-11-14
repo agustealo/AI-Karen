@@ -167,7 +167,7 @@ export function PluginSettingsProvider({ children }: { children: React.ReactNode
   const updateSetting = useCallback((pluginId: string, key: string, value: unknown) => {
     setPluginSettings((prev) => {
       const config = prev.get(pluginId);
-      if (!config || !config.loaded || config.error) return prev;
+      if (!config || !config.loaded || config.schema.length === 0) return prev;
       const field = config.schema.find((item) => item.key === key);
       // The UI is never an authority for credential storage.
       if (!field || field.readOnly || field.type === 'password' || field.type === 'json') return prev;
@@ -176,6 +176,7 @@ export function PluginSettingsProvider({ children }: { children: React.ReactNode
         ...config,
         values: { ...config.values, [key]: value },
         modified: true,
+        error: null,
       });
     });
   }, []);
