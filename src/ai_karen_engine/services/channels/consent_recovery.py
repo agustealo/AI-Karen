@@ -83,6 +83,16 @@ def assess_retirement_evidence_snapshot(
         and record["credential_deletion_claim_recorded"]
     ):
         raise ValueError("Retirement claim correlation evidence inconsistent")
+    # There is no independent erasure-verification ledger in this contract.
+    # A historical 'verified' status may be retained for audit, but cannot
+    # erase a request from the unresolved inventory. Also reject impossible
+    # source projections rather than reporting them as coherent local truth.
+    if (
+        record["deletion_request_recorded"] != record["unverified_deletion_request"]
+        or (record["credential_deletion_claim_recorded"]
+            and not record["deletion_request_recorded"])
+    ):
+        raise ValueError("Retirement deletion verification evidence inconsistent")
 
     blockers: list[str] = []
     def block_if(condition: bool, reason: str) -> None:
