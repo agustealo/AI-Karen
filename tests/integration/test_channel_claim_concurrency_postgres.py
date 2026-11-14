@@ -42,6 +42,10 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
     try:
         # Disposable dedicated DB, with only prerequisites of the migration.
         await raw.execute("""
+            DROP TABLE IF EXISTS public.channel_personal_credential_deletions CASCADE;
+            DROP TABLE IF EXISTS public.channel_personal_pairing_state CASCADE;
+            DROP TABLE IF EXISTS public.channel_personal_pairing_consents CASCADE;
+            DROP TABLE IF EXISTS public.channel_connection_owners CASCADE;
             DROP TABLE IF EXISTS public.channel_outbox CASCADE;
             DROP TABLE IF EXISTS public.channel_inbox CASCADE;
             DROP TABLE IF EXISTS public.channel_link_challenges CASCADE;
