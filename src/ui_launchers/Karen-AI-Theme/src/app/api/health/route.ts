@@ -34,11 +34,11 @@ export const GET = async (request: Request): Promise<NextResponse> => {
       followRedirects: false,
     });
 
-    if (response.status === 503) return notReady();
-    if (response.status !== 200) {
-      response.headers.set('cache-control', 'no-store');
-      return response;
-    }
+    // Public readiness is a capability claim, not a diagnostic relay.
+    // A proxy 502, backend exception, redirect, or unauthorized upstream
+    // response cannot attest to readiness and must not expose the upstream
+    // body or headers (which may include internal infrastructure details).
+    if (response.status !== 200) return notReady();
 
     const payload: unknown = await response.json();
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
