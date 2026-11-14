@@ -41,7 +41,7 @@ describe('settings UX ownership contract', () => {
   it('distinguishes saved provider selection from runtime health and draft changes', () => {
     expect(models).toContain('const hasUnsavedSelection');
     expect(models).toContain("Workspace default:");
-    expect(models).toContain("not proof of a currently executing model");
+    expect(models).toContain("Browsing a provider below does not change the workspace default");
     expect(models).toContain("New default chosen but not saved");
     expect(models).toContain("Registered provider details");
     expect(models).toContain("Save provider connection");
@@ -141,7 +141,8 @@ describe('settings UX ownership contract', () => {
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
     expect(models).toContain("apiClient.get<ModelSettingsResponse>('/api/settings/model')");
     expect(models).toContain("normalizeModelSettingsResponse");
-    expect(models).toContain("canSaveProviderModelSelection");
+    expect(models).toContain("canSetWorkspaceDefault");
+    expect(models).toContain("verifiedModels.some((model) => model.id === selectedModel)");
     expect(models).not.toContain("localStorage.setItem");
   });
 });
