@@ -426,8 +426,8 @@ export function KarenCopilotControlledChat({
           </div>
         </div>
       )}
-      {!draftSynced && <p role="status" className="px-3 text-xs text-muted-foreground">
-        Saving draft to your conversation…
+      {draftStatus === "ready" && !draftSynced && <p role="status" className="px-3 text-xs text-muted-foreground">
+        Draft changes pending save…
       </p>}
       <div data-testid="karen-copilot-sdk-chat"
         className="flex min-h-0 min-w-0 flex-1 flex-col">
