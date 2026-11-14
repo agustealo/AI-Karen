@@ -459,22 +459,17 @@ export default function ModelSettings() {
     }
   };
 
-  const handleSave = async () => {
-    if (!canManageRuntime) return;
-    if (!selectedProviderDetails) return;
-    if (!canSaveProviderModelSelection(selectedModel, availableModels, {
-      isLoading: isLoadingModels,
-      manualEntryAllowed: canEnterModelManually,
-    })) {
+  const handleSave = async (setWorkspaceDefault: boolean) => {
+    if (!canManageRuntime || !selectedProviderDetails) return;
+    if (setWorkspaceDefault && !canSetWorkspaceDefault) {
       toast({
-        title: 'Model not available',
-        description: isLoadingModels
-          ? 'Model discovery is still running. Save after the inventory is available.'
-          : 'Choose a model from the current provider inventory before saving.',
+        title: 'Model is not ready for chat',
+        description: 'Verify the connection and choose a live, healthy model before setting the workspace default.',
         variant: 'destructive',
       });
       return;
     }
+
     setIsSaving(true);
     try {
       const submittedApiKey = isEditingApiKey ? apiKey.trim() : '';
@@ -485,11 +480,14 @@ export default function ModelSettings() {
           if (!credentialsValid) return;
         }
       } else if (submittedApiKey && apiKeyValidationState === 'invalid') {
-        throw new Error(apiKeyValidationMessage || `${selectedProviderLabel || selectedProviderDetails.display_name} API key validation failed.`);
+        throw new Error(apiKeyValidationMessage || 'Credential validation failed.');
       }
+
+      // Connection edits never send a model identifier: the existing API
+      // preserves the saved global choice until "Set as default" is explicit.
       const response = await apiClient.put<ModelSettingsResponse>('/api/settings/model', {
         provider: selectedProvider,
-        model: selectedModel.trim(),
+        model: setWorkspaceDefault ? selectedModel.trim() : undefined,
         base_url: selectedProviderDetails.supports_base_url_override ? baseUrl.trim() : undefined,
         runtime_source: usesRuntimeOptions ? runtimeSource : undefined,
         api_key: submittedApiKey || undefined,
@@ -497,8 +495,22 @@ export default function ModelSettings() {
         api_key_prefix: selectedProviderDetails.supports_custom_auth ? apiKeyPrefix : undefined,
         chat_response_mode: chatResponseMode,
       });
-      applyNormalizedSettings(response);
-      toast({ title: 'Model settings saved', description: `Karen confirmed the saved configuration for ${selectedProviderLabel || selectedProviderDetails.display_name}. Runtime health is checked separately.` });
+      if (setWorkspaceDefault) {
+        applyNormalizedSettings(response);
+      } else {
+        setSettings(response);
+        setApiKey('');
+        setIsEditingApiKey(false);
+        setApiKeyValidationState('idle');
+        setApiKeyValidationMessage('');
+        void loadProviderModels(selectedProvider, baseUrl);
+      }
+      toast({
+        title: setWorkspaceDefault ? 'Workspace default updated' : 'Provider connection settings saved',
+        description: setWorkspaceDefault
+          ? 'The backend confirmed the saved default. Karen will still report the actual model for each response.'
+          : 'Connection details were saved. Refresh the provider inventory and confirm health before selecting it for chat.',
+      });
     } catch (error) {
       const message = formatProviderCredentialMessage(
         selectedProviderLabel || selectedProviderDetails.display_name,
@@ -507,8 +519,10 @@ export default function ModelSettings() {
       setApiKeyValidationState('invalid');
       setApiKeyValidationMessage(message);
       setIsEditingApiKey(true);
-      toast({ title: `Save failed for ${selectedProviderLabel || selectedProviderDetails.display_name}`, description: message, variant: 'destructive' });
-    } finally { setIsSaving(false); }
+      toast({ title: 'Save failed', description: message, variant: 'destructive' });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleClearApiKey = async () => {
@@ -518,7 +532,6 @@ export default function ModelSettings() {
     try {
       const response = await apiClient.put<ModelSettingsResponse>('/api/settings/model', {
         provider: selectedProvider,
-        model: selectedModel.trim(),
         runtime_source: usesRuntimeOptions ? runtimeSource : undefined,
         clear_api_key: true,
       });
