@@ -1,0 +1,627 @@
+{
+  "repository": "agustealo/AI-Karen",
+  "default_branch": "main",
+  "main_sha_at_audit": "43ebdaaedef99f3c58d5a5c653f09d5b4a7088a0",
+  "retention_days": 21,
+  "archive_tag": "branch-archive/2026-11-14-closed-unmerged-prs",
+  "created_at": "2026-11-14T18:10:43.754Z",
+  "recovery": "git fetch origin tag branch-archive/2026-11-14-closed-unmerged-prs; git show branch-archive/2026-11-14-closed-unmerged-prs:.branch-archives/2026-11-14-closed-unmerged-prs.json; git branch <recovered-name> <branch-sha>",
+  "branches": [
+    {
+      "name": "ci/recharts-v3-migration-burn-20261008",
+      "sha": "2470fa96f12a26a3d0ef1ce24503b179ef5b3843",
+      "committed_at": "2026-10-08T19:19:04-04:00",
+      "unique_commits_vs_main": 1,
+      "merge_base": "7a0c968d51f4c5eb6287ed36366f1cc39b23ac49",
+      "closed_prs": [
+        {
+          "number": 194,
+          "closed_at": "2026-10-09T12:20:36Z",
+          "updated_at": "2026-10-09T12:20:36Z"
+        }
+      ]
+    },
+    {
+      "name": "cleanup/conversation-service-compatibility",
+      "sha": "1b7a0d1314b28dd8f27eae9668b45eafd8248884",
+      "committed_at": "2026-10-06T20:24:42-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "4425423d2b3fbe440d6a059324ad891689a8b848",
+      "closed_prs": [
+        {
+          "number": 153,
+          "closed_at": "2026-10-07T09:47:57Z",
+          "updated_at": "2026-10-07T09:47:58Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/admin-training-workbench-visual-polish-20261010",
+      "sha": "dcd174425ad7787b03a65faae313f6271be3b010",
+      "committed_at": "2026-10-10T01:14:23-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "a214ab9ef37d6a1ce9010952226426f4f7c0a8ba",
+      "closed_prs": [
+        {
+          "number": 263,
+          "closed_at": "2026-10-10T05:55:48Z",
+          "updated_at": "2026-10-10T05:55:48Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/authorized-time-weather-context-20261024",
+      "sha": "55ec30c68f69a3d2a64f88e4747886cbb2416e88",
+      "committed_at": "2026-10-24T13:19:22-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "32d6cc0b2e68d347b87475f9acc5c23720606428",
+      "closed_prs": [
+        {
+          "number": 521,
+          "closed_at": "2026-10-24T17:25:13Z",
+          "updated_at": "2026-10-24T17:25:14Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/foundry-csv-adapter-20261010",
+      "sha": "676a26f45ef415702c629648e260779dd1eeb464",
+      "committed_at": "2026-10-10T13:29:20-04:00",
+      "unique_commits_vs_main": 9,
+      "merge_base": "4a69596621798b6dfb59399267a7340232769624",
+      "closed_prs": [
+        {
+          "number": 286,
+          "closed_at": "2026-10-10T17:33:26Z",
+          "updated_at": "2026-10-10T17:33:27Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/foundry-governed-import-api-20261010",
+      "sha": "20648720061aa7451732b75a2ad0a89fdfd9db92",
+      "committed_at": "2026-10-10T13:22:31-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "a938d6def66d2abbaa9035e5b45c2556eb4c9959",
+      "closed_prs": [
+        {
+          "number": 282,
+          "closed_at": "2026-10-10T17:27:29Z",
+          "updated_at": "2026-10-10T17:27:29Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/foundry-import-main-20261010",
+      "sha": "56171ffbdf497975a9a6e770a66a9cfe10dc1496",
+      "committed_at": "2026-10-10T13:27:40-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "4a69596621798b6dfb59399267a7340232769624",
+      "closed_prs": [
+        {
+          "number": 284,
+          "closed_at": "2026-10-10T17:33:24Z",
+          "updated_at": "2026-10-10T17:33:25Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/foundry-scoped-dataset-execution-20261010",
+      "sha": "c25d77b8c96e27d5fd4221cd09fe7371e053a538",
+      "committed_at": "2026-10-10T12:45:49-04:00",
+      "unique_commits_vs_main": 14,
+      "merge_base": "7fbb78da1ae2dec532cc1671e85d4b169cedfc39",
+      "closed_prs": [
+        {
+          "number": 275,
+          "closed_at": "2026-10-10T16:49:47Z",
+          "updated_at": "2026-10-10T16:49:47Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/foundry-tenant-dataset-resolver-20261010",
+      "sha": "e2dcf17fd5c26f06d3b7ffc2c5d7a937bae09a18",
+      "committed_at": "2026-10-10T12:39:36-04:00",
+      "unique_commits_vs_main": 8,
+      "merge_base": "cdbf2cd67145616301324ef37468281052ded755",
+      "closed_prs": [
+        {
+          "number": 273,
+          "closed_at": "2026-10-10T16:42:00Z",
+          "updated_at": "2026-10-10T16:42:01Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/manual-free-plugin-catalog-ui-20261010",
+      "sha": "39036c0df341b7759a4359fe0bc975e7a038a8b2",
+      "committed_at": "2026-10-10T16:28:09-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "478c482c4f8d00c3941f6c870fcb46139d712db7",
+      "closed_prs": [
+        {
+          "number": 315,
+          "closed_at": "2026-10-10T20:29:55Z",
+          "updated_at": "2026-10-10T20:29:56Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/manual-plugin-catalog-api-20261010",
+      "sha": "7d0b2c7632e22fd42e68b73e74b35a7dbc03d5d8",
+      "committed_at": "2026-10-10T16:25:17-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "478c482c4f8d00c3941f6c870fcb46139d712db7",
+      "closed_prs": [
+        {
+          "number": 314,
+          "closed_at": "2026-10-10T20:29:51Z",
+          "updated_at": "2026-10-10T20:29:51Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/plugin-ui-durable-checksum-baseline-20261010",
+      "sha": "fc33981ff01bff9343e145f121c1893cf1508ebd",
+      "committed_at": "2026-10-10T15:23:52-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "01291daabeb45c0e7479fafe68d741fa4b422e4c",
+      "closed_prs": [
+        {
+          "number": 299,
+          "closed_at": "2026-10-10T19:38:11Z",
+          "updated_at": "2026-10-10T19:38:12Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/plugin-ui-recovery-inspection-20261010",
+      "sha": "4eb90fe02de36897b631afd69be36947f9e0145c",
+      "committed_at": "2026-10-10T15:52:27-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "c667943217cf9f0e3c86ddba78af3bcf5da64b07",
+      "closed_prs": [
+        {
+          "number": 306,
+          "closed_at": "2026-10-10T19:58:06Z",
+          "updated_at": "2026-10-10T19:58:06Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/premium-brand-presentation",
+      "sha": "ca533336df2e6af5190b6a5604b71f6615e62b08",
+      "committed_at": "2026-09-24T10:46:59-04:00",
+      "unique_commits_vs_main": 21,
+      "merge_base": "4bbaedde6e527085d0697c28b2ef24b102258049",
+      "closed_prs": [
+        {
+          "number": 96,
+          "closed_at": "2026-09-24T16:53:37Z",
+          "updated_at": "2026-09-24T16:53:37Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/runtime-evidence-sufficiency-20261009",
+      "sha": "ed61971f56653e1267727f982fb93193e553dca6",
+      "committed_at": "2026-10-09T16:10:49-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "43565ccb63114a8f19092e157d385246ffcd88c0",
+      "closed_prs": [
+        {
+          "number": 234,
+          "closed_at": "2026-10-09T21:28:52Z",
+          "updated_at": "2026-10-09T21:28:52Z"
+        }
+      ]
+    },
+    {
+      "name": "feat/trace-personal-recall-decisions-20261010",
+      "sha": "0ccbcf3aef05aa30913a075b9928677a2460a43d",
+      "committed_at": "2026-10-10T18:02:08-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "6ab5c6169e5df2b1be150260bcc4ff7c834ce0f0",
+      "closed_prs": [
+        {
+          "number": 327,
+          "closed_at": "2026-10-10T22:13:20Z",
+          "updated_at": "2026-10-10T22:13:20Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/admin-user-mutations-canonical",
+      "sha": "25d658ac8283e4d62f34dac5feaae43d214f97c2",
+      "committed_at": "2026-10-09T22:55:25-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "91feefe1af7a30abe3cc577db4c4ca42c749b4e5",
+      "closed_prs": [
+        {
+          "number": 248,
+          "closed_at": "2026-10-10T03:55:16Z",
+          "updated_at": "2026-10-10T03:55:17Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/admin-users-canonical-mutations",
+      "sha": "3d7e621bc4a8f0183133cc5b807c17f91e3e463f",
+      "committed_at": "2026-10-09T23:13:05-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "462110012333c186b5e1897a9307784d659cca80",
+      "closed_prs": [
+        {
+          "number": 250,
+          "closed_at": "2026-10-10T03:55:20Z",
+          "updated_at": "2026-10-10T03:55:20Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/admin-users-invalid-enum-filters",
+      "sha": "1c85705c65659a8e4ab96b09fbac1d4cab7ba353",
+      "committed_at": "2026-10-09T22:47:49-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "91feefe1af7a30abe3cc577db4c4ca42c749b4e5",
+      "closed_prs": [
+        {
+          "number": 247,
+          "closed_at": "2026-10-10T03:57:16Z",
+          "updated_at": "2026-10-10T03:57:16Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/ci-dockerhub-auth-20261009",
+      "sha": "d207e2a9c3f045f9ca25b1b83b3580a7d1e87c0d",
+      "committed_at": "2026-10-09T17:06:28-04:00",
+      "unique_commits_vs_main": 6,
+      "merge_base": "225e7b2a3d268a19cd137dad19022504e0d3ec86",
+      "closed_prs": [
+        {
+          "number": 238,
+          "closed_at": "2026-10-09T21:28:54Z",
+          "updated_at": "2026-10-09T21:28:54Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/conversation-read-authority",
+      "sha": "c7f88f9c342a277511abb9c786acb189fb9c5dcd",
+      "committed_at": "2026-10-06T16:34:59-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "eab7e35a0f1f0894f0c1be445349c31e552b5470",
+      "closed_prs": [
+        {
+          "number": 148,
+          "closed_at": "2026-10-07T09:47:53Z",
+          "updated_at": "2026-10-07T09:47:53Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/conversation-route-ownership-rbac",
+      "sha": "46141001d898b8c050e976401876b67555a7fa3b",
+      "committed_at": "2026-10-06T18:15:03-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "4e91093e7b9ea7ebb925f89dcaa70e1b999d7e4e",
+      "closed_prs": [
+        {
+          "number": 151,
+          "closed_at": "2026-10-07T09:47:55Z",
+          "updated_at": "2026-10-07T09:47:55Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/cortex-explicit-memory-write-20261009",
+      "sha": "3d77659758dec9b925442c413351a28ea21ee9f4",
+      "committed_at": "2026-10-09T05:41:46-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "c8033050d009480a73214216ceaf373ac21a9f7c",
+      "closed_prs": [
+        {
+          "number": 200,
+          "closed_at": "2026-10-09T09:45:07Z",
+          "updated_at": "2026-10-09T09:45:08Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/degraded-conversation-evidence-20261018",
+      "sha": "5091acf2cce41cd9b7526700ce0135ac03cc37e1",
+      "committed_at": "2026-10-18T11:05:56-04:00",
+      "unique_commits_vs_main": 9,
+      "merge_base": "c0d753ad286cb40394a9403c8dcf0a893c2e343d",
+      "closed_prs": [
+        {
+          "number": 481,
+          "closed_at": "2026-10-18T16:05:09Z",
+          "updated_at": "2026-10-18T16:05:10Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/direct-live-capability-clean",
+      "sha": "c5e8d7523535cd2e954a0384a558c3cd5597232b",
+      "committed_at": "2026-10-07T23:02:32-04:00",
+      "unique_commits_vs_main": 41,
+      "merge_base": "b1b7a23a1371ffcb6d9a13ddaf06fdd8e505ce2c",
+      "closed_prs": [
+        {
+          "number": 167,
+          "closed_at": "2026-10-08T04:27:44Z",
+          "updated_at": "2026-10-08T04:27:44Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/direct-live-capability-hardening",
+      "sha": "8a10e4787739887d84a902a5b39f45068ea56ad6",
+      "committed_at": "2026-10-07T21:10:21-04:00",
+      "unique_commits_vs_main": 84,
+      "merge_base": "d4bc0d2d6d34422c507c3fbf1e6095414e5a47ba",
+      "closed_prs": [
+        {
+          "number": 164,
+          "closed_at": "2026-10-08T01:15:44Z",
+          "updated_at": "2026-10-08T01:15:44Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/grounded-capability-synthesis-20261022",
+      "sha": "9332d6545544d1bc6d903ee849afbb71f7b409a2",
+      "committed_at": "2026-10-23T07:09:48-04:00",
+      "unique_commits_vs_main": 8,
+      "merge_base": "43a3ca03ba3295aee317cd618e0bc7e3a6e9eb77",
+      "closed_prs": [
+        {
+          "number": 504,
+          "closed_at": "2026-10-23T16:42:07Z",
+          "updated_at": "2026-10-23T16:42:08Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/medusa-plan-validator-a01-20261010",
+      "sha": "11a73f6bfeeb6288f83bf2c28c71a65bfa8c4e91",
+      "committed_at": "2026-10-10T17:49:55-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "20497442ba1513ea76d771783ea03b3fd4a6130b",
+      "closed_prs": [
+        {
+          "number": 321,
+          "closed_at": "2026-10-10T22:12:58Z",
+          "updated_at": "2026-10-10T22:12:59Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/plugin-disable-persistent-state-20261010",
+      "sha": "933077309c51f4db92bf6db2266296269939fe74",
+      "committed_at": "2026-10-10T17:42:06-04:00",
+      "unique_commits_vs_main": 6,
+      "merge_base": "5133be7aa46633f0f12a7fa9ba1af23dfd34f690",
+      "closed_prs": [
+        {
+          "number": 322,
+          "closed_at": "2026-10-10T21:50:11Z",
+          "updated_at": "2026-10-10T21:50:11Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/plugin-registry-catalog-response-contract",
+      "sha": "c2d0c637eb501219f4b27a008e8a06e42d676667",
+      "committed_at": "2026-10-08T09:49:34-04:00",
+      "unique_commits_vs_main": 13,
+      "merge_base": "fc73531861fee698691fe83937ef88705e561278",
+      "closed_prs": [
+        {
+          "number": 168,
+          "closed_at": "2026-10-08T13:54:17Z",
+          "updated_at": "2026-10-08T13:55:03Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/plugin-ui-bundled-recovery-20261010",
+      "sha": "9aa2ea1aa94c3b0655ee17e94360b75c824ef962",
+      "committed_at": "2026-10-10T15:58:30-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "c667943217cf9f0e3c86ddba78af3bcf5da64b07",
+      "closed_prs": [
+        {
+          "number": 307,
+          "closed_at": "2026-10-10T19:59:01Z",
+          "updated_at": "2026-10-10T19:59:10Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/plugin-ui-install-staging-20261010",
+      "sha": "45e360b41b1e8e5a0fc7462d2193e10bda26020a",
+      "committed_at": "2026-10-10T15:28:44-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "bb2422957b3c3c6e0a2fdf18fd36ebedd8ba8045",
+      "closed_prs": [
+        {
+          "number": 301,
+          "closed_at": "2026-10-10T19:36:04Z",
+          "updated_at": "2026-10-10T19:36:05Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/plugin-ui-install-staging-converged-20261010",
+      "sha": "0c78e96033b2844daf74d3eb32b08d406899a9e8",
+      "committed_at": "2026-10-10T15:35:51-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "8b1acfbaed10fb16582e1f63a4cfe456f2df25d7",
+      "closed_prs": [
+        {
+          "number": 302,
+          "closed_at": "2026-10-10T19:38:14Z",
+          "updated_at": "2026-10-10T19:38:15Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/search-authoritative-execution-context-20261014",
+      "sha": "712a1e0db3ee779f3a093a8fefcfa23d9bec88f5",
+      "committed_at": "2026-10-14T08:01:18-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "0a77b45b1c62dea1f7a9eaf56efbf8f1afefba3c",
+      "closed_prs": [
+        {
+          "number": 387,
+          "closed_at": "2026-10-14T13:44:58Z",
+          "updated_at": "2026-10-14T13:44:58Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/spacy-artifact-proof-current-main",
+      "sha": "51bca426363bdb8cfc5f2c39f99acec8c46eab2a",
+      "committed_at": "2026-10-08T08:41:16-04:00",
+      "unique_commits_vs_main": 6,
+      "merge_base": "b5911f74693f7b94beb0c61999c956e4111a6dc4",
+      "closed_prs": [
+        {
+          "number": 173,
+          "closed_at": "2026-10-08T13:44:29Z",
+          "updated_at": "2026-10-08T13:44:29Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/spacy-download-artifact-integrity",
+      "sha": "ff121385033a48cd547bf5570753281a6538b8dc",
+      "committed_at": "2026-10-08T08:16:10-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "b5911f74693f7b94beb0c61999c956e4111a6dc4",
+      "closed_prs": [
+        {
+          "number": 174,
+          "closed_at": "2026-10-08T13:44:31Z",
+          "updated_at": "2026-10-08T13:44:31Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/stream-error-provenance-20261017",
+      "sha": "b84c2a1a8c7bacc153bbca1a3661fe9120975907",
+      "committed_at": "2026-10-17T12:37:03-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "e0ac0d1d9201cbc6d57cdb8f682dbe7f71ed59ef",
+      "closed_prs": [
+        {
+          "number": 456,
+          "closed_at": "2026-10-17T18:12:32Z",
+          "updated_at": "2026-10-17T18:12:32Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/stream-partial-fallback-integrity-20261017",
+      "sha": "999532f7214459da6c0d0279298835703e9dbc5d",
+      "committed_at": "2026-10-17T15:09:59-04:00",
+      "unique_commits_vs_main": 3,
+      "merge_base": "0fd6d553bfb6b662fed15d34889f29482cae7fd6",
+      "closed_prs": [
+        {
+          "number": 464,
+          "closed_at": "2026-10-18T12:07:30Z",
+          "updated_at": "2026-10-18T12:07:30Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/stream-preexecution-gate-provenance-20261017",
+      "sha": "db9cb412c20799a59f7d4c29ba2f1847f56350fd",
+      "committed_at": "2026-10-18T08:44:12-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "76c684e065fee1fce02990c5523760d8e5517e25",
+      "closed_prs": [
+        {
+          "number": 460,
+          "closed_at": "2026-10-18T12:46:36Z",
+          "updated_at": "2026-10-18T12:46:36Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/verify-spacy-staged-model-artifacts",
+      "sha": "0ff1b4d8a5a66a51093a25991213287b3838ef08",
+      "committed_at": "2026-10-08T00:17:27-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "fc73531861fee698691fe83937ef88705e561278",
+      "closed_prs": [
+        {
+          "number": 170,
+          "closed_at": "2026-10-08T04:29:22Z",
+          "updated_at": "2026-10-08T04:29:22Z"
+        }
+      ]
+    },
+    {
+      "name": "fix/web-eslint-command-20261008",
+      "sha": "3bbd3db0632f300dfb2ed883834970b0feddcc46",
+      "committed_at": "2026-10-08T19:22:35-04:00",
+      "unique_commits_vs_main": 7,
+      "merge_base": "6f28c639be9274cdfd2a0e473144c32be2c76ce8",
+      "closed_prs": [
+        {
+          "number": 192,
+          "closed_at": "2026-10-09T12:20:34Z",
+          "updated_at": "2026-10-09T12:20:34Z"
+        }
+      ]
+    },
+    {
+      "name": "refactor/langgraph-response-policy-authority-20261012",
+      "sha": "26168445f616969adeecfe6c837634775772bf97",
+      "committed_at": "2026-10-12T16:13:01-04:00",
+      "unique_commits_vs_main": 5,
+      "merge_base": "c4d8f32cd5c06f07cb8f768b5c64e5ec458d7a76",
+      "closed_prs": [
+        {
+          "number": 339,
+          "closed_at": "2026-10-12T20:57:58Z",
+          "updated_at": "2026-10-12T20:57:59Z"
+        }
+      ]
+    },
+    {
+      "name": "refactor/langgraph-response-policy-ownership-20261012",
+      "sha": "0a60bd348fb178e692feca9d58076ff101256077",
+      "committed_at": "2026-10-12T16:20:28-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "c4d8f32cd5c06f07cb8f768b5c64e5ec458d7a76",
+      "closed_prs": [
+        {
+          "number": 341,
+          "closed_at": "2026-10-12T20:52:38Z",
+          "updated_at": "2026-10-12T20:52:38Z"
+        }
+      ]
+    },
+    {
+      "name": "test/foundry-worker-scope-contract-20261010",
+      "sha": "154c099fdc179f9b846ff002a733d22818c44f63",
+      "committed_at": "2026-10-10T13:00:09-04:00",
+      "unique_commits_vs_main": 10,
+      "merge_base": "1a10bc76e5705815fca7696a137b53c72e56095b",
+      "closed_prs": [
+        {
+          "number": 278,
+          "closed_at": "2026-10-10T17:03:30Z",
+          "updated_at": "2026-10-10T17:03:31Z"
+        }
+      ]
+    }
+  ]
+}
