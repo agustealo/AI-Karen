@@ -50,10 +50,12 @@ principal/RuntimePolicy with channel.consent. Consent SQL also joins owner
 assignment before accepting the risk acknowledgement, independently of host
 validation. The owner ledger cannot be created by the consent action.
 
-The owner is still assigned by a separate governed administrative process,
-which must be implemented and audited before a self-service QR UI goes live.
-A persisted acknowledgement is never sufficient to create a QR or claim a
-provider-linked session; no managed Baileys operator has been approved.
+The owner is assigned through the separately authenticated operator-only
+endpoint described below; ChannelHost performs fresh authorization and emits
+the existing owner-assignment audit event. This administrative assignment
+does not make personal QR pairing available. A persisted acknowledgement is
+never sufficient to create a QR or claim a provider-linked session; no
+managed Baileys operator has been approved.
 
 ## Owner assignment authority
 
