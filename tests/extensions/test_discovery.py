@@ -222,3 +222,27 @@ def test_duplicate_top_level_discovery_and_manifest_loaders_are_retired() -> Non
     root = Path(__file__).parents[2] / "src" / "ai_karen_engine" / "extensions"
     assert not (root / "discovery.py").exists()
     assert not (root / "manifest.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_ignores_unpublished_upload_staging_and_symlinks(
+    tmp_path: Path,
+) -> None:
+    _write_plugin(tmp_path)
+    staged = tmp_path / ".plugin-upload-incomplete"
+    staged.mkdir()
+    raw = json.loads((tmp_path / "echo" / "plugin_manifest.json").read_text(encoding="utf-8"))
+    raw["name"] = "staged-untrusted"
+    raw["display_name"] = "Unpublished Plugin"
+    (staged / "manifest.json").write_text(json.dumps(raw), encoding="utf-8")
+
+    # No directory symlink can masquerade as a second trusted catalog member.
+    (tmp_path / "symlink-alias").symlink_to(tmp_path / "echo", target_is_directory=True)
+
+    kernel = PluginKernel(tmp_path)
+    count = await kernel.refresh()
+
+    assert count == 1
+    assert set(kernel.catalog_registry.list_discovered()) == {"echo"}
+    assert kernel.get_record("staged-untrusted") is None
+    assert kernel.runtime_registry.get("staged-untrusted") is None
