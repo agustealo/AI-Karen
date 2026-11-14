@@ -1136,6 +1136,7 @@ class AuthService(BaseService):
                     raise ValueError(
                         "Use Sign out to terminate the current session"
                     )
+                revoked_access_token = str(target.access_token)
                 target.is_active = False
                 target.invalidated_at = datetime.utcnow()
                 target.invalidation_reason = "account_remote_revoke"
@@ -1143,7 +1144,7 @@ class AuthService(BaseService):
                 await session.commit()
 
             for cached_session in self._active_sessions.values():
-                if cached_session.access_token == target.access_token:
+                if cached_session.access_token == revoked_access_token:
                     cached_session.is_active = False
             await self._emit_audit_event(
                 action="auth.session.remote_revoked",
