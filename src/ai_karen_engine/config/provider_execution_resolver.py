@@ -129,6 +129,7 @@ OPENAI_COMPATIBLE_PROVIDER_IDS = {
     "together",
     "groq",
     "fireworks",
+    "nous",
     "deepinfra",
     "cohere",
     "novita",

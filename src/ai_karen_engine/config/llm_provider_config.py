@@ -89,6 +89,7 @@ MODEL_SETTINGS_PROVIDER_ORDER: List[str] = [
     "together",
     "groq",
     "fireworks",
+    "nous",
     "deepinfra",
     "huggingface",
     "cohere",
@@ -148,6 +149,18 @@ OPENAI_COMPATIBLE_PROVIDER_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "common_models": [
             "accounts/fireworks/models/llama-v3p1-70b-instruct",
             "accounts/fireworks/models/qwen2p5-72b-instruct",
+        ],
+    },
+    "nous": {
+        "api_key_env": "NOUS_API_KEY",
+        "base_url": "https://inference-api.nousresearch.com/v1",
+        "display_name": "Nous Portal (Hermes)",
+        # Catalog hints only. Chat can offer a model only after live inventory
+        # and configured runtime health are verified.
+        "common_models": [
+            "Hermes-4.3-36B",
+            "Hermes-4-70B",
+            "Hermes-4-405B",
         ],
     },
     "deepinfra": {
@@ -1933,6 +1946,64 @@ class LLMProviderConfigManager:
                 capabilities={"streaming", "low_latency"},
                 limits=ProviderLimits(
                     concurrent_requests=10,
+                    max_context_length=131072,
+                    max_output_tokens=8192,
+                ),
+            ),
+            ProviderConfig(
+                name="nous",
+                display_name="Nous Portal (Hermes)",
+                description=(
+                    "Nous Research Portal: OpenAI-compatible API for Hermes "
+                    "and other subscription models. Requires a Portal API key."
+                ),
+                provider_type=ProviderType.EXTERNAL,
+                priority=64,
+                endpoint=ProviderEndpoint(
+                    base_url="https://inference-api.nousresearch.com/v1",
+                    chat_endpoint="/chat/completions",
+                    models_endpoint="/models",
+                ),
+                authentication=ProviderAuthentication(
+                    type=AuthenticationType.API_KEY,
+                    api_key_env_var="NOUS_API_KEY",
+                    api_key_header="Authorization",
+                    api_key_prefix="Bearer",
+                    validation_endpoint="/models",
+                ),
+                models=[
+                    ProviderModel(
+                        id="Hermes-4.3-36B",
+                        name="Hermes 4.3 36B",
+                        family="hermes",
+                        capabilities={"text", "reasoning"},
+                        context_length=131072,
+                        max_tokens=8192,
+                        supports_streaming=True,
+                    ),
+                    ProviderModel(
+                        id="Hermes-4-70B",
+                        name="Hermes 4 70B",
+                        family="hermes",
+                        capabilities={"text", "reasoning"},
+                        context_length=131072,
+                        max_tokens=8192,
+                        supports_streaming=True,
+                    ),
+                    ProviderModel(
+                        id="Hermes-4-405B",
+                        name="Hermes 4 405B",
+                        family="hermes",
+                        capabilities={"text", "reasoning"},
+                        context_length=131072,
+                        max_tokens=8192,
+                        supports_streaming=True,
+                    ),
+                ],
+                default_model="Hermes-4.3-36B",
+                capabilities={"streaming", "text_generation"},
+                limits=ProviderLimits(
+                    concurrent_requests=5,
                     max_context_length=131072,
                     max_output_tokens=8192,
                 ),

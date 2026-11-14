@@ -343,6 +343,81 @@ async def test_remote_provider_discovery_tracks_live_and_configured_model_source
 
 
 @pytest.mark.asyncio
+async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.integrations.providers import openai_compatible_provider
+
+    key = "credential-from-secret-manager"
+    provider = SimpleNamespace(
+        name="nous",
+        enabled=True,
+        endpoint=SimpleNamespace(base_url="https://inference-api.nousresearch.com/v1"),
+        provider_type=ProviderType.EXTERNAL,
+        models=[
+            SimpleNamespace(
+                id="Hermes-4.3-36B", name="Hermes 4.3",
+                family="hermes", capabilities={"text", "reasoning"},
+            ),
+            SimpleNamespace(
+                id="Hermes-4-70B", name="Hermes 4",
+                family="hermes", capabilities={"text"},
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: provider if name == "nous" else None,
+            get_api_key=lambda name: key if name == "nous" else None,
+        ),
+    )
+    monkeypatch.setattr(settings_routes, "_get_provider_override", lambda name: {})
+
+    async def no_local_models(*, runtime: str) -> list[object]:
+        assert runtime == "nous"
+        return []
+
+    monkeypatch.setattr(
+        settings_routes,
+        "get_model_discovery_service",
+        lambda: SimpleNamespace(get_models_async=no_local_models),
+    )
+
+    class NousInventory:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["base_url"] == "https://inference-api.nousresearch.com/v1"
+            assert kwargs["api_key"] == key
+
+        def get_models(self) -> list[str]:
+            return ["Hermes-4.3-36B", "Hermes-4-405B"]
+
+    monkeypatch.setattr(
+        openai_compatible_provider, "OpenAICompatibleProvider", NousInventory
+    )
+    response = await settings_routes.get_provider_models(
+        "nous", current_user={"roles": ["admin"]}
+    )
+    assert response["provider"] == "nous"
+    assert response["discovery_status"] == "ready"
+    assert response["inventory_source"] == "mixed"
+    by_id = {model.id: model for model in response["models"]}
+    assert by_id["Hermes-4.3-36B"].source == "provider_live"
+    assert by_id["Hermes-4-405B"].source == "provider_live"
+    assert by_id["Hermes-4-70B"].source == "configured_catalog"
+    assert key not in repr(response)
+
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.get_provider_models(
+            "nous",
+            base_url="http://127.0.0.1:11434/v1",
+            current_user={"roles": ["admin"]},
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_remote_outage_returns_honest_catalog_status_not_live_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

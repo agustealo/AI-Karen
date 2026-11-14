@@ -615,6 +615,15 @@ class ProviderRegistryService:
 
     def _check_api_key_availability(self, provider_name: str) -> bool:
         """Check if API key is available for provider"""
+        if provider_name.lower() == "nous":
+            # Canonical provider config reads encrypted Settings secrets and env.
+            # Env-only checks incorrectly label valid saved Portal keys missing.
+            from ai_karen_engine.config.llm_provider_config import (
+                get_provider_config_manager,
+            )
+
+            return get_provider_config_manager().has_api_key("nous")
+
 
         # Map provider names to one or more accepted environment variable names
         api_key_mapping = {
@@ -623,6 +632,7 @@ class ProviderRegistryService:
             # Prefer GEMINI_API_KEY while supporting legacy GOOGLE_API_KEY.
             "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
             "deepseek": ("DEEPSEEK_API_KEY",),
+            "nous": ("NOUS_API_KEY",),
             "huggingface": ("HUGGINGFACE_API_KEY",),
             "cohere": ("COHERE_API_KEY",),
             # Test providers that require API keys
@@ -950,6 +960,7 @@ class ProviderRegistryService:
                         "anthropic": "ANTHROPIC_API_KEY",
                         "gemini": "GEMINI_API_KEY",
                         "deepseek": "DEEPSEEK_API_KEY",
+                        "nous": "NOUS_API_KEY",
                         "huggingface": "HUGGINGFACE_API_KEY",
                         # Test providers
                         "failed_provider": "FAILED_PROVIDER_API_KEY",
