@@ -1,0 +1,150 @@
+name: One-time content-equivalence branch cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-content-equivalence-branch-cleanup.yml
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: one-time-content-equivalence-branch-cleanup
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Fetch git history without file blobs
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Fetch the current branch refs
+        run: git -c protocol.version=2 fetch --no-tags --filter=blob:none origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Audit equivalent history and delete verified redundant branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execFileSync } = require('child_process');
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const fullName = owner + '/' + repo;
+            const reserved = new Set(['main', 'master', 'development', 'develop', 'production', 'staging']);
+            const reservedPrefixes = ['release/', 'hotfix/', 'production/', 'staging/'];
+            const oldEnoughBefore = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            const command = (args, maxBuffer=8 * 1024 * 1024) => execFileSync('git', args, {
+              encoding: 'utf8', maxBuffer, stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            const protectedBranch = (name) => reserved.has(name) || reservedPrefixes.some(p => name.startsWith(p));
+            const [repoInfo, branches, prs] = await Promise.all([
+              github.rest.repos.get({ owner, repo }),
+              github.paginate(github.rest.repos.listBranches, { owner, repo, per_page: 100 }),
+              github.paginate(github.rest.pulls.list, { owner, repo, state: 'all', per_page: 100 }),
+            ]);
+            const defaultBranch = repoInfo.data.default_branch;
+            reserved.add(defaultBranch);
+            const byHead = new Map();
+            for (const pr of prs) {
+              if (pr.head?.repo?.full_name !== fullName || !pr.head.ref) continue;
+              const items = byHead.get(pr.head.ref) ?? [];
+              items.push(pr);
+              byHead.set(pr.head.ref, items);
+            }
+            const deleted = [], withheld = [], errors = [];
+            const baseRef = 'refs/remotes/origin/' + defaultBranch;
+            for (const branch of branches) {
+              const name = branch.name;
+              const sha = branch.commit.sha;
+              const linked = byHead.get(name) ?? [];
+              if (branch.protected || protectedBranch(name)) {
+                withheld.push({ name, reason: 'reserved_or_protected' }); continue;
+              }
+              if (linked.some(p => p.state === 'open')) {
+                withheld.push({ name, reason: 'active_pr', prs: linked.filter(p=>p.state==='open').map(p=>p.number) }); continue;
+              }
+              try {
+                const committedAt = command(['show', '-s', '--format=%cI', sha]).trim();
+                if (!committedAt || new Date(committedAt).getTime() > oldEnoughBefore) {
+                  withheld.push({ name, reason: 'recent_or_unverifiable_tip', committed_at: committedAt }); continue;
+                }
+                const base = command(['merge-base', baseRef, sha]).trim();
+                const uniqueMergeCommits = command(['rev-list', '--count', '--merges', base + '..' + sha]).trim();
+                if (uniqueMergeCommits !== '0') {
+                  withheld.push({ name, reason: 'has_unique_merge_commits', merge_count: Number(uniqueMergeCommits) }); continue;
+                }
+                const cherry = command(['cherry', '-v', baseRef, sha]).trim().split('\n').filter(Boolean);
+                const allCherryEquivalent = cherry.every(x => x.startsWith('- '));
+                let equivalence = allCherryEquivalent ? 'patch_ids_already_in_main' : null;
+                let touchedPaths = -1;
+                if (!equivalence) {
+                  const pathsBuffer = execFileSync('git', ['diff', '--no-renames', '--name-only', '-z', base, sha], {
+                    encoding: 'buffer', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore','pipe','pipe'],
+                  });
+                  const paths = pathsBuffer.toString('utf8').split('\0').filter(Boolean);
+                  touchedPaths = paths.length;
+                  if (paths.length > 0 && paths.length <= 100) {
+                    try {
+                      command(['diff', '--quiet', baseRef, sha, '--', ...paths]);
+                      equivalence = 'all_branch_modified_paths_equal_main';
+                    } catch (e) {
+                      if (e.status !== 1) throw e;
+                    }
+                  }
+                }
+                if (!equivalence) {
+                  withheld.push({ name, reason: 'unique_unreconciled_changes', cherry_total: cherry.length,
+                    cherry_unmatched: cherry.filter(x=>x.startsWith('+ ')).length, touched_paths: touchedPaths }); continue;
+                }
+                const fresh = (await github.rest.repos.getBranch({ owner, repo, branch: name })).data;
+                if (fresh.protected || fresh.commit.sha !== sha) {
+                  withheld.push({ name, reason: 'changed_head_or_protection' }); continue;
+                }
+                const newlyOpen = await github.rest.pulls.list({
+                  owner, repo, state: 'open', head: owner + ':' + name, per_page: 100,
+                });
+                if (newlyOpen.data.length) {
+                  withheld.push({ name, reason: 'new_open_pr' }); continue;
+                }
+                await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + name });
+                deleted.push({ name, sha, reason: equivalence, cherry_total: cherry.length,
+                  touched_paths: touchedPaths, committed_at: committedAt,
+                  old_prs: linked.map(p=>p.number) });
+              } catch (error) {
+                errors.push({ name, status: error.status ?? null, message: error.message });
+              }
+            }
+            const report = { repository: fullName, main_ref: baseRef,
+              main_sha_at_audit: command(['rev-parse', baseRef]).trim(),
+              inspected: branches.length, deleted_count: deleted.length,
+              withheld_count: withheld.length, error_count: errors.length,
+              deleted, withheld, errors };
+            fs.writeFileSync('content-equivalence-branch-report.json', JSON.stringify(report, null, 2));
+            core.info(JSON.stringify({ inspected: report.inspected, deleted: report.deleted_count,
+              withheld: report.withheld_count, errors: report.error_count }));
+            await core.summary.addHeading('Content-equivalence branch cleanup')
+              .addTable([
+                [{data:'Measure',header:true},{data:'Count',header:true}],
+                ['Inspected',String(report.inspected)],
+                ['Deleted with content/patch evidence',String(report.deleted_count)],
+                ['Withheld',String(report.withheld_count)],
+                ['Errors',String(report.error_count)]
+              ]).write();
+            if (errors.length) core.setFailed('Some branches could not be verified. Full report attached.');
+
+      - name: Upload evidence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: content-equivalence-branch-report
+          path: content-equivalence-branch-report.json
+          if-no-files-found: warn
+          retention-days: 30
