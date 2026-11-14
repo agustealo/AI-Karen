@@ -160,12 +160,12 @@ export default function ChannelsSettings() {
 
       <Alert>
         <ShieldAlert className="h-4 w-4" aria-hidden="true" />
-        <AlertTitle>Personal WhatsApp pairing is not available</AlertTitle>
+        <AlertTitle>Read-only channel status</AlertTitle>
         <AlertDescription>
-          Unofficial personal Linked Devices pairing has not passed managed-provider
-          and live session verification. The official WhatsApp Business Cloud API
-          is a separate channel. No QR code, connect, or disconnect operation is
-          available in this panel.
+          This panel does not initiate personal WhatsApp Linked Devices pairing,
+          issue QR codes, unlink sessions, or erase provider credentials.
+          A configured provider is not proof of a live connection. The official
+          WhatsApp Business Cloud API remains a separate channel.
         </AlertDescription>
       </Alert>
 
