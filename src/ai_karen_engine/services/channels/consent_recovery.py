@@ -44,6 +44,13 @@ _RETIREMENT_BOOLEAN_FIELDS = (
     "outbound_not_confirmed",
 )
 
+RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS = (
+    "provider_unlink_independent_verification_unavailable",
+    "credential_erasure_independent_verification_unavailable",
+    "retention_and_backup_scope_verification_unavailable",
+    "governed_final_cleanup_authority_unavailable",
+)
+
 
 def assess_retirement_evidence_snapshot(
     record: Mapping[str, Any],
@@ -97,12 +104,7 @@ def assess_retirement_evidence_snapshot(
     # These independent sources of authority do not yet exist. In particular,
     # a forged historical 'verified' row cannot suppress these mandatory
     # blockers; claims and a quiet local queue are never sufficient.
-    blockers.extend((
-        "provider_unlink_independent_verification_unavailable",
-        "credential_erasure_independent_verification_unavailable",
-        "retention_and_backup_scope_verification_unavailable",
-        "governed_final_cleanup_authority_unavailable",
-    ))
+    blockers.extend(RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS)
     return {
         # Whitelist the original owner-only SQL columns. An unexpected
         # repository adapter field must not expose session, credential,
@@ -307,5 +309,6 @@ class PersonalConsentRecoveryService:
 __all__ = [
     "PersonalConsentRecoveryService",
     "RETIREMENT_VERIFICATION_CONTRACT_VERSION",
+    "RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS",
     "assess_retirement_evidence_snapshot",
 ]

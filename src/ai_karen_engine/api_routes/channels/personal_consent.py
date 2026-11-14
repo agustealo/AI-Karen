@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -20,6 +20,7 @@ from ai_karen_engine.persistence.repositories.channel_repository import (
 )
 from ai_karen_engine.services.channels.consent_recovery import (
     PersonalConsentRecoveryService,
+    RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS,
 )
 from ai_karen_engine.services.channels.personal_pairing_policy import (
     PERSONAL_WHATSAPP_CONSENT_VERSION,
@@ -336,6 +337,18 @@ class PersonalRetirementAssessment(BaseModel):
         "retention_and_backup_scope_verification_unavailable",
         "governed_final_cleanup_authority_unavailable",
     ]] = Field(min_length=4)
+
+    @field_validator("blocking_reasons")
+    @classmethod
+    def require_independent_verification_blockers(cls, codes: list[str]) -> list[str]:
+        # The existing verification owner defines what cannot currently be
+        # attested. Pydantic must not accept a mocked/incomplete backend
+        # that silently removes one of those mandatory blockers.
+        if len(set(codes)) != len(codes) or not all(
+            code in codes for code in RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS
+        ):
+            raise ValueError("Independent retirement verification evidence unavailable")
+        return codes
 
 
 class PersonalRetirementEvidenceItem(BaseModel):

@@ -946,7 +946,14 @@ async def test_retirement_api_refuses_fake_cleanup_grant_and_redacts_invalid_evi
         **original,
         "retirement_assessment": {
             **original["retirement_assessment"],
-            "blocking_reasons": [],
+            # Four valid local reason codes alone are not sufficient; all
+            # independent verification prerequisites remain mandatory.
+            "blocking_reasons": [
+                "local_retirement_hold_missing",
+                "active_pairing_consent_remains",
+                "pairing_teardown_unresolved",
+                "credential_deletion_request_missing",
+            ],
         },
     }
     recovery.list_retirement_evidence.return_value = [bad]
