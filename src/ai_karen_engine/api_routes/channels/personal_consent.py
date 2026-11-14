@@ -372,8 +372,19 @@ async def list_retired_channel_evidence(
             tenant_id=tenant_id, user_id=user_id,
         )
         return PersonalRetirementEvidenceInventory(connections=rows)
-    except Exception as exc:
+    except PermissionError as exc:
         raise _translate(exc, operation="recovery") from None
+    except Exception as exc:
+        # This GET accepts no user data beyond an authenticated principal.
+        # Missing, malformed or forged backend evidence is a server integrity
+        # failure, not a recoverable client validation problem.
+        logger.error(
+            "channel.personal_retirement.evidence_invalid",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            503, "Personal channel retirement evidence unavailable",
+        ) from None
 
 
 class PersonalCredentialDeletionRequestItem(BaseModel):
