@@ -348,6 +348,46 @@ async def test_service_requires_canonical_manifest_and_confirms_only_persisted_r
 
 
 @pytest.mark.asyncio
+async def test_quarantined_uploaded_plugin_rejects_settings_before_db_access():
+    service = PluginService()
+    service.get_plugin_info = AsyncMock(return_value={
+        "manifest": _manifest(),
+        "is_valid": True,
+        "error_message": None,
+        "activation_blocked_reason": "isolated_runtime_required",
+    })
+    service._settings_repository = SimpleNamespace(
+        get=AsyncMock(side_effect=AssertionError("untrusted settings touched SQL")),
+        write=AsyncMock(side_effect=AssertionError("untrusted settings touched SQL")),
+    )
+    with pytest.raises(PluginSettingsNotConfigured, match="Quarantined"):
+        await service.read_plugin_settings("settings-test", TENANT_A)
+    with pytest.raises(PluginSettingsNotConfigured, match="Quarantined"):
+        await service.write_plugin_settings(
+            plugin_id="settings-test",
+            tenant_id=TENANT_A,
+            actor_user_id="operator",
+            settings={"region": "east"},
+            revision=0,
+            request_id="request-1",
+            correlation_id="corr-1",
+        )
+    service._settings_repository.get.assert_not_awaited()
+    service._settings_repository.write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_settings_access_fails_before_catalog_or_database(monkeypatch):
+    async def guest(_request):
+        return {"user_id": "guest", "authenticated": False}
+
+    monkeypatch.setattr(routes, "get_current_user", guest)
+    with pytest.raises(HTTPException) as exc:
+        await routes.require_extension_mutation_access(_request())
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_route_uses_authenticated_tenant_and_maps_stale_revision():
     saved = []
 
