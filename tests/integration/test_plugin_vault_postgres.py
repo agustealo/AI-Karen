@@ -46,7 +46,7 @@ async def test_live_plugin_secret_enrollment_rotation_revoke_and_audit_rollback(
         migrations = (
             "20260827070000_07_identity_vault.sql",
             "20260827080000_08_identity_vault_tenant_scope.sql",
-            "20261114040000_52_plugin_vault_binding.sql",
+            "20261114050000_53_plugin_vault_binding.sql",
         )
         for filename in migrations:
             await raw.execute(
