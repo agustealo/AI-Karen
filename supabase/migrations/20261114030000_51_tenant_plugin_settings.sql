@@ -36,6 +36,34 @@ CREATE INDEX idx_extension_plugin_settings_audit_tenant_plugin
     ON public.extension_plugin_settings_audit
        (tenant_id, plugin_id, revision DESC);
 
+-- Public-schema grants differ between Supabase generations. Explicitly remove
+-- Data API and PUBLIC grants, even when a project grants table privileges by
+-- default. Only the authenticated Karen backend database role may be granted
+-- SELECT/INSERT/UPDATE on settings and SELECT/INSERT on audit by deployment.
+REVOKE ALL ON public.extension_plugin_settings FROM PUBLIC;
+REVOKE ALL ON public.extension_plugin_settings_audit FROM PUBLIC;
+REVOKE ALL ON SEQUENCE public.extension_plugin_settings_audit_id_seq FROM PUBLIC;
+DO $plugin_settings_revoke$
+DECLARE
+    client_role text;
+BEGIN
+    FOREACH client_role IN ARRAY ARRAY['anon', 'authenticated']
+    LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = client_role) THEN
+            EXECUTE format(
+                'REVOKE ALL ON public.extension_plugin_settings, '
+                || 'public.extension_plugin_settings_audit FROM %I', client_role
+            );
+            EXECUTE format(
+                'REVOKE ALL ON SEQUENCE '
+                || 'public.extension_plugin_settings_audit_id_seq FROM %I',
+                client_role
+            );
+        END IF;
+    END LOOP;
+END
+$plugin_settings_revoke$;
+
 ALTER TABLE public.extension_plugin_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.extension_plugin_settings FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.extension_plugin_settings_audit ENABLE ROW LEVEL SECURITY;
