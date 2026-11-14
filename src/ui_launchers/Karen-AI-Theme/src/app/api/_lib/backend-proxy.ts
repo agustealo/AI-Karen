@@ -351,7 +351,13 @@ export async function proxyToBackend(
         clearInitTimeout(init);
         lastError = error;
 
-        const canRetry = isRetryableProxyError(error) && attempt < retryAttempts;
+        // Our own request deadline is already exhausted. Repeating a
+        // 30-second timeout can leave first-run/auth checks hanging for
+        // multiple full deadlines. Preserve retries for fast, transient
+        // failures on safe reads, but never restart a timed-out request.
+        const deadlineExceeded = init.signal?.aborted === true;
+        const canRetry = !deadlineExceeded &&
+          isRetryableProxyError(error) && attempt < retryAttempts;
         if (!canRetry) {
           throw error;
         }
