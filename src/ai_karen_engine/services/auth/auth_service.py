@@ -300,14 +300,12 @@ class AuthService(BaseService):
         user_agent: str,
         device_fingerprint: str,
     ) -> None:
-        """Persist a session record to the database when possible."""
+        """Commit the access/refresh session before returning login credentials."""
         try:
             user_uuid = uuid.UUID(str(user_id))
-        except ValueError:
-            logger.warning(
-                "Skipping DB session persistence; invalid user id: %s", user_id
-            )
-            return
+        except ValueError as exc:
+            logger.warning("Refusing session persistence for invalid user id")
+            raise RuntimeError("Invalid durable session owner") from exc
 
         try:
             async with self._session_scope() as db_session:
@@ -325,8 +323,13 @@ class AuthService(BaseService):
                     )
                 )
                 await db_session.flush()
-        except Exception as e:
-            logger.error("Failed to persist session to database: %s", e)
+                # Yield-based request dependencies may finalize after the HTTP
+                # response starts. A login must not send JWTs before the durable
+                # session commit succeeds, including the first-run admin case.
+                await db_session.commit()
+        except Exception as exc:
+            logger.exception("Failed to persist authentication session")
+            raise RuntimeError("Durable session persistence unavailable") from exc
 
     async def authenticate_user(
         self,
@@ -403,8 +406,10 @@ class AuthService(BaseService):
                 device_fingerprint=device_fingerprint,
             )
 
-            self._active_sessions[session.id] = session
-
+            # An unpersisted token must never be returned as an authenticated
+            # session. Request-scoped database commit remains the transaction
+            # authority; an unavailable DB refuses login instead of falling
+            # back to in-memory sessions.
             await self._persist_auth_session(
                 user_id=user.id,
                 access_token=access_token,
@@ -413,6 +418,7 @@ class AuthService(BaseService):
                 user_agent=user_agent,
                 device_fingerprint=device_fingerprint,
             )
+            self._active_sessions[session.id] = session
 
             logger.info("User authenticated successfully - %s", login_identifier)
             return user, access_token, refresh_token
@@ -490,51 +496,8 @@ class AuthService(BaseService):
             return None, str(e)
 
     async def validate_token(self, token: str) -> Optional[UserAccount]:
-        """Validate an access token and return its durable user."""
-        if not self._initialized:
-            await self.initialize()
-
-        try:
-            payload = jwt.decode(
-                token,
-                self.config.jwt_secret_key,
-                algorithms=[self.config.jwt_algorithm],
-                options={"verify_aud": False},
-            )
-
-            if payload.get("exp", 0) < time.time():
-                logger.warning("Token expired")
-                return None
-
-            user_id = payload.get("sub")
-            if not user_id:
-                logger.warning("Invalid token: missing user ID")
-                return None
-
-            user = await self.get_user_by_id(user_id)
-            if not user:
-                logger.warning(f"User not found: {user_id}")
-                return None
-
-            if user.status != UserStatus.ACTIVE:
-                logger.warning(f"User not active: {user_id}")
-                return None
-
-            if not user.tenant_id:
-                logger.warning("Invalid token subject has no durable tenant: %s", user_id)
-                return None
-
-            return user
-
-        except jwt.ExpiredSignatureError:
-            logger.warning("Token expired")
-            return None
-        except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid token: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Error validating token: {e}")
-            return None
+        """Use the canonical active-session authority for access validation."""
+        return await self.validate_session(token)
 
     @staticmethod
     def _hash_refresh_token(refresh_token: str) -> str:
@@ -650,7 +613,12 @@ class AuthService(BaseService):
                 db_auth_session.access_token = new_access_token
                 db_auth_session.refresh_token = new_refresh_token
                 db_auth_session.last_accessed = datetime.utcnow()
+                user_id_for_audit = str(auth_user.user_id)
+                session_id_for_audit = str(db_auth_session.session_token)
                 await db_session.flush()
+                # Do not send a rotated token pair or report successful audit
+                # until the consumed-token history is durably committed.
+                await db_session.commit()
 
                 for cached_session in self._active_sessions.values():
                     if cached_session.refresh_token == refresh_token and cached_session.is_active:
@@ -661,15 +629,12 @@ class AuthService(BaseService):
 
                 await self._emit_audit_event(
                     action="auth.session.refresh_rotated",
-                    actor_user_id=str(auth_user.user_id),
-                    target_user_id=str(auth_user.user_id),
+                    actor_user_id=user_id_for_audit,
+                    target_user_id=user_id_for_audit,
                     status="success",
-                    session_id=str(db_auth_session.session_token),
+                    session_id=session_id_for_audit,
                 )
-
-                logger.info(
-                    "Refresh token rotated successfully for user %s", auth_user.user_id
-                )
+                logger.info("Refresh token rotated for user %s", user_id_for_audit)
                 return new_access_token, new_refresh_token, None
 
         except Exception as e:
@@ -694,9 +659,8 @@ class AuthService(BaseService):
                     db_auth_session.invalidated_at = datetime.utcnow()
                     db_auth_session.invalidation_reason = "logout"
                     await db_session.flush()
-                    logger.info(
-                        "User logged out successfully: %s", db_auth_session.user_id
-                    )
+                    await db_session.commit()
+                    logger.info("User session invalidated by logout")
                     for cached_session in self._active_sessions.values():
                         if cached_session.refresh_token == refresh_token:
                             cached_session.is_active = False
@@ -920,14 +884,44 @@ class AuthService(BaseService):
         return session
 
     async def validate_session(
-        self, session_token: str, ip_address: str = "unknown", user_agent: str = ""
+        self,
+        session_token: str,
+        ip_address: str = "unknown",
+        user_agent: str = "",
+        *,
+        strict_errors: bool = False,
     ) -> Optional[UserAccount]:
+        """Verify a signed access token against an active, tenant-owned DB session.
+
+        The JWT signature alone never proves that its session is still active.
+        Logout, password changes, refresh rotation and manual revocation all
+        invalidate the associated old access token immediately at this boundary.
+        """
         if not self._initialized:
             await self.initialize()
+
+        try:
+            payload = jwt.decode(
+                session_token,
+                self.config.jwt_secret_key,
+                algorithms=[self.config.jwt_algorithm],
+                audience="ai-karen-users",
+                issuer="ai-karen",
+            )
+            user_uuid = uuid.UUID(str(payload["sub"]))
+            token_tenant_id = str(payload.get("tenant_id") or "").strip()
+            if not token_tenant_id or token_tenant_id == "default":
+                return None
+        except (jwt.InvalidTokenError, KeyError, ValueError, TypeError):
+            return None
+
         try:
             async with self._session_scope() as db_session:
+                # The user-active index bounds the lookup even when there are
+                # many historic sessions; access_token is compared exactly.
                 result = await db_session.execute(
                     select(AuthSession).where(
+                        AuthSession.user_id == user_uuid,
                         AuthSession.access_token == session_token,
                         AuthSession.is_active,
                     )
@@ -935,33 +929,31 @@ class AuthService(BaseService):
                 db_auth_session = result.scalar_one_or_none()
                 if not db_auth_session:
                     return None
-                try:
-                    payload = jwt.decode(
-                        session_token,
-                        self.config.jwt_secret_key,
-                        algorithms=[self.config.jwt_algorithm],
-                        options={"verify_aud": False},
+                if db_auth_session.expires_in and db_auth_session.created_at:
+                    refresh_expires_at = db_auth_session.created_at + timedelta(
+                        seconds=db_auth_session.expires_in
                     )
-                    if payload.get("exp", 0) < time.time():
+                    if refresh_expires_at < datetime.utcnow():
                         return None
-                except Exception:
-                    return None
                 if db_auth_session.device_fingerprint:
-                    current_fingerprint = self._generate_device_fingerprint(user_agent, ip_address)
+                    current_fingerprint = self._generate_device_fingerprint(
+                        user_agent, ip_address
+                    )
                     if db_auth_session.device_fingerprint != current_fingerprint:
                         logger.warning(
-                            "Device fingerprint mismatch for session %s",
-                            db_auth_session.session_token,
+                            "Device fingerprint changed for authenticated session"
                         )
                 user_result = await db_session.execute(
-                    select(AuthUser).where(AuthUser.user_id == db_auth_session.user_id)
+                    select(AuthUser).where(AuthUser.user_id == user_uuid)
                 )
                 auth_user = user_result.scalar_one_or_none()
-                if not auth_user or not auth_user.is_active or not auth_user.tenant_id:
-                    db_auth_session.is_active = False
-                    db_auth_session.invalidated_at = datetime.utcnow()
-                    db_auth_session.invalidation_reason = "user_or_tenant_inactive"
-                    await db_session.flush()
+                if (
+                    not auth_user
+                    or not auth_user.is_active
+                    or not auth_user.is_verified
+                    or not auth_user.tenant_id
+                    or str(auth_user.tenant_id) != token_tenant_id
+                ):
                     return None
                 db_auth_session.last_accessed = datetime.utcnow()
                 await db_session.flush()
@@ -969,7 +961,12 @@ class AuthService(BaseService):
                 self._user_cache[user.id] = user
                 return user
         except Exception as exc:
-            logger.error("Database session validation failed; rejecting session: %s", exc)
+            logger.error(
+                "Database session validation failed; rejecting session: %s",
+                type(exc).__name__,
+            )
+            if strict_errors:
+                raise RuntimeError("Session verification unavailable") from exc
             return None
 
     async def list_sessions(
@@ -1136,6 +1133,9 @@ class AuthService(BaseService):
                     db_session.invalidated_at = now
                     db_session.invalidation_reason = "password_changed"
                 await session.flush()
+                # Password and every revoked session commit atomically before
+                # the API reports success and clears browser credentials.
+                await session.commit()
                 self._user_cache.pop(user_id, None)
                 for cached_session in self._active_sessions.values():
                     if cached_session.user_id == user_id:

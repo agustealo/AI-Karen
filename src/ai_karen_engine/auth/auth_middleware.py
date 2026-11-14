@@ -375,15 +375,30 @@ class SecureAuthMiddleware:
         return any(path.startswith(pattern) for pattern in public_patterns)
 
     async def validate_token(self, token: str) -> Dict[str, Any]:
+        """Never report JWT signature validity as authenticated session truth."""
         try:
             payload = self._verify_access_token(token)
-            return {"status": TokenStatus.VALID, "payload": payload}
+            canonical = await self._require_active_session(token, payload)
+            return {"status": TokenStatus.VALID, "payload": canonical}
         except AuthenticationError as exc:
-            if "expired" in str(exc).lower():
-                return {"status": TokenStatus.EXPIRED, "error": str(exc)}
-            return {"status": TokenStatus.INVALID, "error": str(exc)}
-        except Exception as exc:
-            return {"status": TokenStatus.INVALID, "error": str(exc)}
+            if "revoked" in exc.message.lower():
+                token_status = TokenStatus.REVOKED
+            elif "expired" in exc.message.lower():
+                token_status = TokenStatus.EXPIRED
+            else:
+                token_status = TokenStatus.INVALID
+            return {
+                "status": token_status,
+                "error": exc.message,
+                "http_status": exc.status_code,
+            }
+        except Exception:
+            logger.exception("auth.session_validation_failed")
+            return {
+                "status": TokenStatus.INVALID,
+                "error": "Session verification unavailable",
+                "http_status": 503,
+            }
 
     def _verify_access_token(self, token: str) -> Dict[str, Any]:
         payload = self._decode_jwt(token)
@@ -392,6 +407,44 @@ class SecureAuthMiddleware:
         if token_id and self._is_token_revoked(token_id):
             raise AuthenticationError("Token has been revoked")
         return payload
+
+    async def _require_active_session(
+        self, token: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Resolve canonical active-session truth after JWT verification.
+
+        Redis revocation is advisory, not a substitute for durable PostgreSQL
+        session checks. The AuthService owns token/session validation. An
+        unavailable session store rejects the request, never grants JWT-only
+        access to a previously revoked token.
+        """
+        try:
+            from ai_karen_engine.auth.auth_service import get_auth_service
+
+            auth_service = await get_auth_service()
+            account = await auth_service.validate_session(token, strict_errors=True)
+        except Exception as exc:
+            logger.error(
+                "auth.session_validation_unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+            raise AuthenticationError("Session verification unavailable", 503) from exc
+
+        if account is None:
+            raise AuthenticationError("Session expired or revoked", 401)
+        if (
+            str(account.id) != str(payload.get("sub") or "")
+            or str(account.tenant_id) != str(payload.get("tenant_id") or "")
+        ):
+            raise AuthenticationError("Session identity or tenant mismatch", 401)
+
+        # Role and email claims can be stale after an account correction. Only
+        # the canonical active user may contribute those fields to RBAC.
+        validated = dict(payload)
+        validated["roles"] = list(account.roles or [])
+        validated["email"] = account.email
+        validated["permissions"] = []
+        return validated
 
     def _get_user_from_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -414,27 +467,40 @@ class SecureAuthMiddleware:
             token = self._extract_token_from_request(request)
             if token:
                 try:
-                    payload = self._verify_access_token(token)
-                    return self._get_user_from_payload(payload)
+                    token_result = await self.validate_token(token)
+                    if token_result["status"] == TokenStatus.VALID:
+                        return self._get_user_from_payload(token_result["payload"])
+                    if not is_public:
+                        raise AuthenticationError(
+                            token_result.get("error") or "Session unavailable",
+                            token_result.get("http_status", 401),
+                        )
                 except AuthenticationError as exc:
                     if not is_public:
                         logger.warning(
-                            "Access token verification failed for %s: %s", path, exc
+                            "Authenticated session rejected for %s: %s",
+                            path,
+                            exc.message,
                         )
-                except Exception as exc:
-                    logger.error(
-                        "Unexpected error verifying access token for %s: %s", path, exc
-                    )
+                        raise
 
+            # Older cookie compatibility is allowed only when it represents a
+            # separately authenticated active session, never as a fallback for
+            # a rejected bearer/cookie identity on a protected request.
             session_token = self._extract_session_token_from_request(request)
-            if session_token:
-                token_result = await self.validate_token(session_token)
-                if token_result["status"] == TokenStatus.VALID:
-                    return self._get_user_from_payload(token_result["payload"])
-                if not is_public:
-                    raise AuthenticationError(
-                        token_result.get("error") or "Session token invalid"
-                    )
+            if session_token and session_token != token:
+                try:
+                    token_result = await self.validate_token(session_token)
+                    if token_result["status"] == TokenStatus.VALID:
+                        return self._get_user_from_payload(token_result["payload"])
+                    if not is_public:
+                        raise AuthenticationError(
+                            token_result.get("error") or "Session unavailable",
+                            token_result.get("http_status", 401),
+                        )
+                except AuthenticationError:
+                    if not is_public:
+                        raise
 
             if is_public:
                 return {
@@ -445,11 +511,14 @@ class SecureAuthMiddleware:
                     "tenant_id": None,
                     "authenticated": False,
                 }
-            raise AuthenticationError("No authentication token provided")
+            raise AuthenticationError("No valid active session provided", 401)
         except AuthenticationError:
             raise
         except Exception as exc:
-            logger.error("Error authenticating request: %s", exc)
+            logger.error(
+                "Error authenticating request",
+                extra={"error_type": type(exc).__name__},
+            )
             if is_public:
                 return {
                     "user_id": "anonymous",
