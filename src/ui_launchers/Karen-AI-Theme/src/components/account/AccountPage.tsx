@@ -102,6 +102,13 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
+function requireCurrentPrincipal(expected: AccountPrincipal): void {
+  const signedIn = authService.getCurrentUser();
+  if (signedIn?.user_id !== expected.user_id || signedIn?.tenant_id !== expected.tenant_id) {
+    throw new Error("Account identity changed. Reload before applying these details.");
+  }
+}
+
 export default function AccountPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -132,6 +139,7 @@ export default function AccountPage() {
   const loadVersion = useRef(0);
 
   const applyAccount = useCallback((verified: AccountUser) => {
+    requireCurrentPrincipal(verified);
     setAccount(verified);
     setUsername(verified.username);
     setFullName(verified.full_name);
@@ -217,6 +225,7 @@ export default function AccountPage() {
         verified.full_name !== wanted.full_name ||
         verified.email.toLowerCase() !== wanted.email
       ) throw new Error("The saved account details could not be verified. Refresh before retrying.");
+      requireCurrentPrincipal(principal);
       applyAccount(verified);
       toast({ title: "Profile saved", description: "Your updated account details were verified in Karen." });
     } catch (error) {
@@ -244,6 +253,7 @@ export default function AccountPage() {
       if (verified.preferences.theme !== nextTheme) {
         throw new Error("The saved display preference could not be verified.");
       }
+      requireCurrentPrincipal(principal);
       setAccount(verified);
       authService.updateCurrentUser({ preferences: verified.preferences });
       setTheme(nextTheme);
@@ -295,8 +305,12 @@ export default function AccountPage() {
     setNewPassword("");
     setConfirmPassword("");
     toast({ title: "Password changed", description: "Sign in again with your new password." });
-    await logout();
-    router.replace("/login?reason=password-changed");
+    try {
+      await logout();
+    } finally {
+      setIsPasswordSaving(false);
+      router.replace("/login?reason=password-changed");
+    }
   };
 
   const handleLogout = async () => {
@@ -340,8 +354,6 @@ export default function AccountPage() {
       </section>
     );
   }
-
-  const chosenName = cleanName || cleanUsername || "Member";
 
   return (
     <section aria-label="My Account" className="space-y-6">
