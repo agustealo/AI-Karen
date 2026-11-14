@@ -213,7 +213,13 @@ export default function ModelSettings() {
     !isLoadingModels &&
     !modelDiscoveryError,
   );
+  const configuredEndpoint = normalizeDisplayBaseUrl(
+    selectedProviderDetails?.base_url || selectedProviderDetails?.default_base_url,
+  );
   const canSetWorkspaceDefault = providerReadyForChat &&
+    !isEditingApiKey &&
+    (!selectedProviderDetails?.supports_base_url_override ||
+      normalizeDisplayBaseUrl(baseUrl) === configuredEndpoint) &&
     verifiedModels.some((model) => model.id === selectedModel);
 
   const selectedProviderLabel = useMemo(() => {
@@ -470,15 +476,22 @@ export default function ModelSettings() {
     setIsSaving(true);
     try {
       const submittedApiKey = isEditingApiKey ? apiKey.trim() : '';
-      if (selectedProviderDetails.requires_api_key) {
-        const needsNewKey = isEditingApiKey || !selectedProviderDetails.api_key_configured;
-        if (needsNewKey) {
-          const credentialsValid = await validateProviderCredentialsBeforeSave();
-          if (!credentialsValid) return;
-        }
-      } else if (submittedApiKey && apiKeyValidationState === 'invalid') {
-        throw new Error(apiKeyValidationMessage || 'Credential validation failed.');
+      if (!setWorkspaceDefault && isEditingApiKey && !submittedApiKey) {
+        toast({
+          title: 'API key required',
+          description: 'Enter the new key, or cancel editing to keep the currently stored credential.',
+          variant: 'destructive',
+        });
+        return;
       }
+      if (setWorkspaceDefault && selectedProviderDetails.requires_api_key) {
+        // A default cannot be promoted while an unsaved credential is being
+        // edited. Keep the auth guard as defense in depth for a missing key.
+        const needsNewKey = isEditingApiKey || !selectedProviderDetails.api_key_configured;
+        if (needsNewKey && !await validateProviderCredentialsBeforeSave()) return;
+      }
+      // Connection-only saves may store an unverified candidate. It remains
+      // ineligible for chat until backend health and live inventory confirm it.
 
       // Connection edits never send a model identifier: the existing API
       // preserves the saved global choice until "Set as default" is explicit.
@@ -506,7 +519,7 @@ export default function ModelSettings() {
         title: setWorkspaceDefault ? 'Workspace default updated' : 'Provider connection settings saved',
         description: setWorkspaceDefault
           ? 'The backend confirmed the saved default. Karen will still report the actual model for each response.'
-          : 'Connection details were saved. Refresh the provider inventory and confirm health before selecting it for chat.',
+          : 'Connection details were stored. Credentials and live model access remain unverified until Karen confirms them.',
       });
     } catch (error) {
       const message = formatProviderCredentialMessage(
