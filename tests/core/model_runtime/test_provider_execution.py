@@ -95,29 +95,64 @@ def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
 
 
 def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
-    tmp_path, monkeypatch,
+    monkeypatch,
 ) -> None:
     import json
+    import sys
+    import types
     from contextlib import contextmanager
+    from types import SimpleNamespace
 
-    from ai_karen_engine.config import llm_provider_config as provider_config
+    import pytest
+
     from ai_karen_engine.core.model_runtime import provider_execution
-    from ai_karen_engine.core.model_runtime.provider_registry_service import (
-        ProviderRegistryService,
+    from ai_karen_engine.core.model_runtime.provider_endpoint import (
+        ProviderEndpoint,
+        ProviderEndpointType,
+    )
+    from ai_karen_engine.core.model_runtime.runtime_engine import (
+        EndpointKind,
+        Locality,
+        RuntimeEngine,
     )
 
-    manager = provider_config.LLMProviderConfigManager(config_dir=tmp_path)
+    # This lean provider-wiring test uses the real canonical HTTP transport
+    # without importing the application config package's optional YAML stack.
+    # The full config/registry wiring is proved in the resolver owner tests.
     secret = {"value": "credential-from-settings"}
-    monkeypatch.setattr(
-        manager, "get_api_key",
-        lambda provider: secret["value"] if provider == "nous" else None,
+    configured = SimpleNamespace(
+        enabled=True,
+        authentication=SimpleNamespace(api_key_env_var="NOUS_API_KEY"),
+        endpoint=SimpleNamespace(
+            base_url="https://inference-api.nousresearch.com/v1"
+        ),
     )
-    monkeypatch.setattr(provider_config, "_provider_config_manager", manager)
+    manager = SimpleNamespace(
+        get_provider=lambda provider: configured if provider == "nous" else None,
+        is_provider_configured=lambda provider: provider == "nous" and bool(secret["value"]),
+        get_api_key=lambda provider: secret["value"] if provider == "nous" else None,
+    )
+    config_package = types.ModuleType("ai_karen_engine.config")
+    config_package.__path__ = []
+    config_module = types.ModuleType("ai_karen_engine.config.llm_provider_config")
+    config_module.get_provider_config_manager = lambda: manager
+    monkeypatch.setitem(sys.modules, "ai_karen_engine.config", config_package)
+    monkeypatch.setitem(
+        sys.modules, "ai_karen_engine.config.llm_provider_config", config_module
+    )
     monkeypatch.delenv("NOUS_API_KEY", raising=False)
 
-    registry = ProviderRegistryService()
-    endpoint = registry.get_provider_endpoint("nous")
-    assert endpoint is not None
+    endpoint = ProviderEndpoint(
+        provider_id="nous",
+        display_name="Nous Portal (Hermes)",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        base_url="https://inference-api.nousresearch.com/v1",
+        api_key_env="NOUS_API_KEY",
+        kind=EndpointKind.CLOUD_PROVIDER,
+        locality=Locality.CLOUD,
+        runtime_engine=RuntimeEngine.REMOTE_API,
+        metadata={"configuration_owner": "llm_provider_config"},
+    )
     requests = []
 
     class Response:
@@ -151,8 +186,10 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
     assert "NOUS_API_KEY" not in __import__("os").environ
 
     secret["value"] = None
-    import pytest
-    with pytest.raises(provider_execution.ProviderExecutionError, match="provider_credential_unavailable"):
+    with pytest.raises(
+        provider_execution.ProviderExecutionError,
+        match="provider_credential_unavailable",
+    ):
         provider_execution._sync_openai_compatible_request(
             endpoint,
             messages=[{"role": "user", "content": "Hello Hermes"}],
