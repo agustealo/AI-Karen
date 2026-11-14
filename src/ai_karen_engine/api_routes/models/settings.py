@@ -30,6 +30,7 @@ from ai_karen_engine.config.llm_provider_config import (
     AuthenticationType,
     DEFAULT_OLLAMA_BASE_URL,
     MODEL_SETTINGS_PROVIDER_ORDER,
+    OPENAI_COMPATIBLE_PROVIDER_DEFAULTS,
     ProviderAuthentication,
     ProviderConfig,
     ProviderEndpoint,
@@ -425,6 +426,17 @@ async def update_model_settings(
     settings = get_settings_manager()
     provider_manager = get_provider_config_manager()
 
+    # Vendor credentials may only be used with their documented endpoint.
+    # A custom upstream must be registered under the governed custom-provider
+    # workflow, never by redirecting a preconfigured vendor's bearer token.
+    if request.provider == "nous" and request.base_url is not None:
+        approved = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS["nous"]["base_url"]
+        if _discovery_url_key(request.base_url) != _discovery_url_key(approved):
+            raise HTTPException(
+                status_code=403,
+                detail="Nous Portal API credentials require the approved Nous endpoint",
+            )
+
     # Validate the selected runtime against backend-owned endpoints before
     # persisting any part of this settings update.
     if request.runtime_source is not None:
@@ -623,6 +635,13 @@ async def get_provider_models(
             runtime_options=ollama_options,
         ) if normalized_id == "ollama" else saved_endpoint or configured_endpoint
     )
+    if normalized_id == "nous":
+        approved = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS["nous"]["base_url"]
+        if not target_url or _discovery_url_key(target_url) != _discovery_url_key(approved):
+            raise HTTPException(
+                status_code=403,
+                detail="Nous Portal model discovery requires the approved endpoint",
+            )
     if base_url:
         requested_key = _discovery_url_key(base_url, ollama=normalized_id == "ollama")
         authorized_keys = {
@@ -699,7 +718,8 @@ async def get_provider_models(
                 client = OpenAICompatibleProvider(
                     base_url=target_url, api_key=api_key, timeout=3, max_retries=0
                 )
-                for name in await asyncio.to_thread(client.get_models):
+                live_models = await asyncio.to_thread(client.get_models)
+                for name in live_models:
                     # A live listing supersedes a matching configured catalog
                     # model. Otherwise the UI would report a live ID as static.
                     by_id[name] = ProviderModelPayload(
@@ -710,9 +730,49 @@ async def get_provider_models(
                         is_installed=False,
                         source="provider_live",
                     )
-            except Exception:
+                # An authenticated live model inventory is a positive
+                # connection observation. Write it through the existing
+                # health monitor, not a second UI or discovery health cache.
+                if live_models and api_key:
+                    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                        get_provider_registry_service,
+                    )
+                    from ai_karen_engine.core.model_runtime.runtime_engine import (
+                        EndpointKind,
+                    )
+
+                    registry = get_provider_registry_service()
+                    endpoint = registry.get_provider_endpoint(normalized_id)
+                    if endpoint is not None and endpoint.kind == EndpointKind.CLOUD_PROVIDER:
+                        registry.health_monitor.update_provider_health(
+                            normalized_id, is_healthy=True
+                        )
+            except Exception as exc:
                 live_discovery_failed = True
-                logger.warning("Remote model discovery unavailable for %s", normalized_id, exc_info=True)
+                logger.warning(
+                    "remote_model_discovery_unavailable",
+                    extra={"provider": normalized_id, "error_type": type(exc).__name__},
+                )
+                try:
+                    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                        get_provider_registry_service,
+                    )
+                    from ai_karen_engine.core.model_runtime.runtime_engine import (
+                        EndpointKind,
+                    )
+
+                    registry = get_provider_registry_service()
+                    endpoint = registry.get_provider_endpoint(normalized_id)
+                    if endpoint is not None and endpoint.kind == EndpointKind.CLOUD_PROVIDER:
+                        registry.health_monitor.update_provider_health(
+                            normalized_id, is_healthy=False,
+                            error_type=type(exc).__name__,
+                        )
+                except Exception:
+                    logger.warning(
+                        "remote_provider_health_record_unavailable",
+                        extra={"provider": normalized_id},
+                    )
 
     sources = {model.source for model in by_id.values()}
     if normalized_id == "ollama":
