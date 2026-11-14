@@ -856,12 +856,12 @@ export default function ChannelsSettings() {
         </div>
       )}
       <RetiredPersonalConsentRecovery
-        key={principalKey}
+        key={'consent:' + principalKey}
         channels={inventory}
         authenticated={isAuthenticated && !isAuthLoading}
       />
       <RetiredCredentialDeletionHistory
-        key={principalKey}
+        key={'deletion:' + principalKey}
         authenticated={isAuthenticated && !isAuthLoading}
       />
     </div>
