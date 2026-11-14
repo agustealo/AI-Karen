@@ -86,3 +86,24 @@ def test_plugin_store_disabled_lifecycle_actions_use_real_backend_paths() -> Non
     assert "`/api/plugins/${encodeURIComponent(pluginId)}/disable`" in service
     assert "await pluginStoreService.disablePlugin(pluginId);" in state
     assert "Plugin disable request succeeded, but the plugin list could not be refreshed:" in state
+
+
+def test_upload_and_uninstall_use_authenticated_canonical_store_paths() -> None:
+    service = SERVICE.read_text(encoding="utf-8")
+    page = PAGE.read_text(encoding="utf-8")
+    api = (ROOT / "lib/api.ts").read_text(encoding="utf-8")
+
+    assert "async uploadPlugin(pluginId: string, archive: File)" in service
+    assert "apiClient.postFormData<" in service
+    assert "`${this.baseUrl}/upload`" in service
+    assert "`${this.baseUrl}/${encodeURIComponent(pluginId)}/installation`" in service
+    assert "apiClient.delete<" in service
+    assert "await pluginStoreService.uploadPlugin(uploadId, uploadFile)" in page
+    assert "await pluginStoreService.uninstallPlugin(uninstallId)" in page
+    assert "result?.success !== true || result.installed !== true || result.enabled !== false" in page
+    assert "result?.success !== true || result.uninstalled !== true" in page
+    assert "/api/plugins/store" not in page
+    assert "await fetch(" not in page
+    assert "async postFormData<T>(endpoint: string, data: FormData)" in api
+    assert "if (init.body instanceof FormData)" in api
+    assert "delete requestHeaders['Content-Type'];" in api
