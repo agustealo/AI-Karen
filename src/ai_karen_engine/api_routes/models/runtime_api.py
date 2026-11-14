@@ -90,7 +90,9 @@ class RuntimeProviderCatalog(BaseModel):
 
 
 def _build_bootstrap_runtime_catalog(error: Optional[Exception] = None) -> RuntimeProviderCatalog:
-    error_message = str(error) if error else "Provider catalog booted from fallback because settings payload failed."
+    # Never reflect raw backend exception text into a consumer-facing catalog:
+    # provider errors may embed credentials, tokens or endpoint query strings.
+    error_message = "Provider settings unavailable; model availability is unverified."
     providers = [
         RuntimeProvider(
             id="builtin_transformers",
@@ -329,7 +331,10 @@ async def get_runtime_provider_catalog(
             runtime_config_hash=runtime_config_hash,
         )
     except Exception as e:
-        logger.error(f"Error building runtime provider catalog: {e}")
+        logger.error(
+            "runtime_provider_catalog_failed",
+            extra={"error_type": type(e).__name__},
+        )
         return _build_bootstrap_runtime_catalog(e)
 
 
