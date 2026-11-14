@@ -688,3 +688,9 @@ idempotency, stale/foreign owner rejection, concurrent operators, non-owner
 tenant RLS UPDATE/DELETE denial, irreversible reactivation failure, and
 privacy account/tenant cascade. CI remains in the existing plugin workflow,
 with no secondary CI path and no consumer packaging requirement.
+
+Retirement also fences any new consent acceptance and pairing observation in
+the canonical repository SQL. A user may still revoke existing consent after
+the hold, but neither a fresh acknowledgement nor even a manually planted
+consent can authorize a new QR/link observation for a held connection. The
+disposable PostgreSQL test proves this condition against the live revision.

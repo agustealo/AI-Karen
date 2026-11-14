@@ -251,6 +251,7 @@ class SqlChannelRepository:
                     WHERE c.tenant_id = CAST(:tenant AS uuid)
                       AND c.connection_id = :connection
                       AND o.user_id = CAST(:user AS uuid)
+                      AND c.retirement_locked = false
                     FOR UPDATE OF c
                 """),
                 {"tenant": tenant_id, "connection": observation.connection_id,
@@ -719,6 +720,7 @@ class SqlChannelRepository:
                       AND c.connection_id = :connection
                       AND u.user_id = CAST(:user AS uuid)
                       AND u.is_active = true AND u.is_verified = true
+                      AND c.retirement_locked = false
                     ON CONFLICT DO NOTHING
                     RETURNING consent_id
                 """),

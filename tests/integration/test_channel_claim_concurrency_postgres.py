@@ -951,6 +951,40 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert hold_evidence[0]["connection_revision"] == 2
         assert hold_evidence[0]["unverified_deletion_request"] is True
 
+        # No fresh pairing or risk-consent acceptance may be recorded after
+        # the local retirement fence, even if a privileged actor directly
+        # plants an otherwise valid consent for a new provider.
+        assert not await owner_repo.acknowledge_personal_pairing_risk(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            user_id=str(user), provider_id="post-hold-provider",
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_personal_pairing_consents
+               (tenant_id,connection_id,user_id,provider_id,policy_version)
+               VALUES ($1,$2,$3,'post-hold-provider',$4)""",
+            tenant_a, connection_id, user,
+            PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+        denied_pairing = PairingObservation(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            provider_id="post-hold-provider", connection_revision=2,
+            sequence=1, event=PairingEvent.QR_ISSUED,
+            observed_at=datetime.now(timezone.utc) - timedelta(seconds=2),
+            authenticated=True,
+            qr_expires_at=datetime.now(timezone.utc) + timedelta(seconds=90),
+        )
+        with pytest.raises(PairingEvidenceDenied):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=denied_pairing, user_id=str(user),
+                provider_vetted_and_enabled=True,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND provider_id='post-hold-provider'""",
+            tenant_a, connection_id,
+        ) == 0
         for forbidden in (
             "enabled=true", "retirement_locked=false",
             "enabled=true, retirement_locked=false",
