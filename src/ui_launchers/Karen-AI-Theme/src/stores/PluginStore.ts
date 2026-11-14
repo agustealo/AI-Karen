@@ -4,6 +4,11 @@ import pluginStoreService from '@/lib/PluginStoreService';
 
 interface PluginStoreState {
   plugins: Plugin[];
+  installedPlugins: Plugin[];
+  installedPage: number;
+  installedSearchResponse: PluginSearchResponse | null;
+  installedLoading: boolean;
+  installedError: string | null;
   loading: boolean;
   error: string | null;
   searchParams: PluginSearchParams;
@@ -18,6 +23,7 @@ interface PluginStoreState {
   
   setSearchParams: (params: Partial<PluginSearchParams>) => void;
   searchPlugins: () => Promise<void>;
+  loadInstalled: (page?: number) => Promise<void>;
   refreshPlugins: () => Promise<void>;
   getPluginDetails: (pluginId: string) => Promise<void>;
   installPlugin: (pluginId: string, version?: string) => Promise<void>;
@@ -30,9 +36,15 @@ interface PluginStoreState {
 }
 
 let latestPluginSearchRequestId = 0;
+let latestInstalledSearchRequestId = 0;
 
 export const usePluginStore = create<PluginStoreState>((set, get) => ({
   plugins: [],
+  installedPlugins: [],
+  installedPage: 1,
+  installedSearchResponse: null,
+  installedLoading: false,
+  installedError: null,
   loading: false,
   error: null,
   searchParams: {
@@ -79,13 +91,59 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
     }
   },
 
+  loadInstalled: async (page?: number) => {
+    const requestedPage = page ?? get().installedPage;
+    const requestId = ++latestInstalledSearchRequestId;
+    set({ installedLoading: true, installedError: null, installedPage: requestedPage });
+    try {
+      const response = await pluginStoreService.searchPlugins({
+        page: requestedPage,
+        per_page: 20,
+        sort_by: 'name',
+        installed_only: true,
+      });
+      if (requestId !== latestInstalledSearchRequestId) return;
+      if (response.plugins.some((plugin) => plugin.status !== 'installed')) {
+        throw new Error('Installed plugin catalog returned invalid lifecycle data.');
+      }
+      // Removing the last item on a later page must not make the entire
+      // installed catalog appear empty while earlier pages still exist.
+      if (
+        response.total > 0 &&
+        response.plugins.length === 0 &&
+        requestedPage > Math.max(1, response.total_pages)
+      ) {
+        await get().loadInstalled(Math.max(1, response.total_pages));
+        return;
+      }
+      if (response.total > 0 && response.plugins.length === 0) {
+        throw new Error('Installed plugin catalog returned an inconsistent empty page.');
+      }
+      set({
+        installedPlugins: response.plugins,
+        installedSearchResponse: response,
+        installedLoading: false,
+      });
+    } catch (cause) {
+      if (requestId !== latestInstalledSearchRequestId) return;
+      set({
+        installedPlugins: [],
+        installedSearchResponse: null,
+        installedLoading: false,
+        installedError: cause instanceof Error ? cause.message : 'Failed to load installed plugins',
+      });
+    }
+  },
+
   refreshPlugins: async () => {
     await get().searchPlugins();
-    // searchPlugins preserves its existing UI error state, but lifecycle
-    // callers must not announce a verified refresh when retrieval failed.
     const refreshError = get().error;
-    if (refreshError) {
-      throw new Error(refreshError);
+    await get().loadInstalled();
+    const installedError = get().installedError;
+    // Both browse and installed views must read back from the authoritative
+    // catalog. A partial refresh must never present an unverified success.
+    if (refreshError || installedError) {
+      throw new Error(refreshError || installedError || 'Plugin catalog refresh failed.');
     }
   },
 
@@ -129,10 +187,12 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
     // mislabeled as an installation failure or presented as verified UI state.
     await get().searchPlugins();
     const refreshError = get().error;
-    if (refreshError) {
+    await get().loadInstalled();
+    const installedError = get().installedError;
+    if (refreshError || installedError) {
       throw new Error(
         'Plugin installation request succeeded, but the plugin list could not be refreshed: ' +
-          refreshError,
+          (refreshError || installedError),
       );
     }
   },
@@ -159,10 +219,12 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
 
     await get().searchPlugins();
     const refreshError = get().error;
-    if (refreshError) {
+    await get().loadInstalled();
+    const installedError = get().installedError;
+    if (refreshError || installedError) {
       throw new Error(
         'Plugin disable request succeeded, but the plugin list could not be refreshed: ' +
-          refreshError,
+          (refreshError || installedError),
       );
     }
   },

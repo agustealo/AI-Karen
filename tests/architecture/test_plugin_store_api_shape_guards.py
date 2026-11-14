@@ -107,3 +107,29 @@ def test_upload_and_uninstall_use_authenticated_canonical_store_paths() -> None:
     assert "async postFormData<T>(endpoint: string, data: FormData)" in api
     assert "if (init.body instanceof FormData)" in api
     assert "delete requestHeaders['Content-Type'];" in api
+
+
+def test_installed_catalog_is_not_the_current_browse_page() -> None:
+    page = PAGE.read_text(encoding="utf-8")
+    state = STORE.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
+    types = (ROOT / "types/plugin.ts").read_text(encoding="utf-8")
+    backend = (
+        Path(__file__).resolve().parents[2] / "src/ai_karen_engine/api_routes/plugins/store.py"
+    ).read_text(encoding="utf-8")
+
+    assert "plugins.filter((plugin) => plugin.status === 'installed')" not in page
+    assert "installedPlugins," in page
+    assert "installedSearchResponse," in page
+    assert "installedLoading," in page
+    assert "installedError," in page
+    assert "void loadInstalled();" in page
+    assert "onPageChange={(page) => { void loadInstalled(page); }}" in page
+    assert "installed_only: true" in state
+    assert "latestInstalledSearchRequestId" in state
+    assert "installedError:" in state
+    assert "if (refreshError || installedError)" in state
+    assert "searchParams.append('installed_only', 'true')" in service
+    assert "installed_only: z.boolean().optional()" in types
+    assert 'plugin["status"] == "installed"' in backend
+    assert '"incompatible" if runtime_status == "error"' in backend

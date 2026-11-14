@@ -73,6 +73,11 @@ const getErrorMessage = (error: unknown): string => {
 export default function PluginStorePage() {
   const {
     plugins,
+    installedPlugins,
+    installedPage,
+    installedSearchResponse,
+    installedLoading,
+    installedError,
     loading,
     error,
     searchParams,
@@ -84,6 +89,7 @@ export default function PluginStorePage() {
     installingPlugins,
     setSearchParams,
     searchPlugins,
+    loadInstalled,
     refreshPlugins,
     installPlugin,
     disablePlugin,
@@ -110,12 +116,6 @@ export default function PluginStorePage() {
   const [uninstallId, setUninstallId] = useState('');
   const [uninstalling, setUninstalling] = useState(false);
 
-  const installedPlugins = useMemo(() => {
-    return Array.isArray(plugins)
-      ? plugins.filter((plugin) => plugin.status === 'installed')
-      : [];
-  }, [plugins]);
-
   const safeCategories = useMemo(() => (Array.isArray(categories) ? categories : []), [categories]);
 
   const selectedCategoryLabel = useMemo(() => {
@@ -139,7 +139,8 @@ export default function PluginStorePage() {
      */
     void loadCategories();
     void searchPlugins();
-  }, [loadCategories, searchPlugins]);
+    void loadInstalled();
+  }, [loadCategories, searchPlugins, loadInstalled]);
 
   const handleSearch = useCallback(
     (params: typeof searchParams) => {
@@ -528,7 +529,13 @@ export default function PluginStorePage() {
             </CardHeader>
 
             <CardContent>
-              {loading ? (
+              {installedError ? (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                  <AlertTitle>Installed plugins unavailable</AlertTitle>
+                  <AlertDescription>{installedError}</AlertDescription>
+                </Alert>
+              ) : installedLoading ? (
                 <div
                   className="flex flex-col items-center justify-center py-12"
                   role="status"
@@ -563,7 +570,14 @@ export default function PluginStorePage() {
               ) : (
                 <PluginGrid
                   plugins={installedPlugins}
-                  loading={loading}
+                  loading={installedLoading}
+                  total={installedSearchResponse?.total}
+                  page={installedPage}
+                  perPage={installedSearchResponse?.per_page}
+                  totalPages={installedSearchResponse?.total_pages}
+                  hasNext={installedSearchResponse?.has_next}
+                  hasPrev={installedPage > 1}
+                  onPageChange={(page) => { void loadInstalled(page); }}
                   onInstall={handleInstall}
                   onDisable={handleDisable}
                   onDetails={handleDetails}
