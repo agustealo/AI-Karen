@@ -41,6 +41,13 @@ def service(monkeypatch, *, permissions=None, account=None, records=None):
                 "policy_version": "obsolete-policy",
             }],
         ),
+        list_owned_personal_retirement_evidence=AsyncMock(return_value=[{
+            "connection_id": CONNECTION, "connection_revision": 2,
+            "connection_enabled": False, "active_consent": False,
+            "unresolved_pairing": True, "deletion_request_recorded": True,
+            "unverified_deletion_request": True,
+            "inbox_not_completed": False, "outbound_not_confirmed": True,
+        }]),
         revoke_personal_pairing_consent=AsyncMock(return_value=True),
         list_owned_personal_credential_deletion_requests=AsyncMock(return_value=[{
             "request_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -191,3 +198,22 @@ async def test_retired_deletion_inventory_denied_without_fresh_rbac(monkeypatch)
     with pytest.raises(PermissionError, match="RBAC"):
         await authority.list_deletion_requests(tenant_id=TENANT, user_id=USER)
     repository.list_owned_personal_credential_deletion_requests.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retirement_evidence_reuses_fresh_consent_policy_without_host(monkeypatch):
+    authority, repository, lookup = service(monkeypatch)
+    rows = await authority.list_retirement_evidence(tenant_id=TENANT, user_id=USER)
+    assert rows[0]["unresolved_pairing"] is True
+    lookup.assert_awaited_once_with(tenant_id=TENANT, user_id=USER)
+    repository.list_owned_personal_retirement_evidence.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retirement_evidence_denied_by_rbac_without_sql(monkeypatch):
+    authority, repository, _ = service(monkeypatch, permissions=set())
+    with pytest.raises(PermissionError, match="RBAC"):
+        await authority.list_retirement_evidence(tenant_id=TENANT, user_id=USER)
+    repository.list_owned_personal_retirement_evidence.assert_not_awaited()

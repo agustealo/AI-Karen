@@ -566,3 +566,28 @@ Proof runs with the existing disposable PostgreSQL channel contract:
 tests/integration/test_channel_claim_concurrency_postgres.py`.
 That suite must prove direct deletion rejection, retained consent/deletion
 status, non-owner RLS DELETE denial, and tenant-erasure compatibility.
+
+
+## KOC-05 owner-scoped retirement-evidence inspection (read-only)
+
+The existing transport-independent consent recovery path offers authenticated
+`GET /api/channels/personal/consent-recovery/retirement-evidence` using the
+same fresh active/verified principal, channel.consent RBAC, RuntimePolicy and
+ActionExecutionGate as consent withdrawal. It reads only tenant-RLS SQL, not a
+retired ChannelHost, plugin or third-party provider. User identity and tenant
+are derived exclusively from session authentication.
+
+The hard-limited 50-connection snapshot reports each owned connection's
+revision and enabled state, outstanding consent, unresolved pairing
+observations, presence of credential-deletion requests and unverified
+requests, unfinished inbound work and outbound work without confirmed
+delivery. It does not return secret handles, accounts, provider receipts,
+messages, session references or raw participant identifiers. Overflow
+or malformed identity fails closed.
+
+No value in this report authorizes deleting, unlinking, erasing or retiring
+the connection, even if every flag is false: a persisted vendor receipt is
+not independent current verification, and a read snapshot can become stale
+after the transaction. Governed revision-fenced operator cleanup, external
+verification and retention policy remain NOT_READY; no destructive API or
+provider action was added.

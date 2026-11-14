@@ -132,6 +132,17 @@ class PersonalConsentRecoveryService:
             tenant_id=tenant_id, user_id=user_id,
         )
 
+    async def list_retirement_evidence(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict[str, str | int | bool]]:
+        """Read stored blockers after fresh consent policy, without ChannelHost."""
+        tenant_id, user_id = await self._authorize(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        return await self._repository.list_owned_personal_retirement_evidence(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+
     async def list_deletion_requests(
         self, *, tenant_id: str, user_id: str,
     ) -> list[dict[str, str | int]]:

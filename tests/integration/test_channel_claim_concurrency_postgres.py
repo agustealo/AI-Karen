@@ -207,6 +207,26 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_id=str(tenant_b), user_id=str(user),
         ) == []
 
+        # Live SQL retirement snapshot is bounded, owner-only and read-only.
+        # The stored deletion request is still pending; live channel work
+        # and provider evidence remain separate, not a cleanup authorization.
+        readiness = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        assert readiness == [{
+            "connection_id": connection_id, "connection_revision": 1,
+            "connection_enabled": True, "active_consent": False,
+            "unresolved_pairing": False, "deletion_request_recorded": True,
+            "unverified_deletion_request": True, "inbox_not_completed": False,
+            "outbound_not_confirmed": True,
+        }]
+        assert await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(another_user),
+        ) == []
+        assert await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_b), user_id=str(user),
+        ) == []
+
         # A direct connection DELETE must fail at transaction commit even when
         # the connection is disabled or its ChannelHost has retired.
         with pytest.raises(asyncpg.ForeignKeyViolationError):
