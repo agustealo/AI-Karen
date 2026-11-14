@@ -15,6 +15,9 @@ from pydantic import BaseModel, ConfigDict
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.services.channels.host import ChannelHostServices
+from ai_karen_engine.services.channels.consent_recovery import (
+    PersonalConsentRecoveryService,
+)
 from ai_karen_engine.services.channels.personal_pairing_policy import (
     PERSONAL_WHATSAPP_CONSENT_VERSION,
     PERSONAL_WHATSAPP_RISK_NOTICE_TEXT,
@@ -52,7 +55,8 @@ class PersonalOwnerAssignmentResult(BaseModel):
     provider_unlinked: bool = False
 
 
-def _host_and_actor(request: Request, user: UserData) -> tuple[ChannelHostServices, str, str]:
+def _verified_actor(user: UserData) -> tuple[str, str]:
+    """One auth-derived durable actor shared by host and recovery ingress."""
     tenant_id = str(user.tenant_id or "").strip()
     user_id = str(user.user_id or "").strip()
     try:
@@ -61,6 +65,11 @@ def _host_and_actor(request: Request, user: UserData) -> tuple[ChannelHostServic
         raise HTTPException(403, "Verified durable user and tenant identity required") from None
     if user.is_active is not True or user.is_verified is not True:
         raise HTTPException(403, "Active verified user required")
+    return tenant_id, user_id
+
+
+def _host_and_actor(request: Request, user: UserData) -> tuple[ChannelHostServices, str, str]:
+    tenant_id, user_id = _verified_actor(user)
     host = getattr(request.app.state, "channel_host_services", None)
     if not isinstance(host, ChannelHostServices) or host.activation is None:
         raise HTTPException(503, "Channel consent service unavailable")
@@ -93,16 +102,23 @@ async def _authorize(
 
 
 def _translate(
-    exc: Exception, *, operation: Literal["consent", "ownership"] = "consent",
+    exc: Exception, *, operation: Literal["consent", "ownership", "recovery"] = "consent",
 ) -> HTTPException:
-    label = "Personal channel ownership" if operation == "ownership" else "Personal channel consent"
+    label = {
+        "ownership": "Personal channel ownership",
+        "consent": "Personal channel consent",
+        "recovery": "Personal channel consent recovery",
+    }[operation]
     if isinstance(exc, PermissionError):
         return HTTPException(403, f"{label} denied")
     if isinstance(exc, ValueError):
         return HTTPException(422, f"Invalid {label.lower()} request")
     logger.error(
-        "channel.personal_owner_assignment.unavailable"
-        if operation == "ownership" else "channel.personal_consent.unavailable",
+        {
+            "ownership": "channel.personal_owner_assignment.unavailable",
+            "consent": "channel.personal_consent.unavailable",
+            "recovery": "channel.personal_consent.recovery_unavailable",
+        }[operation],
         extra={"error_type": type(exc).__name__},
     )
     return HTTPException(503, f"{label} unavailable")
@@ -212,6 +228,59 @@ async def list_personal_channel_connections(
     except Exception as exc:
         raise _translate(exc) from None
     return PersonalChannelInventoryResponse(connections=connections)
+
+
+class PersonalConsentRecoveryItem(BaseModel):
+    connection_id: str
+    provider_id: str
+    policy_version: str
+
+
+class PersonalConsentRecoveryInventory(BaseModel):
+    consents: list[PersonalConsentRecoveryItem]
+
+
+@router.get("/consent-recovery", response_model=PersonalConsentRecoveryInventory)
+async def list_personal_consent_recovery(
+    user: UserData = Depends(get_current_user),
+) -> PersonalConsentRecoveryInventory:
+    """Owner-scoped SQL consent ledger, even without a channel installation.
+
+    This is not a new ChannelHost or provider readiness endpoint.
+    """
+    tenant_id, user_id = _verified_actor(user)
+    try:
+        rows = await PersonalConsentRecoveryService().list_active(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+    except Exception as exc:
+        raise _translate(exc, operation="recovery") from None
+    return PersonalConsentRecoveryInventory(consents=rows)
+
+
+@router.post(
+    "/consent-recovery/{connection_id}/{provider_id}/revoke",
+    response_model=ConsentResult,
+)
+async def revoke_retired_personal_consent(
+    connection_id: UUID,
+    provider_id: str,
+    user: UserData = Depends(get_current_user),
+) -> ConsentResult:
+    """Only withdraw existing stored consent; never assert remote unlink."""
+    if not provider_id or not provider_id.strip() or len(provider_id) > 128:
+        raise HTTPException(422, "Invalid consent recovery provider")
+    tenant_id, user_id = _verified_actor(user)
+    try:
+        revoked = await PersonalConsentRecoveryService().revoke(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            connection_id=str(connection_id),
+            provider_id=provider_id,
+        )
+    except Exception as exc:
+        raise _translate(exc, operation="recovery") from None
+    return ConsentResult(revoked=revoked)
 
 
 @router.get("/{connection_id}/{provider_id}/status", response_model=PersonalPairingStatus)
