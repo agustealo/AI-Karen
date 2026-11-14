@@ -199,6 +199,9 @@ class PluginKernel:
         )
         self._catalog_manifests: Dict[str, CatalogExtensionManifest] = {}
         self._disabled: set[str] = set()
+        # Retained even after a failed refresh updates catalog fingerprints.
+        # Only a verified shutdown and module eviction can clear this fence.
+        self._retirement_pending: set[str] = set()
         self._active: Dict[str, str] = {}
         self._initialized = False
         # Serialize catalog projection and explicit lifecycle mutations so
@@ -372,6 +375,7 @@ class PluginKernel:
                 (metadata := self.catalog_registry.get_metadata(plugin_id)) is not None
                 and metadata.is_valid
                 and plugin_id not in self._disabled
+                and plugin_id not in self._retirement_pending
                 and manifest.capabilities.communication_channel is None
                 and manifest.rbac.default_enabled
             )
@@ -420,6 +424,7 @@ class PluginKernel:
                 or not metadata.is_valid
                 or not metadata.file_hash
                 or previous_hashes.get(plugin_id) != metadata.file_hash
+                or plugin_id in self._retirement_pending
             ):
                 await self._retire_loaded_plugin(plugin_id, instance)
 
@@ -670,6 +675,7 @@ class PluginKernel:
             try:
                 await shutdown()
             except BaseException as exc:
+                self._retirement_pending.add(plugin_id)
                 previous = self.runtime_registry.get(plugin_id)
                 if previous is not None:
                     await self.runtime_registry.update_state(
@@ -682,6 +688,7 @@ class PluginKernel:
                 )
                 raise
         self.loader.forget_loaded_extension(plugin_id)
+        self._retirement_pending.discard(plugin_id)
 
     def _required_by_enabled_plugin(self, dependency_id: str) -> bool:
         """Check direct and transitive registered requirements, without imports."""
@@ -711,6 +718,8 @@ class PluginKernel:
             return await self._enable_unlocked(plugin_id)
 
     async def _enable_unlocked(self, plugin_id: str) -> bool:
+        if plugin_id in self._retirement_pending:
+            raise RuntimeError("Plugin retirement incomplete; cannot enable")
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
