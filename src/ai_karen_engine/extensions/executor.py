@@ -274,27 +274,6 @@ class ExtensionExecutionService:
                 data_classification,
             )
 
-        # The current canonical handler runner invokes Python in this process.
-        # Requested sandbox/subprocess/container labels do not create isolation.
-        # Fail closed before resolving or importing code from an untrusted origin.
-        isolation_mode = getattr(
-            manifest, "isolation_mode", ExecutionIsolationMode.IN_PROCESS
-        )
-        if (
-            trust_tier not in (TrustTier.FIRST_PARTY, TrustTier.BUILTIN_TRUSTED)
-            or isolation_mode != ExecutionIsolationMode.IN_PROCESS
-        ):
-            return self._fail_with_provenance(
-                request,
-                start,
-                execution_id,
-                "isolation_unavailable",
-                "The plugin runtime cannot safely execute this trust tier or isolation mode",
-                trust_tier,
-                result_trust,
-                data_classification,
-            )
-
         health = self._get_health(plugin_id)
         if health == "unavailable":
             return self._fail_with_provenance(
@@ -392,6 +371,27 @@ class ExtensionExecutionService:
                 execution_id,
                 "budget_exhausted",
                 "Execution budget exhausted",
+                trust_tier,
+                result_trust,
+                data_classification,
+            )
+
+        # The current canonical handler runner invokes Python in this process.
+        # Requested sandbox/subprocess/container labels do not create isolation.
+        # Fail closed before resolving or importing code from an untrusted origin.
+        isolation_mode = getattr(
+            manifest, "isolation_mode", ExecutionIsolationMode.IN_PROCESS
+        )
+        if (
+            trust_tier not in (TrustTier.FIRST_PARTY, TrustTier.BUILTIN_TRUSTED)
+            or isolation_mode != ExecutionIsolationMode.IN_PROCESS
+        ):
+            return self._fail_with_provenance(
+                request,
+                start,
+                execution_id,
+                "isolation_unavailable",
+                "The plugin runtime cannot safely execute this trust tier or isolation mode",
                 trust_tier,
                 result_trust,
                 data_classification,
