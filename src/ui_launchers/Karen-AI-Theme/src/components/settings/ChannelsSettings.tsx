@@ -158,7 +158,7 @@ export default function ChannelsSettings() {
         </Button>
       </div>
 
-      <Alert>
+      <Alert role="note">
         <ShieldAlert className="h-4 w-4" aria-hidden="true" />
         <AlertTitle>Read-only channel status</AlertTitle>
         <AlertDescription>
