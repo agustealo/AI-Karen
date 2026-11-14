@@ -833,3 +833,29 @@ then records the correctly scoped claim to prove correlation. It independently
 checks that `sent` is still outstanding, all historical claims stay unverified
 and owner/tenant isolation is preserved. There is no newly approved provider,
 remote operation, cleanup permission, or additional orchestrator.
+
+## KOC-05 nonblank provider receipt integrity (v2 read-side hardening)
+
+The retirement inventory now treats a stored provider unlink or deletion claim
+as present only if its provider receipt identifier contains non-whitespace
+characters. The provider/revision correlation predicate applies the same
+condition to **both** stored receipts. This is defensive for older or
+privileged-imported evidence: the original pairing-state schema bounds receipt
+length but does not prohibit an identifier containing only whitespace.
+The credential-deletion schema already checks for nonblank receipt IDs; the
+read-side guard applies consistently to both sources rather than assuming
+historical data cannot be malformed.
+
+The existing pairing reducer also rejects whitespace-only, oversized and
+non-string provider receipt identifiers before storing link/unlink claims.
+No provider callbacks are authenticated by this check, and no claim is
+promoted to independent unlink or erasure proof. The v2 API shape, mandatory
+verification blockers, owner/tenant scoping and `cleanup_authorized=false`
+remain unchanged.
+
+Canonical repository and reducer unit tests cover the SQL guards and the
+invalid receipt transitions. The existing disposable PostgreSQL test stores
+a valid original-revision claim, replaces the unlink receipt with historical
+whitespace to prove it no longer counts, then restores the valid receipt and
+proves that only local provider/revision correlation returns. Independent
+session identity and credential/backup retention scope remain unverified.
