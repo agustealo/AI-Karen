@@ -414,6 +414,15 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
     assert query.count("s.provider_unlink_receipt_id ~ '[^[:space:]]'") == 2
     assert query.count("d.provider_receipt_id ~ '[^[:space:]]'") == 2
     assert "AS provider_revision_claims_correlated" in query
+    # An old ledger label 'verified' is not independent erasure evidence.
+    # The source query must report *any* recorded request as unresolved
+    # until a separately authenticated verifier becomes available.
+    unverified_query = query.split("AS unverified_deletion_request")[0].split(
+        "AS provider_revision_claims_correlated"
+    )[-1]
+    assert "channel_personal_credential_deletions d" in unverified_query
+    assert "AND d.user_id = o.user_id" in unverified_query
+    assert "d.status <> 'verified'" not in unverified_query
     assert "b.status NOT IN ('delivered', 'read')" in query
     assert "b.status NOT IN ('sent', 'delivered', 'read')" not in query
     selected = query.split("FROM public.channel_connections c")[0]
