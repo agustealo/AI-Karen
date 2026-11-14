@@ -872,6 +872,10 @@ async def test_admin_chat_visibility_endpoint_has_audited_backend_save(
     assert writes[0]["provider_enabled"] is True
     assert audit[0]["operator_id"] == "administrator"
 
+    async def no_unlisted_models(*_args, **_kwargs):
+        return {"models": []}
+
+    monkeypatch.setattr(settings_routes, "get_provider_models", no_unlisted_models)
     with pytest.raises(HTTPException) as exc:
         await settings_routes.update_provider_chat_access(
             "zai",
@@ -880,4 +884,4 @@ async def test_admin_chat_visibility_endpoint_has_audited_backend_save(
             ),
             current_user={"user_id": "administrator", "roles": ["admin"]},
         )
-    assert exc.value.status_code == 409  # Disabled model inventory remains unavailable
+    assert exc.value.status_code == 422
