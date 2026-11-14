@@ -41,7 +41,6 @@ import {
 import {
   normalizeModelSettingsResponse,
   type RuntimeSettingsResponse,
-  sortProviderModels,
   normalizeDiscoveredProviderModels,
   getProviderModelDiscoveryNotice,
 } from '@/lib/model-runtime-inventory';
