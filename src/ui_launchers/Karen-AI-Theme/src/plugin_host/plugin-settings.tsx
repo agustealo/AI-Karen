@@ -814,6 +814,10 @@ export function PluginSettingsForm({
     }
     return groups;
   }, [schema]);
+  const credentialFields = React.useMemo(
+    () => schema.filter((field) => field.type === 'password'),
+    [schema],
+  );
 
   if (!loaded) {
     return (
@@ -870,11 +874,8 @@ export function PluginSettingsForm({
         </Card>
       ))}
 
-      {schema.some((field) => field.type === 'password') && (
-        <PluginCredentialsManager
-          pluginId={pluginId}
-          fields={schema.filter((field) => field.type === 'password')}
-        />
+      {credentialFields.length > 0 && (
+        <PluginCredentialsManager pluginId={pluginId} fields={credentialFields} />
       )}
 
       <div className="flex items-center justify-between">
