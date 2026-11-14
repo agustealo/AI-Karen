@@ -23,6 +23,7 @@ export interface LoginResponse {
   user: {
     user_id: string;
     email: string;
+    username?: string;
     full_name: string;
     roles: string[];
     is_active: boolean;
@@ -37,6 +38,7 @@ export interface LoginResponse {
 export interface AuthUser {
   user_id: string;
   email: string;
+  username?: string;
   full_name: string;
   roles: string[];
   is_active: boolean;
