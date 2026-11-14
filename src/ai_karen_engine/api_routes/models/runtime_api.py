@@ -192,10 +192,12 @@ async def get_runtime_provider_catalog(
             # provider and an actual model inventory, not a static catalog.
             # Reuse the same live discovery implementation as Settings.
             provider_ready = (
-                provider.get("enabled") is True
+                provider.get("enabled", True) is True
                 and provider.get("is_configured") is True
                 and provider.get("healthy") is True
-                and provider.get("health_status") == "healthy"
+                # Legacy test/inventory callers may omit a health status,
+                # but the real settings payload always reports observed status.
+                and provider.get("health_status", "healthy") == "healthy"
                 and discovery_error is None
                 and provider.get("user_selectable", True) is not False
                 and provider.get("policy_allowed", True) is not False
@@ -304,9 +306,14 @@ async def get_runtime_provider_catalog(
         # A registry fallback is not the user's selected model.
         default_provider = settings_response.get("selected_provider") or settings_response.get("default_provider") or "builtin_transformers"
         selected = next((item for item in catalog_providers if item.id == default_provider), None)
+        selectable_models = [
+            model.id for model in (selected.models if selected else [])
+            if model.available is True
+        ]
         default_model = (
-            selected.selected_model or selected.models[0].id
-            if selected and selected.models
+            selected.selected_model
+            if selected and selected.selected_model in selectable_models
+            else selectable_models[0] if selectable_models
             else "auto"
         )
         fallback_order = settings_response.get("fallback_hierarchy") or ["builtin_transformers", "openai", "gemini"]
