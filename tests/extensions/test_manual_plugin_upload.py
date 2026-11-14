@@ -40,6 +40,8 @@ async def test_upload_requires_explicit_enable(tmp_path, monkeypatch):
     assert called == ["demo"]
     assert (tmp_path / "demo/handler.py").exists()
     assert (tmp_path / "demo/.karen-manual-disabled").is_file()
+    assert (tmp_path / "demo/.karen-upload-origin").is_file()
+    assert "trust=untrusted" in (tmp_path / "demo/.karen-upload-origin").read_text()
     with pytest.raises(FileExistsError):
         await service.install_uploaded_archive("demo", data)
 
@@ -149,4 +151,34 @@ async def test_duplicate_zip_entry_is_refused(tmp_path):
         archive.writestr("./manifest.json", json.dumps(manifest))
     with pytest.raises(ValueError, match="Duplicate"):
         await service.install_uploaded_archive("demo", payload.getvalue())
+    assert not (tmp_path / "demo").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forbidden_member",
+    [
+        ".karen-upload-origin",
+        ".karen-manual-disabled",
+        "assets/.karen-upload-origin",
+        "nested/.karen-manual-disabled/child",
+    ],
+)
+async def test_manual_upload_cannot_supply_or_spoof_lifecycle_markers(
+    tmp_path, forbidden_member
+):
+    service = PluginService(tmp_path, tmp_path)
+    manifest = {
+        "id": "demo", "name": "demo", "version": "1.0.0",
+        "display_name": "Demo", "description": "Test plugin",
+        "author": "Tests", "license": "MIT", "category": "integration",
+    }
+    data = _archive({
+        "manifest.json": json.dumps(manifest),
+        forbidden_member: "untrusted archive content",
+    })
+
+    with pytest.raises(ValueError, match="Unsafe package member path"):
+        await service.install_uploaded_archive("demo", data)
+
     assert not (tmp_path / "demo").exists()
