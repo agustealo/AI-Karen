@@ -315,8 +315,11 @@ class ProviderRegistryService:
     ) -> List[ProviderEndpoint]:
         """Find endpoints matching required capabilities."""
         targets: List[ProviderEndpoint] = []
-        for endpoint in self._provider_endpoints.values():
-            if not endpoint.enabled:
+        # Snapshot first: reconciliation may revoke a stale configured
+        # endpoint while the candidate list is being traversed.
+        for candidate in tuple(self._provider_endpoints.values()):
+            endpoint = self.get_provider_endpoint(candidate.provider_id)
+            if endpoint is None or not endpoint.enabled:
                 continue
             if kind is not None and endpoint.kind != kind:
                 continue
@@ -352,6 +355,13 @@ class ProviderRegistryService:
             kind=kind,
             healthy_only=healthy_only,
         )
+        # An explicit target request may choose a permitted cloud provider,
+        # but automatic selection never promotes a non-fallback cloud endpoint.
+        targets = [
+            endpoint for endpoint in targets
+            if endpoint.kind != EndpointKind.CLOUD_PROVIDER
+            or endpoint.fallback_eligible
+        ]
         return targets[0] if targets else None
 
     def _endpoint_to_capabilities(
@@ -1003,7 +1013,12 @@ class ProviderRegistryService:
                         return fallback_provider
 
         # Last resort: try any available provider with required capability
-        available_providers = self.get_available_providers(capability=capability)
+        available_providers = [
+            provider for provider in self.get_available_providers(capability=capability)
+            if (endpoint := self.get_provider_endpoint(provider)) is None
+            or endpoint.kind != EndpointKind.CLOUD_PROVIDER
+            or endpoint.fallback_eligible
+        ]
         if available_providers:
             selected = available_providers[0]
             logger.warning(f"Using last resort provider: {selected}")
