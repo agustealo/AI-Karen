@@ -63,12 +63,21 @@ class FakeResult:
     def scalar_one_or_none(self):
         return self.value
 
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self.value if isinstance(self.value, list) else []
+
 
 class FakeDbSession:
-    def __init__(self, *rows):
+    def __init__(self, *rows, fail_commit: bool = False):
         self.rows = list(rows)
         self.statements = []
         self.flushed = False
+        self.committed = False
+        self.fail_commit = fail_commit
+        self.added = []
 
     async def execute(self, statement):
         self.statements.append(statement)
@@ -78,6 +87,14 @@ class FakeDbSession:
 
     async def flush(self):
         self.flushed = True
+
+    async def commit(self):
+        if self.fail_commit:
+            raise OSError("commit unavailable")
+        self.committed = True
+
+    def add(self, row):
+        self.added.append(row)
 
 
 def session_service(db: FakeDbSession):
@@ -252,6 +269,116 @@ async def test_login_denied_when_durable_session_persistence_fails():
     assert user is None and access is None
     assert error == "Authentication failed"
     assert svc._active_sessions == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_commit", [False, True])
+async def test_logout_invalidates_only_after_committed_database_revoke(fail_commit):
+    row = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        refresh_token="secret-refresh",
+        is_active=True,
+        invalidated_at=None,
+        invalidation_reason=None,
+    )
+    cache = SimpleNamespace(refresh_token="secret-refresh", is_active=True)
+    db = FakeDbSession(row, fail_commit=fail_commit)
+    svc = session_service(db)
+    svc._active_sessions = {"session": cache}
+
+    if fail_commit:
+        with pytest.raises(OSError):
+            await svc.logout("secret-refresh")
+        assert cache.is_active
+    else:
+        await svc.logout("secret-refresh")
+        assert db.committed
+        assert cache.is_active is False
+    assert db.flushed
+    assert row.invalidation_reason == "logout"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_commit", [False, True])
+async def test_password_revocation_and_audit_require_database_commit(fail_commit):
+    current_user = SimpleNamespace(password_hash="original", updated_at=None)
+    active_session = SimpleNamespace(
+        is_active=True, invalidated_at=None, invalidation_reason=None
+    )
+    db = FakeDbSession(
+        current_user, [active_session], fail_commit=fail_commit
+    )
+    svc = session_service(db)
+    cached = SimpleNamespace(user_id=USER_ID, is_active=True)
+    svc._active_sessions = {"session": cached}
+    svc._user_cache = {USER_ID: account()}
+    svc._validate_password = lambda password: None
+    svc._verify_password = lambda current, stored: True
+    svc._hash_password = lambda password: "new-hash"
+    svc._emit_audit_event = AsyncMock()
+
+    error = await svc.change_user_password(
+        USER_ID, "old-secret", "new-secret"
+    )
+    if fail_commit:
+        assert error == "Password update failed"
+        assert cached.is_active
+        svc._emit_audit_event.assert_not_awaited()
+    else:
+        assert error is None
+        assert db.committed
+        assert cached.is_active is False
+        assert svc._user_cache == {}
+        svc._emit_audit_event.assert_awaited_once()
+    assert current_user.password_hash == "new-hash"
+    assert active_session.invalidation_reason == "password_changed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_commit", [False, True])
+async def test_refresh_rotation_and_audit_require_database_commit(fail_commit):
+    live_session = SimpleNamespace(
+        session_token=uuid.uuid4(),
+        user_id=uuid.UUID(USER_ID),
+        created_at=datetime.utcnow(),
+        expires_in=3600,
+        access_token="old-access",
+        refresh_token="old-refresh",
+        is_active=True,
+        last_accessed=None,
+    )
+    db_user = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        tenant_id=uuid.UUID(TENANT_ID),
+        is_active=True,
+    )
+    db = FakeDbSession(None, live_session, db_user, fail_commit=fail_commit)
+    svc = session_service(db)
+    cached = SimpleNamespace(
+        refresh_token="old-refresh",
+        access_token="old-access",
+        is_active=True,
+        last_used=None,
+    )
+    svc._active_sessions = {"session": cached}
+    svc._generate_access_token = lambda user: "new-access"
+    svc._generate_refresh_token = lambda: "new-refresh"
+    svc._emit_audit_event = AsyncMock()
+
+    access, refresh, error = await svc.refresh_access_token("old-refresh")
+    if fail_commit:
+        assert (access, refresh, error) == (None, None, "Database unavailable")
+        assert cached.access_token == "old-access"
+        assert cached.refresh_token == "old-refresh"
+        svc._emit_audit_event.assert_not_awaited()
+    else:
+        assert (access, refresh, error) == ("new-access", "new-refresh", None)
+        assert db.committed
+        assert cached.access_token == "new-access"
+        assert cached.refresh_token == "new-refresh"
+        svc._emit_audit_event.assert_awaited_once()
+    assert db.flushed
+    assert len(db.added) == 1
 
 
 def middleware():
