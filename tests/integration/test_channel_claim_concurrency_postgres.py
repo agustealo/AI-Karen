@@ -230,9 +230,22 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "active_consent": False,
             "unresolved_pairing": False, "provider_unlink_claim_recorded": False,
             "deletion_request_recorded": True,
+            "credential_deletion_claim_recorded": False,
             "unverified_deletion_request": True, "inbox_not_completed": False,
             "outbound_not_confirmed": True,
         }]
+        from ai_karen_engine.services.channels.consent_recovery import (
+            assess_retirement_evidence_snapshot,
+        )
+        assessed_before = assess_retirement_evidence_snapshot(readiness[0])
+        assert assessed_before["retirement_assessment"]["status"] == "blocked"
+        assert assessed_before["retirement_assessment"]["cleanup_authorized"] is False
+        assert "local_retirement_hold_missing" in (
+            assessed_before["retirement_assessment"]["blocking_reasons"]
+        )
+        assert "provider_unlink_claim_missing" in (
+            assessed_before["retirement_assessment"]["blocking_reasons"]
+        )
         assert await owner_repo.list_owned_personal_retirement_evidence(
             tenant_id=str(tenant_a), user_id=str(another_user),
         ) == []
@@ -341,6 +354,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         )
         assert evidence_after_claim[0]["unverified_deletion_request"] is True
         assert evidence_after_claim[0]["deletion_request_recorded"] is True
+        assert evidence_after_claim[0]["credential_deletion_claim_recorded"] is True
 
         # Ordinary unowned connections remain deletable when no personal
         # retirement ledger has ever existed.
@@ -1241,7 +1255,23 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert matching[0]["provider_unlink_claim_recorded"] is True
         assert matching[0]["unresolved_pairing"] is False
         assert matching[0]["deletion_request_recorded"] is True
+        assert matching[0]["credential_deletion_claim_recorded"] is True
         assert matching[0]["unverified_deletion_request"] is True
+        assessment = assess_retirement_evidence_snapshot(matching[0])[
+            "retirement_assessment"
+        ]
+        assert assessment["cleanup_authorized"] is False
+        assert assessment["provider_unlink_independently_verified"] is False
+        assert assessment["credential_erasure_independently_verified"] is False
+        assert assessment["retention_scope_verified"] is False
+        assert "provider_unlink_claim_missing" not in assessment["blocking_reasons"]
+        assert "credential_deletion_claim_missing" not in assessment["blocking_reasons"]
+        assert "provider_unlink_independent_verification_unavailable" in (
+            assessment["blocking_reasons"]
+        )
+        assert "credential_erasure_independent_verification_unavailable" in (
+            assessment["blocking_reasons"]
+        )
         assert matching[0]["connection_enabled"] is False
         assert await owner_repo.list_owned_personal_retirement_evidence(
             tenant_id=str(tenant_b), user_id=str(user),

@@ -730,3 +730,65 @@ observations and credential deletion claims, rejects QR/replay/stale scopes,
 and confirms the ledger remains unverified. Actual third-party erasure,
 independent verification, retention policy and destructive connection
 cleanup remain NOT_READY.
+
+
+## Verification-readiness contract (KOC-05, v1)
+
+The existing `PersonalConsentRecoveryService.list_retirement_evidence`
+now owns a **version-fenced, transport-independent, read-only assessment**
+of the authoritative owner-scoped SQL snapshot. The accompanying
+`assess_retirement_evidence_snapshot` function is a pure interpretation
+of stored evidence, not a second provider/verifier or a deletion authority.
+The consent recovery service still independently enforces a freshly
+verified principal, tenant isolation, `CHANNEL_CONSENT` RBAC,
+`RuntimePolicy`, and `ActionExecutionGate`; it requires no live plugin,
+provider credential, or ChannelHost. It fails closed on invalid evidence,
+duplicate connection IDs, or an oversized result. The assessment cannot
+create, mutate, erase, or unlock a connection.
+
+Contract `retirement-verification-readiness-v1` returns
+`status=blocked`, `cleanup_authorized=false`, and explicit,
+code-stable blocking reasons. The local blockers reflect the immutable
+retirement hold, enabled state, unrevoked consent, unresolved pairing,
+missing vendor unlink claim, missing deletion request, missing
+`provider_claimed` receipt, unverified deletion requests, unfinished
+inbound work and unconfirmed outbound delivery. The SQL repository now
+separately reports `credential_deletion_claim_recorded`, without leaking
+provider receipt IDs or session references. These facts are **historical
+snapshots**, not provider health or current proof of erasure.
+
+Four mandatory independent blockers remain regardless of all local flags:
+independent provider unlink verification, independent credential erasure
+verification, scoped provider/backup retention review, and the absent
+governed cleanup authority. A vendor receipt, a historical `verified`
+label, an empty outbox, or all-local-success combination **cannot** clear
+those requirements. Migration 51 continues to forbid promoting vendor
+claims to `verified`.
+
+The thin existing retirement evidence API is unchanged in location and
+HTTP method; its validated response now includes the strict nested
+`retirement_assessment`. Boolean success flags are typed as literal
+`false`, the contract version is pinned, and invalid backend evidence
+produces a redacted failure, not a fake verified state. Settings validates
+the version, mandatory blockers, known codes and the immutable false
+status, and renders explanations in the existing owner-only read-only
+review. It never exposes a finalizer or cleanup button. No new endpoint,
+database table, provider adapter, registry, or workflow is introduced.
+
+Actual independently verified remote retirement remains **NOT_READY**.
+It requires a separately governed, source-authenticated verifier with
+vendor-specific trust and canonical tenant, owner, connection, provider,
+session and revision correlation; signed/attested provenance and
+tamper-evident retention; exhaustive credential, message, media, backup
+and subcontractor retention policies; expiry and replay protection; and
+a revision-fenced operator finalization protocol with explicit RBAC,
+audit and rollback/unknown semantics. None of those are asserted or
+fabricated by this report. Only after such proofs pass could a separately
+reviewed contract evolve and enable specific cleanup operations.
+
+Proof uses existing consent recovery policy/unit tests, schema/API
+anti-forgery tests, frontend fail-closed contract tests, and the existing
+disposable real PostgreSQL channel suite. It tests both incomplete
+local evidence and a held connection with recorded original-session
+unlink and credential deletion claims; both must remain blocked.
+No external consumer packaging is required for these internal contracts.

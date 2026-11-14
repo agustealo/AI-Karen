@@ -309,6 +309,35 @@ class PersonalConsentRecoveryInventory(BaseModel):
     consents: list[PersonalConsentRecoveryItem]
 
 
+class PersonalRetirementAssessment(BaseModel):
+    """Version-fenced blocker report, never a cleanup authorization grant."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["retirement-verification-readiness-v1"]
+    status: Literal["blocked"]
+    cleanup_authorized: Literal[False]
+    provider_unlink_independently_verified: Literal[False]
+    credential_erasure_independently_verified: Literal[False]
+    retention_scope_verified: Literal[False]
+    blocking_reasons: list[Literal[
+        "local_retirement_hold_missing",
+        "local_connection_still_enabled",
+        "active_pairing_consent_remains",
+        "pairing_teardown_unresolved",
+        "provider_unlink_claim_missing",
+        "credential_deletion_request_missing",
+        "credential_deletion_claim_missing",
+        "credential_deletion_requests_unverified",
+        "inbound_work_unresolved",
+        "outbound_delivery_unconfirmed",
+        "provider_unlink_independent_verification_unavailable",
+        "credential_erasure_independent_verification_unavailable",
+        "retention_and_backup_scope_verification_unavailable",
+        "governed_final_cleanup_authority_unavailable",
+    ]] = Field(min_length=4)
+
+
 class PersonalRetirementEvidenceItem(BaseModel):
     connection_id: str
     connection_revision: int
@@ -318,9 +347,11 @@ class PersonalRetirementEvidenceItem(BaseModel):
     unresolved_pairing: bool
     provider_unlink_claim_recorded: bool
     deletion_request_recorded: bool
+    credential_deletion_claim_recorded: bool
     unverified_deletion_request: bool
     inbox_not_completed: bool
     outbound_not_confirmed: bool
+    retirement_assessment: PersonalRetirementAssessment
 
 
 class PersonalRetirementEvidenceInventory(BaseModel):
@@ -340,9 +371,9 @@ async def list_retired_channel_evidence(
         rows = await PersonalConsentRecoveryService().list_retirement_evidence(
             tenant_id=tenant_id, user_id=user_id,
         )
+        return PersonalRetirementEvidenceInventory(connections=rows)
     except Exception as exc:
         raise _translate(exc, operation="recovery") from None
-    return PersonalRetirementEvidenceInventory(connections=rows)
 
 
 class PersonalCredentialDeletionRequestItem(BaseModel):

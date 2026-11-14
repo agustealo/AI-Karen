@@ -43,8 +43,11 @@ def service(monkeypatch, *, permissions=None, account=None, records=None):
         ),
         list_owned_personal_retirement_evidence=AsyncMock(return_value=[{
             "connection_id": CONNECTION, "connection_revision": 2,
-            "connection_enabled": False, "active_consent": False,
-            "unresolved_pairing": True, "deletion_request_recorded": True,
+            "connection_enabled": False, "retirement_held": True,
+            "active_consent": False, "unresolved_pairing": True,
+            "provider_unlink_claim_recorded": False,
+            "deletion_request_recorded": True,
+            "credential_deletion_claim_recorded": False,
             "unverified_deletion_request": True,
             "inbox_not_completed": False, "outbound_not_confirmed": True,
         }]),
@@ -205,6 +208,9 @@ async def test_retirement_evidence_reuses_fresh_consent_policy_without_host(monk
     authority, repository, lookup = service(monkeypatch)
     rows = await authority.list_retirement_evidence(tenant_id=TENANT, user_id=USER)
     assert rows[0]["unresolved_pairing"] is True
+    assert rows[0]["retirement_assessment"]["status"] == "blocked"
+    assert rows[0]["retirement_assessment"]["cleanup_authorized"] is False
+    assert "pairing_teardown_unresolved" in rows[0]["retirement_assessment"]["blocking_reasons"]
     lookup.assert_awaited_once_with(tenant_id=TENANT, user_id=USER)
     repository.list_owned_personal_retirement_evidence.assert_awaited_once_with(
         tenant_id=TENANT, user_id=USER,
@@ -217,3 +223,122 @@ async def test_retirement_evidence_denied_by_rbac_without_sql(monkeypatch):
     with pytest.raises(PermissionError, match="RBAC"):
         await authority.list_retirement_evidence(tenant_id=TENANT, user_id=USER)
     repository.list_owned_personal_retirement_evidence.assert_not_awaited()
+
+
+def _complete_retirement_snapshot(**changes):
+    stored = dict(
+        connection_id=CONNECTION, connection_revision=3,
+        connection_enabled=False, retirement_held=True,
+        active_consent=False, unresolved_pairing=False,
+        provider_unlink_claim_recorded=True,
+        deletion_request_recorded=True,
+        credential_deletion_claim_recorded=True,
+        unverified_deletion_request=False,
+        inbox_not_completed=False, outbound_not_confirmed=False,
+    )
+    stored.update(changes)
+    return stored
+
+
+def test_all_local_claims_and_historical_verified_rows_never_authorize_cleanup():
+    from ai_karen_engine.services.channels.consent_recovery import (
+        RETIREMENT_VERIFICATION_CONTRACT_VERSION,
+        assess_retirement_evidence_snapshot,
+    )
+
+    snapshot = _complete_retirement_snapshot(
+        credential_handle="vault://secret",
+        session_reference="private-session",
+        provider_receipt_id="private-receipt",
+        message_text="private-message",
+    )
+    result = assess_retirement_evidence_snapshot(snapshot)
+    for secret_field in (
+        "credential_handle", "session_reference", "provider_receipt_id",
+        "message_text",
+    ):
+        assert secret_field not in result
+    receipt = result["retirement_assessment"]
+    assert receipt["contract_version"] == RETIREMENT_VERIFICATION_CONTRACT_VERSION
+    assert receipt["status"] == "blocked"
+    assert receipt["cleanup_authorized"] is False
+    assert receipt["provider_unlink_independently_verified"] is False
+    assert receipt["credential_erasure_independently_verified"] is False
+    assert receipt["retention_scope_verified"] is False
+    assert receipt["blocking_reasons"] == [
+        "provider_unlink_independent_verification_unavailable",
+        "credential_erasure_independent_verification_unavailable",
+        "retention_and_backup_scope_verification_unavailable",
+        "governed_final_cleanup_authority_unavailable",
+    ]
+    assert result["connection_id"] == CONNECTION
+    assert snapshot.get("retirement_assessment") is None
+
+
+def test_retirement_assessment_lists_all_local_and_remote_blockers():
+    from ai_karen_engine.services.channels.consent_recovery import (
+        assess_retirement_evidence_snapshot,
+    )
+    result = assess_retirement_evidence_snapshot(_complete_retirement_snapshot(
+        connection_enabled=True, retirement_held=False,
+        active_consent=True, unresolved_pairing=True,
+        provider_unlink_claim_recorded=False,
+        deletion_request_recorded=False,
+        credential_deletion_claim_recorded=False,
+        unverified_deletion_request=True,
+        inbox_not_completed=True, outbound_not_confirmed=True,
+    ))
+    assert result["retirement_assessment"]["blocking_reasons"][:10] == [
+        "local_retirement_hold_missing",
+        "local_connection_still_enabled",
+        "active_pairing_consent_remains",
+        "pairing_teardown_unresolved",
+        "provider_unlink_claim_missing",
+        "credential_deletion_request_missing",
+        "credential_deletion_claim_missing",
+        "credential_deletion_requests_unverified",
+        "inbound_work_unresolved",
+        "outbound_delivery_unconfirmed",
+    ]
+    assert len(result["retirement_assessment"]["blocking_reasons"]) == 14
+
+
+@pytest.mark.parametrize("change", [
+    {"connection_id": ""},
+    {"connection_id": " "},
+    {"connection_id": "a" * 257},
+    {"connection_revision": 0},
+    {"connection_revision": True},
+    {"connection_revision": "3"},
+    {"retirement_held": "false"},
+    {"connection_enabled": 0},
+    {"provider_unlink_claim_recorded": None},
+    {"credential_deletion_claim_recorded": "true"},
+    {"active_consent": 1},
+    {"unverified_deletion_request": None},
+])
+def test_retirement_assessment_refuses_untrusted_or_partial_snapshot(change):
+    from ai_karen_engine.services.channels.consent_recovery import (
+        assess_retirement_evidence_snapshot,
+    )
+    with pytest.raises(ValueError, match="complete stored evidence"):
+        assess_retirement_evidence_snapshot(_complete_retirement_snapshot(**change))
+
+
+@pytest.mark.asyncio
+async def test_retirement_assessment_rejects_duplicate_and_oversized_repository_results(monkeypatch):
+    authority, repository, _ = service(monkeypatch)
+    snapshot = _complete_retirement_snapshot()
+    for bad in ([snapshot, snapshot], [snapshot] * 51, None):
+        repository.list_owned_personal_retirement_evidence.return_value = bad
+        with pytest.raises(ValueError, match="(Duplicate|inventory invalid)"):
+            await authority.list_retirement_evidence(tenant_id=TENANT, user_id=USER)
+
+
+@pytest.mark.asyncio
+async def test_retirement_assessment_empty_result_is_honestly_empty(monkeypatch):
+    authority, repository, _ = service(monkeypatch)
+    repository.list_owned_personal_retirement_evidence.return_value = []
+    assert await authority.list_retirement_evidence(
+        tenant_id=TENANT, user_id=USER,
+    ) == []

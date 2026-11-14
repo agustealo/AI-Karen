@@ -652,9 +652,27 @@ describe('KOC-05 read-only retirement evidence review', () => {
     unresolved_pairing: true,
     provider_unlink_claim_recorded: true,
     deletion_request_recorded: true,
+    credential_deletion_claim_recorded: true,
     unverified_deletion_request: true,
     inbox_not_completed: false,
     outbound_not_confirmed: true,
+    retirement_assessment: {
+      contract_version: 'retirement-verification-readiness-v1',
+      status: 'blocked',
+      cleanup_authorized: false,
+      provider_unlink_independently_verified: false,
+      credential_erasure_independently_verified: false,
+      retention_scope_verified: false,
+      blocking_reasons: [
+        'pairing_teardown_unresolved',
+        'credential_deletion_requests_unverified',
+        'outbound_delivery_unconfirmed',
+        'provider_unlink_independent_verification_unavailable',
+        'credential_erasure_independent_verification_unavailable',
+        'retention_and_backup_scope_verification_unavailable',
+        'governed_final_cleanup_authority_unavailable',
+      ],
+    },
   };
 
   it('reads the SQL evidence only on demand even when ChannelHost is retired', async () => {
@@ -675,6 +693,10 @@ describe('KOC-05 read-only retirement evidence review', () => {
     expect(screen.getByText(/Provider unlink receipt claimed for the original held session/)).toBeTruthy();
     expect(screen.getByText(/Reactivation is blocked/)).toBeTruthy();
     expect(screen.getByText(/Retirement is not authorized by this report/)).toBeTruthy();
+    expect(screen.getByText('Final cleanup: blocked')).toBeTruthy();
+    expect(screen.getByText('Independent provider unlink verification unavailable')).toBeTruthy();
+    expect(screen.getByText('Provider retention and backup coverage unverified')).toBeTruthy();
+    expect(screen.getByText(/Provider credential-deletion claim recorded/)).toBeTruthy();
     expect(apiClient.delete).not.toHaveBeenCalled();
     expect(apiClient.post).not.toHaveBeenCalled();
   });
@@ -694,6 +716,65 @@ describe('KOC-05 read-only retirement evidence review', () => {
     expect((await screen.findByRole('alert')).textContent)
       .toContain('Retirement evidence unavailable');
     expect(screen.queryByText(/Retirement is not authorized by this report/)).toBeNull();
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { retirement_assessment: { ...evidence.retirement_assessment, cleanup_authorized: true } },
+    { retirement_assessment: { ...evidence.retirement_assessment, status: 'verified' } },
+    { retirement_assessment: { ...evidence.retirement_assessment, contract_version: 'retirement-verification-readiness-v2' } },
+    { retirement_assessment: { ...evidence.retirement_assessment, provider_unlink_independently_verified: true } },
+    { retirement_assessment: { ...evidence.retirement_assessment, blocking_reasons: [] } },
+    { retirement_assessment: { ...evidence.retirement_assessment, blocking_reasons: ['governed_final_cleanup_authority_unavailable'] } },
+    { retirement_assessment: { ...evidence.retirement_assessment, blocking_reasons: [...evidence.retirement_assessment.blocking_reasons, 'invented_authority'] } },
+    { retirement_assessment: { ...evidence.retirement_assessment, blocking_reasons: [...evidence.retirement_assessment.blocking_reasons, 'governed_final_cleanup_authority_unavailable'] } },
+    { retirement_assessment: undefined },
+    { credential_deletion_claim_recorded: 'true' },
+  ])('refuses forged or incomplete verification contracts %#', async (override) => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) return { connections: [{ ...evidence, ...override }] };
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review channel retirement evidence',
+    }));
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Retirement evidence unavailable');
+    expect(screen.queryByText('Final cleanup: blocked')).toBeNull();
+    expect(apiClient.delete).not.toHaveBeenCalled();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('stays blocked even when every local observation appears complete', async () => {
+    const localComplete = {
+      ...evidence,
+      unresolved_pairing: false,
+      unverified_deletion_request: false,
+      outbound_not_confirmed: false,
+      retirement_assessment: {
+        ...evidence.retirement_assessment,
+        blocking_reasons: [
+          'provider_unlink_independent_verification_unavailable',
+          'credential_erasure_independent_verification_unavailable',
+          'retention_and_backup_scope_verification_unavailable',
+          'governed_final_cleanup_authority_unavailable',
+        ],
+      },
+    };
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) return { connections: [localComplete] };
+      throw new Error('Unexpected URL');
+    });
+    render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review channel retirement evidence',
+    }));
+    expect(await screen.findByText('Final cleanup: blocked')).toBeTruthy();
+    expect(screen.getByText('Governed final cleanup is unavailable')).toBeTruthy();
+    expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.delete).not.toHaveBeenCalled();
   });
 
