@@ -541,6 +541,13 @@ class SqlChannelRepository:
                                WHERE d.tenant_id = c.tenant_id
                                  AND d.connection_id = c.connection_id
                                  AND d.user_id = o.user_id
+                                 AND d.status = 'provider_claimed'
+                           ) AS credential_deletion_claim_recorded,
+                           EXISTS (
+                               SELECT 1 FROM public.channel_personal_credential_deletions d
+                               WHERE d.tenant_id = c.tenant_id
+                                 AND d.connection_id = c.connection_id
+                                 AND d.user_id = o.user_id
                                  AND d.status <> 'verified'
                            ) AS unverified_deletion_request,
                            EXISTS (
@@ -583,6 +590,7 @@ class SqlChannelRepository:
                 "unresolved_pairing": bool(row["unresolved_pairing"]),
                 "provider_unlink_claim_recorded": bool(row["provider_unlink_claim_recorded"]),
                 "deletion_request_recorded": bool(row["deletion_request_recorded"]),
+                "credential_deletion_claim_recorded": bool(row["credential_deletion_claim_recorded"]),
                 "unverified_deletion_request": bool(row["unverified_deletion_request"]),
                 "inbox_not_completed": bool(row["inbox_not_completed"]),
                 "outbound_not_confirmed": bool(row["outbound_not_confirmed"]),

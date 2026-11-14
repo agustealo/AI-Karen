@@ -10,7 +10,7 @@ and the same tenant-RLS SqlChannelRepository used by ChannelHost.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -28,6 +28,100 @@ from ai_karen_engine.services.auth.auth_service import UserStatus
 from ai_karen_engine.services.auth.fresh_user_lookup import get_fresh_user_by_id
 
 logger = logging.getLogger(__name__)
+
+RETIREMENT_VERIFICATION_CONTRACT_VERSION = "retirement-verification-readiness-v1"
+
+_RETIREMENT_BOOLEAN_FIELDS = (
+    "connection_enabled",
+    "retirement_held",
+    "active_consent",
+    "unresolved_pairing",
+    "provider_unlink_claim_recorded",
+    "deletion_request_recorded",
+    "credential_deletion_claim_recorded",
+    "unverified_deletion_request",
+    "inbox_not_completed",
+    "outbound_not_confirmed",
+)
+
+RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS = (
+    "provider_unlink_independent_verification_unavailable",
+    "credential_erasure_independent_verification_unavailable",
+    "retention_and_backup_scope_verification_unavailable",
+    "governed_final_cleanup_authority_unavailable",
+)
+
+
+def assess_retirement_evidence_snapshot(
+    record: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Explain local and remote retirement blockers without minting authority.
+
+    This is not an erasure verifier or permission grant. Verified status in
+    historical vendor records is NOT independent source-authenticated proof;
+    until a separately governed verifier and retention evidence exist, all
+    cleanup remains unavailable. Strict typing prevents malformed SQL or
+    test adapters from masquerading as a safe snapshot.
+    """
+    if (
+        not isinstance(record, Mapping)
+        or not isinstance(record.get("connection_id"), str)
+        or not 1 <= len(record["connection_id"].strip()) <= 256
+        or type(record.get("connection_revision")) is not int
+        or record["connection_revision"] < 1
+        or any(type(record.get(field)) is not bool for field in _RETIREMENT_BOOLEAN_FIELDS)
+    ):
+        raise ValueError("Retirement assessment requires complete stored evidence")
+
+    blockers: list[str] = []
+    def block_if(condition: bool, reason: str) -> None:
+        if condition:
+            blockers.append(reason)
+
+    block_if(not record["retirement_held"], "local_retirement_hold_missing")
+    block_if(record["connection_enabled"], "local_connection_still_enabled")
+    block_if(record["active_consent"], "active_pairing_consent_remains")
+    block_if(record["unresolved_pairing"], "pairing_teardown_unresolved")
+    block_if(
+        not record["provider_unlink_claim_recorded"],
+        "provider_unlink_claim_missing",
+    )
+    block_if(
+        not record["deletion_request_recorded"],
+        "credential_deletion_request_missing",
+    )
+    block_if(
+        not record["credential_deletion_claim_recorded"],
+        "credential_deletion_claim_missing",
+    )
+    block_if(
+        record["unverified_deletion_request"],
+        "credential_deletion_requests_unverified",
+    )
+    block_if(record["inbox_not_completed"], "inbound_work_unresolved")
+    block_if(record["outbound_not_confirmed"], "outbound_delivery_unconfirmed")
+
+    # These independent sources of authority do not yet exist. In particular,
+    # a forged historical 'verified' row cannot suppress these mandatory
+    # blockers; claims and a quiet local queue are never sufficient.
+    blockers.extend(RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS)
+    return {
+        # Whitelist the original owner-only SQL columns. An unexpected
+        # repository adapter field must not expose session, credential,
+        # vendor receipt or message data to a recovery caller.
+        "connection_id": record["connection_id"],
+        "connection_revision": record["connection_revision"],
+        **{field: record[field] for field in _RETIREMENT_BOOLEAN_FIELDS},
+        "retirement_assessment": {
+            "contract_version": RETIREMENT_VERIFICATION_CONTRACT_VERSION,
+            "status": "blocked",
+            "cleanup_authorized": False,
+            "provider_unlink_independently_verified": False,
+            "credential_erasure_independently_verified": False,
+            "retention_scope_verified": False,
+            "blocking_reasons": blockers,
+        },
+    }
 
 
 class PersonalConsentRecoveryService:
@@ -134,14 +228,30 @@ class PersonalConsentRecoveryService:
 
     async def list_retirement_evidence(
         self, *, tenant_id: str, user_id: str,
-    ) -> list[dict[str, str | int | bool]]:
-        """Read stored blockers after fresh consent policy, without ChannelHost."""
+    ) -> list[dict[str, Any]]:
+        """Read bounded owner snapshots and fail-closed verification blockers."""
         tenant_id, user_id = await self._authorize(
             tenant_id=tenant_id, user_id=user_id,
         )
-        return await self._repository.list_owned_personal_retirement_evidence(
+        rows = await self._repository.list_owned_personal_retirement_evidence(
             tenant_id=tenant_id, user_id=user_id,
         )
+        if not isinstance(rows, list) or len(rows) > 50:
+            raise ValueError("Personal retirement evidence inventory invalid")
+        assessed = [assess_retirement_evidence_snapshot(row) for row in rows]
+        if len({row["connection_id"] for row in assessed}) != len(assessed):
+            raise ValueError("Duplicate connection retirement evidence")
+        logger.info(
+            "channel.personal_retirement.verification_assessment",
+            extra={
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "record_count": len(assessed),
+                "cleanup_authorized": False,
+                "contract_version": RETIREMENT_VERIFICATION_CONTRACT_VERSION,
+            },
+        )
+        return assessed
 
     async def list_deletion_requests(
         self, *, tenant_id: str, user_id: str,
@@ -196,4 +306,9 @@ class PersonalConsentRecoveryService:
         return revoked is True
 
 
-__all__ = ["PersonalConsentRecoveryService"]
+__all__ = [
+    "PersonalConsentRecoveryService",
+    "RETIREMENT_VERIFICATION_CONTRACT_VERSION",
+    "RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS",
+    "assess_retirement_evidence_snapshot",
+]

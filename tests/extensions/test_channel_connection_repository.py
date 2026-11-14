@@ -374,7 +374,8 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
         "retirement_locked": True,
         "active_consent": True, "unresolved_pairing": True,
         "provider_unlink_claim_recorded": False,
-        "deletion_request_recorded": True, "unverified_deletion_request": True,
+        "deletion_request_recorded": True, "credential_deletion_claim_recorded": False,
+        "unverified_deletion_request": True,
         "inbox_not_completed": False, "outbound_not_confirmed": True,
         "credential_handle": "vault://private",
     }
@@ -389,6 +390,7 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
         "active_consent": True,
         "unresolved_pairing": True, "provider_unlink_claim_recorded": False,
         "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": False,
         "unverified_deletion_request": True, "inbox_not_completed": False,
         "outbound_not_confirmed": True,
     }]

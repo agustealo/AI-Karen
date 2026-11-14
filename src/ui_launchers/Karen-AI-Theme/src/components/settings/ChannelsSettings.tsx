@@ -673,6 +673,42 @@ function RetiredCredentialDeletionHistory({ authenticated }: { authenticated: bo
   );
 }
 
+const RETIREMENT_REQUIRED_BLOCKERS = [
+  'provider_unlink_independent_verification_unavailable',
+  'credential_erasure_independent_verification_unavailable',
+  'retention_and_backup_scope_verification_unavailable',
+  'governed_final_cleanup_authority_unavailable',
+] as const;
+
+const RETIREMENT_BLOCKER_LABELS = {
+  local_retirement_hold_missing: 'No durable local retirement hold',
+  local_connection_still_enabled: 'Connection still enabled',
+  active_pairing_consent_remains: 'Active consent still recorded',
+  pairing_teardown_unresolved: 'Pairing teardown is unresolved',
+  provider_unlink_claim_missing: 'Original-session provider unlink claim is missing',
+  credential_deletion_request_missing: 'Credential deletion request not recorded',
+  credential_deletion_claim_missing: 'Provider credential-deletion claim is missing',
+  credential_deletion_requests_unverified: 'Credential-deletion request remains unverified',
+  inbound_work_unresolved: 'Inbound work remains unfinished',
+  outbound_delivery_unconfirmed: 'Outbound delivery is not confirmed',
+  provider_unlink_independent_verification_unavailable: 'Independent provider unlink verification unavailable',
+  credential_erasure_independent_verification_unavailable: 'Independent credential-erasure verification unavailable',
+  retention_and_backup_scope_verification_unavailable: 'Provider retention and backup coverage unverified',
+  governed_final_cleanup_authority_unavailable: 'Governed final cleanup is unavailable',
+} as const;
+
+type RetirementBlocker = keyof typeof RETIREMENT_BLOCKER_LABELS;
+
+type RetirementAssessment = {
+  contract_version: 'retirement-verification-readiness-v1';
+  status: 'blocked';
+  cleanup_authorized: false;
+  provider_unlink_independently_verified: false;
+  credential_erasure_independently_verified: false;
+  retention_scope_verified: false;
+  blocking_reasons: RetirementBlocker[];
+};
+
 type PersonalRetirementEvidence = {
   connection_id: string;
   connection_revision: number;
@@ -682,9 +718,11 @@ type PersonalRetirementEvidence = {
   unresolved_pairing: boolean;
   provider_unlink_claim_recorded: boolean;
   deletion_request_recorded: boolean;
+  credential_deletion_claim_recorded: boolean;
   unverified_deletion_request: boolean;
   inbox_not_completed: boolean;
   outbound_not_confirmed: boolean;
+  retirement_assessment: RetirementAssessment;
 };
 
 function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
@@ -698,8 +736,8 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
   const seen = new Set<string>();
   const booleanFields = [
     'connection_enabled', 'retirement_held', 'active_consent', 'unresolved_pairing',
-    'provider_unlink_claim_recorded', 'deletion_request_recorded', 'unverified_deletion_request',
-    'inbox_not_completed', 'outbound_not_confirmed',
+    'provider_unlink_claim_recorded', 'deletion_request_recorded', 'credential_deletion_claim_recorded',
+    'unverified_deletion_request', 'inbox_not_completed', 'outbound_not_confirmed',
   ] as const;
   for (const entry of rows) {
     if (!entry || typeof entry !== 'object') {
@@ -714,6 +752,26 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
       booleanFields.some((field) => typeof row[field] !== 'boolean')
     ) {
       throw new Error('Incomplete retirement evidence');
+    }
+    const assessment = row.retirement_assessment;
+    if (!assessment || typeof assessment !== 'object' || Array.isArray(assessment)) {
+      throw new Error('Missing retirement verification assessment');
+    }
+    const review = assessment as Record<string, unknown>;
+    const blockers = review.blocking_reasons;
+    if (
+      review.contract_version !== 'retirement-verification-readiness-v1' ||
+      review.status !== 'blocked' ||
+      review.cleanup_authorized !== false ||
+      review.provider_unlink_independently_verified !== false ||
+      review.credential_erasure_independently_verified !== false ||
+      review.retention_scope_verified !== false ||
+      !Array.isArray(blockers) || blockers.length < RETIREMENT_REQUIRED_BLOCKERS.length ||
+      blockers.some((code) => typeof code !== 'string' || !(code in RETIREMENT_BLOCKER_LABELS)) ||
+      new Set(blockers).size !== blockers.length ||
+      RETIREMENT_REQUIRED_BLOCKERS.some((code) => !blockers.includes(code))
+    ) {
+      throw new Error('Untrusted or incomplete retirement verification');
     }
     seen.add(row.connection_id);
   }
@@ -818,6 +876,11 @@ function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: bo
                   : 'No credential deletion request recorded'}
               </p>
               <p className="text-xs">
+                {record.credential_deletion_claim_recorded
+                  ? 'Provider credential-deletion claim recorded. Independent erasure verification remains unavailable.'
+                  : 'No provider credential-deletion claim recorded'}
+              </p>
+              <p className="text-xs">
                 {record.unverified_deletion_request
                   ? 'Credential deletion request not verified'
                   : 'No pending unverified request observed'}
@@ -832,9 +895,22 @@ function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: bo
                   ? 'Outbound delivery not confirmed'
                   : 'No unconfirmed outbound delivery observed'}
               </p>
-              <p className="text-xs font-medium">
-                Retirement is not authorized by this report, regardless of these flags.
-              </p>
+              <div className="space-y-1 border-t border-border/60 pt-2"
+                aria-label="Retirement verification blockers">
+                <p className="text-xs font-semibold">Final cleanup: blocked</p>
+                <p className="text-xs text-muted-foreground">
+                  Provider claims and historical SQL labels cannot independently verify erasure.
+                  The following checks are unresolved:
+                </p>
+                <ul className="list-disc pl-5 text-xs">
+                  {record.retirement_assessment.blocking_reasons.map((code) => (
+                    <li key={code}>{RETIREMENT_BLOCKER_LABELS[code]}</li>
+                  ))}
+                </ul>
+                <p className="text-xs font-medium">
+                  Retirement is not authorized by this report, regardless of these flags.
+                </p>
+              </div>
             </div>
           ))}
         </div>

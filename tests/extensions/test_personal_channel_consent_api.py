@@ -13,6 +13,9 @@ from ai_karen_engine.api_routes.channels import personal_consent as api
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.extensions.channels.contracts import ChannelConnection
 from ai_karen_engine.services.channels.host import ChannelHostServices
+from ai_karen_engine.services.channels.consent_recovery import (
+    assess_retirement_evidence_snapshot,
+)
 
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 USER = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -589,15 +592,20 @@ def retired_recovery_context(monkeypatch, *, consents=None, revoked=True):
             "policy_version": "obsolete-policy",
         }]),
         revoke=AsyncMock(return_value=revoked),
-        list_retirement_evidence=AsyncMock(return_value=[{
-            "connection_id": CONNECTION, "connection_revision": 2,
-            "connection_enabled": False, "retirement_held": False,
-            "active_consent": False,
-            "unresolved_pairing": True, "provider_unlink_claim_recorded": False,
-            "deletion_request_recorded": True,
-            "unverified_deletion_request": True,
-            "inbox_not_completed": False, "outbound_not_confirmed": True,
-        }]),
+        list_retirement_evidence=AsyncMock(return_value=[
+            assess_retirement_evidence_snapshot({
+                "connection_id": CONNECTION, "connection_revision": 2,
+                "connection_enabled": False, "retirement_held": False,
+                "active_consent": False,
+                "unresolved_pairing": True,
+                "provider_unlink_claim_recorded": False,
+                "deletion_request_recorded": True,
+                "credential_deletion_claim_recorded": False,
+                "unverified_deletion_request": True,
+                "inbox_not_completed": False,
+                "outbound_not_confirmed": True,
+            }),
+        ]),
         list_deletion_requests=AsyncMock(return_value=[{
             "request_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
             "connection_id": CONNECTION, "provider_id": PROVIDER,
@@ -757,7 +765,14 @@ async def test_retirement_evidence_api_requires_identity_and_never_claims_deleti
     item = result.connections[0].model_dump()
     assert item["unresolved_pairing"] is True
     assert item["provider_unlink_claim_recorded"] is False
+    assert item["credential_deletion_claim_recorded"] is False
     assert item["outbound_not_confirmed"] is True
+    assessment = item["retirement_assessment"]
+    assert assessment["contract_version"] == "retirement-verification-readiness-v1"
+    assert assessment["status"] == "blocked"
+    assert assessment["cleanup_authorized"] is False
+    assert assessment["provider_unlink_independently_verified"] is False
+    assert "governed_final_cleanup_authority_unavailable" in assessment["blocking_reasons"]
     for secret in ("credential_handle", "session_reference", "provider_receipt_id",
                    "message_text", "retirement_authorized", "provider_unlinked"):
         assert secret not in item
@@ -906,3 +921,72 @@ def test_retirement_hold_api_contract_is_authenticated_and_strict():
             idempotency_key="ffffffff-ffff-ffff-ffff-ffffffffffff",
             operator_user_id=USER,
         )
+
+
+@pytest.mark.asyncio
+async def test_retirement_api_refuses_fake_cleanup_grant_and_redacts_invalid_evidence(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    original = recovery.list_retirement_evidence.return_value[0]
+    corrupted = {
+        **original,
+        "retirement_assessment": {
+            **original["retirement_assessment"],
+            "cleanup_authorized": True,
+        },
+    }
+    recovery.list_retirement_evidence.return_value = [corrupted]
+    with pytest.raises(HTTPException) as err:
+        await api.list_retired_channel_evidence(user=actor())
+    assert err.value.status_code == 503
+    assert "cleanup_authorized" not in err.value.detail
+
+    # Even a forged historical 'verified' ledger label cannot remove the
+    # mandatory independently verified-erasure blockers from this response.
+    bad = {
+        **original,
+        "retirement_assessment": {
+            **original["retirement_assessment"],
+            # Four valid local reason codes alone are not sufficient; all
+            # independent verification prerequisites remain mandatory.
+            "blocking_reasons": [
+                "local_retirement_hold_missing",
+                "active_pairing_consent_remains",
+                "pairing_teardown_unresolved",
+                "credential_deletion_request_missing",
+            ],
+        },
+    }
+    recovery.list_retirement_evidence.return_value = [bad]
+    with pytest.raises(HTTPException) as err:
+        await api.list_retired_channel_evidence(user=actor())
+    assert err.value.status_code == 503
+
+
+def test_retirement_review_response_schema_never_accepts_destructive_capability():
+    valid = assess_retirement_evidence_snapshot({
+        "connection_id": CONNECTION, "connection_revision": 2,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": False, "unresolved_pairing": False,
+        "provider_unlink_claim_recorded": True,
+        "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": True,
+        "unverified_deletion_request": False,
+        "inbox_not_completed": False, "outbound_not_confirmed": False,
+    })
+    assert api.PersonalRetirementEvidenceItem(**valid).retirement_assessment.cleanup_authorized is False
+    for forge in (
+        {"cleanup_authorized": True},
+        {"status": "verified"},
+        {"provider_unlink_independently_verified": True},
+        {"credential_erasure_independently_verified": True},
+        {"retention_scope_verified": True},
+        {"contract_version": "retirement-verification-readiness-v2"},
+    ):
+        with pytest.raises(ValidationError):
+            api.PersonalRetirementEvidenceItem(**{
+                **valid,
+                "retirement_assessment": {
+                    **valid["retirement_assessment"],
+                    **forge,
+                },
+            })

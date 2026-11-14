@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -20,6 +20,7 @@ from ai_karen_engine.persistence.repositories.channel_repository import (
 )
 from ai_karen_engine.services.channels.consent_recovery import (
     PersonalConsentRecoveryService,
+    RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS,
 )
 from ai_karen_engine.services.channels.personal_pairing_policy import (
     PERSONAL_WHATSAPP_CONSENT_VERSION,
@@ -309,6 +310,47 @@ class PersonalConsentRecoveryInventory(BaseModel):
     consents: list[PersonalConsentRecoveryItem]
 
 
+class PersonalRetirementAssessment(BaseModel):
+    """Version-fenced blocker report, never a cleanup authorization grant."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["retirement-verification-readiness-v1"]
+    status: Literal["blocked"]
+    cleanup_authorized: Literal[False]
+    provider_unlink_independently_verified: Literal[False]
+    credential_erasure_independently_verified: Literal[False]
+    retention_scope_verified: Literal[False]
+    blocking_reasons: list[Literal[
+        "local_retirement_hold_missing",
+        "local_connection_still_enabled",
+        "active_pairing_consent_remains",
+        "pairing_teardown_unresolved",
+        "provider_unlink_claim_missing",
+        "credential_deletion_request_missing",
+        "credential_deletion_claim_missing",
+        "credential_deletion_requests_unverified",
+        "inbound_work_unresolved",
+        "outbound_delivery_unconfirmed",
+        "provider_unlink_independent_verification_unavailable",
+        "credential_erasure_independent_verification_unavailable",
+        "retention_and_backup_scope_verification_unavailable",
+        "governed_final_cleanup_authority_unavailable",
+    ]] = Field(min_length=4)
+
+    @field_validator("blocking_reasons")
+    @classmethod
+    def require_independent_verification_blockers(cls, codes: list[str]) -> list[str]:
+        # The existing verification owner defines what cannot currently be
+        # attested. Pydantic must not accept a mocked/incomplete backend
+        # that silently removes one of those mandatory blockers.
+        if len(set(codes)) != len(codes) or not all(
+            code in codes for code in RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS
+        ):
+            raise ValueError("Independent retirement verification evidence unavailable")
+        return codes
+
+
 class PersonalRetirementEvidenceItem(BaseModel):
     connection_id: str
     connection_revision: int
@@ -318,9 +360,11 @@ class PersonalRetirementEvidenceItem(BaseModel):
     unresolved_pairing: bool
     provider_unlink_claim_recorded: bool
     deletion_request_recorded: bool
+    credential_deletion_claim_recorded: bool
     unverified_deletion_request: bool
     inbox_not_completed: bool
     outbound_not_confirmed: bool
+    retirement_assessment: PersonalRetirementAssessment
 
 
 class PersonalRetirementEvidenceInventory(BaseModel):
@@ -340,9 +384,20 @@ async def list_retired_channel_evidence(
         rows = await PersonalConsentRecoveryService().list_retirement_evidence(
             tenant_id=tenant_id, user_id=user_id,
         )
-    except Exception as exc:
+        return PersonalRetirementEvidenceInventory(connections=rows)
+    except PermissionError as exc:
         raise _translate(exc, operation="recovery") from None
-    return PersonalRetirementEvidenceInventory(connections=rows)
+    except Exception as exc:
+        # This GET accepts no user data beyond an authenticated principal.
+        # Missing, malformed or forged backend evidence is a server integrity
+        # failure, not a recoverable client validation problem.
+        logger.error(
+            "channel.personal_retirement.evidence_invalid",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            503, "Personal channel retirement evidence unavailable",
+        ) from None
 
 
 class PersonalCredentialDeletionRequestItem(BaseModel):
