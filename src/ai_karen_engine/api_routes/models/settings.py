@@ -53,6 +53,10 @@ from ai_karen_engine.integrations.providers.ollama_provider import (
 from ai_karen_engine.integrations.llm_registry import get_registry
 from ai_karen_engine.services.formatting.settings_manager import get_settings_manager
 from ai_karen_engine.core.security.secrets.secrets import get_secret_manager
+from ai_karen_engine.config.provider_authentication import (
+    AuthenticationStatus,
+    get_provider_auth_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -729,30 +733,89 @@ async def validate_provider_settings(
     request: ProviderSettingsValidationRequest,
     current_user: Any = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Validate provider settings (API key, base URL)."""
-    try:
-        provider_id = _normalize_provider_id(request.provider)
-        
-        # Simple validation for now - check if API key is provided if required
-        # and try to discover models if base_url is provided.
-        
-        if request.api_key and len(request.api_key) < 3:
-             return {"valid": False, "message": "Invalid API key format"}
+    """Verify a candidate API key against the configured provider, not a catalog.
 
-        # Return success with count if we can find any models
-        # (This is a lightweight check)
-        discovery_service = get_model_discovery_service()
-        models = discovery_service.get_models(runtime=provider_id)
-        
-        return {
-            "valid": True, 
-            "message": "Settings verified",
-            "models_discovered": len(models)
-        }
-        
-    except Exception as e:
-        logger.error(f"Validation failed for {request.provider}: {e}")
-        return {"valid": False, "message": f"Validation failed: {str(e)}"}
+    This is an administrator-managed workspace setting. A model listing, saved
+    key or merely nonempty input cannot establish authenticated access.
+    """
+    roles = (
+        current_user.get("roles", [])
+        if isinstance(current_user, dict)
+        else getattr(current_user, "roles", [])
+    )
+    if "admin" not in roles and "super_admin" not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required to validate workspace credentials",
+        )
+
+    provider_id = _normalize_provider_id(request.provider)
+    unverified = {
+        "valid": False,
+        "status": "unverified",
+        "message": "Provider credential could not be verified",
+        "models_discovered": 0,
+    }
+    try:
+        provider = get_provider_config_manager().get_provider(provider_id)
+        if provider is None or not provider.enabled:
+            return {**unverified, "message": "Provider is unavailable"}
+        if provider.authentication.type != AuthenticationType.API_KEY:
+            return {
+                **unverified,
+                "status": "not_required",
+                "message": "This provider does not require an API key",
+            }
+        if not request.api_key or not request.api_key.strip():
+            return {**unverified, "message": "Enter an API key to verify"}
+
+        # Do not let submitted key material follow a user-provided base URL.
+        # The auth adapter probes only the endpoint already in provider config.
+        if request.base_url is not None:
+            if not provider.endpoint:
+                return unverified
+            if _discovery_url_key(request.base_url) != _discovery_url_key(
+                provider.endpoint.base_url
+            ):
+                return {
+                    **unverified,
+                    "message": "The endpoint must be configured before validating credentials",
+                }
+
+        result = await get_provider_auth_manager().validate_candidate_api_key(
+            provider_id, request.api_key
+        )
+        verified = result.status == AuthenticationStatus.VALID
+        if verified:
+            return {
+                "valid": True,
+                "status": "verified",
+                "message": "Provider authenticated the submitted API key",
+                "models_discovered": 0,
+            }
+        if result.status in {
+            AuthenticationStatus.INVALID,
+            AuthenticationStatus.INSUFFICIENT_PERMISSIONS,
+        }:
+            state = "invalid"
+            message = "Provider rejected this credential"
+        elif result.status == AuthenticationStatus.RATE_LIMITED:
+            state = "unverified"
+            message = "Provider rate limit prevented verification"
+        else:
+            state = "unverified"
+            message = "Provider verification is unavailable"
+        return {**unverified, "status": state, "message": message}
+    except HTTPException:
+        # Malformed client URLs must never be used for a candidate probe.
+        return {**unverified, "message": "Invalid provider validation endpoint"}
+    except Exception as exc:
+        # Exception strings can contain keys, authorization headers or URLs.
+        logger.warning(
+            "provider_credential_validation_failed",
+            extra={"provider": provider_id, "error_type": type(exc).__name__},
+        )
+        return unverified
 
 
 async def build_model_settings_payload() -> Dict[str, Any]:
