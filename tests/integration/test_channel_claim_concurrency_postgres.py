@@ -92,7 +92,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         await raw.execute(integrity_migration)
         hold_migration = (
             Path(__file__).resolve().parents[2]
-            / "supabase/migrations/20261114030000_52_channel_personal_retirement_hold.sql"
+            / "supabase/migrations/20261114040000_52_channel_personal_retirement_hold.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(hold_migration)
         await raw.execute(
