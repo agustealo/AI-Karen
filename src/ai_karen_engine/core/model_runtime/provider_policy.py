@@ -32,6 +32,7 @@ CLOUD_PROVIDERS: set[str] = {
     "anthropic",
     "deepseek",
     "zai",
+    "nous",
     "openai_compatible_remote",
 }
 
