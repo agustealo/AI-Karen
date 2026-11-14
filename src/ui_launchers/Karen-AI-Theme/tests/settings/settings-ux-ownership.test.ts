@@ -47,6 +47,10 @@ describe('settings UX ownership contract', () => {
     expect(models).toContain("Save provider connection");
     expect(models).toContain("Set as workspace default");
     expect(models).toContain("canSetWorkspaceDefault");
+    expect(models).toContain("configuredEndpoint");
+    expect(models).toContain("!isEditingApiKey");
+    expect(models).toContain("setWorkspaceDefault ? selectedModel.trim() : undefined");
+    expect(models).toContain("Connection-only saves may store an unverified candidate");
     expect(models).toContain("not verified for chat");
     expect(models).toContain("Ready for chat");
     expect(models).not.toContain("Finalize Intelligence Settings");
