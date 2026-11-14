@@ -1,0 +1,97 @@
+name: One-time cleanup of merged PR branches
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/one-time-merged-pr-branch-cleanup.yml]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: one-time-merged-pr-branch-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Delete only exact-head merged PR branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = 'agustealo';
+            const repo = 'AI-Karen';
+            const repository = owner + '/' + repo;
+            const preservedNames = new Set(['main', 'master', 'develop', 'development', 'staging', 'production']);
+            const preservedPrefixes = ['release/', 'hotfix/', 'production/', 'staging/'];
+            const [branches, pulls] = await Promise.all([
+              github.paginate(github.rest.repos.listBranches, { owner, repo, per_page: 100 }),
+              github.paginate(github.rest.pulls.list, { owner, repo, state: 'all', per_page: 100 }),
+            ]);
+            const byBranch = new Map();
+            for (const pr of pulls) {
+              if (pr.head?.repo?.full_name !== repository || !pr.head.ref) continue;
+              const list = byBranch.get(pr.head.ref) ?? [];
+              list.push(pr);
+              byBranch.set(pr.head.ref, list);
+            }
+            const deleted = [], withheld = [], failed = [];
+            const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+            for (const branch of branches) {
+              const name = branch.name;
+              if (preservedNames.has(name) || preservedPrefixes.some(p => name.startsWith(p)) || branch.protected) {
+                withheld.push({ branch: name, reason: 'protected_or_release' });
+                continue;
+              }
+              const associated = byBranch.get(name) ?? [];
+              if (associated.some(pr => pr.state === 'open')) {
+                withheld.push({ branch: name, reason: 'open_pr' });
+                continue;
+              }
+              const match = associated.find(pr => pr.merged_at &&
+                pr.head.sha === branch.commit.sha &&
+                pr.base?.repo?.full_name === repository);
+              if (!match) {
+                withheld.push({ branch: name, reason: 'no_exact_head_merged_pr' });
+                continue;
+              }
+              try {
+                const fresh = (await github.rest.repos.getBranch({ owner, repo, branch: name })).data;
+                if (fresh.protected || fresh.commit.sha !== branch.commit.sha) {
+                  withheld.push({ branch: name, reason: 'changed_or_newly_protected' });
+                  continue;
+                }
+                await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + name });
+                deleted.push({ branch: name, head_sha: branch.commit.sha, merged_pr: match.number });
+                await pause(1000);
+              } catch (error) {
+                failed.push({ branch: name, status: error.status ?? null, message: error.message });
+                await pause(2500);
+              }
+            }
+            const report = { repository, examined_branches: branches.length, examined_prs: pulls.length,
+              deleted_count: deleted.length, withheld_count: withheld.length, failed_count: failed.length,
+              deleted, withheld, failed };
+            require('fs').writeFileSync('merged-branch-cleanup-report.json', JSON.stringify(report, null, 2));
+            await core.summary.addHeading('One-time merged branch cleanup')
+              .addTable([
+                [{ data: 'Measure', header: true }, { data: 'Count', header: true }],
+                ['Examined branches', String(branches.length)],
+                ['Deleted exact-head merged branches', String(deleted.length)],
+                ['Withheld', String(withheld.length)],
+                ['Failed', String(failed.length)]
+              ])
+              .write();
+            core.info(JSON.stringify({deleted_count: deleted.length, withheld_count: withheld.length, failed_count: failed.length}));
+            if (failed.length) core.setFailed('Some eligible branch deletions failed; see audit artifact.');
+      - name: Upload deletion audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: one-time-merged-branch-cleanup-report
+          path: merged-branch-cleanup-report.json
+          if-no-files-found: warn
+          retention-days: 30
