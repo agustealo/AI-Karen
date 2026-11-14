@@ -184,13 +184,11 @@ export default function ModelSettings() {
     [settings],
   );
 
-  const canSelectProvider = useCallback((provider?: { selectable?: boolean; requires_api_key?: boolean } | null) => {
-    if (!provider) return false;
-    if (provider.selectable !== false) return true;
-    return Boolean(provider.requires_api_key);
-  }, []);
+  // Settings is a configuration and diagnostic surface. Browsing a disabled
+  // or unconfigured registered provider never grants chat execution.
+  const canSelectProvider = useCallback((provider?: { id: string } | null) => Boolean(provider?.id), []);
 
-  const hasUnsavedSelection = Boolean(normalizedSettings && (
+  const hasUnsavedSelection = Boolean(normalizedSettings && selectedModel && (
     selectedProvider !== normalizedSettings.selected_provider ||
     selectedModel !== normalizedSettings.selected_model
   ));
@@ -202,6 +200,22 @@ export default function ModelSettings() {
   const selectableCloudProviders = useMemo(
     () => (normalizedSettings?.thirdPartyProviders || []).filter((provider) => canSelectProvider(provider)),
     [normalizedSettings?.thirdPartyProviders, canSelectProvider],
+  );
+
+  const verifiedModels = useMemo(() => availableModels.filter((model) =>
+    model.source === 'provider_live' ||
+    (model.is_installed === true && (model.source === 'ollama_native' || model.source === 'local_runtime')),
+  ), [availableModels]);
+
+  const canSetWorkspaceDefault = Boolean(
+    selectedProviderDetails?.enabled === true &&
+    selectedProviderDetails?.is_configured === true &&
+    selectedProviderDetails?.healthy === true &&
+    selectedProviderDetails?.health_status === 'healthy' &&
+    selectedModel &&
+    verifiedModels.some((model) => model.id === selectedModel) &&
+    !isLoadingModels &&
+    !modelDiscoveryError,
   );
 
   const selectedProviderLabel = useMemo(() => {
@@ -284,7 +298,8 @@ export default function ModelSettings() {
       const discovered = normalizeDiscoveredProviderModels(providerId, response.models || []);
       setModelDiscoveryNotice(getProviderModelDiscoveryNotice(response));
       setAvailableModels(discovered);
-      setSelectedModel((previous) => reconcileDiscoveredModelSelection(previous, discovered));
+      // Discovery refresh is read-only. It must not silently select a new
+      // workspace default or turn an unavailable saved model into a draft.
     } catch (error) {
       if (requestId !== modelDiscoveryRequestId.current) return;
       const message = formatErrorMessage(error, `Karen could not refresh models for ${providerId}.`);
@@ -292,7 +307,8 @@ export default function ModelSettings() {
       // A failed endpoint is never evidence that a managed model is
       // available, regardless of its saved or catalog-selected ID.
       setAvailableModels([]);
-      if (!manualEntryAllowed) setSelectedModel('');
+      // Preserve the user's draft and report the discovery error. It must
+      // never silently become a different model.
       toast({
         title: 'Model discovery failed',
         description: message,
@@ -309,7 +325,7 @@ export default function ModelSettings() {
 
   useEffect(() => {
     if (!selectedProviderDetails) return;
-    const providerDefaultModel = selectedProviderDetails.selected_model || selectedProviderDetails.default_model || selectedProviderDetails.models[0]?.id || '';
+    // No provider-model combination is chosen merely by opening Settings.
     const selectedSource = selectedProviderDetails.runtime_source === 'container' ? 'container' : 'host';
     const runtimeEndpoint = usesRuntimeOptions
       ? selectedProviderDetails.runtime_options?.find((option) => option.source === selectedSource)?.base_url
@@ -328,9 +344,13 @@ export default function ModelSettings() {
     setApiKeyHeader(selectedProviderDetails.api_key_header || 'Authorization');
     setApiKeyPrefix(selectedProviderDetails.api_key_prefix ?? 'Bearer');
     setAvailableModels(requiresLiveModelInventory ? [] : fallbackProviderModels);
-    setSelectedModel(providerDefaultModel);
+    setSelectedModel(
+      selectedProviderDetails.id === normalizedSettings?.selected_provider
+        ? normalizedSettings.selected_model
+        : '',
+    );
     void loadProviderModels(selectedProviderDetails.id, providerBaseUrl, canEnterModelManually);
-  }, [canEnterModelManually, fallbackProviderModels, loadProviderModels, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
+  }, [canEnterModelManually, fallbackProviderModels, loadProviderModels, normalizedSettings?.selected_model, normalizedSettings?.selected_provider, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
 
   useEffect(() => {
     if (!usesRuntimeOptions) return;
