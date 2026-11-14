@@ -170,3 +170,22 @@ def test_plugin_truth_surfaces_retrigger_plugin_ci() -> None:
         assert path in source
 
     assert "src/ai_karen_engine/api_routes/plugins/" in source
+
+
+def test_user_uploaded_code_never_inherits_builtin_trust_or_in_process_execution() -> None:
+    root = ROOT / "src" / "ai_karen_engine"
+    kernel = (root / "extensions" / "plugin_kernel.py").read_text(encoding="utf-8")
+    upload = (root / "services" / "plugin_service.py").read_text(encoding="utf-8")
+    executor = (root / "extensions" / "executor.py").read_text(encoding="utf-8")
+
+    assert 'UPLOADED_ORIGIN_MARKER = ".karen-upload-origin"' in kernel
+    assert "and not self._is_uploaded_plugin(plugin_id)" in kernel
+    assert "self._is_builtin_root() and not self._is_uploaded_plugin(origin_plugin_id)" in kernel
+    assert "Uploaded plugin execution requires a verified isolated runtime" in kernel
+    assert "(staged / PluginKernel.UPLOADED_ORIGIN_MARKER).write_text(" in upload
+    assert "PluginKernel.UPLOADED_ORIGIN_MARKER," in upload
+    assert "trust_tier not in (TrustTier.FIRST_PARTY, TrustTier.BUILTIN_TRUSTED)" in executor
+    assert "isolation_mode != ExecutionIsolationMode.IN_PROCESS" in executor
+    assert '"isolation_unavailable"' in executor
+    assert "result.trust_tier = getattr(resolved" not in executor
+    assert "self._invoke(handler, request)" in executor
