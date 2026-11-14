@@ -205,3 +205,88 @@ async def test_installed_only_catalog_filter_ignores_available_plugins_before_pa
     assert second["has_next"] is False
     assert {first["plugins"][0]["runtime_status"], second["plugins"][0]["runtime_status"]} == {"enabled", "disabled"}
     assert all(item["status"] == "installed" for item in first["plugins"] + second["plugins"])
+
+
+def test_uploaded_plugin_catalog_exposes_isolation_block_reason() -> None:
+    payload = store._plugin_payload(
+        {
+            "manifest": _manifest(),
+            "status": "disabled",
+            "activation_blocked_reason": "isolated_runtime_required",
+        }
+    )
+    assert payload["status"] == "installed"
+    assert payload["runtime_status"] == "disabled"
+    assert payload["activation_blocked_reason"] == "isolated_runtime_required"
+
+
+@pytest.mark.asyncio
+async def test_store_install_quarantine_is_audited_409_without_enable_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_events = []
+
+    class RBAC:
+        def has_permission(self, _user, permission):
+            assert permission is Permission.ADMIN_PLUGINS_MANAGE
+            return True
+
+        def audit_access_attempt(self, *args, **kwargs):
+            return None
+
+    class Service:
+        async def get_plugin_info(self, _plugin_id):
+            return {
+                "manifest": _manifest(),
+                "status": "disabled",
+                "activation_blocked_reason": "isolated_runtime_required",
+            }
+
+        async def enable_plugin(self, _plugin_id):
+            pytest.fail("Quarantined uploads must never reach the enable transition")
+
+    monkeypatch.setattr(plugin_routes, "get_rbac_manager", RBAC)
+    monkeypatch.setattr(
+        store,
+        "get_audit_logger",
+        lambda: SimpleNamespace(log_audit_event=audit_events.append),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await store.install_plugin_endpoint(
+            http_request=_request(),
+            request=store.PluginInstallRequest(plugin_id="alpha-plugin"),
+            current_user={"user_id": "operator", "tenant_id": "tenant-a", "roles": ["admin"]},
+            plugin_service=Service(),
+        )
+
+    assert exc.value.status_code == 409
+    assert "isolated runtime" in exc.value.detail
+    assert audit_events[-1]["metadata"]["reason"] == "isolated_runtime_required"
+    assert audit_events[-1]["metadata"]["outcome"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_plugin_mutation_reports_quarantine_conflict_without_fake_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = []
+
+    class Service:
+        async def enable_plugin(self, plugin_id):
+            raise ValueError("Uploaded plugin execution requires a verified isolated runtime")
+
+    monkeypatch.setattr(
+        plugin_routes, "get_audit_logger",
+        lambda: SimpleNamespace(log_audit_event=events.append),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await plugin_routes._set_enabled(
+            plugin_name="alpha-plugin",
+            request=_request(),
+            user={"user_id": "operator", "tenant_id": "tenant-a", "roles": ["admin"]},
+            service=Service(),
+            enabled=True,
+        )
+    assert exc.value.status_code == 409
+    assert "isolated runtime" in exc.value.detail
+    assert [event["metadata"]["outcome"] for event in events] == ["attempt", "rejected"]
