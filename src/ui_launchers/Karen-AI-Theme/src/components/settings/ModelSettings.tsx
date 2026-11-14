@@ -205,16 +205,17 @@ export default function ModelSettings() {
     (model.is_installed === true && (model.source === 'ollama_native' || model.source === 'local_runtime')),
   ), [availableModels]);
 
-  const canSetWorkspaceDefault = Boolean(
+  const providerReadyForChat = Boolean(
     selectedProviderDetails?.enabled === true &&
     selectedProviderDetails?.is_configured === true &&
     selectedProviderDetails?.healthy === true &&
     selectedProviderDetails?.health_status === 'healthy' &&
-    selectedModel &&
-    verifiedModels.some((model) => model.id === selectedModel) &&
+    verifiedModels.length > 0 &&
     !isLoadingModels &&
     !modelDiscoveryError,
   );
+  const canSetWorkspaceDefault = providerReadyForChat &&
+    verifiedModels.some((model) => model.id === selectedModel);
 
   const selectedProviderLabel = useMemo(() => {
     if (!selectedProviderDetails) return '';
@@ -647,7 +648,7 @@ export default function ModelSettings() {
               {selectedProviderDetails && (
                 <div role="status" className="rounded-xl border border-border/60 px-4 py-3 text-sm">
                   <p className="font-semibold">
-                    {selectedProviderLabel}: {canSetWorkspaceDefault ? 'Ready for chat' : 'Setup or verification required'}
+                    {selectedProviderLabel}: {providerReadyForChat ? 'Ready for chat' : 'Setup or verification required'}
                   </p>
                   <p className="mt-1 text-muted-foreground">
                     {selectedProviderDetails.enabled !== true
