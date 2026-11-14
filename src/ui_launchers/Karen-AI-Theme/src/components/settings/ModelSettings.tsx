@@ -26,6 +26,7 @@ import { Label } from '../ui/label';
 import { Input } from '../ui/input';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue, SelectSeparator } from '../ui/select';
 import { Button } from '../ui/button';
+import { Checkbox } from '../ui/checkbox';
 import { Badge } from '../ui/badge';
 import { Separator } from '../ui/separator';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -154,6 +155,7 @@ export default function ModelSettings() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isClearingKey, setIsClearingKey] = useState(false);
+  const [isUpdatingChatAccess, setIsUpdatingChatAccess] = useState(false);
   const [chatResponseMode, setChatResponseMode] = useState<ChatResponseMode>('streaming_first');
 
   // Custom Provider State
@@ -200,12 +202,15 @@ export default function ModelSettings() {
   );
 
   const verifiedModels = useMemo(() => availableModels.filter((model) =>
-    model.source === 'provider_live' ||
-    (model.is_installed === true && (model.source === 'ollama_native' || model.source === 'local_runtime')),
-  ), [availableModels]);
+    selectedProviderDetails?.chat_model_visibility?.[model.id] !== false && (
+      model.source === 'provider_live' ||
+      (model.is_installed === true && (model.source === 'ollama_native' || model.source === 'local_runtime'))
+    ),
+  ), [availableModels, selectedProviderDetails?.chat_model_visibility]);
 
   const providerReadyForChat = Boolean(
     selectedProviderDetails?.enabled === true &&
+    selectedProviderDetails?.chat_enabled !== false &&
     selectedProviderDetails?.is_configured === true &&
     selectedProviderDetails?.healthy === true &&
     selectedProviderDetails?.health_status === 'healthy' &&
@@ -352,7 +357,12 @@ export default function ModelSettings() {
         ? normalizedSettings.selected_model
         : '',
     );
-    void loadProviderModels(selectedProviderDetails.id, providerBaseUrl);
+    if (selectedProviderDetails.enabled === true) {
+      void loadProviderModels(selectedProviderDetails.id, providerBaseUrl);
+    } else {
+      setModelDiscoveryError('');
+      setModelDiscoveryNotice('Provider disabled. Enable it in Admin settings before checking live models.');
+    }
   }, [canEnterModelManually, fallbackProviderModels, loadProviderModels, normalizedSettings?.selected_model, normalizedSettings?.selected_provider, requiresLiveModelInventory, selectedProviderDetails, usesRuntimeOptions]);
 
   useEffect(() => {
@@ -553,6 +563,37 @@ export default function ModelSettings() {
     } finally { setIsClearingKey(false); }
   };
 
+  const handleAdminChatAccessChange = async (change: {
+    provider_enabled?: boolean;
+    chat_enabled?: boolean;
+    model_id?: string;
+    model_enabled?: boolean;
+  }) => {
+    if (!canManageRuntime || !selectedProviderDetails || isUpdatingChatAccess) return;
+    setIsUpdatingChatAccess(true);
+    try {
+      const confirmed = await apiClient.patch<ModelSettingsResponse>(
+        `/api/settings/model/providers/${encodeURIComponent(selectedProviderDetails.id)}/chat-access`,
+        change,
+      );
+      // The server is the only source of persisted configuration truth.
+      // Do not silently change the workspace's selected provider or model.
+      setSettings(confirmed);
+      toast({
+        title: 'Chat access updated',
+        description: 'Saved provider and model chat options. Live readiness still determines availability.',
+      });
+    } catch (error) {
+      toast({
+        title: 'Chat access was not changed',
+        description: formatErrorMessage(error, 'Karen could not save chat availability.'),
+        variant: 'destructive',
+      });
+    } finally {
+      setIsUpdatingChatAccess(false);
+    }
+  };
+
   const handleCreateCustomProvider = async () => {
     if (!canManageRuntime) return;
     if (!customProviderForm.name.trim() || !customProviderForm.displayName.trim() || !customProviderForm.baseUrl.trim() || !customProviderForm.model.trim()) {
@@ -660,7 +701,7 @@ export default function ModelSettings() {
               {selectedProviderDetails && (
                 <div role="status" className="rounded-xl border border-border/60 px-4 py-3 text-sm">
                   <p className="font-semibold">
-                    {selectedProviderLabel}: {providerReadyForChat ? 'Ready for chat' : 'Setup or verification required'}
+                    {selectedProviderLabel}: {providerReadyForChat ? 'Ready for chat' : selectedProviderDetails.chat_enabled === false ? 'Hidden from chat by administrator' : 'Setup or verification required'}
                   </p>
                   <p className="mt-1 text-muted-foreground">
                     {selectedProviderDetails.enabled !== true
@@ -873,6 +914,61 @@ export default function ModelSettings() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {canManageRuntime && selectedProviderDetails &&
+                selectedProviderDetails.provider_type !== 'builtin' &&
+                selectedProviderDetails.id !== 'fallback' && (
+                <div className="rounded-xl border border-border/60 bg-muted/10 p-4 space-y-4" aria-label="Administrative chat availability">
+                  <p className="font-semibold text-sm">Chat availability</p>
+                  <p className="text-xs text-muted-foreground">
+                    Configure and enable the connection first. These controls publish approved options
+                    to the conversation picker only after backend health and model verification.
+                  </p>
+                  <label htmlFor="admin-provider-enabled" className="flex items-center gap-3 text-sm">
+                    <Checkbox
+                      id="admin-provider-enabled"
+                      checked={selectedProviderDetails.enabled === true}
+                      disabled={isUpdatingChatAccess}
+                      onCheckedChange={(checked) => void handleAdminChatAccessChange({ provider_enabled: checked === true })}
+                    />
+                    Enable provider runtime
+                  </label>
+                  <label htmlFor="admin-provider-chat-enabled" className="flex items-center gap-3 text-sm">
+                    <Checkbox
+                      id="admin-provider-chat-enabled"
+                      checked={selectedProviderDetails.chat_enabled !== false}
+                      disabled={isUpdatingChatAccess}
+                      onCheckedChange={(checked) => void handleAdminChatAccessChange({ chat_enabled: checked === true })}
+                    />
+                    Offer verified provider models in chat
+                  </label>
+                  {availableModels.length > 0 && (
+                    <div className="space-y-3 border-t border-border/40 pt-3">
+                      <p className="text-xs font-semibold">Individual models</p>
+                      {availableModels.map((model) => (
+                        <label key={model.id} className="flex items-center gap-3 text-sm">
+                          <Checkbox
+                            aria-label={`Offer ${model.name} in chat`}
+                            checked={selectedProviderDetails.chat_model_visibility?.[model.id] !== false}
+                            disabled={isUpdatingChatAccess || selectedProviderDetails.enabled !== true}
+                            onCheckedChange={(checked) => void handleAdminChatAccessChange({
+                              model_id: model.id,
+                              model_enabled: checked === true,
+                            })}
+                          />
+                          <span className="min-w-0 truncate">{model.name}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {verifiedModels.some((item) => item.id === model.id) ? 'Live verified' : 'Verification required'}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    A saved API key is not verification. Disabled or unverified models remain unavailable to chat.
+                  </p>
+                </div>
+              )}
 
               {/* Chat Response Mode Selection */}
               <div className="space-y-4">
