@@ -106,6 +106,38 @@ def _event_digest(event: InboundChannelEvent) -> str:
 class SqlChannelRepository:
     """The only channel inbox and identity persistence adapter."""
 
+    async def list_personal_owned_connections(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[ChannelConnection]:
+        """Bounded owner-only inventory under tenant RLS; never for public use.
+
+        The repository returns canonical internal connection records only to
+        ChannelHost. The HTTP view must not expose credential handles or
+        external provider account identifiers.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT c.connection_id, c.installation_id, c.tenant_id,
+                           c.provider_account_id, c.credential_handle,
+                           c.revision, c.enabled
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND o.user_id = CAST(:user AS uuid)
+                    ORDER BY c.connection_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id, "user": user_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise RuntimeError("Personal connection inventory limit exceeded")
+        return [self._connection_from_row(row) for row in rows]
+
     async def get_personal_connection_owner(
         self, *, tenant_id: str, connection_id: str,
     ) -> str | None:
