@@ -235,7 +235,7 @@ def _complete_retirement_snapshot(**changes):
         deletion_request_recorded=True,
         credential_deletion_claim_recorded=True,
         provider_revision_claims_correlated=True,
-        unverified_deletion_request=False,
+        unverified_deletion_request=True,
         inbox_not_completed=False, outbound_not_confirmed=False,
     )
     stored.update(changes)
@@ -268,6 +268,7 @@ def test_all_local_claims_and_historical_verified_rows_never_authorize_cleanup()
     assert receipt["credential_erasure_independently_verified"] is False
     assert receipt["retention_scope_verified"] is False
     assert receipt["blocking_reasons"] == [
+        "credential_deletion_requests_unverified",
         "provider_unlink_independent_verification_unavailable",
         "credential_erasure_independent_verification_unavailable",
         "retention_and_backup_scope_verification_unavailable",
@@ -288,10 +289,10 @@ def test_retirement_assessment_lists_all_local_and_remote_blockers():
         deletion_request_recorded=False,
         credential_deletion_claim_recorded=False,
         provider_revision_claims_correlated=False,
-        unverified_deletion_request=True,
+        unverified_deletion_request=False,
         inbox_not_completed=True, outbound_not_confirmed=True,
     ))
-    assert result["retirement_assessment"]["blocking_reasons"][:10] == [
+    assert result["retirement_assessment"]["blocking_reasons"][:9] == [
         "local_retirement_hold_missing",
         "local_connection_still_enabled",
         "active_pairing_consent_remains",
@@ -299,11 +300,10 @@ def test_retirement_assessment_lists_all_local_and_remote_blockers():
         "provider_unlink_claim_missing",
         "credential_deletion_request_missing",
         "credential_deletion_claim_missing",
-        "credential_deletion_requests_unverified",
         "inbound_work_unresolved",
         "outbound_delivery_unconfirmed",
     ]
-    assert len(result["retirement_assessment"]["blocking_reasons"]) == 14
+    assert len(result["retirement_assessment"]["blocking_reasons"]) == 13
 
 
 @pytest.mark.parametrize("change", [
@@ -388,3 +388,33 @@ def test_v2_retirement_assessment_is_still_not_a_session_identity_verifier():
     assert "retention_and_backup_scope_verification_unavailable" in (
         assessed["retirement_assessment"]["blocking_reasons"]
     )
+
+
+@pytest.mark.parametrize("changes", [
+    {"unverified_deletion_request": False},
+    {"deletion_request_recorded": False},
+    {"deletion_request_recorded": False, "unverified_deletion_request": False},
+])
+def test_historical_verified_label_or_orphan_claim_cannot_clear_unverified_deletion(changes):
+    from ai_karen_engine.services.channels.consent_recovery import (
+        assess_retirement_evidence_snapshot,
+    )
+    with pytest.raises(ValueError, match="deletion verification evidence inconsistent"):
+        assess_retirement_evidence_snapshot(_complete_retirement_snapshot(**changes))
+
+
+def test_no_deletion_request_reports_missing_request_not_unverified_intent():
+    from ai_karen_engine.services.channels.consent_recovery import (
+        assess_retirement_evidence_snapshot,
+    )
+    assessed = assess_retirement_evidence_snapshot(_complete_retirement_snapshot(
+        deletion_request_recorded=False,
+        credential_deletion_claim_recorded=False,
+        provider_revision_claims_correlated=False,
+        unverified_deletion_request=False,
+    ))
+    reasons = assessed["retirement_assessment"]["blocking_reasons"]
+    assert "credential_deletion_request_missing" in reasons
+    assert "credential_deletion_claim_missing" in reasons
+    assert "credential_deletion_requests_unverified" not in reasons
+    assert assessed["retirement_assessment"]["cleanup_authorized"] is False
