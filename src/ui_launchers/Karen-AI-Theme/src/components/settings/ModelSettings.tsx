@@ -572,7 +572,7 @@ export default function ModelSettings() {
           <AlertDescription className="text-sm">
             Provider connections and API credentials are administered by your workspace.
             This panel shows their backend-reported status. You can choose any verified,
-            authorized provider and model from your conversation's model controls;
+            authorized provider and model from your conversation&apos;s model controls;
             contact an administrator to configure additional providers.
           </AlertDescription>
         </Alert>
