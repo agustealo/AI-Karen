@@ -8,7 +8,7 @@
  * manufactures a QR, or treats the last stored event as a live session.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -80,6 +80,246 @@ function readableFailure(error: unknown): string {
     }
   }
   return 'Karen could not verify your channel connections.';
+}
+
+
+type ConsentStatus = {
+  acknowledged: boolean;
+  policy_version: string;
+  notice_title: string;
+  notice_text: string;
+  paired: boolean;
+  provider_unlinked: boolean;
+};
+
+type ConsentReceipt = {
+  acknowledged?: boolean;
+  revoked?: boolean;
+  paired?: boolean;
+  provider_unlinked?: boolean;
+};
+
+function verifyConsentStatus(value: unknown): ConsentStatus {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid consent response');
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.acknowledged !== 'boolean' ||
+    typeof record.policy_version !== 'string' ||
+    !record.policy_version.trim() ||
+    record.policy_version.length > 128 ||
+    typeof record.notice_title !== 'string' ||
+    !record.notice_title.trim() ||
+    typeof record.notice_text !== 'string' ||
+    !record.notice_text.trim() ||
+    typeof record.paired !== 'boolean' ||
+    typeof record.provider_unlinked !== 'boolean'
+  ) {
+    throw new Error('Incomplete consent response');
+  }
+  return record as ConsentStatus;
+}
+
+function PersonalChannelRiskConsent({
+  connectionId,
+  providerId,
+}: {
+  connectionId: string;
+  providerId: string;
+}) {
+  const [status, setStatus] = useState<ConsentStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+
+  const endpoint = '/api/channels/personal/' +
+    encodeURIComponent(connectionId) + '/' + encodeURIComponent(providerId);
+  const consentPath = endpoint + '/consent';
+  const readConsent = useCallback(async () => verifyConsentStatus(
+    await apiClient.get<ConsentStatus>(consentPath),
+  ), [consentPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setStatus(null);
+    setChecked(false);
+    setError(null);
+    setConfirmation(null);
+
+    void readConsent()
+      .then((result) => {
+        if (!cancelled) {
+          setStatus(result);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError('Current consent could not be verified. No change was made.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [readConsent]);
+
+  const refreshConsent = async () => {
+    if (busy || loading) return;
+    setLoading(true);
+    setStatus(null);
+    setChecked(false);
+    setError(null);
+    setConfirmation(null);
+    try {
+      setStatus(await readConsent());
+    } catch {
+      setError('Current consent could not be verified. No change was made.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const mutateConsent = async (action: 'accept' | 'revoke') => {
+    if (
+      loading || busy || !status ||
+      (action === 'accept' && (status.acknowledged || !checked)) ||
+      (action === 'revoke' && !status.acknowledged)
+    ) return;
+
+    const expectedVersion = status.policy_version;
+    setBusy(true);
+    setStatus(null);
+    setChecked(false);
+    setConfirmation(null);
+    setError(null);
+
+    try {
+      const response = action === 'accept'
+        ? await apiClient.post<ConsentReceipt>(consentPath, {
+            accepted: true, policy_version: expectedVersion,
+          })
+        : await apiClient.post<ConsentReceipt>(endpoint + '/revoke', {});
+
+      if (
+        !response ||
+        (action === 'accept' ? response.acknowledged !== true : response.revoked !== true) ||
+        response.paired !== false ||
+        response.provider_unlinked !== false
+      ) {
+        throw new Error('Consent mutation receipt unverified');
+      }
+
+      // A mutation receipt alone is not persisted truth. Always re-read.
+      const fresh = await readConsent();
+      if (
+        fresh.acknowledged !== (action === 'accept') ||
+        (action === 'accept' && fresh.policy_version !== expectedVersion)
+      ) {
+        throw new Error('Persisted consent did not confirm mutation');
+      }
+      setStatus(fresh);
+      setConfirmation(action === 'accept'
+        ? 'Risk acknowledgement verified in Karen. No WhatsApp device has been linked.'
+        : 'Risk acknowledgement revoked in Karen. Remote unlink and credential erasure are not verified.');
+    } catch {
+      // The server may have committed before an ambiguous receipt was lost.
+      // Never silently retry a mutation or claim it was rolled back.
+      setStatus(null);
+      setError('Consent change unverified. Refresh status before trying again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="space-y-3 border-t border-border/50 pt-4" aria-label="Personal connection risk consent">
+      <p className="text-sm font-semibold">Unofficial personal WhatsApp risk consent</p>
+      <p className="text-xs text-muted-foreground">
+        This is not an account connection control. Consent does not create a QR,
+        start a session, verify unlink, or erase provider credentials.
+      </p>
+      {loading && <p role="status">Checking stored risk acknowledgement...</p>}
+      {!loading && status && (
+        <>
+          <p role="status" className="text-sm">
+            <strong>Stored consent:</strong>{' '}
+            {status.acknowledged ? 'Acknowledged' : 'Not acknowledged'}
+          </p>
+          <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+            <p className="font-semibold text-sm">{status.notice_title}</p>
+            <p className="text-sm whitespace-pre-wrap">{status.notice_text}</p>
+            <p className="text-xs text-muted-foreground">
+              Current policy version: {status.policy_version}
+            </p>
+          </div>
+          {!status.acknowledged && (
+            <>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => setChecked(event.target.checked)}
+                  aria-label="I explicitly accept the personal WhatsApp risks"
+                />
+                <span>I understand and explicitly accept these risks for this connection.</span>
+              </label>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!checked || busy}
+                onClick={() => void mutateConsent('accept')}
+              >
+                Acknowledge risks
+              </Button>
+            </>
+          )}
+          {status.acknowledged && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => void mutateConsent('revoke')}
+              aria-label="Revoke personal WhatsApp risk consent"
+            >
+              Revoke consent
+            </Button>
+          )}
+        </>
+      )}
+      {busy && <p role="status">Verifying the persisted consent change...</p>}
+      {!busy && !loading && confirmation && (
+        <p role="status" className="text-sm">{confirmation}</p>
+      )}
+      {!busy && !loading && error && (
+        <Alert role="alert" variant="destructive">
+          <AlertCircle className="h-4 w-4" aria-hidden="true" />
+          <AlertTitle>Consent status unverified</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {!busy && !loading && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => void refreshConsent()}
+          aria-label="Refresh personal channel consent"
+        >
+          Refresh consent status
+        </Button>
+      )}
+    </section>
+  );
 }
 
 export default function ChannelsSettings() {
@@ -235,6 +475,12 @@ export default function ChannelsSettings() {
                     A provider unlink observation was recorded. This is not proof
                     of credential or message-data erasure.
                   </p>
+                )}
+                {channel.availability === 'configured' && channel.provider_id && (
+                  <PersonalChannelRiskConsent
+                    connectionId={channel.connection_id}
+                    providerId={channel.provider_id}
+                  />
                 )}
               </CardContent>
             </Card>
