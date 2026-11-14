@@ -792,3 +792,44 @@ disposable real PostgreSQL channel suite. It tests both incomplete
 local evidence and a held connection with recorded original-session
 unlink and credential deletion claims; both must remain blocked.
 No external consumer packaging is required for these internal contracts.
+
+
+## KOC-05 retirement claim correlation and outbound confirmation (v2)
+
+The versioned owner-only retirement evidence contract is now
+`retirement-verification-readiness-v2`. The canonical repository reports
+`provider_revision_claims_correlated` only when **the same provider** has
+a disconnected pairing observation with a nonempty unlink receipt and a
+`provider_claimed` deletion record with a receipt, for the same tenant,
+connection, owner and immutable original retirement-hold revision.
+The hold must be active, the connection fenced and the current revision must
+equal the hold's fenced revision. Separate existing flags still report whether
+*any* provider unlink and credential-deletion claims were recorded. They do
+not quietly disappear when a mismatched provider submitted one of them.
+
+The source-assessment owner emits
+`provider_revision_claims_mismatched` when both claims exist independently
+but no same-provider, same-original-revision evidence pair exists. A
+cryptographically authenticated provider callback and a scoped deletion
+receipt are **claims**, not independent proof of remote unlink/erasure.
+Provider/revision correlation is **not remote session correlation**: the
+pairing ledger does not record a canonical verified remote session reference,
+so even `provider_revision_claims_correlated=true` does not attest the same
+remote session, credential destruction, complete retention scope or backup
+deletion. The four independent-verification/finalization blockers remain
+mandatory and cleanup authorization remains hardcoded false.
+
+The owner evidence query also treats an outbox in `sent` state as
+**unconfirmed provider delivery**. Only `delivered` or `read` status
+excludes it from the outstanding-delivery blocker; such status remains merely
+persisted provider evidence, not proof of remote message retention policy.
+The v2 API has strict typed response fields and the UI rejects a v1 or forged
+v2 status instead of presenting an invented retirement pass.
+
+Regression proof remains in canonical tests and the disposable live
+PostgreSQL channel suite. It stores a provider unlink for one provider and a
+synthetic deletion claim for a different provider to prove mismatch detection,
+then records the correctly scoped claim to prove correlation. It independently
+checks that `sent` is still outstanding, all historical claims stay unverified
+and owner/tenant isolation is preserved. There is no newly approved provider,
+remote operation, cleanup permission, or additional orchestrator.

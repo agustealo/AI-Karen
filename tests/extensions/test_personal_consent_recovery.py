@@ -48,6 +48,7 @@ def service(monkeypatch, *, permissions=None, account=None, records=None):
             "provider_unlink_claim_recorded": False,
             "deletion_request_recorded": True,
             "credential_deletion_claim_recorded": False,
+            "provider_revision_claims_correlated": False,
             "unverified_deletion_request": True,
             "inbox_not_completed": False, "outbound_not_confirmed": True,
         }]),
@@ -233,6 +234,7 @@ def _complete_retirement_snapshot(**changes):
         provider_unlink_claim_recorded=True,
         deletion_request_recorded=True,
         credential_deletion_claim_recorded=True,
+        provider_revision_claims_correlated=True,
         unverified_deletion_request=False,
         inbox_not_completed=False, outbound_not_confirmed=False,
     )
@@ -285,6 +287,7 @@ def test_retirement_assessment_lists_all_local_and_remote_blockers():
         provider_unlink_claim_recorded=False,
         deletion_request_recorded=False,
         credential_deletion_claim_recorded=False,
+        provider_revision_claims_correlated=False,
         unverified_deletion_request=True,
         inbox_not_completed=True, outbound_not_confirmed=True,
     ))
@@ -342,3 +345,46 @@ async def test_retirement_assessment_empty_result_is_honestly_empty(monkeypatch)
     assert await authority.list_retirement_evidence(
         tenant_id=TENANT, user_id=USER,
     ) == []
+
+
+def test_mismatched_provider_claims_keep_local_correlation_blocked():
+    from ai_karen_engine.services.channels.consent_recovery import (
+        assess_retirement_evidence_snapshot,
+    )
+    assessed = assess_retirement_evidence_snapshot(
+        _complete_retirement_snapshot(provider_revision_claims_correlated=False)
+    )
+    reasons = assessed["retirement_assessment"]["blocking_reasons"]
+    assert reasons[0] == "provider_revision_claims_mismatched"
+    assert "provider_unlink_claim_missing" not in reasons
+    assert "credential_deletion_claim_missing" not in reasons
+    assert "provider_unlink_independent_verification_unavailable" in reasons
+    assert assessed["retirement_assessment"]["cleanup_authorized"] is False
+
+
+@pytest.mark.parametrize("changes", [
+    {"provider_unlink_claim_recorded": False},
+    {"credential_deletion_claim_recorded": False},
+    {"retirement_held": False},
+    {"connection_enabled": True},
+])
+def test_correlated_claim_flag_fails_closed_if_inconsistent_with_sources(changes):
+    from ai_karen_engine.services.channels.consent_recovery import (
+        assess_retirement_evidence_snapshot,
+    )
+    with pytest.raises(ValueError, match="correlation evidence inconsistent"):
+        assess_retirement_evidence_snapshot(_complete_retirement_snapshot(**changes))
+
+
+def test_v2_retirement_assessment_is_still_not_a_session_identity_verifier():
+    from ai_karen_engine.services.channels.consent_recovery import (
+        RETIREMENT_VERIFICATION_CONTRACT_VERSION,
+        assess_retirement_evidence_snapshot,
+    )
+    assessed = assess_retirement_evidence_snapshot(_complete_retirement_snapshot())
+    assert RETIREMENT_VERIFICATION_CONTRACT_VERSION == "retirement-verification-readiness-v2"
+    assert assessed["provider_revision_claims_correlated"] is True
+    assert assessed["retirement_assessment"]["credential_erasure_independently_verified"] is False
+    assert "retention_and_backup_scope_verification_unavailable" in (
+        assessed["retirement_assessment"]["blocking_reasons"]
+    )

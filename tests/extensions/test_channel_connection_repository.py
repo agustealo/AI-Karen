@@ -375,6 +375,7 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
         "active_consent": True, "unresolved_pairing": True,
         "provider_unlink_claim_recorded": False,
         "deletion_request_recorded": True, "credential_deletion_claim_recorded": False,
+        "provider_revision_claims_correlated": False,
         "unverified_deletion_request": True,
         "inbox_not_completed": False, "outbound_not_confirmed": True,
         "credential_handle": "vault://private",
@@ -391,6 +392,7 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
         "unresolved_pairing": True, "provider_unlink_claim_recorded": False,
         "deletion_request_recorded": True,
         "credential_deletion_claim_recorded": False,
+        "provider_revision_claims_correlated": False,
         "unverified_deletion_request": True, "inbox_not_completed": False,
         "outbound_not_confirmed": True,
     }]
@@ -404,6 +406,14 @@ async def test_retirement_evidence_inventory_is_scoped_bounded_and_secretless(mo
                  "channel_inbox", "channel_outbox"):
         assert term in query
     assert args == {"tenant": TENANT, "user": user}
+    assert "s.provider_id = d.provider_id" in query
+    assert "s.connection_revision = d.connection_revision" in query
+    assert "s.connection_revision = h.requested_revision" in query
+    assert "h.fenced_revision = c.revision" in query
+    assert "d.provider_receipt_id IS NOT NULL" in query
+    assert "AS provider_revision_claims_correlated" in query
+    assert "b.status NOT IN ('delivered', 'read')" in query
+    assert "b.status NOT IN ('sent', 'delivered', 'read')" not in query
     selected = query.split("FROM public.channel_connections c")[0]
     for secret in ("credential_handle", "provider_account_id",
                    "session_reference", "provider_receipt_id", "message_text"):

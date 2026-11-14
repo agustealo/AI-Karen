@@ -231,6 +231,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "unresolved_pairing": False, "provider_unlink_claim_recorded": False,
             "deletion_request_recorded": True,
             "credential_deletion_claim_recorded": False,
+            "provider_revision_claims_correlated": False,
             "unverified_deletion_request": True, "inbox_not_completed": False,
             "outbound_not_confirmed": True,
         }]
@@ -1194,6 +1195,57 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         # Credential deletion intent can be issued after the local hold for
         # the original pre-hold revision. A later vendor response is recorded
         # as provider_claimed ONLY, not independently verified erasure.
+        # A vendor deletion claim from a different provider on the same
+        # held connection must never count as one correlated unlink/erasure
+        # evidence pair, even if the separate claim flags are true.
+        foreign_args = dict(
+            tenant_id=str(tenant_a), connection_id=terminal_connection,
+            user_id=str(user), provider_id="foreign-test-provider",
+            connection_revision=1, session_reference="foreign-session",
+            credential_scope="companion-credentials",
+            idempotency_key="foreign-" + uuid.uuid4().hex,
+        )
+        foreign_request = await owner_repo.request_personal_credential_deletion(
+            **foreign_args,
+        )
+        from ai_karen_engine.extensions.channels.contracts import (
+            PersonalCredentialErasureReceipt,
+        )
+        foreign_receipt = PersonalCredentialErasureReceipt(
+            provider_id=foreign_args["provider_id"],
+            connection_id=terminal_connection,
+            connection_revision=1,
+            session_reference=foreign_args["session_reference"],
+            deletion_request_id=foreign_request["request_id"],
+            provider_receipt_id="foreign-claim-test-only",
+            credential_scope="companion-credentials",
+            erased_at=datetime.now(timezone.utc),
+        )
+        assert await owner_repo.record_personal_credential_deletion_claim(
+            tenant_id=str(tenant_a),
+            request_id=foreign_request["request_id"],
+            connection_id=terminal_connection,
+            user_id=str(user), receipt=foreign_receipt,
+        )
+        uncorrelated = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        observed_foreign = next(
+            entry for entry in uncorrelated
+            if entry["connection_id"] == terminal_connection
+        )
+        assert observed_foreign["provider_unlink_claim_recorded"] is True
+        assert observed_foreign["credential_deletion_claim_recorded"] is True
+        assert observed_foreign["provider_revision_claims_correlated"] is False
+        from ai_karen_engine.services.channels.consent_recovery import (
+            assess_retirement_evidence_snapshot,
+        )
+        blocked_reasons = assess_retirement_evidence_snapshot(
+            observed_foreign
+        )["retirement_assessment"]["blocking_reasons"]
+        assert "provider_revision_claims_mismatched" in blocked_reasons
+        assert "provider_unlink_independent_verification_unavailable" in blocked_reasons
+
         deletion_idempotency = "terminal-" + uuid.uuid4().hex
         deletion_args = dict(
             tenant_id=str(tenant_a), connection_id=terminal_connection,
@@ -1256,6 +1308,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert matching[0]["unresolved_pairing"] is False
         assert matching[0]["deletion_request_recorded"] is True
         assert matching[0]["credential_deletion_claim_recorded"] is True
+        assert matching[0]["provider_revision_claims_correlated"] is True
         assert matching[0]["unverified_deletion_request"] is True
         assessment = assess_retirement_evidence_snapshot(matching[0])[
             "retirement_assessment"
@@ -1276,6 +1329,25 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert await owner_repo.list_owned_personal_retirement_evidence(
             tenant_id=str(tenant_b), user_id=str(user),
         ) == []
+        # Sending is not delivery confirmation: outbox 'sent' must remain
+        # a retirement blocker until a delivered/read provider receipt.
+        assert await raw.execute(
+            "UPDATE public.channel_outbox SET status='sent' WHERE "
+            "tenant_id=$1 AND delivery_id=$2",
+            tenant_a, delivery,
+        ) == "UPDATE 1"
+        sent_outbound_evidence = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        sent_main = next(
+            entry for entry in sent_outbound_evidence
+            if entry["connection_id"] == connection_id
+        )
+        assert sent_main["outbound_not_confirmed"] is True
+        assert "outbound_delivery_unconfirmed" in (
+            assess_retirement_evidence_snapshot(sent_main)
+            ["retirement_assessment"]["blocking_reasons"]
+        )
     finally:
         if engine is not None:
             await engine.dispose()

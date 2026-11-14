@@ -601,6 +601,7 @@ def retired_recovery_context(monkeypatch, *, consents=None, revoked=True):
                 "provider_unlink_claim_recorded": False,
                 "deletion_request_recorded": True,
                 "credential_deletion_claim_recorded": False,
+                "provider_revision_claims_correlated": False,
                 "unverified_deletion_request": True,
                 "inbox_not_completed": False,
                 "outbound_not_confirmed": True,
@@ -766,6 +767,8 @@ async def test_retirement_evidence_api_requires_identity_and_never_claims_deleti
     assert item["unresolved_pairing"] is True
     assert item["provider_unlink_claim_recorded"] is False
     assert item["credential_deletion_claim_recorded"] is False
+    assert item["provider_revision_claims_correlated"] is False
+    assert item["retirement_assessment"]["contract_version"] == "retirement-verification-readiness-v2"
     assert item["outbound_not_confirmed"] is True
     assessment = item["retirement_assessment"]
     assert assessment["contract_version"] == "retirement-verification-readiness-v1"
@@ -970,6 +973,7 @@ def test_retirement_review_response_schema_never_accepts_destructive_capability(
         "provider_unlink_claim_recorded": True,
         "deletion_request_recorded": True,
         "credential_deletion_claim_recorded": True,
+        "provider_revision_claims_correlated": True,
         "unverified_deletion_request": False,
         "inbox_not_completed": False, "outbound_not_confirmed": False,
     })
@@ -980,7 +984,7 @@ def test_retirement_review_response_schema_never_accepts_destructive_capability(
         {"provider_unlink_independently_verified": True},
         {"credential_erasure_independently_verified": True},
         {"retention_scope_verified": True},
-        {"contract_version": "retirement-verification-readiness-v2"},
+        {"contract_version": "retirement-verification-readiness-v3"},
     ):
         with pytest.raises(ValidationError):
             api.PersonalRetirementEvidenceItem(**{
@@ -990,3 +994,29 @@ def test_retirement_review_response_schema_never_accepts_destructive_capability(
                     **forge,
                 },
             })
+
+
+def test_retirement_api_rejects_unsupported_correlated_claim_downgrade():
+    complete = assess_retirement_evidence_snapshot({
+        "connection_id": CONNECTION, "connection_revision": 2,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": False, "unresolved_pairing": False,
+        "provider_unlink_claim_recorded": True,
+        "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": True,
+        "provider_revision_claims_correlated": False,
+        "unverified_deletion_request": False,
+        "inbox_not_completed": False, "outbound_not_confirmed": False,
+    })
+    blockers = complete["retirement_assessment"]["blocking_reasons"]
+    assert "provider_revision_claims_mismatched" in blockers
+    with pytest.raises(ValidationError):
+        api.PersonalRetirementEvidenceItem(**{
+            **complete, "retirement_assessment": {
+                **complete["retirement_assessment"],
+                "blocking_reasons": [
+                    reason for reason in blockers
+                    if reason != "provider_unlink_independent_verification_unavailable"
+                ],
+            },
+        })

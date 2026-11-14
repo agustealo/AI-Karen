@@ -315,7 +315,7 @@ class PersonalRetirementAssessment(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    contract_version: Literal["retirement-verification-readiness-v1"]
+    contract_version: Literal["retirement-verification-readiness-v2"]
     status: Literal["blocked"]
     cleanup_authorized: Literal[False]
     provider_unlink_independently_verified: Literal[False]
@@ -329,6 +329,7 @@ class PersonalRetirementAssessment(BaseModel):
         "provider_unlink_claim_missing",
         "credential_deletion_request_missing",
         "credential_deletion_claim_missing",
+        "provider_revision_claims_mismatched",
         "credential_deletion_requests_unverified",
         "inbound_work_unresolved",
         "outbound_delivery_unconfirmed",
@@ -361,6 +362,7 @@ class PersonalRetirementEvidenceItem(BaseModel):
     provider_unlink_claim_recorded: bool
     deletion_request_recorded: bool
     credential_deletion_claim_recorded: bool
+    provider_revision_claims_correlated: bool
     unverified_deletion_request: bool
     inbox_not_completed: bool
     outbound_not_confirmed: bool
