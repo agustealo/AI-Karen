@@ -15,6 +15,7 @@ import type {
  */
 export function getRuntimeProviderStatusLabel(provider: RuntimeProviderCatalogProvider): string {
   if (provider.enabled === false) return "Disabled";
+  if (provider.chat_enabled === false) return "Hidden from chat";
   if (provider.configured === false) return "Not configured";
   const status = provider.health?.status ?? "unknown";
   if (status === "unknown") return "Not checked";
@@ -30,6 +31,7 @@ export type ComposerModelRequest = { provider: string; model: string } | null;
 
 function isSelectableProvider(provider: RuntimeProviderCatalogProvider): boolean {
   return provider.enabled === true &&
+    provider.chat_enabled !== false &&
     provider.allowed_for_current_user !== false &&
     provider.configured === true &&
     isRuntimeProviderOperational(provider);
