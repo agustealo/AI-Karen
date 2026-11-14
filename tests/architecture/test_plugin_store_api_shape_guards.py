@@ -133,3 +133,29 @@ def test_installed_catalog_is_not_the_current_browse_page() -> None:
     assert "installed_only: z.boolean().optional()" in types
     assert 'plugin["status"] == "installed"' in backend
     assert '"incompatible" if runtime_status == "error"' in backend
+
+
+def test_plugin_details_modal_is_mounted_and_handles_errors_without_shadow_routing() -> None:
+    page = PAGE.read_text(encoding="utf-8")
+    state = STORE.read_text(encoding="utf-8")
+    modal = (ROOT / "components/plugins/PluginDetailsModal.tsx").read_text(encoding="utf-8")
+
+    assert "import { PluginDetailsModal } from './PluginDetailsModal';" in page
+    assert "<PluginDetailsModal" in page
+    assert "open={detailsOpen}" in page
+    assert "onOpenChange={handleDetailsOpenChange}" in page
+    assert "details={selectedPlugin}" in page
+    assert "loading={detailsLoading}" in page
+    assert "error={detailsError || operationError || null}" in page
+    assert "setDetailsOpen(true);" in page
+    assert "if (!open) clearSelectedPlugin();" in page
+    assert "onEnable={() => {" in page
+    assert "onDisable={() => {" in page
+    assert "latestPluginDetailsRequestId" in state
+    assert "detailsLoading: true" in state
+    assert "details.plugin.id !== pluginId" in state
+    assert "detailsError:" in state
+    assert "Plugin details are unavailable." in modal
+    assert "Loading plugin information..." in modal
+    assert "plugin.status !== 'incompatible'" in modal
+    assert "return null;" not in modal.split("if (!details?.plugin)", 1)[1].split("const plugin =", 1)[0]
