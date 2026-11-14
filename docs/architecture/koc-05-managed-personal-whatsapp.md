@@ -628,3 +628,63 @@ after migrations 35 and 50, rejects forged `verified` inserts/updates,
 rejects request-scope edits and receipt substitution, exercises the
 canonical idempotent provider claim, and confirms the retirement evidence
 still reports the claim as unverified. No consumer-package dependency.
+
+
+## KOC-05 durable operator retirement hold (migration 52)
+
+The first *non-destructive* retirement stage is implemented through canonical
+owners only. An authenticated operator may explicitly submit
+`POST /api/channels/personal/{connection_id}/retirement-hold` with
+`expected_revision` and a UUID `idempotency_key`. Neither tenant, operator
+identity, owner identity, provider receipt nor policy plan can be supplied by
+HTTP. The route resolves tenant/operator from the active verified session and
+mints an existing `channel.deactivate` action grant through
+`ChannelActivationService.issue_action_plan`. The host rechecks installation,
+live principal, manifest roles, RBAC, RuntimePolicy and ActionExecutionGate,
+then delegates exactly one mutation to `SqlChannelRepository`.
+
+The repository transaction locks the exact tenant connection row, verifies a
+current verified personal owner and operator, rejects stale connection
+revisions, and commits both (a) `enabled=false`, revision increment,
+`retirement_locked=true`; and (b) an immutable, owner-and-operator-scoped hold
+with original revision and idempotency key. Replay of the *same* caller,
+revision and idempotency key returns the original hold without repeating the
+local stop; a changed caller/key/revision gets a 409 conflict. A connection
+without a verified assigned owner cannot enter this personal hold path.
+
+The database activation trigger prevents direct SQL re-enablement and
+canonical `channel.activate` while the hold or the irreversible connection
+fence exists. Disabling the channel invalidates stale ingress/dispatch
+revision checks on all replicas. The process-local channel adapter's
+`stop(connection=...)` is attempted **after** the transaction: its observed
+success/failure is returned separately and audited, with no provider data
+exposure. An adapter returning from `stop` is NOT proof of vendor unlink
+or remote erasure. A failed or cancelled local stop does not roll back the
+already durable admission fence. No retry replays a possibly side-effecting
+adapter stop, and a manual operator reconciliation remains required.
+
+The owner-facing existing retirement-evidence inspection now includes the
+`retirement_held` flag derived from the irreversible connection fence.
+The ledger has no regular tenant UPDATE/DELETE RLS policy, so direct callers
+cannot erase or rewrite holds. Tenant/account erasure may remove the
+personal audit hold through governed FK cascades; `retirement_locked` is
+retained on a surviving connection, preventing account erasure from silently
+restoring channel activation. Operator principal identifiers follow the
+tenant's audit-retention policy; this slice does not define a separate
+data-subject erasure protocol.
+
+This stage is **not** full retirement. No provider session unlink, real
+credential deletion, independent erasure verification, removal of historical
+inbound/outbound messages, cleanup of Vault references or physical connection
+deletion is performed or implied. The consumer UI has no destructive action.
+The active host/installation must be available for operator authorization;
+if absent, the hold endpoint fails closed while consent recovery and
+read-only evidence remain available. Full vendor retirement, with independent
+source-authenticated receipts and retention/backup policy, remains NOT_READY.
+
+Proof extends the canonical repository, host and API tests and the existing
+disposable PostgreSQL channel integration: atomic state/hold commit, exact
+idempotency, stale/foreign owner rejection, concurrent operators, non-owner
+tenant RLS UPDATE/DELETE denial, irreversible reactivation failure, and
+privacy account/tenant cascade. CI remains in the existing plugin workflow,
+with no secondary CI path and no consumer packaging requirement.

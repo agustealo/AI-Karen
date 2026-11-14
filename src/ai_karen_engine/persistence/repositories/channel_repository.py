@@ -82,6 +82,10 @@ class ChannelAdmissionDenied(PermissionError):
     """No enabled tenant connection and verified, active sender binding."""
 
 
+class ChannelRetirementConflict(ValueError):
+    """Retirement request or revision conflicts with persisted channel state."""
+
+
 def _tenant_uuid(value: str) -> str:
     if not value or not value.strip():
         raise ValueError("tenant identity is required")
@@ -474,6 +478,7 @@ class SqlChannelRepository:
             rows = (await session.execute(
                 text("""
                     SELECT c.connection_id, c.revision, c.enabled,
+                           c.retirement_locked,
                            EXISTS (
                                SELECT 1 FROM public.channel_personal_pairing_consents p
                                WHERE p.tenant_id = c.tenant_id
@@ -535,6 +540,7 @@ class SqlChannelRepository:
                 "connection_id": str(row["connection_id"]),
                 "connection_revision": int(row["revision"]),
                 "connection_enabled": bool(row["enabled"]),
+                "retirement_held": bool(row["retirement_locked"]),
                 "active_consent": bool(row["active_consent"]),
                 "unresolved_pairing": bool(row["unresolved_pairing"]),
                 "deletion_request_recorded": bool(row["deletion_request_recorded"]),
@@ -980,6 +986,134 @@ class SqlChannelRepository:
             tenant_id=tenant_id, connection_id=connection_id,
         )
         return connection if connection is not None and connection.enabled else None
+
+    async def place_personal_retirement_hold(
+        self, *, tenant_id: str, connection_id: str, operator_user_id: str,
+        expected_revision: int, idempotency_key: str,
+    ) -> dict[str, str | int | bool]:
+        """Atomically fence admission and record an immutable operator hold.
+
+        The request cannot unlink the native provider, erase credentials or
+        delete retained messages. Retry only the same idempotency key and
+        revision; every nonmatching or stale request fails closed.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        operator_user_id = str(uuid.UUID(operator_user_id))
+        idempotency_key = str(uuid.UUID(idempotency_key))
+        if (
+            not isinstance(connection_id, str)
+            or not 1 <= len(connection_id.strip()) <= 256
+            or type(expected_revision) is not int
+            or expected_revision < 1
+        ):
+            raise ValueError("Invalid personal retirement hold scope")
+
+        async with async_transaction_scope(tenant_id) as session:
+            connection = (await session.execute(
+                text("""
+                    SELECT c.revision, c.enabled, c.retirement_locked, o.user_id
+                    FROM public.channel_connections c
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = o.tenant_id
+                     AND u.user_id = o.user_id
+                    JOIN public.auth_users actor
+                      ON actor.tenant_id = c.tenant_id
+                     AND actor.user_id = CAST(:operator AS uuid)
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND u.is_active = true AND u.is_verified = true
+                      AND actor.is_active = true
+                      AND actor.is_verified = true
+                    FOR UPDATE OF c
+                """),
+                {
+                    "tenant": tenant_id, "connection": connection_id,
+                    "operator": operator_user_id,
+                },
+            )).mappings().one_or_none()
+            if connection is None:
+                raise ChannelAdmissionDenied("Retirement connection or principal denied")
+
+            existing = (await session.execute(
+                text("""
+                    SELECT hold_id, requested_revision, fenced_revision,
+                           operator_user_id, owner_user_id, idempotency_key
+                    FROM public.channel_personal_retirement_holds
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                    FOR UPDATE
+                """),
+                {"tenant": tenant_id, "connection": connection_id},
+            )).mappings().one_or_none()
+            if existing is not None:
+                if (
+                    str(existing["operator_user_id"]) != operator_user_id
+                    or str(existing["owner_user_id"]) != str(connection["user_id"])
+                    or str(existing["idempotency_key"]) != idempotency_key
+                    or int(existing["requested_revision"]) != expected_revision
+                    or int(existing["fenced_revision"]) != int(connection["revision"])
+                    or connection["retirement_locked"] is not True
+                    or connection["enabled"] is not False
+                ):
+                    raise ChannelRetirementConflict("Different retirement hold already exists")
+                return {
+                    "hold_id": str(existing["hold_id"]),
+                    "connection_revision": int(existing["fenced_revision"]),
+                    "created_new": False,
+                }
+            if connection["retirement_locked"] is True:
+                raise ChannelRetirementConflict("Connection is already retirement-fenced")
+            if int(connection["revision"]) != expected_revision:
+                raise ChannelRetirementConflict("Stale retirement expected revision")
+            changed = (await session.execute(
+                text("""
+                    UPDATE public.channel_connections
+                    SET enabled = false, retirement_locked = true,
+                        revision = revision + 1, updated_at = clock_timestamp()
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND revision = :revision
+                      AND retirement_locked = false
+                    RETURNING revision
+                """),
+                {
+                    "tenant": tenant_id, "connection": connection_id,
+                    "revision": expected_revision,
+                },
+            )).scalar_one_or_none()
+            if changed != expected_revision + 1:
+                raise ChannelRetirementConflict("Concurrent retirement revision changed")
+            hold = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_personal_retirement_holds (
+                        tenant_id, connection_id, owner_user_id,
+                        operator_user_id, requested_revision,
+                        fenced_revision, idempotency_key
+                    ) VALUES (
+                        CAST(:tenant AS uuid), :connection, CAST(:owner AS uuid),
+                        CAST(:operator AS uuid), :requested_revision,
+                        :fenced_revision, CAST(:idempotency AS uuid)
+                    ) RETURNING hold_id
+                """),
+                {
+                    "tenant": tenant_id, "connection": connection_id,
+                    "owner": str(connection["user_id"]),
+                    "operator": operator_user_id,
+                    "requested_revision": expected_revision,
+                    "fenced_revision": int(changed),
+                    "idempotency": idempotency_key,
+                },
+            )).scalar_one_or_none()
+            if hold is None:
+                raise ChannelRetirementConflict("Retirement evidence not persisted")
+            return {
+                "hold_id": str(hold),
+                "connection_revision": int(changed),
+                "created_new": True,
+            }
 
     async def set_connection_enabled(
         self, *, tenant_id: str, connection_id: str,
@@ -1890,6 +2024,7 @@ class SqlChannelRepository:
 __all__ = [
     "ChannelAdmissionConflict",
     "ChannelAdmissionDenied",
+    "ChannelRetirementConflict",
     "ClaimedChannelMessage",
     "ClaimedChannelDelivery",
     "ChannelDeliveryPreflight",

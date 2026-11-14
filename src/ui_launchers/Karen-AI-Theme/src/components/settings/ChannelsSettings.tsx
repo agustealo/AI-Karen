@@ -677,6 +677,7 @@ type PersonalRetirementEvidence = {
   connection_id: string;
   connection_revision: number;
   connection_enabled: boolean;
+  retirement_held: boolean;
   active_consent: boolean;
   unresolved_pairing: boolean;
   deletion_request_recorded: boolean;
@@ -695,7 +696,7 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
   }
   const seen = new Set<string>();
   const booleanFields = [
-    'connection_enabled', 'active_consent', 'unresolved_pairing',
+    'connection_enabled', 'retirement_held', 'active_consent', 'unresolved_pairing',
     'deletion_request_recorded', 'unverified_deletion_request',
     'inbox_not_completed', 'outbound_not_confirmed',
   ] as const;
@@ -791,6 +792,11 @@ function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: bo
               </p>
               <p className="text-xs">
                 {record.connection_enabled ? 'Connection still enabled' : 'Connection disabled'}
+              </p>
+              <p className="text-xs">
+                {record.retirement_held
+                  ? 'Durable local retirement hold recorded. Reactivation is blocked.'
+                  : 'No local retirement hold recorded'}
               </p>
               <p className="text-xs">
                 {record.active_consent ? 'Active consent remains' : 'No active consent observed'}

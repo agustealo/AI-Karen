@@ -1130,3 +1130,128 @@ async def test_personal_inventory_refuses_permission_denial_without_partial_succ
         await host.list_owned_personal_channels(tenant_id=tenant, user_id=user)
     host.get_personal_pairing_status.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_operator_retirement_hold_uses_existing_deactivate_policy_and_local_stop():
+    """Only the canonical channel host may attempt process-local adapter stop."""
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    operator = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    connection = ChannelConnection(
+        connection_id="personal-channel", tenant_id=tenant,
+        installation_id="telegram-bot", provider_account_id="internal-account",
+        credential_handle="vault://private", revision=7, enabled=True,
+    )
+    hold = {
+        "hold_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "connection_revision": 8, "created_new": True,
+    }
+    host.repository.get_connection = AsyncMock(return_value=connection)
+    host.repository.place_personal_retirement_hold = AsyncMock(return_value=hold)
+    host.activation._authorize = AsyncMock()
+    plan = SimpleNamespace(policy_decision_id="policy-allowed")
+    kwargs = dict(
+        tenant_id=tenant, connection_id="personal-channel",
+        operator_user_id=operator, session_id="session-1",
+        authorized_plan=plan, expected_revision=7,
+        idempotency_key="ffffffff-ffff-ffff-ffff-ffffffffffff",
+    )
+    result = await host.place_personal_retirement_hold(**kwargs)
+    assert result == {
+        "hold_id": hold["hold_id"], "connection_revision": 8,
+        "hold_recorded": True, "connection_enabled": False,
+        "created_new": True, "local_stop_attempted": True,
+        "local_stop_succeeded": True, "provider_unlinked": False,
+        "credentials_erased": False,
+    }
+    host.activation._authorize.assert_awaited_once_with(
+        tenant_id=tenant, user_id=operator, session_id="session-1",
+        installation_id="telegram-bot", action="channel.deactivate", plan=plan,
+    )
+    host.repository.place_personal_retirement_hold.assert_awaited_once_with(
+        tenant_id=tenant, connection_id="personal-channel",
+        operator_user_id=operator, expected_revision=7,
+        idempotency_key=kwargs["idempotency_key"],
+    )
+    adapter.stop.assert_awaited_once_with(connection=connection)
+    adapter.start.assert_not_awaited()
+    adapter.send.assert_not_awaited()
+
+    # Ambiguous client retry uses the same SQL hold and does not repeat a
+    # transport stop or claim that a vendor session was removed.
+    host.repository.place_personal_retirement_hold.return_value = {
+        **hold, "created_new": False,
+    }
+    replay = await host.place_personal_retirement_hold(**kwargs)
+    assert replay["created_new"] is False
+    assert replay["local_stop_attempted"] is False
+    assert replay["local_stop_succeeded"] is False
+    assert replay["provider_unlinked"] is False
+    assert adapter.stop.await_count == 1
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_local_stop_failure_is_visible_without_losing_sql_hold(caplog):
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    conn = ChannelConnection(
+        connection_id="held", tenant_id=tenant, installation_id="telegram-bot",
+        provider_account_id="internal-account", credential_handle="vault://private",
+        revision=3, enabled=True,
+    )
+    host.repository.get_connection = AsyncMock(return_value=conn)
+    host.repository.place_personal_retirement_hold = AsyncMock(return_value={
+        "hold_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "connection_revision": 4, "created_new": True,
+    })
+    host.activation._authorize = AsyncMock()
+    adapter.stop.side_effect = RuntimeError("vault://token-must-not-log")
+    response = await host.place_personal_retirement_hold(
+        tenant_id=tenant, connection_id="held",
+        operator_user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        session_id="session", authorized_plan=SimpleNamespace(policy_decision_id="p"),
+        expected_revision=3,
+        idempotency_key="ffffffff-ffff-ffff-ffff-ffffffffffff",
+    )
+    assert response["hold_recorded"] is True
+    assert response["connection_enabled"] is False
+    assert response["local_stop_attempted"] is True
+    assert response["local_stop_succeeded"] is False
+    assert response["provider_unlinked"] is False
+    assert "vault://token-must-not-log" not in caplog.text
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_denied_before_sql_when_policy_denies():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="held", tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://handle", revision=2, enabled=True,
+    ))
+    host.repository.place_personal_retirement_hold = AsyncMock()
+    host.activation._authorize = AsyncMock(side_effect=PermissionError("denied"))
+    with pytest.raises(PermissionError):
+        await host.place_personal_retirement_hold(
+            tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            connection_id="held",
+            operator_user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            session_id="session", authorized_plan=SimpleNamespace(policy_decision_id="p"),
+            expected_revision=2,
+            idempotency_key="ffffffff-ffff-ffff-ffff-ffffffffffff",
+        )
+    host.repository.place_personal_retirement_hold.assert_not_awaited()
+    adapter.stop.assert_not_awaited()
+    await host.shutdown()
