@@ -1135,7 +1135,7 @@ export default function ModelSettings() {
                                 variant="outline"
                                 size="icon"
                                 onClick={() => loadProviderModels(selectedProvider, baseUrl)}
-                                disabled={isLoadingModels}
+                                disabled={isLoadingModels || selectedProviderDetails.enabled !== true}
                                 className="h-7 w-7"
                                 title="Refresh model discovery"
                                  aria-label="Refresh model discovery"
