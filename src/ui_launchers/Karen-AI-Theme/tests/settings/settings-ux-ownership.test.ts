@@ -29,6 +29,15 @@ describe('settings UX ownership contract', () => {
     expect(models).toContain('Your saved provider and model selection have not been changed');
   });
 
+  it('cannot claim a stored key or a legacy validation response is verified', () => {
+    expect(models).toContain("setApiKeyValidationState('idle')");
+    expect(models).toContain('key is stored, but has not been verified in this session');
+    expect(models).toContain("response.status === 'verified'");
+    expect(models).toContain("response.status !== 'verified'");
+    expect(models).not.toContain("setApiKeyValidationState(selectedProviderDetails?.api_key_configured ? 'valid' : 'idle')");
+    expect(models).not.toContain("if (!response.valid) {");
+  });
+
   it('distinguishes saved provider selection from runtime health and draft changes', () => {
     expect(models).toContain('const hasUnsavedSelection');
     expect(models).toContain("Saved model:");
