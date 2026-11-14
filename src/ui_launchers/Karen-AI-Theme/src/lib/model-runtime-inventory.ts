@@ -131,9 +131,10 @@ export interface RuntimeProviderCatalogProvider {
 export function isRuntimeProviderOperational(
   provider: Pick<RuntimeProviderDetails, 'healthy' | 'health'>,
 ): boolean {
-  return provider.health?.status === 'degraded' ||
-    (provider.healthy === true &&
-      (provider.health == null || provider.health.status === 'healthy'));
+  // Neither a degraded probe nor an unknown health result proves that a
+  // configured endpoint can accept a new conversation.
+  return provider.healthy === true &&
+    (provider.health == null || provider.health.status === 'healthy');
 }
 
 export interface RuntimeProviderCatalogResponse {
@@ -416,10 +417,14 @@ export function normalizeModelSettingsResponse(response: RuntimeSettingsResponse
     providers[0]?.id ||
     '';
   const selectedProviderDetails = providers.find((provider) => provider.id === selectedProvider);
-  const selectedModel =
-    selectedProviderDetails?.models.find((model) => model.id === selectedProviderDetails.selected_model)?.id ||
-    selectedProviderDetails?.models[0]?.id ||
-    '';
+  // Report only the actual saved application preference. "auto", an absent
+  // model and an obsolete catalog ID must not create an unsaved local edit.
+  const savedModel = response.selected_model && response.selected_model !== 'auto'
+    ? response.selected_model
+    : '';
+  const selectedModel = selectedProviderDetails?.models.find(
+    (model) => model.id === savedModel,
+  )?.id || '';
 
   return {
     selected_provider: selectedProvider,
@@ -444,7 +449,7 @@ export function normalizeRuntimeProviderCatalogResponse(
     .map((provider) => {
       const normalizedModels = sortProviderModels(
         (provider.models || [])
-          .filter((model) => model.available !== false)
+          .filter((model) => model.available === true)
           .map((model) => ({
           id: model.id,
           name: model.label || model.id,
