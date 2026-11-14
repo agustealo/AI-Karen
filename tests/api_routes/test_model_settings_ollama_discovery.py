@@ -157,6 +157,42 @@ async def test_ollama_runtime_source_and_response_mode_are_durably_saved(
 
 
 @pytest.mark.asyncio
+async def test_connection_settings_save_never_switches_workspace_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configuring an individual provider is not a request to change routing."""
+    writes: dict[str, object] = {}
+    commits: list[bool] = []
+    monkeypatch.setattr(
+        settings_routes,
+        "get_settings_manager",
+        lambda: SimpleNamespace(
+            set_setting=lambda key, value, save=False: writes.__setitem__(key, value),
+            _save_settings=lambda: commits.append(True),
+        ),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(),
+    )
+
+    async def saved():
+        return {"selected_provider": "ollama", "selected_model": "qwen3:4b"}
+
+    monkeypatch.setattr(settings_routes, "build_model_settings_payload", saved)
+    result = await settings_routes.update_model_settings(
+        settings_routes.ModelSettingsUpdateRequest(
+            provider="openai", chat_response_mode="auto"
+        ),
+        current_user={"roles": ["admin"]},
+    )
+    assert result == {"selected_provider": "ollama", "selected_model": "qwen3:4b"}
+    assert writes == {"chat_response_mode": "auto"}
+    assert commits == [True]
+
+
+@pytest.mark.asyncio
 async def test_unavailable_runtime_is_rejected_before_persistence(
     ollama_endpoint: None,
     monkeypatch: pytest.MonkeyPatch,
