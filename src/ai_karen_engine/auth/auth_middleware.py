@@ -422,7 +422,7 @@ class SecureAuthMiddleware:
             from ai_karen_engine.auth.auth_service import get_auth_service
 
             auth_service = await get_auth_service()
-            account = await auth_service.validate_session(token)
+            account = await auth_service.validate_session(token, strict_errors=True)
         except Exception as exc:
             logger.error(
                 "auth.session_validation_unavailable",
