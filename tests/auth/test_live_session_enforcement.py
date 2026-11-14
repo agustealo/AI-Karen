@@ -171,6 +171,55 @@ async def test_database_error_never_falls_back_to_jwt_only_access():
 
 
 @pytest.mark.asyncio
+async def test_session_issuance_commits_before_success_and_rejects_commit_failure():
+    class FakePersistence:
+        def __init__(self, fail: bool):
+            self.fail = fail
+            self.add_count = 0
+            self.flushed = False
+            self.committed = False
+
+        def add(self, value):
+            assert str(value.user_id) == USER_ID
+            self.add_count += 1
+
+        async def flush(self):
+            self.flushed = True
+
+        async def commit(self):
+            if self.fail:
+                raise OSError("commit unavailable")
+            self.committed = True
+
+    for should_fail in (False, True):
+        db = FakePersistence(should_fail)
+        svc = object.__new__(AuthService)
+        svc._config = SimpleNamespace(refresh_token_expire_days=30)
+
+        @asynccontextmanager
+        async def scope():
+            yield db
+
+        svc._session_scope = scope
+        issuance = svc._persist_auth_session(
+            user_id=USER_ID,
+            access_token="signed-access-token",
+            refresh_token="opaque-refresh-token",
+            ip_address="127.0.0.1",
+            user_agent="test-client",
+            device_fingerprint="fingerprint",
+        )
+        if should_fail:
+            with pytest.raises(RuntimeError, match="Durable session persistence unavailable"):
+                await issuance
+        else:
+            await issuance
+        assert db.add_count == 1
+        assert db.flushed
+        assert db.committed is not should_fail
+
+
+@pytest.mark.asyncio
 async def test_login_denied_when_durable_session_persistence_fails():
     svc = object.__new__(AuthService)
     svc._initialized = True
