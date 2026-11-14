@@ -11,7 +11,7 @@ from ai_karen_engine.services.plugin_service import PluginService
 
 def _write_plugin(
     root: Path, plugin_id: str = "alpha-plugin",
-    *, dependencies: tuple[str, ...] = (),
+    *, dependencies: tuple[str, ...] = (), default_enabled: bool = True,
 ) -> None:
     plugin_dir = root / plugin_id
     plugin_dir.mkdir(parents=True)
@@ -27,6 +27,7 @@ def _write_plugin(
                 "display_name": "Alpha Plugin",
                 "description": "Refresh-state fixture",
                 "dependencies": {"plugins": list(dependencies)},
+                "rbac": {"default_enabled": default_enabled},
                 "author": "Kari",
                 "license": "MIT",
                 "category": "test",
@@ -207,3 +208,109 @@ async def test_uploaded_plugin_remains_untrusted_under_builtin_root_after_refres
     assert registration.state is ExtensionLifecycleState.DISABLED
     with pytest.raises(ValueError, match="isolated runtime"):
         await service.enable_plugin("uploaded-demo")
+
+
+@pytest.mark.asyncio
+async def test_explicit_enable_of_default_disabled_plugin_survives_restart(
+    tmp_path: Path,
+) -> None:
+    _write_plugin(tmp_path, "opt-in", default_enabled=False)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+
+    registry = service.kernel.runtime_registry
+    assert registry.get("opt-in").state is ExtensionLifecycleState.DISABLED
+    assert await service.enable_plugin("opt-in") is True
+    marker = tmp_path / "opt-in" / ".karen-manual-enabled"
+    assert marker.read_text(encoding="utf-8") == "enabled\n"
+
+    await service.refresh_plugins()
+    assert service.kernel.runtime_registry.get("opt-in").state is ExtensionLifecycleState.ENABLED
+
+    # A new process has no in-memory lifecycle state from the previous kernel.
+    restarted = PluginService(tmp_path, tmp_path)
+    await restarted.initialize()
+    assert restarted.kernel.runtime_registry.get("opt-in").state is ExtensionLifecycleState.ENABLED
+    assert marker.is_file()
+
+
+@pytest.mark.asyncio
+async def test_explicit_disable_replaces_persisted_opt_in_across_restart(
+    tmp_path: Path,
+) -> None:
+    _write_plugin(tmp_path, "opt-in", default_enabled=False)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    assert await service.enable_plugin("opt-in") is True
+    assert await service.disable_plugin("opt-in") is True
+
+    assert not (tmp_path / "opt-in" / ".karen-manual-enabled").exists()
+    assert (tmp_path / "opt-in" / ".karen-manual-disabled").is_file()
+
+    await service.refresh_plugins()
+    assert service.kernel.runtime_registry.get("opt-in").state is ExtensionLifecycleState.DISABLED
+    restarted = PluginService(tmp_path, tmp_path)
+    await restarted.initialize()
+    assert restarted.kernel.runtime_registry.get("opt-in").state is ExtensionLifecycleState.DISABLED
+
+    assert await restarted.enable_plugin("opt-in")
+    assert (tmp_path / "opt-in" / ".karen-manual-enabled").is_file()
+    assert not (tmp_path / "opt-in" / ".karen-manual-disabled").exists()
+
+
+@pytest.mark.asyncio
+async def test_corrupted_explicit_enable_marker_cannot_override_default_disabled(
+    tmp_path: Path,
+) -> None:
+    _write_plugin(tmp_path, "opt-in", default_enabled=False)
+    marker = tmp_path / "opt-in" / ".karen-manual-enabled"
+    marker.write_text("not-enabled\n", encoding="utf-8")
+
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    assert service.kernel.runtime_registry.get("opt-in").state is ExtensionLifecycleState.DISABLED
+    with pytest.raises(ValueError, match="Invalid plugin enabled-state marker"):
+        await service.enable_plugin("opt-in")
+
+
+@pytest.mark.asyncio
+async def test_explicit_enable_dependency_graph_remains_consistent_on_refresh(
+    tmp_path: Path,
+) -> None:
+    _write_plugin(tmp_path, "foundation", default_enabled=False)
+    _write_plugin(tmp_path, "consumer", dependencies=("foundation",), default_enabled=True)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    assert service.kernel.runtime_registry.get("consumer").state is ExtensionLifecycleState.DISABLED
+
+    assert await service.enable_plugin("foundation") is True
+    await service.refresh_plugins()
+    assert service.kernel.runtime_registry.get("foundation").state is ExtensionLifecycleState.ENABLED
+    assert service.kernel.runtime_registry.get("consumer").state is ExtensionLifecycleState.ENABLED
+
+    with pytest.raises(ValueError, match="required by an enabled dependent"):
+        await service.disable_plugin("foundation")
+    assert (tmp_path / "foundation" / ".karen-manual-enabled").is_file()
+
+
+@pytest.mark.asyncio
+async def test_failed_durable_opt_in_rolls_back_without_claiming_enable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_plugin(tmp_path, "opt-in", default_enabled=False)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+
+    def fail_write(_plugin_id: str) -> None:
+        raise OSError("storage unavailable")
+
+    monkeypatch.setattr(kernel, "_persist_explicit_enable", fail_write)
+    with pytest.raises(OSError, match="storage unavailable"):
+        await service.enable_plugin("opt-in")
+
+    assert kernel.runtime_registry.get("opt-in").state is ExtensionLifecycleState.DISABLED
+    assert not (tmp_path / "opt-in" / ".karen-manual-enabled").exists()
+    restarted = PluginService(tmp_path, tmp_path)
+    await restarted.initialize()
+    assert restarted.kernel.runtime_registry.get("opt-in").state is ExtensionLifecycleState.DISABLED

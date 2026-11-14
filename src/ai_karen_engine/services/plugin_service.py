@@ -255,6 +255,7 @@ class PluginService:
                         or any(
                             part in {
                                 PluginKernel.UPLOADED_ORIGIN_MARKER,
+                                PluginKernel.MANUAL_ENABLED_MARKER,
                                 ".karen-manual-disabled",
                             }
                             for part in relative.parts

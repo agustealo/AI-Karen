@@ -159,6 +159,7 @@ async def test_duplicate_zip_entry_is_refused(tmp_path):
     "forbidden_member",
     [
         ".karen-upload-origin",
+        ".karen-manual-enabled",
         ".karen-manual-disabled",
         "assets/.karen-upload-origin",
         "nested/.karen-manual-disabled/child",

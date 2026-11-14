@@ -11,6 +11,8 @@ import asyncio
 import inspect
 import json
 import logging
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -191,6 +193,8 @@ class PluginKernel:
     # Durable provenance is independent of the user-controlled disabled gate.
     # Uploading into the built-in root must never promote uploaded code to first-party.
     UPLOADED_ORIGIN_MARKER = ".karen-upload-origin"
+    MANUAL_ENABLED_MARKER = ".karen-manual-enabled"
+    MANUAL_ENABLED_CONTENT = "enabled\n"
 
     def __init__(
         self,
@@ -242,6 +246,34 @@ class PluginKernel:
         marker = self.extensions_root / plugin_id / self.UPLOADED_ORIGIN_MARKER
         # A marker changed into a symlink is suspicious, not a trust upgrade.
         return marker.exists() or marker.is_symlink()
+
+    def _explicitly_enabled(self, plugin_id: str) -> bool:
+        """Read the canonical opt-in marker only when it is a valid regular file."""
+        marker = self.extensions_root / plugin_id / self.MANUAL_ENABLED_MARKER
+        return (
+            not marker.is_symlink()
+            and marker.is_file()
+            and marker.read_text(encoding="utf-8") == self.MANUAL_ENABLED_CONTENT
+        )
+
+    def _persist_explicit_enable(self, plugin_id: str) -> None:
+        """Publish opt-in only after the runtime transition has succeeded."""
+        marker = self.extensions_root / plugin_id / self.MANUAL_ENABLED_MARKER
+        if marker.is_symlink() or (marker.exists() and not marker.is_file()):
+            raise ValueError("Unsafe plugin enabled-state path")
+        if marker.is_file():
+            if not self._explicitly_enabled(plugin_id):
+                raise ValueError("Invalid plugin enabled-state marker")
+            return
+        temporary = marker.with_name(f".karen-enable-{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("x", encoding="utf-8") as handle:
+                handle.write(self.MANUAL_ENABLED_CONTENT)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, marker)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     async def initialize(self, *, auto_discover: bool = True) -> None:
         if self._initialized:
@@ -349,7 +381,8 @@ class PluginKernel:
         catalog_manifests: Dict[str, CatalogExtensionManifest] = {}
 
         for plugin_id in self.catalog_registry.list_discovered():
-            if (self.extensions_root / plugin_id / ".karen-manual-disabled").is_file():
+            disabled_marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
+            if disabled_marker.is_file() or disabled_marker.is_symlink():
                 self._disabled.add(plugin_id)
             metadata = self.catalog_registry.get_metadata(plugin_id)
             if metadata is None:
@@ -398,7 +431,8 @@ class PluginKernel:
                 and plugin_id not in self._retirement_pending
                 and not self._is_uploaded_plugin(plugin_id)
                 and manifest.capabilities.communication_channel is None
-                and manifest.rbac.default_enabled
+                and (manifest.rbac.default_enabled or self._explicitly_enabled(plugin_id))
+                and not (self.extensions_root / plugin_id / self.MANUAL_ENABLED_MARKER).is_symlink()
             )
         }
         while True:
@@ -785,19 +819,37 @@ class PluginKernel:
                 "Communication channel activation requires the governed Channel Gateway"
             )
         marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
-        # A successful explicit enable must be durable across restart.
-        if marker.is_symlink():
+        enabled_marker = self.extensions_root / plugin_id / self.MANUAL_ENABLED_MARKER
+        if (
+            marker.is_symlink()
+            or enabled_marker.is_symlink()
+            or not marker.parent.is_dir()
+            or marker.parent.is_symlink()
+            or (enabled_marker.exists() and not enabled_marker.is_file())
+        ):
             raise ValueError("Unsafe plugin activation marker")
+        # A marker for an explicitly enabled default-disabled plugin is the
+        # durable user choice, separate from the manifest's default.
+        requires_opt_in = manifest is not None and not manifest.rbac.default_enabled
+        if requires_opt_in and enabled_marker.is_file() and not self._explicitly_enabled(plugin_id):
+            raise ValueError("Invalid plugin enabled-state marker")
         await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.ENABLED)
-        # Record the durable state only after the canonical registry accepts
-        # activation. A failed state transition must preserve the marker.
-        if marker.is_file():
-            try:
+        was_explicitly_enabled = enabled_marker.is_file()
+        try:
+            if requires_opt_in:
+                self._persist_explicit_enable(plugin_id)
+            if marker.is_file():
                 marker.unlink()
-            except OSError:
-                await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.DISABLED)
-                self._disabled.add(plugin_id)
-                raise
+        except Exception:
+            # If durable write-through failed, never report a successful enable.
+            # The manual-disabled marker, if present, continues to take priority.
+            if requires_opt_in and not was_explicitly_enabled:
+                enabled_marker.unlink(missing_ok=True)
+            await self.runtime_registry.update_state(
+                plugin_id, ExtensionLifecycleState.DISABLED
+            )
+            self._disabled.add(plugin_id)
+            raise
         self._disabled.discard(plugin_id)
         return True
 
@@ -819,7 +871,14 @@ class PluginKernel:
         if self._required_by_enabled_plugin(plugin_id):
             raise ValueError("Plugin is required by an enabled dependent")
         marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
-        if marker.is_symlink() or not marker.parent.is_dir() or marker.parent.is_symlink():
+        enabled_marker = self.extensions_root / plugin_id / self.MANUAL_ENABLED_MARKER
+        if (
+            marker.is_symlink()
+            or enabled_marker.is_symlink()
+            or (enabled_marker.exists() and not enabled_marker.is_file())
+            or not marker.parent.is_dir()
+            or marker.parent.is_symlink()
+        ):
             raise ValueError("Unsafe plugin disabled-state path")
         # Persist explicit disable before transitioning runtime state.
         # If transition fails, retaining the marker is fail-closed.
@@ -828,6 +887,11 @@ class PluginKernel:
                 handle.write("Plugin disabled explicitly; requires enable\n")
         self._disabled.add(plugin_id)
         await self.runtime_registry.update_state(plugin_id, ExtensionLifecycleState.DISABLED)
+        # The disable marker was durable before this transition. Remove any
+        # explicit-enable state only afterwards; if removal fails, the disable
+        # marker still wins on the next process start.
+        if enabled_marker.is_file():
+            enabled_marker.unlink()
         # Disabling revokes execution and releases existing plugin resources;
         # enabling later must initialize a fresh instance.
         instance = self.loader.get_loaded_extensions().get(plugin_id)

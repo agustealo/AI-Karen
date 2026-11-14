@@ -189,3 +189,19 @@ def test_user_uploaded_code_never_inherits_builtin_trust_or_in_process_execution
     assert '"isolation_unavailable"' in executor
     assert "result.trust_tier = getattr(resolved" not in executor
     assert "self._invoke(handler, request)" in executor
+
+
+def test_explicit_enable_is_durable_and_uploads_cannot_spoof_opt_in() -> None:
+    kernel = (
+        ROOT / "src/ai_karen_engine/extensions/plugin_kernel.py"
+    ).read_text(encoding="utf-8")
+    upload = (
+        ROOT / "src/ai_karen_engine/services/plugin_service.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'MANUAL_ENABLED_MARKER = ".karen-manual-enabled"' in kernel
+    assert "self._persist_explicit_enable(plugin_id)" in kernel
+    assert "manifest.rbac.default_enabled or self._explicitly_enabled(plugin_id)" in kernel
+    assert "enabled_marker.unlink()" in kernel
+    assert "PluginKernel.MANUAL_ENABLED_MARKER" in upload
+    assert "not self._is_uploaded_plugin(plugin_id)" in kernel

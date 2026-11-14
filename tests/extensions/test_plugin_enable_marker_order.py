@@ -98,3 +98,26 @@ async def test_uploaded_origin_refuses_enable_without_removing_durable_disable(
 
     assert marker.is_file()
     assert transitions == []
+
+
+@pytest.mark.asyncio
+async def test_symlinked_explicit_enabled_marker_is_rejected_before_transition(
+    tmp_path: Path,
+) -> None:
+    kernel = PluginKernel(tmp_path)
+    package = tmp_path / "demo"
+    package.mkdir()
+    (package / PluginKernel.MANUAL_ENABLED_MARKER).symlink_to(tmp_path / "outside")
+    transitions = []
+
+    class Registry:
+        def get(self, _name):
+            return SimpleNamespace(manifest=SimpleNamespace(id="demo"))
+
+        async def update_state(self, _name, state):
+            transitions.append(state)
+
+    kernel.runtime_registry = Registry()
+    with pytest.raises(ValueError, match="Unsafe plugin activation marker"):
+        await kernel.enable("demo")
+    assert transitions == []
