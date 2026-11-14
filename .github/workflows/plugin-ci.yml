@@ -9,6 +9,9 @@ on:
       - 'src/ai_karen_engine/api_routes/plugins/**'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/stores/PluginStore.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/components/plugins/**'
+      - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'src/ai_karen_engine/services/search/article_document_service.py'
@@ -35,6 +38,9 @@ on:
       - 'src/ai_karen_engine/api_routes/plugins/**'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/PluginStoreService.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/types/plugin.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/stores/PluginStore.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/components/plugins/**'
+      - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'src/ai_karen_engine/services/search/article_document_service.py'
@@ -178,6 +184,7 @@ jobs:
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
             tests/architecture/test_plugin_runtime_authority.py \
+            tests/architecture/test_plugin_store_api_shape_guards.py \
             -v \
             --cov=src/ai_karen_engine/extensions \
             --cov-report=xml \
