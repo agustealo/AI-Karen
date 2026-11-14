@@ -297,7 +297,7 @@ describe("My Account consumer contracts", () => {
     };
     vi.mocked(apiClient.get).mockImplementation(async (path) =>
       path === "/api/auth/me/sessions" ? { sessions: [
-        { ...remote, session_id: "22222222-2222-2222-2222-222222222222", is_current: true },
+        { ...remote, session_id: "22222222-2222-2222-2222-222222222222", is_current: true, user_agent: "Current Browser" },
         remote,
       ] } : account(),
     );
