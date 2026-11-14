@@ -135,6 +135,18 @@ async def assign_personal_channel_owner(
         ):
             raise PermissionError("Connection outside operator tenant")
 
+        # The personal endpoint cannot assign owners to generic channel
+        # installations. The managed operator must be explicitly allowlisted
+        # with a Vault-backed signing-secret contract before provisioning.
+        # This is an eligibility gate, not evidence of a live paired session.
+        installation_id = connection.installation_id
+        if (
+            not host.settings.personal_pairing_providers.get(installation_id)
+            or "pairing_webhook_secret"
+            not in host.settings.installations.get(installation_id, frozenset())
+        ):
+            raise PermissionError("Managed personal provider unavailable")
+
         session_id = str(uuid4())
         plan = await host.activation.issue_action_plan(
             tenant_id=tenant_id,
