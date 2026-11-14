@@ -1,0 +1,110 @@
+{
+  "repository": "agustealo/AI-Karen",
+  "main_branch": "main",
+  "main_at_audit": "f7857daebcad5df2259de872dd55a5f9197de486",
+  "created_at": "2026-11-14T19:45:46.523Z",
+  "archive_tag": "branch-archive/2026-11-14-final-historical-unique-tips",
+  "statement": "The archived histories are NOT asserted to be merged into main. Their original commit objects are preserved as archive commit parents.",
+  "recovery": "git fetch origin tag branch-archive/2026-11-14-final-historical-unique-tips; git show branch-archive/2026-11-14-final-historical-unique-tips:.branch-archives/2026-11-14-final-historical-unique-tips.json; git branch RECOVERY_NAME ORIGINAL_SHA",
+  "branches": [
+    {
+      "name": "feat/kchat-governed-search-results-20261105",
+      "sha": "f9c153d611d7b36e3738f4785d2dde302cc3162f",
+      "classification": "unique_history_archived_not_integrated_into_main",
+      "committed_at": "2026-11-05T01:27:25-05:00",
+      "unique_commits_vs_main": 10,
+      "merge_base": "66c8913e983d406e7be6ff443083432ce766fb3e",
+      "touched_paths": [
+        "src/ai_karen_engine/core/cortex/routing_intents.py",
+        "src/ai_karen_engine/core/runtime/chat_runtime.py",
+        "src/ai_karen_engine/core/runtime/presentation_contract.py",
+        "src/ui_launchers/Karen-AI-Theme/src/components/chat/KarenPresentationRegistry.tsx",
+        "src/ui_launchers/Karen-AI-Theme/tests/chat/KarenPresentationRegistry.test.tsx",
+        "src/ui_launchers/Karen-AI-Theme/tests/karen-copilotkit-rich-history.test.tsx",
+        "tests/core/runtime/test_search_source_presentation.py",
+        "tests/extensions/test_intelligent_search_cortex_routing.py"
+      ],
+      "prs": []
+    },
+    {
+      "name": "feat/kchat-native-expression-agui-stream-20261104",
+      "sha": "88fa1395d7810936cd5a009eb49dd9197e498222",
+      "classification": "unique_history_archived_not_integrated_into_main",
+      "committed_at": "2026-11-04T12:00:02-05:00",
+      "unique_commits_vs_main": 6,
+      "merge_base": "fe867be9d8211a3dab6b6ce3510295cadad63202",
+      "touched_paths": [
+        "src/ai_karen_engine/core/expression/contracts.py",
+        "src/ai_karen_engine/core/expression/engines/base.py",
+        "src/ai_karen_engine/core/expression/engines/openai_compatible_engine.py",
+        "src/ai_karen_engine/core/expression/gateway.py"
+      ],
+      "prs": []
+    },
+    {
+      "name": "feat/search-to-assistant-composer-20261024",
+      "sha": "f7c6190695350c78f75cb20dfbcc9ef9dbcd34d2",
+      "classification": "unique_history_archived_not_integrated_into_main",
+      "committed_at": "2026-10-24T19:35:51-04:00",
+      "unique_commits_vs_main": 4,
+      "merge_base": "e5ffbd04a3024f7e07ba73569b865b60a840cd0b",
+      "touched_paths": [
+        "src/ui_launchers/Karen-AI-Theme/src/components/chat/SessionProvider.tsx",
+        "src/ui_launchers/Karen-AI-Theme/src/components/chat/assistant-ui/KarenAssistantChat.tsx",
+        "src/ui_launchers/Karen-AI-Theme/src/plugin_repo/intelligent-search/components/Panels.tsx",
+        "src/ui_launchers/Karen-AI-Theme/tests/chat/search-to-composer-contract.test.ts"
+      ],
+      "prs": []
+    },
+    {
+      "name": "fix/kchat-p0-chat-recovery",
+      "sha": "b65c8e3f0b87b6242e199e117d33bb53c5c7d720",
+      "classification": "unique_history_archived_not_integrated_into_main",
+      "committed_at": "2026-11-06T01:25:34-05:00",
+      "unique_commits_vs_main": 12,
+      "merge_base": "6e3fd07b85793408e3a3c69e1e5165c9cb363740",
+      "touched_paths": [
+        "docs/AI_KAREN_CHAT_RECOVERY_LOCAL_TEAM_MANDATE_2026-11-03.md",
+        "docs/development/karen_chat_p0_readonly.py",
+        "docs/development/test_karen_chat_p0_readonly.py",
+        "models/llm_registry.json",
+        "scripts/diagnostics/chat_p0_readonly.py",
+        "src/ai_karen_engine/api_routes/models/runtime_api.py",
+        "src/ai_karen_engine/api_routes/models/settings.py",
+        "src/ai_karen_engine/auth/auth_middleware.py",
+        "src/ai_karen_engine/config/runtime_provider_manager.py",
+        "src/ai_karen_engine/core/runtime/chat_runtime.py",
+        "src/ui_launchers/Karen-AI-Theme/.eslintrc.json",
+        "src/ui_launchers/Karen-AI-Theme/next.config.ts",
+        "src/ui_launchers/Karen-AI-Theme/src/app/api/copilotkit/[[...slug]]/route.ts",
+        "src/ui_launchers/Karen-AI-Theme/src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx",
+        "src/ui_launchers/Karen-AI-Theme/src/lib/model-runtime-inventory.ts",
+        "src/ui_launchers/Karen-AI-Theme/tests/copilotkit-runtime-sdk-run.test.ts",
+        "tests/auth/test_readiness_probe_public.py",
+        "tests/core/runtime/test_chat_runtime_stream_contract.py",
+        "tests/unit/scripts/test_chat_p0_readonly.py"
+      ],
+      "prs": []
+    },
+    {
+      "name": "fix/redis-rate-limit-fail-closed-20261028",
+      "sha": "a4398ed6027ec197339575a1ffdbb24ccdf6755c",
+      "classification": "unique_history_archived_not_integrated_into_main",
+      "committed_at": "2026-10-28T08:02:19-04:00",
+      "unique_commits_vs_main": 2,
+      "merge_base": "8f47abb73602a737503d5b8b6c9046fc059a201d",
+      "touched_paths": [
+        "src/ai_karen_engine/server/rate_limiter.py",
+        "tests/test_redis_atomic_rate_limit.py"
+      ],
+      "prs": [
+        {
+          "number": 562,
+          "state": "closed",
+          "merged_at": "2026-10-28T11:30:24Z",
+          "pr_head_sha": "8f47abb73602a737503d5b8b6c9046fc059a201d"
+        }
+      ]
+    }
+  ]
+}
