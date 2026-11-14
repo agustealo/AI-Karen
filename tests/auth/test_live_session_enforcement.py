@@ -620,3 +620,30 @@ async def test_remote_session_revocation_refuses_current_and_foreign_targets():
     ) is False
     assert foreign_db.committed is False
     assert "auth_users.tenant_id" in str(foreign_db.statements[0])
+
+
+@pytest.mark.asyncio
+async def test_unverified_direct_profile_email_change_fails_closed_before_mutation():
+    owner = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        email="current@example.org",
+        username="current-member",
+        full_name="Current Member",
+    )
+    db = FakeDbSession(owner)
+    svc = session_service(db)
+    svc._emit_audit_event = AsyncMock()
+
+    changed, error = await svc.update_user_profile(
+        USER_ID,
+        email="attacker@example.org",
+        full_name="Unverified Rename",
+    )
+
+    assert changed is None
+    assert error == "Email change requires verified ownership"
+    assert owner.email == "current@example.org"
+    assert owner.full_name == "Current Member"
+    assert db.flushed is False
+    assert db.committed is False
+    svc._emit_audit_event.assert_not_awaited()
