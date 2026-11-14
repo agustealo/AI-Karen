@@ -374,6 +374,8 @@ export async function loadDynamicTransformersModels(): Promise<RuntimeProviderMo
 const isProviderSelectable = (provider: RuntimeProviderDetails): boolean => {
   return (
     provider.enabled !== false &&
+    provider.chat_enabled !== false &&
+    provider.selectable !== false &&
     provider.user_selectable !== false &&
     provider.policy_allowed !== false &&
     provider.is_configured !== false
