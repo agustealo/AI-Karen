@@ -464,3 +464,17 @@ async def test_local_model_cannot_be_chat_ready_without_configured_healthy_runti
     provider = catalog.providers[0]
     assert provider.models[0].available is False
     assert catalog.default_model == "auto"
+
+
+@pytest.mark.asyncio
+async def test_runtime_catalog_outage_does_not_expose_secret_exception_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unavailable():
+        raise RuntimeError("provider://admin:private-token@internal.invalid?key=private-token")
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", unavailable)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
+    assert catalog.catalog_version == "bootstrap"
+    assert "private-token" not in catalog.model_dump_json()
+    assert catalog.errors[0]["error_type"] == "settings_payload_failed"
