@@ -95,10 +95,43 @@ def _resolve_base_url(endpoint: ProviderEndpoint) -> str | None:
 
 
 def _resolve_api_key(endpoint: ProviderEndpoint) -> str | None:
-    if endpoint.api_key_env:
-        value = (os.getenv(endpoint.api_key_env) or "").strip()
-        return value or None
-    return None
+    """Resolve a credential through its configured owner at execution time.
+
+    Workspace credentials stored through Application Settings must reach both
+    regular and streamed requests without environment mutation or stale global
+    key caches. Governed endpoints fail closed when their bound credential is
+    missing or the current provider configuration no longer authorizes them.
+    """
+    if not endpoint.api_key_env:
+        return None
+
+    if endpoint.metadata.get("configuration_owner") == "llm_provider_config":
+        try:
+            from ai_karen_engine.config.llm_provider_config import (
+                get_provider_config_manager,
+            )
+
+            manager = get_provider_config_manager()
+            config = manager.get_provider(endpoint.provider_id)
+            if (
+                config is None
+                or not config.enabled
+                or config.authentication is None
+                or config.authentication.api_key_env_var != endpoint.api_key_env
+                or config.endpoint is None
+                or str(config.endpoint.base_url or "").rstrip("/")
+                != str(endpoint.base_url or "").rstrip("/")
+                or not manager.is_provider_configured(endpoint.provider_id)
+            ):
+                return None
+            return manager.get_api_key(endpoint.provider_id)
+        except Exception:
+            return None
+
+    # Explicitly registered runtime endpoints retain their existing
+    # environment credential contract. No cross-provider secret lookup.
+    value = (os.getenv(endpoint.api_key_env) or "").strip()
+    return value or None
 
 
 def _post_chat_completions(
@@ -109,6 +142,10 @@ def _post_chat_completions(
     """Single OpenAI-compatible HTTP transport for text and tool-call models."""
     headers = {"Content-Type": "application/json"}
     api_key = _resolve_api_key(endpoint)
+    if endpoint.api_key_env and not api_key:
+        raise ProviderExecutionError(
+            f"provider_credential_unavailable:{endpoint.provider_id}"
+        )
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     request = Request(
@@ -469,6 +506,10 @@ async def stream_provider_endpoint(
 
     headers = {"Accept": "text/event-stream", "Content-Type": "application/json"}
     api_key = _resolve_api_key(endpoint)
+    if endpoint.api_key_env and not api_key:
+        raise ProviderExecutionError(
+            f"provider_credential_unavailable:{endpoint.provider_id}"
+        )
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
