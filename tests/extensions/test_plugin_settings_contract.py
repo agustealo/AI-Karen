@@ -110,6 +110,14 @@ def test_settings_reject_undeclared_credentials_and_invalid_schema(values):
     assert "secret-value" not in str(exc.value)
 
 
+def test_reset_can_restore_defaults_when_initial_configuration_has_required_fields():
+    contract = PluginSettingsRepository.contract(_manifest())
+    assert contract.required == ("region",)
+    assert contract.validate({}, require_configured=False) == {}
+    with pytest.raises(PluginSettingsValidationError):
+        contract.validate({})
+
+
 def test_only_declared_valid_settings_are_accepted_without_secret_values():
     contract = PluginSettingsRepository.contract(_manifest())
     assert contract.validate({"region": "east", "timeout": 9}) == {
@@ -321,6 +329,22 @@ async def test_service_requires_canonical_manifest_and_confirms_only_persisted_r
             revision=5, request_id="request-1", correlation_id="corr-1",
         )
     assert store.write.await_count == 1
+
+    reset = await service.write_plugin_settings(
+        plugin_id="settings-test",
+        tenant_id=TENANT_A,
+        actor_user_id="operator",
+        settings={},
+        revision=5,
+        request_id="request-reset",
+        correlation_id="corr-reset",
+        reset=True,
+    )
+    assert reset["success"] is True
+    assert reset["reset"] is True
+    assert reset["settings"] == {"timeout": 20, "enabled": False}
+    assert store.write.await_args.kwargs["operation"] == "reset"
+    assert store.write.await_args.kwargs["settings"] == {}
 
 
 @pytest.mark.asyncio
