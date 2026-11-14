@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.auth.auth_middleware import get_rate_limiter
@@ -106,10 +106,32 @@ class UserResponse(BaseModel):
 class UpdateProfileRequest(BaseModel):
     """Update the current user's profile."""
 
-    email: Optional[str] = None
-    username: Optional[str] = Field(default=None, min_length=1)
-    full_name: Optional[str] = Field(default=None, min_length=1)
+    email: Optional[str] = Field(default=None, min_length=3, max_length=254)
+    username: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     preferences: Optional[Dict[str, Any]] = None
+
+    @field_validator("email", "username", "full_name")
+    @classmethod
+    def normalize_profile_field(cls, value: Optional[str], info: Any) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized or any(ord(char) < 32 for char in normalized):
+            raise ValueError(f"{info.field_name} must be nonempty and contain no control characters")
+        if info.field_name == "username" and any(char.isspace() for char in normalized):
+            raise ValueError("Username cannot contain whitespace")
+        if info.field_name == "email":
+            parts = normalized.split("@")
+            if (
+                len(parts) != 2
+                or not parts[0]
+                or "." not in parts[1]
+                or any(char.isspace() for char in normalized)
+            ):
+                raise ValueError("Enter a valid email address")
+            return normalized.lower()
+        return normalized
 
     @model_validator(mode="after")
     def validate_payload(self):
@@ -261,6 +283,27 @@ def _serialize_user_response(user: Any) -> Dict[str, Any]:
 def _resolve_current_user_id(user: Any) -> str:
     """Resolve current user ID from validated authenticated context."""
     return _ensure_authenticated_user_payload(user)["user_id"]
+
+
+async def _require_owned_account(
+    current_user: Any,
+    auth_svc: CoreAuthService,
+) -> Dict[str, Any]:
+    """Read backend-owned identity and reject stale or cross-tenant sessions."""
+    principal = _ensure_authenticated_user_payload(current_user)
+    canonical = await auth_svc.get_user_by_id(principal["user_id"])
+    if canonical is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user no longer exists",
+        )
+    account = _serialize_user_response(canonical)
+    if account["tenant_id"] != principal["tenant_id"] or not account["is_active"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated account scope is no longer valid",
+        )
+    return account
 
 
 @router.get("/status")
@@ -590,20 +633,7 @@ async def get_current_user_info(
     auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> Dict[str, Any]:
     """Get current canonical user information."""
-    middleware_payload = _ensure_authenticated_user_payload(current_user)
-    canonical_user = await auth_svc.get_user_by_id(middleware_payload["user_id"])
-    if canonical_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authenticated user no longer exists",
-        )
-
-    response = _serialize_user_response(canonical_user)
-    if response["tenant_id"] != middleware_payload["tenant_id"]:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authenticated tenant context is stale",
-        )
+    response = await _require_owned_account(current_user, auth_svc)
     response["authenticated"] = True
     response["last_active"] = datetime.now(timezone.utc).isoformat()
     return response
@@ -616,7 +646,8 @@ async def update_current_user_info(
     auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> Dict[str, Any]:
     """Update current user information through canonical AuthService."""
-    current_user_id = _resolve_current_user_id(current_user)
+    account = await _require_owned_account(current_user, auth_svc)
+    current_user_id = account["user_id"]
 
     try:
         updated_user, error = await auth_svc.update_user_profile(
@@ -642,7 +673,13 @@ async def update_current_user_info(
                 detail=error or "Failed to update profile",
             )
 
-        return _serialize_user_response(updated_user)
+        updated = _serialize_user_response(updated_user)
+        if updated["tenant_id"] != account["tenant_id"]:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authenticated account scope changed during update",
+            )
+        return updated
 
     except HTTPException:
         raise
@@ -661,7 +698,8 @@ async def change_password(
     auth_svc: CoreAuthService = Depends(get_auth_service),
 ) -> JSONResponse:
     """Change current user's password and terminate the current session."""
-    current_user_id = _resolve_current_user_id(current_user)
+    account = await _require_owned_account(current_user, auth_svc)
+    current_user_id = account["user_id"]
     error = await auth_svc.change_user_password(
         current_user_id,
         request.current_password,
@@ -671,7 +709,10 @@ async def change_password(
     if error:
         status_code = status.HTTP_400_BAD_REQUEST
         if error == "Current password is incorrect":
-            status_code = status.HTTP_401_UNAUTHORIZED
+            # An incorrect current password is not an expired authentication
+            # session. 400 prevents the browser API client from refreshing or
+            # invalidating a valid session when displaying this form error.
+            status_code = status.HTTP_400_BAD_REQUEST
         elif error == "User not found":
             status_code = status.HTTP_404_NOT_FOUND
         raise HTTPException(status_code=status_code, detail=error)

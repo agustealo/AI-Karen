@@ -1393,15 +1393,36 @@ class AuthService(BaseService):
                         auth_user.preferences.update(preferences)
                         from sqlalchemy.orm.attributes import flag_modified
                         flag_modified(auth_user, "preferences")
+                auth_user.updated_at = datetime.utcnow()
                 await session.flush()
                 await session.refresh(auth_user)
                 user_account = self._build_user_account(auth_user)
-                self._user_cache[str(auth_user.user_id)] = user_account
-                logger.info("User profile updated for user %s", user_id)
-                return user_account, None
-        except Exception as e:
-            logger.error("Failed to update user profile: %s", e)
-            return None, str(e)
+
+            # The session scope must close before a success audit or cache write
+            # can claim the canonical mutation is complete.
+            self._user_cache[str(user_uuid)] = user_account
+            updated_fields = [
+                key
+                for key, value in {
+                    "email": email,
+                    "username": username,
+                    "full_name": full_name,
+                    "preferences": preferences,
+                }.items()
+                if value is not None
+            ]
+            await self._emit_audit_event(
+                action="auth.profile.updated",
+                actor_user_id=user_id,
+                target_user_id=user_id,
+                status="success",
+                metadata={"updated_fields": updated_fields},
+            )
+            logger.info("User profile updated for user %s", user_id)
+            return user_account, None
+        except Exception:
+            logger.exception("Failed to update user profile for user %s", user_id)
+            return None, "Account update could not be completed"
 
     async def _emit_audit_event(
         self,
