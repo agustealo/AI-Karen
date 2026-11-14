@@ -167,19 +167,57 @@ deleting the row to prevent ABA conflicts. Reset persists an empty override even
 when a manifest declares required setup fields without defaults; those fields
 must be configured again before any action that depends on them can operate.
 
-**Secrets are not yet writable through Plugin Settings.** Password, token,
-API-key, credential, `writeOnly`, and secret-formatted manifest fields are
-reported read-only and omitted from readback. Nested/unsupported fields are
-also read-only. Attempts to write such fields fail with HTTP 422; they are
-never stored in `extension_plugin_settings`.
+**Ordinary settings never store secrets.** Password, token, API-key,
+credential, writeOnly and secret-formatted manifest fields remain read-only in
+the nonsecret settings JSON. Attempts to write them via the normal settings
+API fail; they are never stored in extension_plugin_settings. Nested and
+unsupported fields remain read-only.
 
-Quarantined uploaded plugins are not settings-eligible. The Plugin Store must
-not advertise Configure until an isolated execution boundary is verified.
+## 10. Governed plugin credential enrollment, rotation and revocation
 
-Secrets must be integrated with
-the existing tenant Identity Vault using managed credential bindings, secure
-rotation, and revocation before the platform may claim full secrets readiness.
-Do not substitute plaintext JSON, local files, or client-side encryption.
+CredentialVaultService owns encrypted bytes, provider ownership, credential
+status, audit, rotation, and revocation. Migration
+20261114050000_53_plugin_vault_binding.sql creates only
+plugin_credential_slots, a tenant/plugin/manifest-field reference to
+existing Identity Vault credentials, with composite tenant/credential
+integrity, revision fencing, forced RLS and revoked Data API permissions.
+The binding never stores secret values.
+
+Authenticated plugin managers with ADMIN_PLUGINS_MANAGE may call:
+- GET /api/extensions/{plugin_id}/credentials: declared secret field statuses,
+  configured flags and revisions, never credentials, handles or plaintext.
+- POST /api/extensions/{plugin_id}/credentials/{field_key}: a write-only secret
+  and observed revision. First write enrolls and subsequent writes rotate.
+- DELETE /api/extensions/{plugin_id}/credentials/{field_key}?revision=N:
+  revision-checked revocation that erases encrypted bytes while retaining a
+  credential/audit tombstone. Re-enrollment requires a new explicit secret.
+
+The form renders password inputs separately from nonsecret settings. It
+does not display stored values or include secret values in generic settings
+state; it clears submitted input values after a write attempt. Revoke
+requires a second explicit confirmation. The API uses Pydantic SecretStr
+and no secret material is returned or logged by its handlers. Only exact
+manifest-declared string secret fields are eligible. Quarantined uploaded
+plugins are denied until isolated execution provenance is verified.
+
+Identity Vault owns the tenant-local plugin:{installation} provider with
+explicit provenance metadata. Slot, encrypted secret, credential state and
+audit persist atomically. Unknown tenants, foreign or undeclared fields,
+stale revisions, mismatched providers, unavailable persistence and failed
+audits all fail closed.
+
+**Execution-time secret injection is NOT enabled by this change.** Enrolling
+a credential does not give a plugin permission to access it. A future
+host-only resolver must prove the installed runtime provenance, CORTEX/
+RuntimePolicy permission, RBAC, tenant scope, authorized execution plan and
+durable audit before releasing secret material to a trusted host. Never add
+a generic plaintext route or let a plugin choose an arbitrary vault handle.
+
+The deployment must set a durable KARI_JOB_ENC_KEY, not rely on an ephemeral
+development encryption key. Before production deployment, apply and verify
+Identity Vault migrations and migrations 51 and 53. Disposable PostgreSQL
+tests prove the contract, not actual production deployment or consumer
+end-to-end readiness.
 
 Before production rollout, apply and verify migration 51 in the same
 PostgreSQL schema used by the runtime. Tests and source checks alone do not

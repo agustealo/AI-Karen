@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -104,6 +104,43 @@ class Credential(Base):
         Index("idx_credentials_expires", "expires_at"),
         Index("idx_credentials_last_used", "last_used_at"),
         Index("idx_credentials_tenant", "tenant_id"),
+    )
+
+
+class PluginCredentialSlot(Base):
+    """Tenant-scoped secretless plugin field -> Identity Vault credential binding."""
+
+    __tablename__ = "plugin_credential_slots"
+
+    tenant_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    plugin_id = Column(String(50), primary_key=True, nullable=False)
+    field_key = Column(String(50), primary_key=True, nullable=False)
+    credential_id = Column(UUID(as_uuid=True), nullable=False)
+    revision = Column(BigInteger, nullable=False, default=1)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "credential_id"],
+            ["credentials.tenant_id", "credentials.id"],
+            name="fk_plugin_credential_slots_scoped_credential",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id", "credential_id",
+            name="uq_plugin_credential_slots_tenant_credential",
+        ),
+        CheckConstraint("revision >= 1", name="ck_plugin_credential_slots_revision"),
+        CheckConstraint(
+            "plugin_id ~ '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,49}$'",
+            name="ck_plugin_credential_slots_plugin",
+        ),
+        CheckConstraint(
+            "field_key ~ '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,49}$'",
+            name="ck_plugin_credential_slots_field",
+        ),
+        Index("idx_plugin_credential_slots_credential", "tenant_id", "credential_id"),
     )
 
 

@@ -42,22 +42,12 @@ from ai_karen_engine.database.models.identity_vault import (
 )
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
     CredentialVaultService,
+    get_credential_vault_service,
 )
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/identity-vault", tags=["identity-vault"])
-
-
-# Dependency to get the credential vault service
-_vault_service: CredentialVaultService | None = None
-
-def get_credential_vault_service() -> CredentialVaultService:
-    """Get the credential vault service instance."""
-    global _vault_service
-    if _vault_service is None:
-        _vault_service = CredentialVaultService()
-    return _vault_service
 
 
 # Provider Management Routes

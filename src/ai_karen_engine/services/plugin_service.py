@@ -36,6 +36,9 @@ from ai_karen_engine.extensions.contracts import (
     ExtensionExecutionResult,
 )
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+from ai_karen_engine.services.identity_vault.credential_vault_service import (
+    get_credential_vault_service,
+)
 from ai_karen_engine.services.plugin_settings_repository import (
     PluginSettingsContract,
     PluginSettingsNotConfigured,
@@ -446,6 +449,98 @@ class PluginService:
             "saved": not reset,
             "reset": reset,
         }
+
+    @staticmethod
+    def _plugin_credential_field_keys(
+        record: Dict[str, Any],
+    ) -> frozenset[str]:
+        """Only canonical manifest-declared string secrets are manageable."""
+        PluginService._settings_contract(record)
+        manifest = record["manifest"]
+        config = getattr(manifest, "config_schema", None)
+        properties = getattr(config, "properties", None)
+        if not isinstance(properties, dict):
+            raise PluginSettingsNotConfigured("Plugin has no credential fields")
+        allowed = frozenset(
+            key for key, definition in properties.items()
+            if isinstance(definition, dict)
+            and definition.get("type") == "string"
+            and PluginSettingsRepository._is_secret(key, definition)
+        )
+        if not allowed:
+            raise PluginSettingsNotConfigured("Plugin has no credential fields")
+        if any(len(key) > 50 for key in allowed):
+            raise PluginSettingsNotConfigured("Plugin credential field name exceeds Vault limit")
+        if len(allowed) > 64:
+            raise PluginSettingsNotConfigured("Plugin credential field limit exceeded")
+        return allowed
+
+    async def _require_plugin_credential_field(
+        self, plugin_id: str, field_key: str | None = None
+    ) -> frozenset[str]:
+        record = await self.get_plugin_info(plugin_id)
+        if record is None:
+            raise LookupError("Plugin does not exist in the canonical catalog")
+        allowed = self._plugin_credential_field_keys(record)
+        if field_key is not None and field_key not in allowed:
+            # A URL cannot select an arbitrary existing vault secret type.
+            raise PluginSettingsNotConfigured("Plugin credential field is not declared")
+        return allowed
+
+    async def read_plugin_credential_status(
+        self, plugin_id: str, tenant_id: str
+    ) -> Dict[str, Any]:
+        allowed = await self._require_plugin_credential_field(plugin_id)
+        fields = await get_credential_vault_service().list_plugin_credential_status(
+            tenant_id=uuid.UUID(str(tenant_id)),
+            plugin_id=plugin_id,
+            field_keys=allowed,
+        )
+        return {"plugin_id": plugin_id, "fields": fields}
+
+    async def write_plugin_credential(
+        self,
+        *,
+        plugin_id: str,
+        field_key: str,
+        tenant_id: str,
+        actor_user_id: str,
+        secret_value: str,
+        revision: int,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        await self._require_plugin_credential_field(plugin_id, field_key)
+        receipt = await get_credential_vault_service().write_plugin_credential(
+            tenant_id=uuid.UUID(str(tenant_id)),
+            actor_user_id=actor_user_id,
+            plugin_id=plugin_id,
+            field_key=field_key,
+            secret_value=secret_value,
+            expected_revision=revision,
+            correlation_id=correlation_id,
+        )
+        return {"plugin_id": plugin_id, "field_key": field_key, **receipt}
+
+    async def revoke_plugin_credential(
+        self,
+        *,
+        plugin_id: str,
+        field_key: str,
+        tenant_id: str,
+        actor_user_id: str,
+        revision: int,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        await self._require_plugin_credential_field(plugin_id, field_key)
+        receipt = await get_credential_vault_service().revoke_plugin_credential(
+            tenant_id=uuid.UUID(str(tenant_id)),
+            actor_user_id=actor_user_id,
+            plugin_id=plugin_id,
+            field_key=field_key,
+            expected_revision=revision,
+            correlation_id=correlation_id,
+        )
+        return {"plugin_id": plugin_id, "field_key": field_key, **receipt}
 
     async def refresh_plugins(self) -> int:
         await self._ensure_initialized()
