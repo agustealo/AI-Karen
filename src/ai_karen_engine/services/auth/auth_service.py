@@ -1515,13 +1515,13 @@ class AuthService(BaseService):
                 auth_user = result.scalar_one_or_none()
                 if not auth_user:
                     return None, "User not found"
-                if email is not None:
-                    existing_user = await session.execute(
-                        select(AuthUser).where(AuthUser.email == email, AuthUser.user_id != user_uuid)
-                    )
-                    if existing_user.scalar_one_or_none():
-                        return None, "User with this email already exists"
-                    auth_user.email = email
+                # Never transfer account ownership based solely on an authenticated
+                # profile PUT. A different email address requires an independently
+                # verified, expiring challenge delivered to the *new* mailbox.
+                # The existing generic verification-token model has no target
+                # address binding, so it cannot authorize this mutation.
+                if email is not None and email.lower() != str(auth_user.email).lower():
+                    return None, "Email change requires verified ownership"
                 if username is not None:
                     existing_user = await session.execute(
                         select(AuthUser).where(AuthUser.username == username, AuthUser.user_id != user_uuid)
