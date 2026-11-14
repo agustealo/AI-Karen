@@ -884,7 +884,12 @@ class AuthService(BaseService):
         return session
 
     async def validate_session(
-        self, session_token: str, ip_address: str = "unknown", user_agent: str = ""
+        self,
+        session_token: str,
+        ip_address: str = "unknown",
+        user_agent: str = "",
+        *,
+        strict_errors: bool = False,
     ) -> Optional[UserAccount]:
         """Verify a signed access token against an active, tenant-owned DB session.
 
@@ -960,6 +965,8 @@ class AuthService(BaseService):
                 "Database session validation failed; rejecting session: %s",
                 type(exc).__name__,
             )
+            if strict_errors:
+                raise RuntimeError("Session verification unavailable") from exc
             return None
 
     async def list_sessions(
