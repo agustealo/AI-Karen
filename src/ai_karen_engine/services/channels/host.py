@@ -14,6 +14,7 @@ requires a separate tenant-authorized reconciliation action.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from uuid import uuid4
 
@@ -732,8 +733,20 @@ class ChannelHostServices:
         self.activation = None
         worker = self.worker
         self.worker = None
+        # A failed or cancelled worker join must not skip shutting down the
+        # remaining adapters, HTTP client, Vault and PluginKernel. Preserve
+        # the original shutdown failure and report it only after teardown.
+        worker_failure: BaseException | None = None
         if worker is not None:
-            await worker.shutdown()
+            try:
+                await worker.shutdown()
+            except BaseException as exc:
+                worker_failure = exc
+                if not isinstance(exc, asyncio.CancelledError):
+                    logger.warning(
+                        "channel.host.worker_shutdown_failed",
+                        extra={"error_type": type(exc).__name__},
+                    )
         self.execution = None
         self.delivery = None
 
@@ -771,6 +784,8 @@ class ChannelHostServices:
                 extra={"error_type": type(exc).__name__},
             )
         logger.info("channel.host.stopped")
+        if worker_failure is not None:
+            raise worker_failure
 
 
 __all__ = ["ChannelHostServices"]
