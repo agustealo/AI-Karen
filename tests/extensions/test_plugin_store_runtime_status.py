@@ -168,3 +168,40 @@ async def test_plugin_store_allows_explicit_permission_grant_without_admin_role(
     assert enabled_plugins == ["alpha-plugin"]
     assert access_events[0]["granted"] is True
     assert audit_events[0]["event_type"] == "plugin_install"
+
+
+def test_invalid_runtime_plugin_is_not_presented_as_installable() -> None:
+    payload = store._plugin_payload(
+        {"manifest": _manifest(), "status": "error"}
+    )
+    assert payload["status"] == "incompatible"
+    assert payload["runtime_status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_installed_only_catalog_filter_ignores_available_plugins_before_pagination() -> None:
+    class Service:
+        async def list_plugins(self):
+            return [
+                {"manifest": _manifest(), "status": state}
+                for state in ("disabled", "discovered", "enabled", "error")
+            ]
+
+    first = await store.search_plugins_endpoint(
+        http_request=_request(),
+        request=store.PluginSearchRequest(installed_only=True, per_page=1, page=1),
+        plugin_service=Service(),
+    )
+    second = await store.search_plugins_endpoint(
+        http_request=_request(),
+        request=store.PluginSearchRequest(installed_only=True, per_page=1, page=2),
+        plugin_service=Service(),
+    )
+
+    assert first["total"] == 2
+    assert first["total_pages"] == 2
+    assert first["has_next"] is True
+    assert second["total"] == 2
+    assert second["has_next"] is False
+    assert {first["plugins"][0]["runtime_status"], second["plugins"][0]["runtime_status"]} == {"enabled", "disabled"}
+    assert all(item["status"] == "installed" for item in first["plugins"] + second["plugins"])
