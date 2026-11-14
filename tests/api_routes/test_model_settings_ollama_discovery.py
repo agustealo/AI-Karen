@@ -343,6 +343,66 @@ async def test_remote_provider_discovery_tracks_live_and_configured_model_source
 
 
 @pytest.mark.asyncio
+async def test_nous_endpoint_override_is_denied_before_settings_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[str] = []
+    monkeypatch.setattr(
+        settings_routes, "get_settings_manager",
+        lambda: SimpleNamespace(
+            set_setting=lambda key, value, save=False: writes.append(key)
+        ),
+    )
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(),
+    )
+    for url in (
+        "https://untrusted.example/v1",
+        "http://inference-api.nousresearch.com/v1",
+        "https://inference-api.nousresearch.com/v1?token=leak",
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await settings_routes.update_model_settings(
+                settings_routes.ModelSettingsUpdateRequest(
+                    provider="nous",
+                    base_url=url,
+                ),
+                current_user={"roles": ["admin"]},
+            )
+        assert exc.value.status_code in (400, 403)
+    assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_nous_discovery_rejects_previously_saved_untrusted_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = SimpleNamespace(
+        name="nous",
+        enabled=True,
+        endpoint=SimpleNamespace(
+            base_url="https://inference-api.nousresearch.com/v1"
+        ),
+        provider_type=ProviderType.EXTERNAL,
+        models=[],
+    )
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: provider),
+    )
+    monkeypatch.setattr(
+        settings_routes, "_get_provider_override",
+        lambda name: {"base_url": "https://untrusted.example/v1"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.get_provider_models(
+            "nous", current_user={"roles": ["admin"]}
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
