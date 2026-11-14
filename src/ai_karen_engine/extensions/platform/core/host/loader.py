@@ -459,6 +459,29 @@ class ExtensionLoader:
 
         return self.load_extension(extension_name)
 
+    def forget_loaded_extension(self, extension_name: str) -> None:
+        """Discard a retired instance and its isolated Python import namespace.
+
+        The canonical PluginKernel owns shutdown and guarantees no active
+        execution before calling this. Clearing both caches avoids reusing
+        handler code or relative-imported helpers after uninstall/reinstall.
+        """
+        instance = self._loaded_extensions.pop(extension_name, None)
+        directory = getattr(getattr(instance, "context", None), "extension_dir", None)
+        if directory is None:
+            directory = self._discovered_paths.get(extension_name)
+        if directory is None:
+            return
+        package_prefix = "_karen_extension_" + hashlib.sha256(
+            str(Path(directory).resolve()).encode("utf-8")
+        ).hexdigest()
+        for module_name in tuple(sys.modules):
+            if module_name == package_prefix or module_name.startswith(
+                package_prefix + "."
+            ):
+                sys.modules.pop(module_name, None)
+        self._discovered_paths.pop(extension_name, None)
+
     def get_loaded_extensions(self) -> Dict[str, ExtensionBase]:
         """
         Get all currently loaded extensions.
