@@ -103,6 +103,9 @@ export function KarenCopilotControlledChat({
   // A second click before SDK state flips to running must not start a
   // concurrent run or produce duplicate user-message writes.
   const submitPending = useRef(false);
+  // Presentation only: an explicit SDK invocation may fail before AG-UI
+  // supplies a valid run ID. This is never backend run identity/stop authority.
+  const sdkInvocationPending = useRef(false);
   const mounted = useRef(true);
   const reportBusy = useCallback((busy: boolean) => {
     onBusyChange?.(busy);
@@ -134,13 +137,17 @@ export function KarenCopilotControlledChat({
       onRunFinalized: () => { activeRunId.current = null; },
       onRunFailed: () => {
         const failedRunId = activeRunId.current;
+        const failedBeforeStart = failedRunId === null && sdkInvocationPending.current;
         activeRunId.current = null;
-        // Only the authenticated SDK run lifecycle may establish a failed run.
-        // A failed stream need not reject runAgent(), so never silently hide it.
-        // Keep a pending/confirmed stop distinct from a failed model execution.
-        if (mounted.current && failedRunId &&
-            pendingStopId.current !== failedRunId &&
-            lastStopRunId.current !== failedRunId) {
+        // SDK may emit RUN_ERROR before RUN_STARTED, or resolve runAgent()
+        // instead of rejecting on a terminal stream failure. Report only
+        // while this consumer's explicit SDK invocation is in flight, or
+        // for an attested run ID. Never synthesize a backend run identity.
+        const unconfirmedStop = failedRunId !== null &&
+          (pendingStopId.current === failedRunId ||
+           lastStopRunId.current === failedRunId);
+        if (mounted.current && !unconfirmedStop &&
+            (failedRunId !== null || failedBeforeStart)) {
           setError("Karen could not complete the request. Check the conversation history.");
         }
       },
@@ -150,6 +157,7 @@ export function KarenCopilotControlledChat({
       activeRunId.current = null;
       pendingStopId.current = null;
       lastStopRunId.current = null;
+      sdkInvocationPending.current = false;
       subscription.unsubscribe();
     };
   }, [agent, conversationId, isReady]);
@@ -200,6 +208,9 @@ export function KarenCopilotControlledChat({
           }
           return;
         }
+        // This flag is only for observing a terminal SDK error before
+        // RUN_STARTED. It is not used for cancel, persistence, or tool policy.
+        sdkInvocationPending.current = true;
         try {
           await copilotkit.runAgent({ agent });
         } catch {
@@ -212,6 +223,8 @@ export function KarenCopilotControlledChat({
             // history before choosing whether to send again.
             setError("Karen could not complete the request. Check the conversation history before retrying.");
           }
+        } finally {
+          sdkInvocationPending.current = false;
         }
       } finally {
         submitPending.current = false;
