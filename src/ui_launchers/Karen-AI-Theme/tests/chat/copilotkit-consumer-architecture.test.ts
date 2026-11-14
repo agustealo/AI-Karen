@@ -144,6 +144,14 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).toContain('run_http_responses: observedRunResponses.slice(beforeResponses).slice(-8)');
     expect(liveBrowser).toContain('run_transport_failures:');
     expect(liveBrowser).toContain('persisted_assistant_confirmed: persistedAssistantConfirmed');
+    const firstLiveFollowup = liveBrowser.indexOf(
+      'await test.step("KCON-490 real multi-turn personal context"',
+    );
+    const firstReload = liveBrowser.indexOf(
+      '    await page.reload();\\n    const restored = page.getByTestId("karen-copilot-consumer-chat");',
+    );
+    expect(firstLiveFollowup).toBeGreaterThan(0);
+    expect(firstReload).toBeGreaterThan(firstLiveFollowup);
     expect(liveBrowser).toContain('throw error;');
     // No raw request/response bodies or user-text snapshots in the receipt.
     expect(liveBrowser).not.toContain('testInfo.attach("kcon490-followup-transcript"');
