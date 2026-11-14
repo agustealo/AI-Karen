@@ -105,7 +105,7 @@ describe('settings UX ownership contract', () => {
     expect(facts).toContain('await apiClient.delete');
   });
 
-  it('routes personal Channels through read-only owner-scoped backend truth', () => {
+  it('keeps channel inventory read-only and gates consent writes through canonical scoped endpoints', () => {
     expect(settings).toContain("render: () => <ChannelsSettings />");
     expect(settings).toContain("id: 'channels'");
     expect(channels).toContain("'/api/channels/personal/connections'");
@@ -113,9 +113,14 @@ describe('settings UX ownership contract', () => {
     expect(channels).toContain('setInventory(null)');
     expect(channels).toContain('Not verified connected');
     expect(channels).toContain('historical, not a health check');
-    expect(channels).not.toContain('apiClient.post');
+    expect(channels).toContain('PersonalChannelRiskConsent');
+    expect(channels).toContain('apiClient.post<ConsentReceipt>(consentPath');
+    expect(channels).toContain("apiClient.post<ConsentReceipt>(endpoint + '/revoke'");
+    expect(channels).toContain('const fresh = await readConsent()');
+    expect(channels).toContain('disabled={!checked || busy}');
     expect(channels).not.toContain('localStorage.setItem');
     expect(channels).not.toContain('sessionStorage.setItem');
+    expect(channels).not.toContain('apiClient.delete');
   });
 
   it('uses the canonical backend and runtime inventory instead of fabricated options', () => {
