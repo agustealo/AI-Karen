@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
 from .extension_registry import ExtensionRegistry
-from .extension_loader import ExtensionLoader
+from .extension_loader import ExtensionLoader, LEGACY_UNIFIED_EXECUTION_DISABLED
 from .extension_permissions import ExtensionPermissions
 from .extension_health_monitor import ExtensionHealthMonitor
 from .extension_lifecycle_manager import ExtensionLifecycleManager
@@ -47,29 +47,8 @@ class ExtensionService:
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """Initialize all extension service components."""
-        async with self._lock:
-            if self._initialized:
-                return
-
-            try:
-                # Initialize all components
-                await self.registry.initialize()
-                await self.loader.initialize()
-                await self.permissions.initialize()
-                await self.health_monitor.initialize()
-                await self.lifecycle_manager.initialize()
-                await self.config_manager.initialize()
-
-                # Setup component interconnections
-                await self._setup_interconnections()
-
-                self._initialized = True
-                logger.info("Extension service initialized successfully")
-
-            except Exception as e:
-                logger.error(f"Failed to initialize extension service: {e}")
-                raise
+        """Do not start a second plugin registry, loader or health monitor."""
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def install_extension(
         self,
@@ -77,219 +56,39 @@ class ExtensionService:
         extension_path: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ExtensionServiceResult:
-        """Install a new extension."""
-        try:
-            # Create manifest
-            from ...platform.core.manifest import ExtensionManifest
-
-            manifest = ExtensionManifest.from_dict(manifest_data)
-
-            # Validate manifest
-            validation_errors = manifest.validate()
-            if validation_errors:
-                return ExtensionServiceResult(
-                    success=False, message="Invalid manifest", errors=validation_errors
-                )
-
-            # Check if extension already exists
-            existing = await self.registry.get_extension_by_name(manifest.name)
-            if existing and existing.state.value != "uninstalled":
-                return ExtensionServiceResult(
-                    success=False, message=f"Extension {manifest.name} already exists"
-                )
-
-            # Register extension
-            extension = await self.registry.register_extension(
-                manifest, extension_path, metadata
-            )
-
-            # Install extension
-            success = await self.lifecycle_manager.install_extension(extension.id)
-            if not success:
-                return ExtensionServiceResult(
-                    success=False, message="Failed to install extension"
-                )
-
-            # Load extension
-            load_result = await self.loader.load_extension(extension)
-            if not load_result.success:
-                # Rollback installation
-                await self.registry.uninstall_extension(extension.id)
-                return ExtensionServiceResult(
-                    success=False,
-                    message=f"Failed to load extension: {load_result.error}",
-                    errors=load_result.warnings,
-                )
-
-            return ExtensionServiceResult(
-                success=True,
-                message=f"Extension {manifest.name} installed successfully",
-                data={"extension_id": extension.id},
-            )
-
-        except Exception as e:
-            logger.error(f"Error installing extension: {e}")
-            return ExtensionServiceResult(
-                success=False, message=f"Installation failed: {str(e)}"
-            )
+        """Fail before legacy installation can write database or filesystem."""
+        del manifest_data, extension_path, metadata
+        return ExtensionServiceResult(
+            success=False, message=LEGACY_UNIFIED_EXECUTION_DISABLED
+        )
 
     async def enable_extension(self, extension_id: str) -> ExtensionServiceResult:
-        """Enable an extension."""
-        try:
-            # Check if extension exists
-            extension = await self.registry.get_extension(extension_id)
-            if not extension:
-                return ExtensionServiceResult(
-                    success=False, message="Extension not found"
-                )
-
-            # Check dependencies
-            dependencies_ok = await self._check_dependencies(extension_id)
-            if not dependencies_ok:
-                return ExtensionServiceResult(
-                    success=False, message="Extension dependencies not satisfied"
-                )
-
-            # Enable extension
-            success = await self.lifecycle_manager.enable_extension(extension_id)
-            if not success:
-                return ExtensionServiceResult(
-                    success=False, message="Failed to enable extension"
-                )
-
-            # Load extension if not already loaded
-            if not await self.loader.is_extension_loaded(extension_id):
-                load_result = await self.loader.load_extension(extension)
-                if not load_result.success:
-                    # Rollback enable
-                    await self.lifecycle_manager.disable_extension(extension_id)
-                    return ExtensionServiceResult(
-                        success=False,
-                        message=f"Failed to load extension: {load_result.error}",
-                    )
-
-            return ExtensionServiceResult(
-                success=True,
-                message="Extension enabled successfully",
-                data={"extension_id": extension_id},
-            )
-
-        except Exception as e:
-            logger.error(f"Error enabling extension: {e}")
-            return ExtensionServiceResult(
-                success=False, message=f"Enable failed: {str(e)}"
-            )
+        """Never activate an extension through a shadow state machine."""
+        del extension_id
+        return ExtensionServiceResult(
+            success=False, message=LEGACY_UNIFIED_EXECUTION_DISABLED
+        )
 
     async def disable_extension(self, extension_id: str) -> ExtensionServiceResult:
-        """Disable an extension."""
-        try:
-            # Check if extension exists
-            extension = await self.registry.get_extension(extension_id)
-            if not extension:
-                return ExtensionServiceResult(
-                    success=False, message="Extension not found"
-                )
-
-            # Check if extension has dependents
-            has_dependents = await self.lifecycle_manager._has_dependents(extension_id)
-            if has_dependents:
-                return ExtensionServiceResult(
-                    success=False, message="Cannot disable extension: has dependents"
-                )
-
-            # Disable extension
-            success = await self.lifecycle_manager.disable_extension(extension_id)
-            if not success:
-                return ExtensionServiceResult(
-                    success=False, message="Failed to disable extension"
-                )
-
-            # Unload extension
-            await self.loader.unload_extension(extension_id)
-
-            return ExtensionServiceResult(
-                success=True,
-                message="Extension disabled successfully",
-                data={"extension_id": extension_id},
-            )
-
-        except Exception as e:
-            logger.error(f"Error disabling extension: {e}")
-            return ExtensionServiceResult(
-                success=False, message=f"Disable failed: {str(e)}"
-            )
+        """Never write a shadow disabled status or invoke legacy hooks."""
+        del extension_id
+        return ExtensionServiceResult(
+            success=False, message=LEGACY_UNIFIED_EXECUTION_DISABLED
+        )
 
     async def uninstall_extension(self, extension_id: str) -> ExtensionServiceResult:
-        """Uninstall an extension."""
-        try:
-            # Check if extension exists
-            extension = await self.registry.get_extension(extension_id)
-            if not extension:
-                return ExtensionServiceResult(
-                    success=False, message="Extension not found"
-                )
-
-            # Check if extension has dependents
-            has_dependents = await self.lifecycle_manager._has_dependents(extension_id)
-            if has_dependents:
-                return ExtensionServiceResult(
-                    success=False, message="Cannot uninstall extension: has dependents"
-                )
-
-            # Unload extension if loaded
-            if await self.loader.is_extension_loaded(extension_id):
-                await self.loader.unload_extension(extension_id)
-
-            # Uninstall extension
-            success = await self.lifecycle_manager.uninstall_extension(extension_id)
-            if not success:
-                return ExtensionServiceResult(
-                    success=False, message="Failed to uninstall extension"
-                )
-
-            # Remove from registry
-            await self.registry.uninstall_extension(extension_id)
-
-            return ExtensionServiceResult(
-                success=True,
-                message="Extension uninstalled successfully",
-                data={"extension_id": extension_id},
-            )
-
-        except Exception as e:
-            logger.error(f"Error uninstalling extension: {e}")
-            return ExtensionServiceResult(
-                success=False, message=f"Uninstall failed: {str(e)}"
-            )
+        """Never delete plugin data through an ungoverned legacy manager."""
+        del extension_id
+        return ExtensionServiceResult(
+            success=False, message=LEGACY_UNIFIED_EXECUTION_DISABLED
+        )
 
     async def reload_extension(self, extension_id: str) -> ExtensionServiceResult:
-        """Reload an extension."""
-        try:
-            # Check if extension exists
-            extension = await self.registry.get_extension(extension_id)
-            if not extension:
-                return ExtensionServiceResult(
-                    success=False, message="Extension not found"
-                )
-
-            # Reload extension
-            result = await self.loader.reload_extension(extension_id)
-            if not result.success:
-                return ExtensionServiceResult(
-                    success=False, message=f"Failed to reload extension: {result.error}"
-                )
-
-            return ExtensionServiceResult(
-                success=True,
-                message="Extension reloaded successfully",
-                data={"extension_id": extension_id},
-            )
-
-        except Exception as e:
-            logger.error(f"Error reloading extension: {e}")
-            return ExtensionServiceResult(
-                success=False, message=f"Reload failed: {str(e)}"
-            )
+        """Retain the old result shape but never import or replace code."""
+        del extension_id
+        return ExtensionServiceResult(
+            success=False, message=LEGACY_UNIFIED_EXECUTION_DISABLED
+        )
 
     async def get_extension_info(self, extension_id: str) -> ExtensionServiceResult:
         """Get information about an extension."""
@@ -450,28 +249,14 @@ class ExtensionService:
             )
 
     async def set_extension_config(
-        self, extension_id: str, key: str, value: Any, description: Optional[str] = None
+        self, extension_id: str, key: str, value: Any,
+        description: Optional[str] = None,
     ) -> ExtensionServiceResult:
-        """Set configuration value for an extension."""
-        try:
-            success = await self.config_manager.set_config(
-                extension_id, key, value, description
-            )
-
-            if success:
-                return ExtensionServiceResult(
-                    success=True, message="Config value set", data={"value": value}
-                )
-            else:
-                return ExtensionServiceResult(
-                    success=False, message="Failed to set config value"
-                )
-
-        except Exception as e:
-            logger.error(f"Error setting config: {e}")
-            return ExtensionServiceResult(
-                success=False, message=f"Set config failed: {str(e)}"
-            )
+        """Prevent a duplicate configuration store from writing plugin state."""
+        del extension_id, key, value, description
+        return ExtensionServiceResult(
+            success=False, message=LEGACY_UNIFIED_EXECUTION_DISABLED
+        )
 
     async def _setup_interconnections(self) -> None:
         """Setup interconnections between components."""

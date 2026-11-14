@@ -137,3 +137,112 @@ def test_dynamic_plugin_fastapi_router_mounting_is_retired() -> None:
 
     assert "include_router" not in source
     assert "record.instance" not in source
+
+
+@pytest.mark.asyncio
+async def test_retired_unified_loader_cannot_import_unload_reload_or_invoke_hooks(
+    tmp_path: Any,
+) -> None:
+    """Untrusted code must never enter Python through the old loader."""
+    from ai_karen_engine.extensions.unified.core.extension_loader import (
+        ExtensionLoader as LegacyLoader,
+        LEGACY_UNIFIED_EXECUTION_DISABLED,
+    )
+
+    marker = tmp_path / "executed"
+    plugin_dir = tmp_path / "legacy"
+    plugin_dir.mkdir()
+    (plugin_dir / "main.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('unsafe')\n",
+        encoding="utf-8",
+    )
+    model = SimpleNamespace(
+        id="legacy", name="legacy", extension_path=str(plugin_dir),
+    )
+    loader = LegacyLoader(registry=None)
+    original = object()
+    loader.loaded_extensions["already-loaded"] = original
+
+    with pytest.raises(PermissionError, match="governed PluginKernel"):
+        await loader.initialize()
+    denied = await loader.load_extension(model)
+    assert denied.success is False
+    assert denied.error == LEGACY_UNIFIED_EXECUTION_DISABLED
+    assert not marker.exists()
+
+    assert await loader.unload_extension("already-loaded") is False
+    rejected = await loader.reload_extension("already-loaded")
+    assert rejected.success is False
+    assert rejected.error == LEGACY_UNIFIED_EXECUTION_DISABLED
+    assert loader.loaded_extensions == {"already-loaded": original}
+    with pytest.raises(PermissionError, match="governed PluginKernel"):
+        await loader.call_extension_hook("already-loaded", "initialize")
+    with pytest.raises(PermissionError, match="governed PluginKernel"):
+        await loader._load_extension_module(model)
+    with pytest.raises(PermissionError, match="governed PluginKernel"):
+        await loader._call_extension_hook("already-loaded", "initialize")
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_retired_unified_service_mutations_do_not_access_duplicate_stores() -> None:
+    """No registry, database, filesystem or config mutation may precede denial."""
+    from ai_karen_engine.extensions.unified.core.extension_service import (
+        ExtensionService as LegacyService,
+    )
+    from ai_karen_engine.extensions.unified.core.extension_loader import (
+        LEGACY_UNIFIED_EXECUTION_DISABLED,
+    )
+
+    # Intentionally avoid constructing its deprecated duplicate registry.
+    # These entry points must deny before accessing any service attributes.
+    service = object.__new__(LegacyService)
+    with pytest.raises(PermissionError, match="governed PluginKernel"):
+        await service.initialize()
+    calls = (
+        service.install_extension({"name": "legacy"}, "/unused"),
+        service.enable_extension("legacy"),
+        service.disable_extension("legacy"),
+        service.uninstall_extension("legacy"),
+        service.reload_extension("legacy"),
+        service.set_extension_config("legacy", "enabled", True),
+    )
+    for operation in calls:
+        result = await operation
+        assert result.success is False
+        assert result.message == LEGACY_UNIFIED_EXECUTION_DISABLED
+
+
+@pytest.mark.asyncio
+async def test_retired_unified_substrate_never_queues_or_executes_cached_code() -> None:
+    """Legacy unscoped execution is denied even if code was injected in cache."""
+    from ai_karen_engine.extensions.unified.core.execution_substrate import (
+        ExtensionExecutionSubstrate,
+        ExecutionRequest as LegacyRequest,
+    )
+
+    substrate = ExtensionExecutionSubstrate(max_workers=1, max_concurrent=1)
+    called: list[str] = []
+
+    def forbidden() -> None:
+        called.append("executed")
+
+    substrate._extension_modules["legacy"] = SimpleNamespace(run=forbidden)
+    try:
+        with pytest.raises(PermissionError, match="governed PluginKernel"):
+            await substrate.initialize()
+        with pytest.raises(PermissionError, match="governed PluginKernel"):
+            await substrate.execute_extension("legacy", "run")
+        with pytest.raises(PermissionError, match="governed PluginKernel"):
+            await substrate._execute_function(
+                LegacyRequest(id="request-1", extension_id="legacy", function_name="run")
+            )
+        with pytest.raises(PermissionError, match="governed PluginKernel"):
+            await substrate._load_extension_module("legacy")
+        assert called == []
+        assert substrate._execution_queue.empty()
+        assert substrate._running_executions == {}
+        assert substrate._processor_task is None
+    finally:
+        substrate.executor.shutdown(wait=True)

@@ -22,6 +22,9 @@ from ...platform.core.host.loader import ExtensionContext
 
 logger = logging.getLogger(__name__)
 
+# Compatibility-only error contract. Runtime authority belongs to PluginKernel.
+LEGACY_UNIFIED_EXECUTION_DISABLED = "Legacy unified extension execution is disabled; use the canonical PluginService and governed PluginKernel runtime"
+
 
 @dataclass
 class ExtensionLoadResult:
@@ -49,118 +52,31 @@ class ExtensionLoader:
         self._extension_events: Dict[str, List[Callable]] = {}
 
     async def initialize(self) -> None:
-        """Initialize the loader."""
-        await self._build_dependency_graph()
-        logger.info("Extension loader initialized")
+        """Prevent activation of this superseded loader and its registry."""
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def load_extension(
         self, extension: ExtensionModel, validate: bool = True
     ) -> ExtensionLoadResult:
-        """Load an extension with validation and dependency resolution."""
-        async with self._lock:
-            if extension.id in self.loaded_extensions:
-                return ExtensionLoadResult(
-                    success=True,
-                    extension=extension,
-                    warnings=[f"Extension {extension.name} is already loaded"],
-                )
-
-            # Validate extension if requested
-            if validate:
-                validation_result = await self._validate_extension(extension)
-                if not validation_result.success:
-                    return validation_result
-
-                if validation_result.warnings:
-                    logger.warning(
-                        f"Extension {extension.name} validation warnings: {validation_result.warnings}"
-                    )
-
-            # Load dependencies first
-            dependency_result = await self._load_dependencies(extension)
-            if not dependency_result.success:
-                return dependency_result
-
-            try:
-                # Load the extension module
-                extension_module = await self._load_extension_module(extension)
-                if not extension_module:
-                    return ExtensionLoadResult(
-                        success=False,
-                        error=f"Failed to load extension module: {extension.name}",
-                    )
-
-                # Initialize extension
-                init_result = await self._initialize_extension(
-                    extension, extension_module
-                )
-                if not init_result.success:
-                    return init_result
-
-                # Register hooks and events
-                await self._register_extension_hooks(extension, extension_module)
-
-                # Track loaded extension
-                self.loaded_extensions[extension.id] = extension_module
-                self.extension_paths[extension.id] = Path(
-                    extension.extension_path or ""
-                )
-
-                logger.info(
-                    f"Successfully loaded extension: {extension.name} v{extension.version}"
-                )
-
-                return ExtensionLoadResult(
-                    success=True,
-                    extension=extension,
-                    dependencies_loaded=dependency_result.dependencies_loaded,
-                )
-
-            except Exception as e:
-                logger.error(f"Failed to load extension {extension.name}: {e}")
-                return ExtensionLoadResult(
-                    success=False, error=str(e), extension=extension
-                )
+        """Refuse ungoverned imports, initialization, hooks and dependencies."""
+        del validate
+        return ExtensionLoadResult(
+            success=False,
+            extension=extension,
+            error=LEGACY_UNIFIED_EXECUTION_DISABLED,
+        )
 
     async def unload_extension(self, extension_id: str) -> bool:
-        """Unload an extension."""
-        async with self._lock:
-            if extension_id not in self.loaded_extensions:
-                logger.warning(f"Extension {extension_id} is not loaded")
-                return False
-
-            extension = await self.registry.get_extension(extension_id)
-            if not extension:
-                logger.error(f"Extension {extension_id} not found in registry")
-                return False
-
-            try:
-                # Call cleanup hook if available
-                await self._call_extension_hook(extension_id, "cleanup")
-
-                # Remove from loaded extensions
-                del self.loaded_extensions[extension_id]
-                if extension_id in self.extension_paths:
-                    del self.extension_paths[extension_id]
-
-                logger.info(f"Successfully unloaded extension: {extension.name}")
-                return True
-
-            except Exception as e:
-                logger.error(f"Failed to unload extension {extension.name}: {e}")
-                return False
+        """Refuse mutations outside the kernel's asynchronous retirement gate."""
+        del extension_id
+        return False
 
     async def reload_extension(self, extension_id: str) -> ExtensionLoadResult:
-        """Reload an extension."""
-        # First unload
-        await self.unload_extension(extension_id)
-
-        # Then load again
-        extension = await self.registry.get_extension(extension_id)
-        if not extension:
-            return ExtensionLoadResult(success=False, error="Extension not found")
-
-        return await self.load_extension(extension)
+        """Refuse the legacy unload-then-load path without touching state."""
+        del extension_id
+        return ExtensionLoadResult(
+            success=False, error=LEGACY_UNIFIED_EXECUTION_DISABLED
+        )
 
     async def get_loaded_extensions(self) -> List[ExtensionModel]:
         """Get list of loaded extensions."""
@@ -186,12 +102,9 @@ class ExtensionLoader:
     async def call_extension_hook(
         self, extension_id: str, hook_name: str, *args, **kwargs
     ) -> Any:
-        """Call a specific hook on an extension."""
-        if extension_id not in self.loaded_extensions:
-            logger.warning(f"Extension {extension_id} is not loaded")
-            return None
-
-        return await self._call_extension_hook(extension_id, hook_name, *args, **kwargs)
+        """Never invoke plugin hooks without canonical execution admission."""
+        del extension_id, hook_name, args, kwargs
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def _validate_extension(
         self, extension: ExtensionModel
@@ -264,37 +177,12 @@ class ExtensionLoader:
             success=True, extension=extension, dependencies_loaded=dependencies_loaded
         )
 
-    async def _load_extension_module(self, extension: ExtensionModel) -> Optional[Any]:
-        """Load the extension module from file system."""
-        if not extension.extension_path:
-            logger.error(f"Extension {extension.name} has no extension path")
-            return None
-
-        try:
-            path = Path(extension.extension_path)
-
-            # Find the main extension file
-            main_file = self._find_main_extension_file(path)
-            if not main_file:
-                logger.error(f"No main extension file found in {path}")
-                return None
-
-            # Load the module
-            spec = importlib.util.spec_from_file_location(
-                f"extension_{extension.id}", main_file
-            )
-            if not spec or not spec.loader:
-                logger.error(f"Could not create module spec for {main_file}")
-                return None
-
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-
-            return module
-
-        except Exception as e:
-            logger.error(f"Failed to load extension module {extension.name}: {e}")
-            return None
+    async def _load_extension_module(
+        self, extension: ExtensionModel
+    ) -> Optional[Any]:
+        """Prevent direct private imports from bypassing runtime authority."""
+        del extension
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     def _find_main_extension_file(self, path: Path) -> Optional[Path]:
         """Find the main extension file in the given path."""
@@ -378,19 +266,9 @@ class ExtensionLoader:
     async def _call_extension_hook(
         self, extension_id: str, hook_name: str, *args, **kwargs
     ) -> Any:
-        """Call a specific hook on an extension."""
-        module = self.loaded_extensions.get(extension_id)
-        if not module:
-            return None
-
-        if hasattr(module, hook_name):
-            hook_func = getattr(module, hook_name)
-            if asyncio.iscoroutinefunction(hook_func):
-                return await hook_func(*args, **kwargs)
-            else:
-                return hook_func(*args, **kwargs)
-
-        return None
+        """Reject direct hook invocation even for manually injected modules."""
+        del extension_id, hook_name, args, kwargs
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def _build_dependency_graph(self) -> None:
         """Build dependency graph for extension loading order."""

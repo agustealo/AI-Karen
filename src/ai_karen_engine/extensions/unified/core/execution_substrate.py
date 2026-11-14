@@ -25,6 +25,7 @@ from concurrent.futures import (
 )
 
 from ..database_models import ExtensionModel
+from .extension_loader import LEGACY_UNIFIED_EXECUTION_DISABLED
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +105,8 @@ class ExtensionExecutionSubstrate:
         self._processor_task: Optional[asyncio.Task] = None
 
     async def initialize(self) -> None:
-        """Initialize the execution substrate."""
-        self._running = True
-        self._processor_task = asyncio.create_task(self._execution_processor())
-        logger.info("Extension execution substrate initialized")
+        """Never start a parallel execution processor outside PluginKernel."""
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def shutdown(self) -> None:
         """Shutdown the execution substrate."""
@@ -142,33 +141,9 @@ class ExtensionExecutionSubstrate:
         priority: int = 0,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Execute an extension function."""
-        # Create execution request
-        request = ExecutionRequest(
-            id=str(uuid.uuid4()),
-            extension_id=extension_id,
-            function_name=function_name,
-            args=args or [],
-            kwargs=kwargs or {},
-            timeout=timeout,
-            priority=priority,
-            metadata=metadata or {},
-        )
-
-        # Add to queue
-        async with self._queue_lock:
-            await self._execution_queue.put(request)
-            self._running_executions[request.id] = request
-
-        # Set up timeout handler
-        if timeout:
-            timeout_task = asyncio.create_task(
-                self._timeout_handler(request.id, timeout)
-            )
-            self._timeout_handlers[request.id] = timeout_task
-
-        logger.info(f"Queued execution: {request.id} ({extension_id}.{function_name})")
-        return request.id
+        """Reject direct unscoped execution before queuing any work."""
+        del extension_id, function_name, args, kwargs, timeout, priority, metadata
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def get_execution_status(
         self, execution_id: str
@@ -282,63 +257,14 @@ class ExtensionExecutionSubstrate:
                 )
 
     async def _execute_function(self, request: ExecutionRequest) -> Dict[str, Any]:
-        """Execute an extension function."""
-        start_time = datetime.now()
-
-        try:
-            # Load extension module
-            module = await self._load_extension_module(request.extension_id)
-            if not module:
-                raise ValueError(f"Extension {request.extension_id} not found")
-
-            # Get function
-            if not hasattr(module, request.function_name):
-                raise ValueError(
-                    f"Function {request.function_name} not found in extension"
-                )
-
-            func = getattr(module, request.function_name)
-
-            # Execute function
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*request.args, **request.kwargs)
-            else:
-                # Run in thread pool for CPU-bound operations
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    self.executor, lambda: func(*request.args, **request.kwargs)
-                )
-
-            # Calculate execution time
-            execution_time = (datetime.now() - start_time).total_seconds()
-
-            return {
-                "result": result,
-                "execution_time": execution_time,
-                "memory_usage": 0.0,  # Placeholder
-                "cpu_usage": 0.0,  # Placeholder
-                "logs": [],
-                "metadata": {
-                    "function": request.function_name,
-                    "args_count": len(request.args),
-                    "kwargs_count": len(request.kwargs),
-                },
-            }
-
-        except Exception as e:
-            logger.error(f"Error executing function {request.function_name}: {e}")
-            raise
+        """Prevent execution of a cached callable through a private method."""
+        del request
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def _load_extension_module(self, extension_id: str) -> Optional[Any]:
-        """Load an extension module."""
-        # Check cache
-        if extension_id in self._extension_modules:
-            return self._extension_modules[extension_id]
-
-        # This would typically load from the extension registry
-        # For now, return None as a placeholder
-        logger.warning(f"Extension module {extension_id} not found in registry")
-        return None
+        """Never resolve modules via a parallel code-execution cache."""
+        del extension_id
+        raise PermissionError(LEGACY_UNIFIED_EXECUTION_DISABLED)
 
     async def _timeout_handler(self, execution_id: str, timeout: float) -> None:
         """Handle execution timeout."""
