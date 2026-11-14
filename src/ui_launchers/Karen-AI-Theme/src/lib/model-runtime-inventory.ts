@@ -455,7 +455,7 @@ export function normalizeRuntimeProviderCatalogResponse(
     .map((provider) => {
       const normalizedModels = sortProviderModels(
         (provider.models || [])
-          .filter((model) => model.available === true)
+          .filter((model) => model.available === true && model.chat_enabled !== false)
           .map((model) => ({
           id: model.id,
           name: model.label || model.id,
@@ -475,7 +475,7 @@ export function normalizeRuntimeProviderCatalogResponse(
         display_name: provider.label || provider.id,
         description: provider.degradation_reason || undefined,
         provider_type: provider.category || 'external',
-        selectable: provider.enabled !== false && provider.allowed_for_current_user !== false,
+        selectable: provider.enabled !== false && provider.chat_enabled !== false && provider.allowed_for_current_user !== false,
         requires_api_key: Boolean(provider.requires_api_key),
         api_key_env_var: provider.api_key_env_var || null,
         api_key_configured: provider.configured !== false,
@@ -484,6 +484,7 @@ export function normalizeRuntimeProviderCatalogResponse(
         health: provider.health,
         user_selectable: provider.allowed_for_current_user !== false,
         enabled: provider.enabled !== false,
+        chat_enabled: provider.chat_enabled !== false,
         policy_allowed: provider.allowed_for_current_user !== false,
         policy_rejection_reason: provider.allowed_for_current_user === false ? 'not_allowed_for_current_user' : null,
         runtime_engine:
