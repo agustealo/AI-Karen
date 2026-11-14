@@ -154,6 +154,7 @@ def _plugin_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "version": str(getattr(manifest, "version", "")),
         "status": "installed" if installed else "incompatible" if runtime_status == "error" else "available",
         "runtime_status": runtime_status,
+        "activation_blocked_reason": metadata.get("activation_blocked_reason"),
         "category": str(getattr(manifest, "category", "")) or None,
         "downloads": marketplace.get("downloads"),
         "rating": marketplace.get("rating"),
@@ -451,7 +452,36 @@ async def install_plugin_endpoint(
             ),
         )
 
-    success = await plugin_service.enable_plugin(request.plugin_id)
+    if plugin.get("activation_blocked_reason") == "isolated_runtime_required":
+        _audit_plugin_event(
+            request=http_request,
+            current_user=current_user,
+            event_type="plugin_install",
+            action="enable_local_catalog_plugin",
+            outcome="rejected",
+            details={"plugin_id": request.plugin_id, "reason": "isolated_runtime_required"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Uploaded plugin activation requires a verified isolated runtime",
+        )
+
+    try:
+        success = await plugin_service.enable_plugin(request.plugin_id)
+    except (ValueError, RuntimeError) as exc:
+        _audit_plugin_event(
+            request=http_request,
+            current_user=current_user,
+            event_type="plugin_install",
+            action="enable_local_catalog_plugin",
+            outcome="rejected",
+            details={"plugin_id": request.plugin_id, "reason": "lifecycle_conflict"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
     _audit_plugin_event(
         request=http_request,
         current_user=current_user,

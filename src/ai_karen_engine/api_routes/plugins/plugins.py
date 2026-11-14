@@ -593,6 +593,18 @@ async def _set_enabled(
             plugin_name=plugin_name,
         )
         raise
+    except (ValueError, RuntimeError) as exc:
+        _audit_plugin_mutation(
+            request=request,
+            user=user,
+            action=action,
+            outcome="rejected",
+            plugin_name=plugin_name,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.exception("Plugin mutation failed")
         _audit_plugin_mutation(

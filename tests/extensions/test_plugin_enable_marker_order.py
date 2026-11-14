@@ -70,3 +70,31 @@ async def test_successful_activation_clears_marker_after_transition(tmp_path: Pa
     assert await kernel.enable("demo") is True
     assert observations == [("enabled", True)]
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_uploaded_origin_refuses_enable_without_removing_durable_disable(
+    tmp_path: Path,
+) -> None:
+    kernel = PluginKernel(tmp_path)
+    pkg = tmp_path / "demo"
+    pkg.mkdir()
+    marker = pkg / ".karen-manual-disabled"
+    marker.write_text("explicitly disabled")
+    (pkg / PluginKernel.UPLOADED_ORIGIN_MARKER).write_text("origin=manual_upload")
+    transitions = []
+
+    class Registry:
+        def get(self, name):
+            return SimpleNamespace(manifest=SimpleNamespace(id=name))
+
+        async def update_state(self, name, state):
+            transitions.append(state)
+
+    kernel.runtime_registry = Registry()
+
+    with pytest.raises(ValueError, match="isolated runtime"):
+        await kernel.enable("demo")
+
+    assert marker.is_file()
+    assert transitions == []

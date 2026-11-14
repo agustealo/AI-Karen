@@ -31,6 +31,7 @@ export const PluginSchema = z.object({
   version: z.string(),
   status: PluginStatusSchema,
   runtime_status: z.string().optional(),
+  activation_blocked_reason: z.string().nullable().optional(),
   category: PluginCategorySchema.optional(),
   downloads: z.number().nullable().optional(),
   rating: z.number().nullable().optional(),

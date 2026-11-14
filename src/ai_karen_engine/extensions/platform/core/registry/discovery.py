@@ -220,7 +220,15 @@ class ExtensionDiscoveryService:
             # Start non-recursive scan for immediate subdirectories first
             # Extensions are usually organized in one level under the extensions root
             for path in self.extensions_dir.iterdir():
-                if not path.is_dir() or path.name.startswith("_") or path.name in skip_dirs:
+                # Upload staging directories are dot-prefixed and may hold
+                # a valid manifest before publication. Never discover them,
+                # symlinks, or hidden cache folders during concurrent refresh.
+                if (
+                    not path.is_dir()
+                    or path.is_symlink()
+                    or path.name.startswith(("_", "."))
+                    or path.name in skip_dirs
+                ):
                     continue
 
                 manifest_file = self._find_manifest_file(path)

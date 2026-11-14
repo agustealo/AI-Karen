@@ -174,3 +174,36 @@ async def test_transitive_disabled_dependency_fails_closed_during_refresh(
         kernel.runtime_registry.get(plugin_id).state is ExtensionLifecycleState.ENABLED
         for plugin_id in ("foundation", "middle", "consumer")
     )
+
+
+@pytest.mark.asyncio
+async def test_uploaded_plugin_remains_untrusted_under_builtin_root_after_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_plugin(tmp_path, "uploaded-demo")
+    package = tmp_path / "uploaded-demo"
+    (package / ".karen-upload-origin").write_text(
+        "origin=manual_upload;trust=untrusted\n", encoding="utf-8"
+    )
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    monkeypatch.setattr(kernel, "_is_builtin_root", lambda: True)
+
+    await service.refresh_plugins()
+    registration = kernel.runtime_registry.get("uploaded-demo")
+    assert registration is not None
+    assert registration.manifest.trust_tier.value == "untrusted"
+    assert registration.state is ExtensionLifecycleState.DISABLED
+
+    # Removing a disable marker cannot silently promote the upload to a
+    # first-party plugin, nor make it executable after a restart/refresh.
+    (package / ".karen-manual-disabled").unlink(missing_ok=True)
+    await service.refresh_plugins()
+    registration = kernel.runtime_registry.get("uploaded-demo")
+    assert registration is not None
+    assert registration.manifest.trust_tier.value == "untrusted"
+    assert registration.state is ExtensionLifecycleState.DISABLED
+    with pytest.raises(ValueError, match="isolated runtime"):
+        await service.enable_plugin("uploaded-demo")

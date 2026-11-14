@@ -85,3 +85,33 @@ The system automatically manages the `extension_registry` and related tables. If
 - **Naming**: Use kebab-case for `id` (e.g., `web-search`) and CamelCase for UI components (e.g., `WebSearchPage.tsx`).
 - **Entrypoints**: Ensure your `handler.py` contains a `MainExtension` class.
 - **Cleanup**: Always provide a mechanism to clean up plugin-specific data if the plugin is uninstalled.
+
+
+## 7. Current execution trust and isolation boundary
+
+The manually uploaded ZIP package path is **local installation only** until a
+verified isolated execution worker is implemented. The canonical
+`/api/store/upload` endpoint validates a ZIP, installs it with a durable disabled
+marker, and records `.karen-upload-origin` as untrusted package provenance.
+Uploading a package **does not** authorize execution or convert it into a
+first-party extension, even though it shares the installed-plugin directory.
+
+The current canonical extension executor runs Python handlers in-process.
+Only explicitly first-party/built-in code is eligible for that execution mode.
+For user uploads, third-party signed packages, remote plugins, or manifests
+requesting unsupported subprocess/container/WASM modes, execution fails with
+`isolation_unavailable` before loading the handler. An attempt to enable a
+manually uploaded plugin is rejected until a verified isolation runtime exists.
+The `SANDBOX` compatibility argument on `PluginService` does not provide an
+operating-system security boundary.
+
+Do not remove the upload-origin marker, modify the executor's trust decision,
+or treat a role grant as permission to execute untrusted Python in the
+application process. First-party eligibility is an operator-controlled source
+provenance decision, not a value accepted from an uploaded plugin manifest.
+
+**Migration limitation:** Older manually installed packages that predate the
+origin marker require a separate operator provenance audit. Merely finding a
+package under the built-in directory is not proof that it was shipped as a
+built-in. Do not claim historical packages have been reclassified until that
+audit is complete.

@@ -268,7 +268,7 @@ export function PluginDetailsModal({
   const isCompatible = isPluginCompatible(plugin);
   const installed = Boolean(details.installed);
   const updateAvailable = Boolean(details.update_available);
-  const canInstall = Boolean(onInstall) && !installed && isCompatible && !loading;
+  const canInstall = Boolean(onInstall) && !installed && isCompatible && !loading && !plugin.activation_blocked_reason;
 
   /*
    * PluginDetailsModal displays registry/marketplace metadata and invokes the
@@ -313,6 +313,12 @@ export function PluginDetailsModal({
         </DialogHeader>
 
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+
+        {plugin.activation_blocked_reason && (
+          <p role="status" className="text-sm text-amber-700 dark:text-amber-400">
+            This plugin is installed in quarantine. Activation requires a verified isolated execution runtime.
+          </p>
+        )}
 
         <div className="space-y-6 py-4">
           <div className="flex flex-wrap gap-3">
@@ -482,7 +488,7 @@ export function PluginDetailsModal({
         <DialogFooter>
           {installed ? (
             <div className="flex w-full justify-end gap-2">
-              {plugin.runtime_status === 'disabled' && onEnable && (
+              {plugin.runtime_status === 'disabled' && !plugin.activation_blocked_reason && onEnable && (
                 <Button type="button" onClick={onEnable} disabled={installing || loading}>
                   {installing ? 'Enabling...' : 'Enable'}
                 </Button>
