@@ -137,6 +137,9 @@ jobs:
       - name: Consumer My Account ownership and security contracts
         run: pytest tests/api_routes/test_consumer_my_account_contract.py -q
 
+      - name: Enforce durable account session revocation
+        run: pytest tests/auth/test_live_session_enforcement.py tests/architecture/test_auth_session_validation_contract.py -q
+
       - name: Ruff correctness baseline
         run: |
           # Historical formatting/style debt is retired in contained slices.
