@@ -318,6 +318,8 @@ export function PluginDetailsModal({
           </div>
         </DialogHeader>
 
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+
         <div className="space-y-6 py-4">
           <div className="flex flex-wrap gap-3">
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
