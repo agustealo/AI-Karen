@@ -615,6 +615,15 @@ class ProviderRegistryService:
 
     def _check_api_key_availability(self, provider_name: str) -> bool:
         """Check if API key is available for provider"""
+        if provider_name.lower() == "nous":
+            # Canonical provider config reads encrypted Settings secrets and env.
+            # Env-only checks incorrectly label valid saved Portal keys missing.
+            from ai_karen_engine.config.llm_provider_config import (
+                get_provider_config_manager,
+            )
+
+            return get_provider_config_manager().has_api_key("nous")
+
 
         # Map provider names to one or more accepted environment variable names
         api_key_mapping = {
