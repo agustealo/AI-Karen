@@ -630,6 +630,75 @@ export default function AccountPage() {
             </form>
           </Card>
 
+          <Card>
+            <CardHeader>
+              <CardTitle>Active sessions</CardTitle>
+              <CardDescription>
+                Inspect signed-in sessions and remotely sign out sessions you do not recognize.
+                Browser and network details are informational, not verified device identities.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline"
+                  disabled={isMutating || sessionsLoading}
+                  onClick={() => {
+                    if (!sessionsExpanded) {
+                      setSessionsExpanded(true);
+                      void refreshSessions();
+                    } else {
+                      sessionVersion.current += 1;
+                      setSessionsExpanded(false);
+                      setSessions(null);
+                    }
+                  }}>
+                  {sessionsExpanded ? "Hide sessions" : "View active sessions"}
+                </Button>
+                {sessionsExpanded && (
+                  <Button type="button" variant="outline" disabled={isMutating || sessionsLoading}
+                    onClick={() => void refreshSessions()}>
+                    <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Refresh sessions
+                  </Button>
+                )}
+              </div>
+              {sessionsExpanded && (
+                <div className="space-y-3">
+                  {sessionsLoading && <p role="status" className="text-sm text-muted-foreground">Checking active sessions...</p>}
+                  {sessionsError && <p role="alert" className="text-sm text-destructive">{sessionsError}</p>}
+                  {!sessionsLoading && sessions && sessions.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No sessions were returned. Refresh to check again.</p>
+                  )}
+                  {sessions?.map((session) => (
+                    <div key={session.session_id} className="rounded-lg border p-3 space-y-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <p className="break-words text-sm font-medium">
+                            {session.user_agent || "Unidentified browser"}
+                            {session.is_current && <span className="ml-2 text-xs text-muted-foreground">(current session)</span>}
+                          </p>
+                          <p className="text-xs text-muted-foreground">Network: {session.ip_address || "Not available"}</p>
+                          <p className="text-xs text-muted-foreground">First seen: {formatDate(session.created_at)}</p>
+                          <p className="text-xs text-muted-foreground">Last activity: {formatDate(session.last_accessed)}</p>
+                        </div>
+                        {!session.is_current && (
+                          <Button type="button" size="sm" variant="destructive"
+                            disabled={isMutating || sessionsLoading}
+                            onClick={() => void handleRemoteSessionRevoke(session.session_id)}>
+                            {revokingSession === session.session_id ? "Verifying sign-out..." : "Sign out session"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted-foreground">
+                    Use the regular Sign out action for this browser. Revocations are verified against Karen before success is shown.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
             Account changes require your authenticated session and server verification.
