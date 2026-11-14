@@ -593,7 +593,8 @@ def retired_recovery_context(monkeypatch, *, consents=None, revoked=True):
             "connection_id": CONNECTION, "connection_revision": 2,
             "connection_enabled": False, "retirement_held": False,
             "active_consent": False,
-            "unresolved_pairing": True, "deletion_request_recorded": True,
+            "unresolved_pairing": True, "provider_unlink_claim_recorded": False,
+            "deletion_request_recorded": True,
             "unverified_deletion_request": True,
             "inbox_not_completed": False, "outbound_not_confirmed": True,
         }]),
@@ -755,6 +756,7 @@ async def test_retirement_evidence_api_requires_identity_and_never_claims_deleti
     result = await api.list_retired_channel_evidence(user=actor())
     item = result.connections[0].model_dump()
     assert item["unresolved_pairing"] is True
+    assert item["provider_unlink_claim_recorded"] is False
     assert item["outbound_not_confirmed"] is True
     for secret in ("credential_handle", "session_reference", "provider_receipt_id",
                    "message_text", "retirement_authorized", "provider_unlinked"):

@@ -47,6 +47,10 @@ class Session:
             "user_id": uuid.UUID(USER),
             "connection_revision": 3,
             "live_revision": 3,
+            "live_enabled": True,
+            "retirement_locked": False,
+            "held_revision": None,
+            "held_fenced_revision": None,
             "session_reference": FIELDS["session_reference"],
             "credential_scope": FIELDS["credential_scope"],
             "status": "requested",
@@ -134,4 +138,40 @@ async def test_conflicting_duplicate_receipt_fails_closed(monkeypatch):
     session = Session(changes={"status": "provider_claimed", "provider_receipt_id": "different"})
     inject(monkeypatch, session)
     assert await call(PersonalCredentialErasureReceipt(**FIELDS)) is False
+    assert len(session.statements) == 1
+
+
+@pytest.mark.asyncio
+async def test_original_session_receipt_after_hold_is_only_provider_claim(monkeypatch):
+    session = Session(changes={
+        "live_revision": 4, "live_enabled": False,
+        "retirement_locked": True,
+        "held_revision": 3, "held_fenced_revision": 4,
+    })
+    inject(monkeypatch, session)
+    assert await call(PersonalCredentialErasureReceipt(**FIELDS)) is True
+    assert len(session.statements) == 2
+    assert "LEFT JOIN public.channel_personal_retirement_holds" in session.statements[0]
+    assert "status = 'provider_claimed'" in session.statements[1]
+    assert "status = 'verified'" not in session.statements[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"live_revision": 4, "live_enabled": True,
+     "retirement_locked": True, "held_revision": 3, "held_fenced_revision": 4},
+    {"live_revision": 5, "live_enabled": False,
+     "retirement_locked": True, "held_revision": 3, "held_fenced_revision": 4},
+    {"live_revision": 4, "live_enabled": False,
+     "retirement_locked": True, "held_revision": 2, "held_fenced_revision": 4},
+    {"live_revision": 4, "live_enabled": False,
+     "retirement_locked": True, "held_revision": None, "held_fenced_revision": None},
+    {"live_revision": 3, "live_enabled": False,
+     "retirement_locked": False, "held_revision": 3, "held_fenced_revision": 4},
+])
+async def test_post_hold_claim_rejects_nonmatching_fence(monkeypatch, changes):
+    session = Session(changes=changes)
+    inject(monkeypatch, session)
+    with pytest.raises(ValueError, match="durable request"):
+        await call(PersonalCredentialErasureReceipt(**FIELDS))
     assert len(session.statements) == 1

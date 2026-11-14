@@ -39,8 +39,9 @@ class FakeResult:
 
 
 class FakeSession:
-    def __init__(self, *, revision=2, existing=None, inserted=None):
+    def __init__(self, *, revision=2, existing=None, inserted=None, owner=None):
         self.revision = revision
+        self.owner = owner
         self.existing = existing
         self.inserted = {"request_id": uuid.UUID(REQUEST), "status": "requested"} if inserted is None else inserted
         self.queries = []
@@ -49,7 +50,13 @@ class FakeSession:
         sql = str(statement)
         self.queries.append((sql, params))
         if "SELECT c.revision" in sql:
-            return FakeResult(self.revision)
+            return FakeResult(self.owner if self.owner is not None else (
+                {
+                    "revision": self.revision, "enabled": True,
+                    "retirement_locked": False,
+                    "held_revision": None, "held_fenced_revision": None,
+                } if self.revision is not None else None
+            ))
         if "SELECT request_id, user_id" in sql:
             return FakeResult(self.existing)
         if "INSERT INTO public.channel_personal_credential_deletions" in sql:
@@ -145,3 +152,45 @@ async def test_invalid_input_fails_before_sql(monkeypatch, change):
     with pytest.raises(ValueError):
         await module.SqlChannelRepository().request_personal_credential_deletion(**{**ARGS, **change})
     assert session.queries == []
+
+
+@pytest.mark.asyncio
+async def test_retirement_hold_allows_only_original_revision_deletion_intent(monkeypatch):
+    locked = {
+        "revision": 3, "enabled": False, "retirement_locked": True,
+        "held_revision": 2, "held_fenced_revision": 3,
+    }
+    session = FakeSession(owner=locked)
+    install(monkeypatch, session)
+    result = await module.SqlChannelRepository().request_personal_credential_deletion(
+        **ARGS,
+    )
+    assert result["status"] == "requested"
+    assert "LEFT JOIN public.channel_personal_retirement_holds" in session.queries[0][0]
+    session.queries.clear()
+    with pytest.raises(ValueError, match="owner or revision"):
+        await module.SqlChannelRepository().request_personal_credential_deletion(
+            **{**ARGS, "connection_revision": 3},
+        )
+    assert len(session.queries) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", [
+    {"revision": 3, "enabled": True, "retirement_locked": True,
+     "held_revision": 2, "held_fenced_revision": 3},
+    {"revision": 4, "enabled": False, "retirement_locked": True,
+     "held_revision": 2, "held_fenced_revision": 3},
+    {"revision": 3, "enabled": False, "retirement_locked": True,
+     "held_revision": None, "held_fenced_revision": None},
+    {"revision": 2, "enabled": False, "retirement_locked": False,
+     "held_revision": 2, "held_fenced_revision": 3},
+])
+async def test_retirement_deletion_request_rejects_fake_or_inconsistent_hold(monkeypatch, owner):
+    session = FakeSession(owner=owner)
+    install(monkeypatch, session)
+    with pytest.raises(ValueError, match="owner or revision"):
+        await module.SqlChannelRepository().request_personal_credential_deletion(
+            **ARGS,
+        )
+    assert len(session.queries) == 1
