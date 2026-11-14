@@ -33,6 +33,8 @@ export interface RuntimeProviderDetails {
   health?: { status?: string; last_checked_at?: string | null } | null;
   user_selectable?: boolean;
   enabled?: boolean;
+  chat_enabled?: boolean;
+  chat_model_visibility?: Record<string, boolean>;
   policy_allowed?: boolean;
   policy_rejection_reason?: string | null;
   api_key_masked?: string | null;
@@ -92,6 +94,7 @@ export interface RuntimeProviderCatalogModel {
   label: string;
   source?: string;
   available?: boolean;
+  chat_enabled?: boolean;
   default?: boolean;
   capabilities?: string[];
 }
@@ -101,6 +104,7 @@ export interface RuntimeProviderCatalogProvider {
   label: string;
   category?: string;
   enabled?: boolean;
+  chat_enabled?: boolean;
   configured?: boolean;
   healthy?: boolean;
   /** Observed provider status. Unknown is not an unhealthy probe result. */
