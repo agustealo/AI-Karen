@@ -1,0 +1,57 @@
+{
+  "repository": "agustealo/AI-Karen",
+  "main_sha": "f795873f00d00bce426f490881179c37bec81eca",
+  "main_branch": "main",
+  "created_at": "2026-11-14T19:36:25.367Z",
+  "tag": "branch-archive/2026-11-14-closed-unmerged-final-five",
+  "classification": "closed_unmerged_pr_with_unique_commits",
+  "treatment": "Branch refs removed after durable tag + commit ancestry verified; unique history not asserted merged into main",
+  "recovery": "git fetch origin tag branch-archive/2026-11-14-closed-unmerged-final-five; git show branch-archive/2026-11-14-closed-unmerged-final-five:.branch-archives/2026-11-14-closed-unmerged-final-five.json; git branch RECOVERY_NAME SHA",
+  "branches": [
+    {
+      "name": "docs/kcon-ledger-current-main-20261106",
+      "pr": 676,
+      "sha": "7db15ce56f0c9ce7d834648352b123ea4259b604",
+      "pr_closed_at": "2026-11-06T18:15:55Z",
+      "pr_updated_at": "2026-11-06T18:15:58Z",
+      "tip_committed_at": "2026-11-06T01:59:09-05:00",
+      "unique_commits_vs_main": 1
+    },
+    {
+      "name": "feat/kchat-governed-search-results-first-prompt-20261105",
+      "pr": 659,
+      "sha": "98420ec4299c4cae0c0e4d0e533113218ac8553a",
+      "pr_closed_at": "2026-11-06T04:21:27Z",
+      "pr_updated_at": "2026-11-06T04:21:28Z",
+      "tip_committed_at": "2026-11-05T09:53:39-05:00",
+      "unique_commits_vs_main": 21
+    },
+    {
+      "name": "fix/kchat-degraded-requires-recent-success-20261103",
+      "pr": 630,
+      "sha": "80490f2742c6d0821892f670c3227b405cd2ad41",
+      "pr_closed_at": "2026-11-04T04:58:10Z",
+      "pr_updated_at": "2026-11-04T04:58:11Z",
+      "tip_committed_at": "2026-11-03T23:56:28-05:00",
+      "unique_commits_vs_main": 2
+    },
+    {
+      "name": "fix/memory-goal-event-lifecycle",
+      "pr": 133,
+      "sha": "c3739c1c87aaf8c637593bbfce03694a6c2bce85",
+      "pr_closed_at": "2026-10-06T08:30:36Z",
+      "pr_updated_at": "2026-10-06T08:30:37Z",
+      "tip_committed_at": "2026-10-05T17:11:45-04:00",
+      "unique_commits_vs_main": 61
+    },
+    {
+      "name": "fix/weather-first-prompt-observation-projection-20261105",
+      "pr": 657,
+      "sha": "20d83b79ef776d046bbcd8192e36e7c722f00bb1",
+      "pr_closed_at": "2026-11-05T05:59:09Z",
+      "pr_updated_at": "2026-11-05T05:59:09Z",
+      "tip_committed_at": "2026-11-05T00:48:28-05:00",
+      "unique_commits_vs_main": 7
+    }
+  ]
+}
