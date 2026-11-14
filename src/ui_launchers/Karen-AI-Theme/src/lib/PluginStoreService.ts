@@ -72,6 +72,7 @@ class PluginStoreService {
 
     if (params.query) searchParams.append('query', params.query);
     if (params.category) searchParams.append('category', params.category);
+    if (params.installed_only) searchParams.append('installed_only', 'true');
     if (params.sort_by) searchParams.append('sort_by', params.sort_by);
     searchParams.append('page', params.page.toString());
     searchParams.append('per_page', params.per_page.toString());
