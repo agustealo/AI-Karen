@@ -87,6 +87,16 @@ def apply_pairing_observation(
         or observation.observed_at > now
     ):
         raise PairingEvidenceDenied("Provider evidence or pairing scope not authorized")
+    # Reject unusable receipt identifiers before the phase reducer can
+    # record a linked or unlinked vendor claim. A whitespace-only receipt
+    # is truthy in Python but not evidence of any provider action.
+    receipt = observation.provider_receipt_id
+    if receipt is not None and (
+        not isinstance(receipt, str)
+        or not 1 <= len(receipt.strip()) <= 256
+        or len(receipt) > 256
+    ):
+        raise PairingEvidenceDenied("Provider receipt identifier is invalid")
     if observation.event in (PairingEvent.QR_ISSUED, PairingEvent.LINK_CONFIRMED):
         if not provider_vetted_and_enabled or not consent_current:
             raise PairingEvidenceDenied("Fresh consent and approved provider required for pairing")
