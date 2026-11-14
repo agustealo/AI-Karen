@@ -139,7 +139,12 @@ async def test_custom_manual_model_is_marked_configured_not_live(
             "selected_provider": "custom",
         }
 
+    async def no_live_inventory(provider_id: str, *, current_user) -> dict[str, object]:
+        assert provider_id == "custom"
+        return {"models": []}
+
     monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    monkeypatch.setattr(runtime_api, "get_provider_models", no_live_inventory)
     catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
     provider = next(item for item in catalog.providers if item.id == "custom")
     assert len(provider.models) == 1
