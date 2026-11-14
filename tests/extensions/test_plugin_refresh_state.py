@@ -102,6 +102,30 @@ async def test_disabled_required_plugin_blocks_default_and_explicit_dependent_en
 
 
 @pytest.mark.asyncio
+async def test_dependency_recovery_restores_default_enabled_dependent_after_refresh(
+    tmp_path: Path,
+) -> None:
+    _write_plugin(tmp_path, "foundation")
+    _write_plugin(tmp_path, "consumer", dependencies=("foundation",))
+    (tmp_path / "foundation" / ".karen-manual-disabled").write_text(
+        "explicitly disabled", encoding="utf-8",
+    )
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    assert kernel.runtime_registry.get("consumer").state is ExtensionLifecycleState.DISABLED
+    # A dependency-derived block is not the same as an explicit user disable.
+    # The dependent may return to its declared default once its prerequisite
+    # is explicitly enabled and a fresh catalog projection is accepted.
+    assert "consumer" not in kernel._disabled
+    assert await service.enable_plugin("foundation")
+    await service.refresh_plugins()
+    assert kernel.runtime_registry.get("consumer").state is ExtensionLifecycleState.ENABLED
+    assert "consumer" not in kernel._disabled
+
+
+@pytest.mark.asyncio
 async def test_disabling_required_plugin_refuses_without_mutating_durable_gate(
     tmp_path: Path,
 ) -> None:
