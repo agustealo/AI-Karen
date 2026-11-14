@@ -153,7 +153,8 @@ async def test_retired_unified_loader_cannot_import_unload_reload_or_invoke_hook
     plugin_dir = tmp_path / "legacy"
     plugin_dir.mkdir()
     (plugin_dir / "main.py").write_text(
-        f"from pathlib import Path\\nPath({str(marker)!r}).write_text('unsafe')\\n",
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('unsafe')\n",
         encoding="utf-8",
     )
     model = SimpleNamespace(
