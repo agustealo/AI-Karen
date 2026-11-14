@@ -194,7 +194,7 @@ class PluginKernel:
     # Uploading into the built-in root must never promote uploaded code to first-party.
     UPLOADED_ORIGIN_MARKER = ".karen-upload-origin"
     MANUAL_ENABLED_MARKER = ".karen-manual-enabled"
-    MANUAL_ENABLED_CONTENT = "enabled\\n"
+    MANUAL_ENABLED_CONTENT = "enabled\n"
 
     def __init__(
         self,
