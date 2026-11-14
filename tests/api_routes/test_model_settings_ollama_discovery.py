@@ -379,3 +379,301 @@ def test_discovery_response_contract_rejects_missing_timestamp() -> None:
         settings_routes.ProviderModelsResponse(
             provider="ollama", models=[], discovery_status="empty",
         )
+
+
+@pytest.mark.asyncio
+async def test_provider_validation_requires_real_candidate_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog discovery cannot substitute for an authenticated key probe."""
+    from ai_karen_engine.config.provider_authentication import AuthenticationStatus
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderAuthentication,
+    )
+
+    provider = SimpleNamespace(
+        name="openai",
+        enabled=True,
+        endpoint=SimpleNamespace(base_url="https://api.openai.com/v1"),
+        authentication=ProviderAuthentication(type=AuthenticationType.API_KEY),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: provider if name == "openai" else None),
+    )
+    calls: list[tuple[str, str]] = []
+
+    async def verify(provider_name: str, candidate: str):
+        calls.append((provider_name, candidate))
+        return SimpleNamespace(status=AuthenticationStatus.INVALID)
+
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_auth_manager",
+        lambda: SimpleNamespace(validate_candidate_api_key=verify),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_model_discovery_service",
+        lambda: pytest.fail("A model catalog is not credential verification"),
+    )
+
+    result = await settings_routes.validate_provider_settings(
+        settings_routes.ProviderSettingsValidationRequest(
+            provider="openai",
+            api_key="invalid-secret-value",
+            base_url="https://api.openai.com/v1",
+        ),
+        current_user={"roles": ["admin"]},
+    )
+    assert result["valid"] is False
+    assert result["status"] == "invalid"
+    assert result["models_discovered"] == 0
+    assert calls == [("openai", "invalid-secret-value")]
+    assert "invalid-secret-value" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_provider_validation_fails_closed_for_unapproved_endpoint_and_missing_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderAuthentication,
+    )
+    provider = SimpleNamespace(
+        name="openai",
+        enabled=True,
+        endpoint=SimpleNamespace(base_url="https://api.openai.com/v1"),
+        authentication=ProviderAuthentication(type=AuthenticationType.API_KEY),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: provider),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_auth_manager",
+        lambda: pytest.fail("Unapproved endpoint or missing key cannot trigger validation"),
+    )
+    for url in (
+        "http://127.0.0.1:5432",
+        "https://api.openai.com/v1?api_key=leak",
+        "https://attacker.example/v1",
+    ):
+        result = await settings_routes.validate_provider_settings(
+            settings_routes.ProviderSettingsValidationRequest(
+                provider="openai", api_key="candidate", base_url=url
+            ),
+            current_user={"roles": ["admin"]},
+        )
+        assert result["valid"] is False
+        assert result["status"] == "unverified"
+
+    missing = await settings_routes.validate_provider_settings(
+        settings_routes.ProviderSettingsValidationRequest(provider="openai"),
+        current_user={"roles": ["admin"]},
+    )
+    assert missing["valid"] is False
+    assert missing["status"] == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_provider_validation_rejects_consumer_before_any_provider_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_config_manager",
+        lambda: pytest.fail("Consumer cannot inspect workspace credentials"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.validate_provider_settings(
+            settings_routes.ProviderSettingsValidationRequest(
+                provider="openai", api_key="candidate"
+            ),
+            current_user={"roles": ["user"]},
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_provider_validation_success_requires_authenticated_probe_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config.provider_authentication import AuthenticationStatus
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderAuthentication,
+    )
+
+    provider = SimpleNamespace(
+        name="openai",
+        enabled=True,
+        endpoint=SimpleNamespace(base_url="https://api.openai.com/v1"),
+        authentication=ProviderAuthentication(type=AuthenticationType.API_KEY),
+    )
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: provider),
+    )
+
+    async def verified(provider_name: str, candidate: str):
+        assert provider_name == "openai"
+        assert candidate == "private-candidate"
+        return SimpleNamespace(status=AuthenticationStatus.VALID)
+
+    monkeypatch.setattr(
+        settings_routes,
+        "get_provider_auth_manager",
+        lambda: SimpleNamespace(validate_candidate_api_key=verified),
+    )
+    result = await settings_routes.validate_provider_settings(
+        settings_routes.ProviderSettingsValidationRequest(
+            provider="openai", api_key="private-candidate"
+        ),
+        current_user={"roles": ["admin"]},
+    )
+    assert result["status"] == "verified"
+    assert result["valid"] is True
+    assert "private-candidate" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_provider_auth_manager_probes_candidate_without_persistence_or_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The existing auth adapter must use the submitted key, not a stored key."""
+    import sys
+
+    from ai_karen_engine.config.provider_authentication import (
+        AuthenticationStatus,
+        ProviderAuthenticationManager,
+    )
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderAuthentication,
+        ProviderConfig,
+        ProviderEndpoint,
+    )
+
+    config = ProviderConfig(
+        name="openai",
+        display_name="OpenAI",
+        endpoint=ProviderEndpoint(base_url="https://api.openai.com/v1"),
+        authentication=ProviderAuthentication(type=AuthenticationType.API_KEY),
+    )
+    manager = object.__new__(ProviderAuthenticationManager)
+    manager.config_manager = SimpleNamespace(get_provider=lambda name: config)
+    manager.validation_timeout = 2
+    manager.get_api_key = lambda name: pytest.fail("Stored key must not be fetched")
+
+    captured: list[tuple[str, dict[str, str], bool]] = []
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def json(self):
+            return {"data": [{"id": "gpt-4o"}]}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def get(self, url, *, headers, allow_redirects):
+            captured.append((url, headers, allow_redirects))
+            return FakeResponse()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(
+            ClientTimeout=lambda **kwargs: kwargs,
+            ClientSession=lambda **kwargs: FakeSession(),
+        ),
+    )
+    result = await manager.validate_candidate_api_key("openai", "candidate-only")
+    assert result.status == AuthenticationStatus.VALID
+    assert captured == [(
+        "https://api.openai.com/v1/models",
+        {"User-Agent": "Kari-AI/1.0", "Authorization": "Bearer candidate-only"},
+        False,
+    )]
+    assert manager.config_manager.get_provider("openai") is config
+
+
+@pytest.mark.asyncio
+async def test_candidate_validation_refuses_http_and_non_model_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    from ai_karen_engine.config.provider_authentication import (
+        AuthenticationStatus,
+        ProviderAuthenticationManager,
+    )
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderAuthentication,
+        ProviderConfig,
+        ProviderEndpoint,
+    )
+    config = ProviderConfig(
+        name="openai",
+        display_name="OpenAI",
+        endpoint=ProviderEndpoint(base_url="http://api.openai.com/v1"),
+        authentication=ProviderAuthentication(type=AuthenticationType.API_KEY),
+    )
+    manager = object.__new__(ProviderAuthenticationManager)
+    manager.config_manager = SimpleNamespace(get_provider=lambda name: config)
+    manager.validation_timeout = 2
+    blocked = await manager.validate_candidate_api_key("openai", "private-candidate")
+    assert blocked.status == AuthenticationStatus.UNKNOWN
+
+    config.endpoint.base_url = "https://api.openai.com/v1"
+
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def json(self):
+            return {"ok": True}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(
+            ClientTimeout=lambda **kwargs: kwargs,
+            ClientSession=lambda **kwargs: FakeSession(),
+        ),
+    )
+    unknown = await manager.validate_candidate_api_key("openai", "private-candidate")
+    assert unknown.status == AuthenticationStatus.UNKNOWN
+    assert "private-candidate" not in unknown.message
