@@ -657,6 +657,60 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "DELETE FROM public.auth_users WHERE user_id=$1", erase_user,
         )
 
+        # User erasure must clear owner-scoped consent and deletion intent
+        # without silently leaving those personal rows bound to the account.
+        erase_principal = uuid.uuid4()
+        personal_connection = "user-erase-" + uuid.uuid4().hex
+        await raw.execute(
+            "INSERT INTO public.auth_users(user_id,tenant_id,is_active,is_verified) "
+            "VALUES ($1,$2,true,true)",
+            erase_principal, tenant_b,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id,tenant_id,installation_id,provider_account_id,
+                credential_handle,enabled,revision)
+               VALUES ($1,$2,'telegram-bot','user-erase','vault://test',false,1)""",
+            personal_connection, tenant_b,
+        )
+        await raw.execute(
+            "INSERT INTO public.channel_connection_owners "
+            "(tenant_id,connection_id,user_id) VALUES ($1,$2,$3)",
+            tenant_b, personal_connection, erase_principal,
+        )
+        await raw.execute(
+            "INSERT INTO public.channel_personal_pairing_consents "
+            "(tenant_id,connection_id,user_id,provider_id,policy_version) "
+            "VALUES ($1,$2,$3,'retired-operator','v1')",
+            tenant_b, personal_connection, erase_principal,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_personal_credential_deletions
+               (tenant_id,request_id,connection_id,provider_id,user_id,
+                connection_revision,session_reference,credential_scope,
+                idempotency_key)
+               VALUES ($1,$2,$3,'retired-operator',$4,1,
+                       'session','credentials','user-purge-test')""",
+            tenant_b, uuid.uuid4(), personal_connection, erase_principal,
+        )
+        assert await raw.execute(
+            "DELETE FROM public.auth_users WHERE user_id=$1", erase_principal,
+        ) == "DELETE 1"
+        for personal_table in (
+            "channel_connection_owners",
+            "channel_personal_pairing_consents",
+            "channel_personal_credential_deletions",
+        ):
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public." + personal_table
+                + " WHERE tenant_id=$1 AND connection_id=$2",
+                tenant_b, personal_connection,
+            ) == 0
+        assert await raw.execute(
+            "DELETE FROM public.channel_connections WHERE connection_id=$1",
+            personal_connection,
+        ) == "DELETE 1"
+
         # Independent inbox workers race for a separate pending receipt.
         pending_inbox = uuid.uuid4()
         await raw.execute(

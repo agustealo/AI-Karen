@@ -38,7 +38,7 @@ DECLARE
     current_fk name;
     matches integer;
 BEGIN
-    SELECT count(*), min(conname) INTO matches, current_fk
+    SELECT count(*), min(conname::text) INTO matches, current_fk
     FROM pg_constraint
     WHERE contype = 'f'
       AND conrelid = 'public.channel_personal_credential_deletions'::regclass
@@ -50,7 +50,7 @@ BEGIN
         'ALTER TABLE public.channel_personal_credential_deletions DROP CONSTRAINT %I',
         current_fk
     );
-    SELECT count(*), min(conname) INTO matches, current_fk
+    SELECT count(*), min(conname::text) INTO matches, current_fk
     FROM pg_constraint
     WHERE contype = 'f'
       AND conrelid = 'public.channel_personal_credential_deletions'::regclass
