@@ -1,9 +1,32 @@
 """Uninstall refresh cannot retain state for a removed plugin."""
+import json
 from pathlib import Path
 
 import pytest
 
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+from ai_karen_engine.extensions.contracts import ExtensionLifecycleState
+from ai_karen_engine.services.plugin_service import PluginService
+
+
+def _write_plugin(root: Path, plugin_id: str) -> None:
+    directory = root / plugin_id
+    directory.mkdir()
+    (directory / "handler.py").write_text(
+        "class MainExtension:\\n    pass\\n", encoding="utf-8"
+    )
+    (directory / "plugin_manifest.json").write_text(
+        json.dumps({
+            "name": plugin_id,
+            "version": "1.0.0",
+            "display_name": plugin_id,
+            "description": "Loaded-package retirement contract",
+            "author": "Kari",
+            "license": "MIT",
+            "category": "test",
+            "entrypoint": "handler:MainExtension",
+        }), encoding="utf-8",
+    )
 
 
 @pytest.mark.asyncio
