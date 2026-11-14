@@ -252,6 +252,10 @@ class PluginService:
                     relative = Path(member.filename)
                     if (
                         not member.filename
+                        or relative.name in (
+                            PluginKernel.UPLOADED_ORIGIN_MARKER,
+                            ".karen-manual-disabled",
+                        )
                         or relative.is_absolute()
                         or ".." in relative.parts
                         or "\\" in member.filename
@@ -300,7 +304,13 @@ class PluginService:
             # Durable opt-in activation gate: marker ships with the package and
             # survives process restarts. Only explicit enable may clear it.
             (staged / ".karen-manual-disabled").write_text(
-                "Uploaded plugin requires explicit enable\\n", encoding="utf-8"
+                "Uploaded plugin remains disabled until isolated execution is available\n",
+                encoding="utf-8",
+            )
+            # This survives explicit disable/enable transitions and catalog refresh.
+            # The upload route cannot silently turn into a first-party code source.
+            (staged / PluginKernel.UPLOADED_ORIGIN_MARKER).write_text(
+                "origin=manual_upload;trust=untrusted\n", encoding="utf-8"
             )
             # Hold the exclusive lock through runtime validation and rollback.
             # Releasing it immediately after rename exposed a partial install.
