@@ -262,7 +262,7 @@ def test_plugin_vault_migration_has_scoped_fk_rls_restricted_api_grants():
 
     root = Path(__file__).resolve().parents[2]
     migration = (
-        root / "supabase/migrations/20261114040000_52_plugin_vault_binding.sql"
+        root / "supabase/migrations/20261114050000_53_plugin_vault_binding.sql"
     ).read_text(encoding="utf-8")
     assert "FOREIGN KEY (tenant_id, credential_id)" in migration
     assert "FORCE ROW LEVEL SECURITY" in migration
