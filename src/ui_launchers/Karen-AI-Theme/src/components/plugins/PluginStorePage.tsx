@@ -608,7 +608,7 @@ export default function PluginStorePage() {
         onOpenChange={handleDetailsOpenChange}
         details={selectedPlugin}
         loading={detailsLoading}
-        error={detailsError}
+        error={detailsError || operationError || null}
         installing={Boolean(selectedPlugin?.plugin && installingPlugins.has(selectedPlugin.plugin.id))}
         onInstall={() => {
           const plugin = selectedPlugin?.plugin;
