@@ -57,6 +57,7 @@ export type Plugin = z.infer<typeof PluginSchema>;
 
 export const PluginSearchParamsSchema = z.object({
   query: z.string().optional(),
+  installed_only: z.boolean().optional(),
   category: PluginCategorySchema.optional(),
   sort_by: PluginSortOrderSchema.default('popularity'),
   page: z.number().min(1).default(1),
