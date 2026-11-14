@@ -1313,7 +1313,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         # The older pairing-state schema permits non-null whitespace receipt
         # IDs. A malformed or imported historical row must never be counted
         # as a provider unlink claim or as correlated retirement evidence.
-        for malformed_receipt in ("   ", "\\t\\n "):
+        for malformed_receipt in ("   ", "\t\n "):
             assert await raw.execute(
                 """UPDATE public.channel_personal_pairing_state
                    SET provider_unlink_receipt_id=$3
