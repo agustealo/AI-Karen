@@ -1064,3 +1064,102 @@ def test_retirement_response_validator_rejects_fake_correlation_or_missing_misma
         **raw, "provider_revision_claims_correlated": True,
     })
     assert api.PersonalRetirementEvidenceItem(**legitimate).provider_revision_claims_correlated is True
+
+
+@pytest.mark.parametrize("changed_fact", [
+    {"inbox_not_completed": True},
+    {"outbound_not_confirmed": True},
+    {"unresolved_pairing": True},
+    {"active_consent": True},
+    {"connection_enabled": True},
+    {"retirement_held": False},
+    {"deletion_request_recorded": False},
+    {"unverified_deletion_request": True},
+    {"provider_unlink_claim_recorded": False},
+    {"credential_deletion_claim_recorded": False},
+    {"provider_revision_claims_correlated": False},
+])
+def test_retirement_response_rejects_local_evidence_blocker_contradictions(changed_fact):
+    raw = {
+        "connection_id": CONNECTION, "connection_revision": 4,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": False, "unresolved_pairing": False,
+        "provider_unlink_claim_recorded": True,
+        "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": True,
+        "provider_revision_claims_correlated": True,
+        "unverified_deletion_request": False,
+        "inbox_not_completed": False,
+        "outbound_not_confirmed": False,
+    }
+    complete = assess_retirement_evidence_snapshot(raw)
+    assert api.PersonalRetirementEvidenceItem(**complete)
+    with pytest.raises(ValidationError):
+        api.PersonalRetirementEvidenceItem(**{**complete, **changed_fact})
+
+
+@pytest.mark.parametrize("changed", [
+    {"connection_revision": "4"},
+    {"connection_revision": True},
+    {"connection_id": " "},
+    {"inbox_not_completed": 1},
+    {"outbound_not_confirmed": "false"},
+    {"retirement_held": 1},
+])
+def test_retirement_response_disallows_pydantic_type_coercion(changed):
+    good = assess_retirement_evidence_snapshot({
+        "connection_id": CONNECTION, "connection_revision": 4,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": False, "unresolved_pairing": False,
+        "provider_unlink_claim_recorded": True,
+        "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": True,
+        "provider_revision_claims_correlated": True,
+        "unverified_deletion_request": False,
+        "inbox_not_completed": False,
+        "outbound_not_confirmed": False,
+    })
+    with pytest.raises(ValidationError):
+        api.PersonalRetirementEvidenceItem(**{**good, **changed})
+
+
+def test_retirement_response_rejects_extra_stale_or_reordered_known_blockers():
+    good = assess_retirement_evidence_snapshot({
+        "connection_id": CONNECTION, "connection_revision": 4,
+        "connection_enabled": False, "retirement_held": True,
+        "active_consent": False, "unresolved_pairing": False,
+        "provider_unlink_claim_recorded": True,
+        "deletion_request_recorded": True,
+        "credential_deletion_claim_recorded": True,
+        "provider_revision_claims_correlated": True,
+        "unverified_deletion_request": False,
+        "inbox_not_completed": False,
+        "outbound_not_confirmed": False,
+    })
+    reasons = good["retirement_assessment"]["blocking_reasons"]
+    cases = [
+        ["pairing_teardown_unresolved", *reasons],
+        list(reversed(reasons)),
+    ]
+    for codes in cases:
+        with pytest.raises(ValidationError):
+            api.PersonalRetirementEvidenceItem(**{
+                **good,
+                "retirement_assessment": {
+                    **good["retirement_assessment"],
+                    "blocking_reasons": codes,
+                },
+            })
+
+
+@pytest.mark.asyncio
+async def test_retirement_endpoint_redacts_contradictory_stored_blockers(monkeypatch):
+    recovery = retired_recovery_context(monkeypatch)
+    good = recovery.list_retirement_evidence.return_value[0]
+    recovery.list_retirement_evidence.return_value = [{
+        **good, "outbound_not_confirmed": False,
+    }]
+    with pytest.raises(HTTPException) as error:
+        await api.list_retired_channel_evidence(user=actor())
+    assert error.value.status_code == 503
+    assert error.value.detail == "Personal channel retirement evidence unavailable"
