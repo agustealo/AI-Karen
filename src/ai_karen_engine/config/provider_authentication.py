@@ -39,7 +39,8 @@ except ImportError:
 from ai_karen_engine.config.llm_provider_config import (
     get_provider_config_manager,
     ProviderConfig,
-    AuthenticationType
+    AuthenticationType,
+    OPENAI_COMPATIBLE_PROVIDER_DEFAULTS,
 )
 
 logger = logging.getLogger(__name__)
@@ -569,6 +570,18 @@ class ProviderAuthenticationManager:
         # embedded URL credentials, or a noncanonical validation endpoint.
         base_url = str(getattr(config.endpoint, "base_url", "") or "")
         endpoint = config.authentication.validation_endpoint or "/models"
+        # A previously persisted vendor override must not redirect a fresh
+        # credential test to an untrusted host. Custom endpoints have their
+        # own provider ID and authorization contract.
+        if provider_name == "nous":
+            approved = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS["nous"]["base_url"]
+            if base_url.rstrip("/") != approved.rstrip("/"):
+                return AuthenticationResult(
+                    provider_name=provider_name,
+                    status=AuthenticationStatus.UNKNOWN,
+                    message="Nous Portal requires its approved inference endpoint",
+                    validated_at=now,
+                )
         parsed = urlsplit(base_url)
         if (
             parsed.scheme != "https"
