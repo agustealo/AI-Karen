@@ -1,3 +1,5 @@
+"""Consumer My Account proof against the canonical account implementation."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,18 +22,21 @@ def _source() -> str:
     return ACCOUNT_PAGE.read_text(encoding="utf-8")
 
 
-def test_account_profile_uses_explicit_username_and_full_name_state() -> None:
+def test_account_profile_is_principal_scoped_and_read_after_write_verified() -> None:
     source = _source()
 
     assert 'const [username, setUsername] = useState("")' in source
     assert 'const [fullName, setFullName] = useState("")' in source
-    assert 'setUsername(user.username || "")' in source
-    assert 'setFullName(user.full_name || "")' in source
-    assert 'username: username.trim()' in source
-    assert 'full_name: fullName.trim()' in source
+    assert 'setUsername(verified.username)' in source
+    assert 'setFullName(verified.full_name)' in source
+    assert 'username: cleanUsername' in source
+    assert 'full_name: cleanName' in source
 
-    assert "setName(freshUser.full_name" not in source
-    assert "setUsername(freshUser.username" not in source
+    assert 'verifyAccount(await apiClient.put<unknown>("/api/auth/me", wanted), principal)' in source
+    assert 'verifyAccount(await apiClient.get<unknown>("/api/auth/me"), principal)' in source
+    assert 'requireCurrentPrincipal(principal)' in source
+    assert 'authService.updateCurrentUser({' in source
+    assert '"Profile save not verified"' in source
 
 
 def test_password_change_recovers_from_server_side_session_revocation() -> None:
@@ -39,10 +44,23 @@ def test_password_change_recovers_from_server_side_session_revocation() -> None:
 
     change_index = source.index('await apiClient.post("/api/auth/change-password"')
     logout_index = source.index("await logout();", change_index)
-    redirect_index = source.index('router.replace("/login?reason=password-changed")', logout_index)
+    redirect_index = source.index(
+        'router.replace("/login?reason=password-changed")', logout_index
+    )
 
     assert change_index < logout_index < redirect_index
-    assert "requires a fresh sign-in" in source
+    assert '"Password change failed"' in source
+    assert '"Password changed"' in source
+    assert "revokes existing sessions" in source
+
+
+def test_display_preferences_have_canonical_backend_confirmation() -> None:
+    source = _source()
+
+    assert 'preferences: { theme: nextTheme }' in source
+    assert 'verified.preferences.theme !== nextTheme' in source
+    assert 'value: "system" as const' in source
+    assert 'authService.updateCurrentUser({ preferences: verified.preferences })' in source
 
 
 def test_account_page_has_no_fake_avatar_write_affordance() -> None:
