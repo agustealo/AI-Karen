@@ -241,7 +241,7 @@ class PluginKernel:
         """Detect a package published by the governed manual upload path."""
         marker = self.extensions_root / plugin_id / self.UPLOADED_ORIGIN_MARKER
         # A marker changed into a symlink is suspicious, not a trust upgrade.
-        return marker.is_file() or marker.is_symlink() or marker.is_dir()
+        return marker.exists() or marker.is_symlink()
 
     async def initialize(self, *, auto_discover: bool = True) -> None:
         if self._initialized:
