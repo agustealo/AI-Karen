@@ -736,6 +736,7 @@ async def update_current_user_info(
             if error == "User not found":
                 status_code = status.HTTP_404_NOT_FOUND
             elif error in {
+                "Email change requires verified ownership",
                 "User with this email already exists",
                 "User with this username already exists",
             }:
