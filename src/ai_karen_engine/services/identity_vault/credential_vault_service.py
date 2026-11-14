@@ -663,11 +663,12 @@ class CredentialVaultService(BaseService):
         async with self._session_scope() as session:
             await self._plugin_tenant_scope(session, tenant)
             rows = (await session.execute(
-                select(PluginCredentialSlot, Credential)
+                self._tenant_query(PluginCredentialSlot, tenant)
                 .join(
                     Credential,
                     Credential.id == PluginCredentialSlot.credential_id,
                 )
+                .add_columns(Credential)
                 .where(
                     PluginCredentialSlot.tenant_id == tenant,
                     PluginCredentialSlot.plugin_id == plugin_id,
@@ -691,17 +692,22 @@ class CredentialVaultService(BaseService):
                     raise PluginCredentialDenied("Plugin credential binding integrity denied")
                 if credential.status == CredentialStatus.ACTIVE.value:
                     # EXISTS projection does not return secret contents.
-                    exists = await session.execute(
-                        select(CredentialSecret.id).where(
-                            CredentialSecret.tenant_id == tenant,
-                            CredentialSecret.credential_id == credential.id,
-                            CredentialSecret.secret_type == slot.field_key,
-                        ).limit(1)
+                    count = await session.execute(
+                        text(
+                            "SELECT count(*) FROM public.credential_secrets "
+                            "WHERE tenant_id = CAST(:tenant AS uuid) "
+                            "AND credential_id = CAST(:credential_id AS uuid) "
+                            "AND secret_type = :field_key"
+                        ),
+                        {
+                            "tenant": str(tenant),
+                            "credential_id": str(credential.id),
+                            "field_key": slot.field_key,
+                        },
                     )
                     status = (
                         CredentialStatus.ACTIVE.value
-                        if exists.scalar_one_or_none() is not None
-                        else "unavailable"
+                        if count.scalar_one() == 1 else "unavailable"
                     )
                 else:
                     status = str(credential.status)
