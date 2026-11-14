@@ -48,3 +48,48 @@ def test_zai_stays_inactive_without_explicit_opt_in():
     assert provider is not None
     assert provider.enabled is False
     assert manager.is_provider_configured("zai") is False
+
+
+def test_nous_portal_is_registered_using_shared_adapter_without_secrets(tmp_path, monkeypatch):
+    """Provider setup must be discoverable, but not a fabricated ready runtime."""
+    monkeypatch.delenv("NOUS_API_KEY", raising=False)
+    manager = LLMProviderConfigManager(config_dir=tmp_path)
+    monkeypatch.setattr(provider_config_module, "_provider_config_manager", manager)
+
+    provider = manager.get_provider("nous")
+    assert provider is not None
+    assert provider.display_name == "Nous Portal (Hermes)"
+    assert provider.endpoint.base_url == "https://inference-api.nousresearch.com/v1"
+    assert provider.endpoint.chat_endpoint == "/chat/completions"
+    assert provider.endpoint.models_endpoint == "/models"
+    assert provider.authentication.api_key_env_var == "NOUS_API_KEY"
+    assert provider.authentication.api_key_header == "Authorization"
+    assert provider.authentication.api_key_prefix == "Bearer"
+    assert provider.default_model == "Hermes-4.3-36B"
+    assert {model.id for model in provider.models} == {
+        "Hermes-4.3-36B", "Hermes-4-70B", "Hermes-4-405B",
+    }
+    assert "nous" in provider_config_module.MODEL_SETTINGS_PROVIDER_ORDER
+    assert "nous" in get_openai_compatible_provider_ids()
+
+    spec = resolve_provider_execution("nous")
+    assert spec is not None
+    assert spec.adapter_class == "OpenAICompatibleProvider"
+    assert spec.execution_family == "openai_compatible"
+    assert spec.runtime_engine == "openai_compatible"
+    assert spec.requires_api_key is True
+    assert spec.supports_model_discovery is True
+    assert spec.base_url == provider.endpoint.base_url
+
+
+def test_nous_registration_preserves_existing_provider_settings(tmp_path, monkeypatch):
+    """Adding a default provider must not overwrite a saved disabled choice."""
+    manager = LLMProviderConfigManager(config_dir=tmp_path)
+    saved = manager.get_provider("nous")
+    assert saved is not None
+    manager.update_provider("nous", {"enabled": False, "priority": 18})
+    restored = LLMProviderConfigManager(config_dir=tmp_path)
+    provider = restored.get_provider("nous")
+    assert provider is not None
+    assert provider.enabled is False
+    assert provider.priority == 18
