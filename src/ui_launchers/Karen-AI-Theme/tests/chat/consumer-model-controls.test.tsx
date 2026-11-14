@@ -72,7 +72,6 @@ describe("consumer provider and model controls", () => {
     const disclosure = screen.getByText("Advanced provider and agent details");
     fireEvent.click(disclosure);
     // The advanced list mounts only after React processes the native toggle.
-    fireEvent.toggle(disclosure.closest("details")!);
     expect(await screen.findByText("Unconfigured provider")).not.toBeNull();
     expect(screen.getByText("Not configured")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Configure providers" }));
