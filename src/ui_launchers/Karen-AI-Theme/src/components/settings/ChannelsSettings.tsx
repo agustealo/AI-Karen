@@ -674,7 +674,10 @@ function RetiredCredentialDeletionHistory({ authenticated }: { authenticated: bo
 }
 
 export default function ChannelsSettings() {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const principalKey = isAuthenticated && user?.tenant_id && user?.user_id
+    ? user.tenant_id + ':' + user.user_id
+    : 'signed-out';
   const [inventory, setInventory] = useState<PersonalChannel[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -723,7 +726,7 @@ export default function ChannelsSettings() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, isAuthLoading, reload]);
+  }, [isAuthenticated, isAuthLoading, reload, principalKey]);
 
   return (
     <div className="space-y-5">
@@ -853,10 +856,12 @@ export default function ChannelsSettings() {
         </div>
       )}
       <RetiredPersonalConsentRecovery
+        key={principalKey}
         channels={inventory}
         authenticated={isAuthenticated && !isAuthLoading}
       />
       <RetiredCredentialDeletionHistory
+        key={principalKey}
         authenticated={isAuthenticated && !isAuthLoading}
       />
     </div>

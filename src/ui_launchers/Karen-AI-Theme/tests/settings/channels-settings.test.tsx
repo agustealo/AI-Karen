@@ -5,7 +5,14 @@ import ChannelsSettings from '@/components/settings/ChannelsSettings';
 import { apiClient, ApiError } from '@/lib/api';
 
 const { auth } = vi.hoisted(() => ({
-  auth: { isAuthenticated: true, isLoading: false },
+  auth: {
+    isAuthenticated: true,
+    isLoading: false,
+    user: {
+      tenant_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      user_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    },
+  },
 }));
 
 vi.mock('@/lib/useAuth', () => ({
@@ -74,6 +81,8 @@ function mockInventoryAndConsent(
 beforeEach(() => {
   auth.isAuthenticated = true;
   auth.isLoading = false;
+  auth.user.tenant_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  auth.user.user_id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
   vi.mocked(apiClient.get).mockResolvedValue({ connections: [] });
 });
 
@@ -589,6 +598,33 @@ describe('KOC-05 retired provider deletion request evidence', () => {
     expect((await screen.findByRole('alert')).textContent)
       .toContain('Deletion request status unavailable');
     expect(screen.queryByText('retired-operator')).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('clears retained deletion history across a tenant principal switch without automatic replay', async () => {
+    let oldPrincipal = true;
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === '/api/channels/personal/connections') return { connections: [] };
+      if (path === endpoint) return { requests: oldPrincipal ? [deletion] : [] };
+      throw new Error('Unexpected URL');
+    });
+    const view = render(<ChannelsSettings />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review credential deletion requests',
+    }));
+    expect(await screen.findByText('retired-operator')).toBeTruthy();
+    oldPrincipal = false;
+    auth.user.user_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+    view.rerender(<ChannelsSettings />);
+    await waitFor(() => {
+      expect(screen.queryByText('retired-operator')).toBeNull();
+    });
+    expect(vi.mocked(apiClient.get).mock.calls.filter(([path]) => path === endpoint))
+      .toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Review credential deletion requests',
+    }));
+    expect(await screen.findByText(/No retained deletion requests were found/)).toBeTruthy();
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 
