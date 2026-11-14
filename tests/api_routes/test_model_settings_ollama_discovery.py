@@ -343,6 +343,66 @@ async def test_remote_provider_discovery_tracks_live_and_configured_model_source
 
 
 @pytest.mark.asyncio
+async def test_nous_endpoint_override_is_denied_before_settings_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[str] = []
+    monkeypatch.setattr(
+        settings_routes, "get_settings_manager",
+        lambda: SimpleNamespace(
+            set_setting=lambda key, value, save=False: writes.append(key)
+        ),
+    )
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(),
+    )
+    for url in (
+        "https://untrusted.example/v1",
+        "http://inference-api.nousresearch.com/v1",
+        "https://inference-api.nousresearch.com/v1?token=leak",
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await settings_routes.update_model_settings(
+                settings_routes.ModelSettingsUpdateRequest(
+                    provider="nous",
+                    base_url=url,
+                ),
+                current_user={"roles": ["admin"]},
+            )
+        assert exc.value.status_code in (400, 403)
+    assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_nous_discovery_rejects_previously_saved_untrusted_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = SimpleNamespace(
+        name="nous",
+        enabled=True,
+        endpoint=SimpleNamespace(
+            base_url="https://inference-api.nousresearch.com/v1"
+        ),
+        provider_type=ProviderType.EXTERNAL,
+        models=[],
+    )
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: provider),
+    )
+    monkeypatch.setattr(
+        settings_routes, "_get_provider_override",
+        lambda name: {"base_url": "https://untrusted.example/v1"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.get_provider_models(
+            "nous", current_user={"roles": ["admin"]}
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -396,6 +456,23 @@ async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
     monkeypatch.setattr(
         openai_compatible_provider, "OpenAICompatibleProvider", NousInventory
     )
+    from ai_karen_engine.core.model_runtime import provider_registry_service
+    from ai_karen_engine.core.model_runtime.runtime_engine import EndpointKind
+
+    health_events: list[tuple[str, bool]] = []
+    monitored_registry = SimpleNamespace(
+        get_provider_endpoint=lambda name: SimpleNamespace(kind=EndpointKind.CLOUD_PROVIDER),
+        health_monitor=SimpleNamespace(
+            update_provider_health=lambda name, *, is_healthy: health_events.append(
+                (name, is_healthy)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        provider_registry_service,
+        "get_provider_registry_service",
+        lambda: monitored_registry,
+    )
     response = await settings_routes.get_provider_models(
         "nous", current_user={"roles": ["admin"]}
     )
@@ -406,6 +483,7 @@ async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
     assert by_id["Hermes-4.3-36B"].source == "provider_live"
     assert by_id["Hermes-4-405B"].source == "provider_live"
     assert by_id["Hermes-4-70B"].source == "configured_catalog"
+    assert health_events == [("nous", True)]
     assert key not in repr(response)
 
     with pytest.raises(HTTPException) as exc:
@@ -590,6 +668,41 @@ async def test_provider_validation_fails_closed_for_unapproved_endpoint_and_miss
     )
     assert missing["valid"] is False
     assert missing["status"] == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_nous_candidate_key_never_probes_an_untrusted_saved_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderAuthentication,
+    )
+    from ai_karen_engine.config.provider_authentication import (
+        AuthenticationStatus,
+        ProviderAuthenticationManager,
+    )
+
+    provider = SimpleNamespace(
+        name="nous",
+        enabled=True,
+        authentication=ProviderAuthentication(type=AuthenticationType.API_KEY),
+        endpoint=SimpleNamespace(base_url="https://untrusted.example/v1"),
+    )
+    manager = object.__new__(ProviderAuthenticationManager)
+    manager.config_manager = SimpleNamespace(
+        get_provider=lambda name: provider if name == "nous" else None,
+    )
+
+    async def forbidden_probe(*args, **kwargs):
+        pytest.fail("Submitted token must not be sent to an untrusted host")
+
+    monkeypatch.setattr(manager, "_validate_api_key_auth", forbidden_probe)
+    result = await manager.validate_candidate_api_key(
+        "nous", "sensitive-submitted-key"
+    )
+    assert result.status == AuthenticationStatus.UNKNOWN
+    assert "sensitive-submitted-key" not in result.message
 
 
 @pytest.mark.asyncio

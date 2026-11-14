@@ -119,3 +119,101 @@ def test_nous_provider_status_checks_canonical_stored_secret_not_only_env(
         object(), "nous"
     ) is True
     assert observed == ["nous"]
+
+
+
+def test_nous_can_enter_canonical_chat_registry_only_with_approved_credentials(
+    tmp_path, monkeypatch
+):
+    """Execution eligibility must track key revocation, config and endpoint."""
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+    from ai_karen_engine.core.model_runtime.runtime_engine import (
+        EndpointKind, Locality, RuntimeEngine,
+    )
+
+    manager = LLMProviderConfigManager(config_dir=tmp_path)
+    secret = {"value": None}
+    monkeypatch.setattr(
+        manager, "get_api_key",
+        lambda provider: secret["value"] if provider == "nous" else None,
+    )
+    monkeypatch.setattr(provider_config_module, "_provider_config_manager", manager)
+    registry = ProviderRegistryService()
+    assert registry.get_provider_endpoint("nous") is None
+
+    secret["value"] = "test-secret-from-settings"
+    endpoint = registry.get_provider_endpoint("nous")
+    assert endpoint is not None
+    assert endpoint.base_url == "https://inference-api.nousresearch.com/v1"
+    assert endpoint.api_key_env == "NOUS_API_KEY"
+    assert endpoint.kind == EndpointKind.CLOUD_PROVIDER
+    assert endpoint.locality == Locality.CLOUD
+    assert endpoint.runtime_engine == RuntimeEngine.REMOTE_API
+    assert endpoint.fallback_eligible is False
+    assert endpoint.tenant_scoped is True
+    assert endpoint.default_model == "Hermes-4.3-36B"
+    assert {"chat_completion", "text_generation"}.issubset(
+        registry.effective_endpoint_capabilities(endpoint)
+    )
+    assert registry.get_provider_status("nous").has_api_key is True
+    assert registry.select_best_target(
+        {"chat_completion"}, preferred_target_id="nous", healthy_only=False,
+    ).provider_id == "nous"
+    assert registry.select_best_target(
+        {"chat_completion"}, kind=EndpointKind.CLOUD_PROVIDER,
+        healthy_only=False,
+    ) is None
+
+    secret["value"] = None
+    assert registry.get_provider_endpoint("nous") is None
+    assert registry.get_provider_status("nous") is None
+    assert "nous" not in {
+        endpoint.provider_id for endpoint in registry.resolve_capable_targets(
+            {"chat_completion"}, healthy_only=False,
+        )
+    }
+
+    secret["value"] = "restored"
+    assert registry.get_provider_endpoint("nous") is not None
+    manager.update_provider("nous", {"enabled": False})
+    assert registry.get_provider_endpoint("nous") is None
+
+
+def test_nous_rejects_redirected_vendor_credentials_before_runtime(
+    tmp_path, monkeypatch
+):
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+
+    manager = LLMProviderConfigManager(config_dir=tmp_path)
+    monkeypatch.setattr(
+        manager, "get_api_key",
+        lambda provider: "test-secret" if provider == "nous" else None,
+    )
+    monkeypatch.setattr(provider_config_module, "_provider_config_manager", manager)
+    config = manager.get_provider("nous")
+    config.endpoint.base_url = "https://untrusted.example/v1"
+    registry = ProviderRegistryService()
+    assert registry.get_provider_endpoint("nous") is None
+
+    config.endpoint.base_url = "http://inference-api.nousresearch.com/v1"
+    assert registry.get_provider_endpoint("nous") is None
+    config.endpoint.base_url = "https://inference-api.nousresearch.com/v1"
+    assert registry.get_provider_endpoint("nous") is not None
+
+
+def test_nous_provider_policy_keeps_external_inference_opt_in():
+    from ai_karen_engine.core.model_runtime.provider_policy import (
+        evaluate_provider_policy,
+    )
+
+    blocked = evaluate_provider_policy("nous", external_enabled=False)
+    assert blocked.classification == "cloud_provider"
+    assert blocked.allowed is False
+    assert blocked.reason == "external_provider_disabled"
+    allowed = evaluate_provider_policy("nous", external_enabled=True)
+    assert allowed.allowed is True
+    assert allowed.classification == "cloud_provider"
