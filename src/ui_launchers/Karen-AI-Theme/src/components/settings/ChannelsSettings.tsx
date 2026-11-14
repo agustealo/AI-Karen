@@ -349,6 +349,189 @@ function PersonalChannelRiskConsent({
   );
 }
 
+
+type RetiredConsentRecord = {
+  connection_id: string;
+  provider_id: string;
+  policy_version: string;
+};
+
+function parseRetiredConsentRecords(value: unknown): RetiredConsentRecord[] {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Missing consent recovery records');
+  }
+  const records = (value as { consents?: unknown }).consents;
+  if (!Array.isArray(records) || records.length > 50) {
+    throw new Error('Unverified consent recovery inventory');
+  }
+  const seen = new Set<string>();
+  for (const record of records) {
+    if (!record || typeof record !== 'object') {
+      throw new Error('Incomplete consent recovery record');
+    }
+    const item = record as Record<string, unknown>;
+    if (
+      typeof item.connection_id !== 'string' ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(item.connection_id) ||
+      typeof item.provider_id !== 'string' ||
+      !item.provider_id.trim() ||
+      item.provider_id.length > 128 ||
+      typeof item.policy_version !== 'string' ||
+      !item.policy_version.trim() ||
+      item.policy_version.length > 128
+    ) {
+      throw new Error('Invalid consent recovery record');
+    }
+    const key = item.connection_id + ':' + item.provider_id;
+    if (seen.has(key)) {
+      throw new Error('Duplicate consent recovery record');
+    }
+    seen.add(key);
+  }
+  return records as RetiredConsentRecord[];
+}
+
+function RetiredPersonalConsentRecovery({
+  channels,
+  authenticated,
+}: {
+  channels: PersonalChannel[] | null;
+  authenticated: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [records, setRecords] = useState<RetiredConsentRecord[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [mutating, setMutating] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+
+  const endpoint = '/api/channels/personal/consent-recovery';
+  const readRecords = async () => parseRetiredConsentRecords(
+    await apiClient.get<{ consents: RetiredConsentRecord[] }>(endpoint),
+  );
+
+  const refreshRecords = async () => {
+    if (!authenticated || loading || mutating) return;
+    setExpanded(true);
+    setLoading(true);
+    setRecords(null);
+    setFailure(null);
+    setConfirmation(null);
+    try {
+      setRecords(await readRecords());
+    } catch {
+      setFailure('Stored channel consent could not be verified. No change was made.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const revokeRecord = async (record: RetiredConsentRecord) => {
+    if (!authenticated || loading || mutating || !records ||
+        !records.some((item) =>
+          item.connection_id === record.connection_id &&
+          item.provider_id === record.provider_id,
+        )) return;
+
+    setMutating(true);
+    setRecords(null);
+    setFailure(null);
+    setConfirmation(null);
+    try {
+      const path = endpoint + '/' + encodeURIComponent(record.connection_id) +
+        '/' + encodeURIComponent(record.provider_id) + '/revoke';
+      const receipt = await apiClient.post<ConsentReceipt>(path, {});
+      if (!receipt || receipt.revoked !== true ||
+          receipt.paired !== false || receipt.provider_unlinked !== false) {
+        throw new Error('Retired consent revocation receipt is not authoritative');
+      }
+      const fresh = await readRecords();
+      if (fresh.some((item) =>
+        item.connection_id === record.connection_id &&
+        item.provider_id === record.provider_id,
+      )) {
+        throw new Error('Durable consent revocation was not confirmed');
+      }
+      setRecords(fresh);
+      setConfirmation(
+        'Stored consent revocation verified. This does not unlink the provider or erase its data.',
+      );
+    } catch {
+      // An ambiguous response may have committed. Never retry automatically.
+      setRecords(null);
+      setFailure('Revocation outcome unverified. Review the stored ledger again before retrying.');
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const unrepresented = records?.filter((record) => !channels?.some(
+    (channel) => channel.connection_id === record.connection_id &&
+      channel.active_consent_provider_ids.includes(record.provider_id),
+  ));
+
+  return (
+    <section className="space-y-3 border-t border-border/60 pt-4"
+      aria-label="Retired channel consent recovery">
+      <div className="space-y-2">
+        <p className="text-sm font-semibold">Stored consent recovery</p>
+        <p className="text-xs text-muted-foreground">
+          Withdraw consent still recorded in Karen when a channel installation
+          or its host is no longer running. This cannot reconnect or unlink a
+          WhatsApp device, and is not proof of provider-side data deletion.
+        </p>
+        <Button type="button" variant="outline" size="sm"
+          disabled={!authenticated || loading || mutating}
+          onClick={() => void refreshRecords()}
+          aria-label="Review stored channel consent">
+          {expanded ? 'Refresh stored consent' : 'Review stored consent'}
+        </Button>
+      </div>
+      {loading && <p role="status" className="text-sm">Reading the owned consent ledger...</p>}
+      {mutating && <p role="status" className="text-sm">Verifying the consent withdrawal...</p>}
+      {!loading && !mutating && failure && (
+        <Alert role="alert" variant="destructive">
+          <AlertCircle className="h-4 w-4" aria-hidden="true" />
+          <AlertTitle>Stored consent unverified</AlertTitle>
+          <AlertDescription>{failure}</AlertDescription>
+        </Alert>
+      )}
+      {!loading && !mutating && confirmation && (
+        <p role="status" className="text-sm">{confirmation}</p>
+      )}
+      {!loading && !mutating && unrepresented?.length === 0 && expanded && (
+        <p role="status" className="text-xs text-muted-foreground">
+          No separate active stored consent requires recovery. Any current
+          channel consent is managed in its own connection card.
+        </p>
+      )}
+      {!loading && !mutating && unrepresented && unrepresented.length > 0 && (
+        <div className="space-y-3">
+          {unrepresented.map((record) => (
+            <div key={record.connection_id + ':' + record.provider_id}
+              className="space-y-2 rounded-md border border-border/60 p-3">
+              <p className="text-sm font-semibold">{record.provider_id}</p>
+              <p className="break-all text-xs text-muted-foreground">
+                Connection {record.connection_id}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Recorded policy: {record.policy_version}. This acknowledgement
+                does not establish a live or authorized provider session.
+              </p>
+              <Button type="button" variant="outline" size="sm"
+                disabled={!authenticated || mutating || loading}
+                onClick={() => void revokeRecord(record)}
+                aria-label={'Revoke stored consent for ' + record.provider_id}>
+                Revoke stored consent
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function ChannelsSettings() {
   const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [inventory, setInventory] = useState<PersonalChannel[] | null>(null);
@@ -528,6 +711,10 @@ export default function ChannelsSettings() {
           ))}
         </div>
       )}
+      <RetiredPersonalConsentRecovery
+        channels={inventory}
+        authenticated={isAuthenticated && !isAuthLoading}
+      />
     </div>
   );
 }
