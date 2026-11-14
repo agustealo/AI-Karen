@@ -219,7 +219,7 @@ class SqlChannelRepository:
         No HTTP route exposes this method or makes a QR/session.
         """
         from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
-            PairingEvidenceDenied, PairingPhase, PairingSnapshot,
+            PairingEvidenceDenied, PairingPhase, PairingSnapshot, PairingEvent,
             apply_pairing_observation,
         )
         from ai_karen_engine.services.channels.personal_pairing_policy import (
@@ -243,22 +243,44 @@ class SqlChannelRepository:
             # removal cannot race a local state change.
             connection = (await session.execute(
                 text("""
-                    SELECT c.revision, o.user_id
+                    SELECT c.revision, c.enabled, c.retirement_locked, o.user_id,
+                           h.requested_revision AS held_revision,
+                           h.fenced_revision AS held_fenced_revision
                     FROM public.channel_connections c
                     JOIN public.channel_connection_owners o
                       ON o.tenant_id = c.tenant_id
                      AND o.connection_id = c.connection_id
+                    LEFT JOIN public.channel_personal_retirement_holds h
+                      ON h.tenant_id = c.tenant_id
+                     AND h.connection_id = c.connection_id
                     WHERE c.tenant_id = CAST(:tenant AS uuid)
                       AND c.connection_id = :connection
                       AND o.user_id = CAST(:user AS uuid)
-                      AND c.retirement_locked = false
                     FOR UPDATE OF c
                 """),
                 {"tenant": tenant_id, "connection": observation.connection_id,
                  "user": user_id},
             )).mappings().one_or_none()
-            if (
-                connection is None
+            if connection is None:
+                raise PairingEvidenceDenied("Connection owner or revision has changed")
+            # The irreversible local hold prevents new pairing. Preserve only
+            # authenticated teardown evidence for the original held revision;
+            # the reducer still enforces phase transitions and event sequence.
+            held = connection["retirement_locked"] is True
+            if held:
+                if (
+                    connection["enabled"] is not False
+                    or connection["held_revision"] != observation.connection_revision
+                    or connection["held_fenced_revision"] != connection["revision"]
+                    or observation.event not in (
+                        PairingEvent.DISCONNECT_REQUESTED,
+                        PairingEvent.UNLINK_CONFIRMED,
+                        PairingEvent.FAILED,
+                    )
+                ):
+                    raise PairingEvidenceDenied("Retirement accepts only original-session terminal evidence")
+            elif (
+                connection["held_revision"] is not None
                 or connection["revision"] != observation.connection_revision
             ):
                 raise PairingEvidenceDenied("Connection owner or revision has changed")
@@ -292,6 +314,8 @@ class SqlChannelRepository:
                  "provider": observation.provider_id},
             )).mappings().one_or_none()
             if record is None:
+                if held:
+                    raise PairingEvidenceDenied("Retirement requires existing pairing evidence")
                 prior = PairingSnapshot(
                     tenant_id=tenant_id,
                     connection_id=observation.connection_id,
@@ -494,6 +518,19 @@ class SqlChannelRepository:
                                  AND s.phase NOT IN ('ready', 'disconnected')
                            ) AS unresolved_pairing,
                            EXISTS (
+                               SELECT 1 FROM public.channel_personal_pairing_state s
+                               JOIN public.channel_personal_retirement_holds h
+                                 ON h.tenant_id = s.tenant_id
+                                AND h.connection_id = s.connection_id
+                               WHERE s.tenant_id = c.tenant_id
+                                 AND s.connection_id = c.connection_id
+                                 AND s.phase = 'disconnected'
+                                 AND s.provider_unlink_receipt_id IS NOT NULL
+                                 AND s.connection_revision = h.requested_revision
+                                 AND h.fenced_revision = c.revision
+                                 AND c.retirement_locked = true
+                           ) AS provider_unlink_claim_recorded,
+                           EXISTS (
                                SELECT 1 FROM public.channel_personal_credential_deletions d
                                WHERE d.tenant_id = c.tenant_id
                                  AND d.connection_id = c.connection_id
@@ -544,6 +581,7 @@ class SqlChannelRepository:
                 "retirement_held": bool(row["retirement_locked"]),
                 "active_consent": bool(row["active_consent"]),
                 "unresolved_pairing": bool(row["unresolved_pairing"]),
+                "provider_unlink_claim_recorded": bool(row["provider_unlink_claim_recorded"]),
                 "deletion_request_recorded": bool(row["deletion_request_recorded"]),
                 "unverified_deletion_request": bool(row["unverified_deletion_request"]),
                 "inbox_not_completed": bool(row["inbox_not_completed"]),
@@ -1889,19 +1927,36 @@ class SqlChannelRepository:
         async with async_transaction_scope(tenant_id) as session:
             owner = (await session.execute(
                 text("""
-                    SELECT c.revision
+                    SELECT c.revision, c.enabled, c.retirement_locked,
+                           h.requested_revision AS held_revision,
+                           h.fenced_revision AS held_fenced_revision
                     FROM public.channel_connections c
                     JOIN public.channel_connection_owners o
                       ON o.tenant_id = c.tenant_id
                      AND o.connection_id = c.connection_id
+                    LEFT JOIN public.channel_personal_retirement_holds h
+                      ON h.tenant_id = c.tenant_id
+                     AND h.connection_id = c.connection_id
                     WHERE c.tenant_id = CAST(:tenant AS uuid)
                       AND c.connection_id = :connection
                       AND o.user_id = CAST(:user AS uuid)
                     FOR UPDATE OF c
                 """),
                 {"tenant": tenant_id, "connection": connection_id, "user": user_id},
-            )).scalar_one_or_none()
-            if owner != connection_revision:
+            )).mappings().one_or_none()
+            if owner is None or not (
+                (
+                    owner["retirement_locked"] is False
+                    and owner["held_revision"] is None
+                    and owner["revision"] == connection_revision
+                )
+                or (
+                    owner["retirement_locked"] is True
+                    and owner["enabled"] is False
+                    and owner["held_revision"] == connection_revision
+                    and owner["held_fenced_revision"] == owner["revision"]
+                )
+            ):
                 raise ValueError("Credential deletion owner or revision rejected")
             existing = (await session.execute(
                 text("""
@@ -1974,7 +2029,10 @@ class SqlChannelRepository:
                 text("""
                     SELECT d.provider_id, d.user_id, d.connection_revision,
                            d.session_reference, d.credential_scope, d.status,
-                           d.provider_receipt_id, c.revision AS live_revision
+                           d.provider_receipt_id, c.revision AS live_revision,
+                           c.enabled AS live_enabled, c.retirement_locked,
+                           h.requested_revision AS held_revision,
+                           h.fenced_revision AS held_fenced_revision
                     FROM public.channel_personal_credential_deletions d
                     JOIN public.channel_connections c
                       ON c.tenant_id = d.tenant_id
@@ -1983,6 +2041,9 @@ class SqlChannelRepository:
                       ON o.tenant_id = d.tenant_id
                      AND o.connection_id = d.connection_id
                      AND o.user_id = d.user_id
+                    LEFT JOIN public.channel_personal_retirement_holds h
+                      ON h.tenant_id = c.tenant_id
+                     AND h.connection_id = c.connection_id
                     WHERE d.tenant_id = CAST(:tenant AS uuid)
                       AND d.request_id = CAST(:request AS uuid)
                       AND d.connection_id = :connection
@@ -1992,9 +2053,21 @@ class SqlChannelRepository:
                 {"tenant": tenant_id, "request": request_id,
                  "connection": connection_id, "user": user_id},
             )).mappings().one_or_none()
-            if record is None or (
+            revision_allowed = record is not None and (
+                (
+                    record["retirement_locked"] is False
+                    and record["held_revision"] is None
+                    and record["live_revision"] == receipt.connection_revision
+                )
+                or (
+                    record["retirement_locked"] is True
+                    and record["live_enabled"] is False
+                    and record["held_revision"] == receipt.connection_revision
+                    and record["held_fenced_revision"] == record["live_revision"]
+                )
+            )
+            if not revision_allowed or record is None or (
                 str(record["user_id"]) != user_id
-                or record["live_revision"] != receipt.connection_revision
                 or record["connection_revision"] != receipt.connection_revision
                 or record["provider_id"] != receipt.provider_id
                 or record["session_reference"] != receipt.session_reference

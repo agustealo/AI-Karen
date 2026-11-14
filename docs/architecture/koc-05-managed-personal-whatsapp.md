@@ -694,3 +694,39 @@ the canonical repository SQL. A user may still revoke existing consent after
 the hold, but neither a fresh acknowledgement nor even a manually planted
 consent can authorize a new QR/link observation for a held connection. The
 disposable PostgreSQL test proves this condition against the live revision.
+
+
+## Post-hold terminal evidence continuity (KOC-05)
+
+A revision-fenced local retirement hold never reactivates a personal
+connection or accepts new QR/link observations. The original vendor session
+may still deliver an authenticated disconnect/unlink observation, or claim
+credential deletion, after the local hold increments the connection revision.
+Without a narrowly scoped continuation, that evidence is stranded.
+
+The canonical repository accepts only `disconnect_requested`,
+`unlink_confirmed`, or `failed` observations on a preexisting pairing row
+whose revision equals the immutable hold's requested_revision, while the
+disabled, retirement-locked connection's current revision equals the hold's
+fenced_revision. The signed callback remains admitted solely by the existing
+ChannelHost verifier. The existing reducer still enforces ordered teardown
+events and a nonempty unlink receipt. New pairing, QR, unlinked sessions,
+replays, wrong revisions, missing holds and wrong tenants remain rejected.
+
+The same connection lock permits credential deletion request creation and
+idempotent `provider_claimed` receipt persistence for the precise original
+session revision after a hold. Newer revisions, missing/mismatched holds, or
+foreign scopes are rejected. Migration 51 still prohibits newly inserted or
+updated `verified` status.
+
+Read-only owner retirement evidence includes `provider_unlink_claim_recorded`
+for a disconnected snapshot carrying an unlink receipt matching the original
+hold revision. This is a vendor **claim**, not independently verified unlink
+or proof of deletion. UI labels reflect that difference. The feature adds no
+provider, deletion path, duplicated service or authorization grant.
+
+The existing real PostgreSQL integration test covers post-hold terminal
+observations and credential deletion claims, rejects QR/replay/stale scopes,
+and confirms the ledger remains unverified. Actual third-party erasure,
+independent verification, retention policy and destructive connection
+cleanup remain NOT_READY.

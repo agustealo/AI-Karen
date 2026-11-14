@@ -228,7 +228,8 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "connection_id": connection_id, "connection_revision": 1,
             "connection_enabled": True, "retirement_held": False,
             "active_consent": False,
-            "unresolved_pairing": False, "deletion_request_recorded": True,
+            "unresolved_pairing": False, "provider_unlink_claim_recorded": False,
+            "deletion_request_recorded": True,
             "unverified_deletion_request": True, "inbox_not_completed": False,
             "outbound_not_confirmed": True,
         }]
@@ -1089,6 +1090,162 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             "REVOKE USAGE ON SCHEMA public FROM karen_retirement_hold_probe"
         )
         await raw.execute("DROP ROLE karen_retirement_hold_probe")
+
+        # A real operator hold increments the local revision, but must still
+        # accept strictly terminal, source-authenticated provider observations
+        # for the ORIGINAL pre-hold session. No QR/link event can reopen it.
+        terminal_connection = "terminal-" + uuid.uuid4().hex
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id,tenant_id,installation_id,provider_account_id,
+                credential_handle,enabled,revision)
+               VALUES ($1,$2,'telegram-bot',$3,'vault://terminal-test',true,1)""",
+            terminal_connection, tenant_a, terminal_connection,
+        )
+        assert await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=terminal_connection,
+            user_id=str(user),
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_personal_pairing_state
+               (tenant_id, connection_id, provider_id, connection_revision,
+                sequence, phase, provider_link_receipt_id)
+               VALUES ($1,$2,'approved-managed-connector',1,2,'connected','linked-test')""",
+            tenant_a, terminal_connection,
+        )
+        held = await owner_repo.place_personal_retirement_hold(
+            tenant_id=str(tenant_a), connection_id=terminal_connection,
+            operator_user_id=str(another_user), expected_revision=1,
+            idempotency_key=str(uuid.uuid4()),
+        )
+        assert held["connection_revision"] == 2
+
+        def terminal_observation(seq, event, *, revision=1, receipt=None):
+            return PairingObservation(
+                tenant_id=str(tenant_a),
+                connection_id=terminal_connection,
+                provider_id="approved-managed-connector",
+                connection_revision=revision,
+                sequence=seq, event=event,
+                authenticated=True,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=2),
+                provider_receipt_id=receipt,
+                qr_expires_at=(
+                    datetime.now(timezone.utc) + timedelta(seconds=90)
+                    if event is PairingEvent.QR_ISSUED else None
+                ),
+            )
+
+        # Even synthetic source-authenticated events may not create another
+        # pairing. Actual production ingress authenticates callbacks in host.
+        with pytest.raises(PairingEvidenceDenied):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=terminal_observation(3, PairingEvent.QR_ISSUED),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        with pytest.raises(PairingEvidenceDenied):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=terminal_observation(
+                    3, PairingEvent.UNLINK_CONFIRMED, revision=2,
+                    receipt="foreign-revision",
+                ),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        disconnect = await owner_repo.commit_personal_pairing_observation(
+            observation=terminal_observation(3, PairingEvent.DISCONNECT_REQUESTED),
+            user_id=str(user), provider_vetted_and_enabled=True,
+        )
+        assert disconnect.phase is PairingPhase.DISCONNECT_PENDING
+        with pytest.raises(PairingEvidenceDenied):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=terminal_observation(
+                    3, PairingEvent.DISCONNECT_REQUESTED,
+                ),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        unlink = await owner_repo.commit_personal_pairing_observation(
+            observation=terminal_observation(
+                4, PairingEvent.UNLINK_CONFIRMED, receipt="terminal-vendor-claim",
+            ),
+            user_id=str(user), provider_vetted_and_enabled=True,
+        )
+        assert unlink.phase is PairingPhase.DISCONNECTED
+        assert unlink.provider_unlink_receipt_id == "terminal-vendor-claim"
+        assert await raw.fetchval(
+            """SELECT sequence FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, terminal_connection,
+        ) == 4
+
+        # Credential deletion intent can be issued after the local hold for
+        # the original pre-hold revision. A later vendor response is recorded
+        # as provider_claimed ONLY, not independently verified erasure.
+        deletion_idempotency = "terminal-" + uuid.uuid4().hex
+        deletion_args = dict(
+            tenant_id=str(tenant_a), connection_id=terminal_connection,
+            user_id=str(user), provider_id="approved-managed-connector",
+            connection_revision=1, session_reference="terminal-session",
+            credential_scope="companion-credentials",
+            idempotency_key=deletion_idempotency,
+        )
+        deletion_intent = await owner_repo.request_personal_credential_deletion(
+            **deletion_args,
+        )
+        assert deletion_intent["status"] == "requested"
+        assert await owner_repo.request_personal_credential_deletion(
+            **deletion_args,
+        ) == deletion_intent
+        with pytest.raises(ValueError, match="owner or revision"):
+            await owner_repo.request_personal_credential_deletion(
+                **{**deletion_args, "connection_revision": 2},
+            )
+        from ai_karen_engine.extensions.channels.contracts import (
+            PersonalCredentialErasureReceipt,
+        )
+        vendor_claim = PersonalCredentialErasureReceipt(
+            provider_id="approved-managed-connector",
+            connection_id=terminal_connection,
+            connection_revision=1,
+            session_reference="terminal-session",
+            deletion_request_id=deletion_intent["request_id"],
+            provider_receipt_id="terminal-deletion-vendor-claim",
+            credential_scope="companion-credentials",
+            erased_at=datetime.now(timezone.utc),
+        )
+        assert await owner_repo.record_personal_credential_deletion_claim(
+            tenant_id=str(tenant_a),
+            request_id=deletion_intent["request_id"],
+            connection_id=terminal_connection,
+            user_id=str(user), receipt=vendor_claim,
+        )
+        assert await owner_repo.record_personal_credential_deletion_claim(
+            tenant_id=str(tenant_a),
+            request_id=deletion_intent["request_id"],
+            connection_id=terminal_connection,
+            user_id=str(user), receipt=vendor_claim,
+        )
+        assert await raw.fetchval(
+            """SELECT status FROM public.channel_personal_credential_deletions
+               WHERE tenant_id=$1 AND request_id=$2""",
+            tenant_a, uuid.UUID(deletion_intent["request_id"]),
+        ) == "provider_claimed"
+        terminal_evidence = await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        matching = [
+            entry for entry in terminal_evidence
+            if entry["connection_id"] == terminal_connection
+        ]
+        assert len(matching) == 1
+        assert matching[0]["retirement_held"] is True
+        assert matching[0]["provider_unlink_claim_recorded"] is True
+        assert matching[0]["unresolved_pairing"] is False
+        assert matching[0]["deletion_request_recorded"] is True
+        assert matching[0]["unverified_deletion_request"] is True
+        assert matching[0]["connection_enabled"] is False
+        assert await owner_repo.list_owned_personal_retirement_evidence(
+            tenant_id=str(tenant_b), user_id=str(user),
+        ) == []
     finally:
         if engine is not None:
             await engine.dispose()

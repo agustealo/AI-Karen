@@ -680,6 +680,7 @@ type PersonalRetirementEvidence = {
   retirement_held: boolean;
   active_consent: boolean;
   unresolved_pairing: boolean;
+  provider_unlink_claim_recorded: boolean;
   deletion_request_recorded: boolean;
   unverified_deletion_request: boolean;
   inbox_not_completed: boolean;
@@ -697,7 +698,7 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
   const seen = new Set<string>();
   const booleanFields = [
     'connection_enabled', 'retirement_held', 'active_consent', 'unresolved_pairing',
-    'deletion_request_recorded', 'unverified_deletion_request',
+    'provider_unlink_claim_recorded', 'deletion_request_recorded', 'unverified_deletion_request',
     'inbox_not_completed', 'outbound_not_confirmed',
   ] as const;
   for (const entry of rows) {
@@ -805,6 +806,11 @@ function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: bo
                 {record.unresolved_pairing
                   ? 'Unresolved pairing observation remains'
                   : 'No unresolved pairing observation recorded'}
+              </p>
+              <p className="text-xs">
+                {record.provider_unlink_claim_recorded
+                  ? 'Provider unlink receipt claimed for the original held session. Independent verification remains unavailable.'
+                  : 'No scoped provider unlink claim recorded for the held session'}
               </p>
               <p className="text-xs">
                 {record.deletion_request_recorded

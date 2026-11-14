@@ -316,6 +316,7 @@ class PersonalRetirementEvidenceItem(BaseModel):
     retirement_held: bool
     active_consent: bool
     unresolved_pairing: bool
+    provider_unlink_claim_recorded: bool
     deletion_request_recorded: bool
     unverified_deletion_request: bool
     inbox_not_completed: bool

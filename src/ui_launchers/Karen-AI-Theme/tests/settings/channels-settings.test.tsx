@@ -650,6 +650,7 @@ describe('KOC-05 read-only retirement evidence review', () => {
     retirement_held: true,
     active_consent: false,
     unresolved_pairing: true,
+    provider_unlink_claim_recorded: true,
     deletion_request_recorded: true,
     unverified_deletion_request: true,
     inbox_not_completed: false,
@@ -671,6 +672,7 @@ describe('KOC-05 read-only retirement evidence review', () => {
     }));
     expect(await screen.findByText('Unresolved pairing observation remains')).toBeTruthy();
     expect(screen.getByText('Outbound delivery not confirmed')).toBeTruthy();
+    expect(screen.getByText(/Provider unlink receipt claimed for the original held session/)).toBeTruthy();
     expect(screen.getByText(/Reactivation is blocked/)).toBeTruthy();
     expect(screen.getByText(/Retirement is not authorized by this report/)).toBeTruthy();
     expect(apiClient.delete).not.toHaveBeenCalled();
