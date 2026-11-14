@@ -413,6 +413,51 @@ class SqlChannelRepository:
             )).scalar_one_or_none()
         return found is not None
 
+    async def list_active_personal_consent_providers(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+    ) -> list[str]:
+        """Return current unrevoked provider IDs for the exact verified owner.
+
+        Provider removal from host configuration must not hide persisted user
+        consent or prevent its revocation. This is not provider availability,
+        transport health or a session lookup. The bounded list fails closed
+        rather than truncating unrevoked consent records.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        user_id = str(uuid.UUID(user_id))
+        if not connection_id:
+            raise ValueError("Connection required for active consent inventory")
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT DISTINCT p.provider_id
+                    FROM public.channel_personal_pairing_consents p
+                    JOIN public.channel_connection_owners o
+                      ON o.tenant_id = p.tenant_id
+                     AND o.connection_id = p.connection_id
+                     AND o.user_id = p.user_id
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = o.tenant_id
+                     AND c.connection_id = o.connection_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = p.tenant_id
+                     AND u.user_id = p.user_id
+                    WHERE p.tenant_id = CAST(:tenant AS uuid)
+                      AND p.connection_id = :connection
+                      AND p.user_id = CAST(:user AS uuid)
+                      AND p.revoked_at IS NULL
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ORDER BY p.provider_id
+                    LIMIT 17
+                """),
+                {"tenant": tenant_id, "connection": connection_id,
+                 "user": user_id},
+            )).mappings().all()
+        if len(rows) > 16:
+            raise RuntimeError("Active personal consent inventory limit exceeded")
+        return [str(row["provider_id"]) for row in rows]
+
     async def get_personal_pairing_consent(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         provider_id: str,
