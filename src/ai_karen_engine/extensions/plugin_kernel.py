@@ -201,6 +201,9 @@ class PluginKernel:
         self._disabled: set[str] = set()
         self._active: Dict[str, str] = {}
         self._initialized = False
+        # Serialize catalog projection and explicit lifecycle mutations so
+        # dependency eligibility cannot race enable/disable or refresh.
+        self._state_lock = asyncio.Lock()
 
     @staticmethod
     def canonical_extensions_root() -> Path:
@@ -283,11 +286,17 @@ class PluginKernel:
 
     async def refresh_with_new_plugin_disabled(self, plugin_id: str) -> int:
         """Refresh after explicit upload without auto-enabling the new package."""
-        self._disabled.add(plugin_id)
-        return await self.refresh()
+        async with self._state_lock:
+            self._disabled.add(plugin_id)
+            return await self._refresh_unlocked()
 
     async def refresh(self) -> int:
-        """Refresh catalog truth and atomically rebuild the execution projection."""
+        """Refresh catalog and runtime eligibility under one lifecycle lock."""
+        async with self._state_lock:
+            return await self._refresh_unlocked()
+
+    async def _refresh_unlocked(self) -> int:
+        """Rebuild a complete execution projection without publishing partial state."""
         self._disabled.update(
             registration.manifest.id
             for registration in self.runtime_registry.list_registered()
@@ -343,6 +352,34 @@ class PluginKernel:
                 if error not in metadata.validation_errors:
                     metadata.validation_errors.append(error)
 
+        # Dependency declarations are required runtime prerequisites, not
+        # merely installation-time hints. Compute the fixed point of plugins
+        # that may be enabled. A disabled or invalid dependency disables all
+        # of its transitive dependents; never activate it as a side effect.
+        enabled = {
+            plugin_id
+            for plugin_id, manifest in catalog_manifests.items()
+            if (
+                (metadata := self.catalog_registry.get_metadata(plugin_id)) is not None
+                and metadata.is_valid
+                and plugin_id not in self._disabled
+                and manifest.capabilities.communication_channel is None
+                and manifest.rbac.default_enabled
+            )
+        }
+        while True:
+            blocked = {
+                plugin_id
+                for plugin_id in enabled
+                if any(
+                    dependency not in enabled
+                    for dependency in self._dependency_ids(catalog_manifests[plugin_id])
+                )
+            }
+            if not blocked:
+                break
+            enabled.difference_update(blocked)
+
         for plugin_id, catalog_manifest in catalog_manifests.items():
             metadata = self.catalog_registry.get_metadata(plugin_id)
             if metadata is None or not metadata.is_valid:
@@ -358,11 +395,9 @@ class PluginKernel:
             # Channel transports must remain inactive until the governed
             # Gateway supplies admission, identity binding and delivery fencing.
             target = (
-                ExtensionLifecycleState.DISABLED
-                if plugin_id in self._disabled
-                or catalog_manifest.capabilities.communication_channel is not None
-                or not catalog_manifest.rbac.default_enabled
-                else ExtensionLifecycleState.ENABLED
+                ExtensionLifecycleState.ENABLED
+                if plugin_id in enabled
+                else ExtensionLifecycleState.DISABLED
             )
             await runtime_registry.update_state(plugin_id, target)
 
@@ -599,10 +634,52 @@ class PluginKernel:
                 records.append(record)
         return records
 
+    def _required_by_enabled_plugin(self, dependency_id: str) -> bool:
+        """Check direct and transitive registered requirements, without imports."""
+        for plugin_id, manifest in self._catalog_manifests.items():
+            registration = self.runtime_registry.get(plugin_id)
+            if (
+                plugin_id == dependency_id
+                or registration is None
+                or registration.state is not ExtensionLifecycleState.ENABLED
+            ):
+                continue
+            remaining = list(self._dependency_ids(manifest))
+            visited: set[str] = set()
+            while remaining:
+                required = remaining.pop()
+                if required == dependency_id:
+                    return True
+                if required not in visited:
+                    visited.add(required)
+                    found = self._catalog_manifests.get(required)
+                    if found is not None:
+                        remaining.extend(self._dependency_ids(found))
+        return False
+
     async def enable(self, plugin_id: str) -> bool:
+        async with self._state_lock:
+            return await self._enable_unlocked(plugin_id)
+
+    async def _enable_unlocked(self, plugin_id: str) -> bool:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
+        manifest = self._catalog_manifests.get(plugin_id)
+        if manifest is not None:
+            missing = [
+                dependency
+                for dependency in self._dependency_ids(manifest)
+                if (
+                    (required := self.runtime_registry.get(dependency)) is None
+                    or required.state is not ExtensionLifecycleState.ENABLED
+                )
+            ]
+            if missing:
+                raise ValueError(
+                    "Required plugin dependencies must be enabled first: "
+                    + ", ".join(sorted(missing))
+                )
         if any(
             capability.id == "communication_channel"
             for capability in getattr(registration.manifest, "capabilities", ())
@@ -628,9 +705,18 @@ class PluginKernel:
         return True
 
     async def disable(self, plugin_id: str) -> bool:
+        async with self._state_lock:
+            return await self._disable_unlocked(plugin_id)
+
+    async def _disable_unlocked(self, plugin_id: str) -> bool:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
+        # Refuse to break any already-enabled dependent rather than silently
+        # leaving it executable against a disabled transitive prerequisite.
+        # The refusal happens before touching the durable disabled marker.
+        if self._required_by_enabled_plugin(plugin_id):
+            raise ValueError("Plugin is required by an enabled dependent")
         marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
         if marker.is_symlink() or not marker.parent.is_dir() or marker.parent.is_symlink():
             raise ValueError("Unsafe plugin disabled-state path")
