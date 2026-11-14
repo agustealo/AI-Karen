@@ -22,6 +22,7 @@ type PluginApiItem = {
   version: string;
   status: string;
   runtime_status?: string;
+  activation_blocked_reason?: string | null;
   category?: string | null;
   downloads?: number | null;
   rating?: number | null;
@@ -111,6 +112,7 @@ class PluginStoreService {
       version: plugin.version,
       status: plugin.status as Plugin['status'],
       runtime_status: plugin.runtime_status,
+      activation_blocked_reason: plugin.activation_blocked_reason,
       category: plugin.category ?? undefined,
       downloads: plugin.downloads,
       rating: plugin.rating,
