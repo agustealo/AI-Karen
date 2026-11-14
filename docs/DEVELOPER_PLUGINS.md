@@ -137,40 +137,44 @@ the canonical plugin-management permission, audit, or authorization gates.
 
 ## 9. Governed tenant plugin settings (nonsecret fields)
 
-The canonical settings owner is \`PluginService\` backed by
-\`PluginSettingsRepository\` and migration
-\`20261114030000_51_tenant_plugin_settings.sql\`. The old environment
+The canonical settings owner is `PluginService` backed by
+`PluginSettingsRepository` and migration
+`20261114030000_51_tenant_plugin_settings.sql`. The old environment
 configuration helpers are **not** settings persistence authorities.
 
-Only authenticated identities with \`ADMIN_PLUGINS_MANAGE\` may read, save,
+Only authenticated identities with `ADMIN_PLUGINS_MANAGE` may read, save,
 or reset plugin settings. Each query is filtered by the validated tenant UUID,
 uses a PostgreSQL transaction-local RLS scope, and fails if persistence or the
-migration is unavailable. A manifest must declare \`config_schema.properties\`;
+migration is unavailable. A manifest must declare `config_schema.properties`;
 undeclared keys are rejected even if the manifest requests permissive JSON.
 
 The existing Plugin Store Details dialog shows **Configure** only when the
 backend catalog advertises a settings schema. It uses the existing
-\`PluginSettingsForm\` and the routes mounted at:
-- \`GET /api/extensions/settings\`: authorized tenant catalog projection
-- \`GET /api/extensions/{plugin_id}/settings\`: current values, schema, and revision
-- \`POST /api/extensions/{plugin_id}/settings\`: complete nonsecret settings object
-  and the last observed \`revision\`
-- \`DELETE /api/extensions/{plugin_id}/settings?revision=N\`: reset to defaults
+`PluginSettingsForm` and the routes mounted at:
+- `GET /api/extensions/settings`: authorized tenant catalog projection
+- `GET /api/extensions/{plugin_id}/settings`: current values, schema, and revision
+- `POST /api/extensions/{plugin_id}/settings`: complete nonsecret settings object
+  and the last observed `revision`
+- `DELETE /api/extensions/{plugin_id}/settings?revision=N`: reset to defaults
   with the same version fencing
 
 A successful POST or DELETE must return the **new database revision** and
-\`success=true\`. Races receive HTTP 409, validation errors HTTP 422, and
+`success=true`. Races receive HTTP 409, validation errors HTTP 422, and
 database/migration outages HTTP 503. Both save and reset append a value-free
 audit row inside the same transaction; a failed audit cannot acknowledge a
 successful configuration write. Reset increments the revision instead of
-deleting the row to prevent ABA conflicts.
+deleting the row to prevent ABA conflicts. Reset persists an empty override even
+when a manifest declares required setup fields without defaults; those fields
+must be configured again before any action that depends on them can operate.
 
 **Secrets are not yet writable through Plugin Settings.** Password, token,
-API-key, credential, \`writeOnly\`, and secret-formatted manifest fields are
+API-key, credential, `writeOnly`, and secret-formatted manifest fields are
 reported read-only and omitted from readback. Nested/unsupported fields are
 also read-only. Attempts to write such fields fail with HTTP 422; they are
-never stored in \`extension_plugin_settings\`. Quarantined uploaded plugins are not settings-eligible, and the Plugin Store
-will not advertise Configure for them until their isolation boundary is verified.
+never stored in `extension_plugin_settings`.
+
+Quarantined uploaded plugins are not settings-eligible. The Plugin Store must
+not advertise Configure until an isolated execution boundary is verified.
 
 Secrets must be integrated with
 the existing tenant Identity Vault using managed credential bindings, secure
