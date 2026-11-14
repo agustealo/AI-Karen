@@ -134,6 +134,9 @@ function checkedSettingsResponse(
     typeof response.settings !== 'object' ||
     Array.isArray(response.settings) ||
     !Array.isArray(response.schema) ||
+    !response.schema.every(
+      (field) => field && typeof field.key === 'string' && typeof field.type === 'string',
+    ) ||
     !Number.isSafeInteger(response.revision) ||
     (response.revision ?? -1) < 0 ||
     typeof response.stored !== 'boolean'
@@ -146,7 +149,13 @@ function checkedSettingsResponse(
 function configFromBackend(response: PluginSettingsApiResponse): PluginSettingsConfig {
   return {
     pluginId: response.plugin_id,
-    values: { ...response.settings },
+    values: Object.fromEntries(
+      Object.entries(response.settings).filter(([key]) =>
+        response.schema.some((field) =>
+          field.key === key && !field.readOnly && field.type !== 'password' && field.type !== 'json',
+        ),
+      ),
+    ),
     schema: response.schema,
     revision: response.revision,
     stored: response.stored,
@@ -222,7 +231,7 @@ export function PluginSettingsProvider({ children }: { children: React.ReactNode
 
   const savePluginSettings = useCallback(async (pluginId: string): Promise<boolean> => {
     const config = pluginSettings.get(pluginId);
-    if (!config || !config.loaded || config.error) return false;
+    if (!config || !config.loaded || config.schema.length === 0) return false;
     if (!config.modified) return true;
 
     const values = { ...config.values };
@@ -236,7 +245,8 @@ export function PluginSettingsProvider({ children }: { children: React.ReactNode
       if (
         checked.success !== true ||
         checked.saved !== true ||
-        checked.revision <= revision
+        checked.revision <= revision ||
+        checked.stored !== true
       ) {
         throw new Error('The backend did not confirm durable settings persistence.');
       }
@@ -523,7 +533,7 @@ export function PluginSettingsForm({
   pluginId: string;
   onClose?: () => void;
 }) {
-  const { values: settings, schema, loaded, modified, error } = usePluginSettings(pluginId);
+  const { values: settings, schema, loaded, modified, error, stored } = usePluginSettings(pluginId);
   const { updateSetting, savePluginSettings, resetPluginSettings, refreshSettings } = usePluginSettingsManager();
 
   useEffect(() => {
@@ -627,7 +637,7 @@ export function PluginSettingsForm({
         <Button
           variant="outline"
           onClick={handleReset}
-          disabled={resetting || !modified}
+          disabled={resetting || (!stored && !modified)}
         >
           <RotateCcw className="mr-2 h-4 w-4" />
           {resetting ? 'Resetting...' : 'Reset to Defaults'}
