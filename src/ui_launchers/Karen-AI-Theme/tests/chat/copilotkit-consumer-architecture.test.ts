@@ -30,7 +30,10 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(catalog).toContain("Automatic lets Karen choose an available model.");
     expect(catalog).toContain("Advanced provider and agent details");
     expect(catalog).toContain("if (!showAdvanced) return;");
-    expect(catalog).toContain("showAdvanced && <div");
+    expect(catalog).toContain("{showAdvanced && (");
+    expect(catalog).toContain("Advanced provider and agent details");
+    expect(catalog).toContain('aria-label="Requested model provider"');
+    expect(catalog).toContain('aria-label="Requested model"');
   });
 
 
@@ -51,7 +54,9 @@ describe("canonical CopilotKit chat ownership", () => {
 
 
   it("has exactly one dashboard renderer and no old assistant-ui import", () => {
-    expect(dashboard.match(/<KarenCopilotConsumerChat onOpenAgents=\{\(\) => setActiveMainView\("agents"\)\} \/>/g)).toHaveLength(1);
+    expect(dashboard.match(/<KarenCopilotConsumerChat\\b/g)).toHaveLength(1);
+    expect(dashboard).toContain('onOpenAgents={() => setActiveMainView("agents")}');
+    expect(dashboard).toContain("onOpenProviderSettings={() => {");
     expect(dashboard).not.toContain("<KarenAssistantChat");
     expect(dashboard).not.toContain("@/components/chat/assistant-ui/KarenAssistantChat");
     expect(dashboard).toContain("<PrincipalScopedSessionProvider>");
@@ -64,7 +69,9 @@ describe("canonical CopilotKit chat ownership", () => {
   it("loads CopilotKit CSS from the real shared chat shell, not from previews alone", () => {
     expect(shell).toContain('<link rel="stylesheet" href="/vendor/copilotkit-v2.css" />');
     expect(shell).toContain('enableInspector={false}');
-    expect(dashboard).toContain('<KarenCopilotConsumerChat onOpenAgents={() => setActiveMainView("agents")} />');
+    expect(dashboard).toContain("<KarenCopilotConsumerChat");
+    expect(dashboard).toContain('onOpenAgents={() => setActiveMainView("agents")}');
+    expect(dashboard).toContain("onOpenProviderSettings={() => {");
     expect(nativePreview).not.toContain('href="/vendor/copilotkit-v2.css"');
     expect(consumerPreview).not.toContain('href="/vendor/copilotkit-v2.css"');
     expect(liveBrowser).toContain("await expectRealCopilotKitStyles(page)");
