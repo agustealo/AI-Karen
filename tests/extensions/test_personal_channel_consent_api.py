@@ -771,7 +771,7 @@ async def test_retirement_evidence_api_requires_identity_and_never_claims_deleti
     assert item["retirement_assessment"]["contract_version"] == "retirement-verification-readiness-v2"
     assert item["outbound_not_confirmed"] is True
     assessment = item["retirement_assessment"]
-    assert assessment["contract_version"] == "retirement-verification-readiness-v1"
+    assert assessment["contract_version"] == "retirement-verification-readiness-v2"
     assert assessment["status"] == "blocked"
     assert assessment["cleanup_authorized"] is False
     assert assessment["provider_unlink_independently_verified"] is False
