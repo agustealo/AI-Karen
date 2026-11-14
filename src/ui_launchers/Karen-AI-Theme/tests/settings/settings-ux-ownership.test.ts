@@ -40,10 +40,16 @@ describe('settings UX ownership contract', () => {
 
   it('distinguishes saved provider selection from runtime health and draft changes', () => {
     expect(models).toContain('const hasUnsavedSelection');
-    expect(models).toContain("Saved model:");
+    expect(models).toContain("Workspace default:");
     expect(models).toContain("not proof of a currently executing model");
-    expect(models).toContain("Provider or model selection changed locally");
+    expect(models).toContain("New default chosen but not saved");
     expect(models).toContain("Registered provider details");
+    expect(models).toContain("Save provider connection");
+    expect(models).toContain("Set as workspace default");
+    expect(models).toContain("canSetWorkspaceDefault");
+    expect(models).toContain("not verified for chat");
+    expect(models).toContain("Ready for chat");
+    expect(models).not.toContain("Finalize Intelligence Settings");
     expect(models).not.toContain("Active Node Status");
     expect(models).not.toContain("Active Model</span>");
   });
