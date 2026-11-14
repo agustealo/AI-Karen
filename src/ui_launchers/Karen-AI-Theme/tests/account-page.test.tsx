@@ -285,4 +285,91 @@ describe("My Account consumer contracts", () => {
     })));
     expect(state.syncUser).not.toHaveBeenCalled();
   });
+  it("shows only backend-confirmed session metadata and protects remote controls", async () => {
+    const remote = {
+      session_id: "44444444-4444-4444-4444-444444444444",
+      is_current: false,
+      created_at: "2026-11-14T12:00:00",
+      last_accessed: "2026-11-14T12:05:00",
+      expires_at: "2026-12-14T12:00:00",
+      user_agent: "Remote Browser",
+      ip_address: "192.0.2.3",
+    };
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/auth/me/sessions" ? { sessions: [
+        { ...remote, session_id: "22222222-2222-2222-2222-222222222222", is_current: true },
+        remote,
+      ] } : account(),
+    );
+
+    render(<AccountPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "View active sessions" }));
+    expect(await screen.findByText("Remote Browser", { exact: false })).toBeTruthy();
+    expect(screen.getByText(/current session/)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Sign out session" })).toHaveLength(1);
+    expect(apiClient.get).toHaveBeenCalledWith("/api/auth/me/sessions");
+    expect(screen.queryByText(/refresh.token|access.token|device.fingerprint/i)).toBeNull();
+  });
+
+  it("verifies remote sign-out using a new inventory before reporting success", async () => {
+    const id = "44444444-4444-4444-4444-444444444444";
+    let active = true;
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path !== "/api/auth/me/sessions") return account();
+      return { sessions: active ? [{
+        session_id: id, is_current: false,
+        created_at: "2026-11-14T12:00:00", last_accessed: null,
+        expires_at: null, user_agent: "Remote Browser", ip_address: null,
+      }] : [] };
+    });
+    vi.mocked(apiClient.post).mockImplementation(async (_path) => {
+      active = false;
+      return { session_id: id, revoked: true };
+    });
+    render(<AccountPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "View active sessions" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out session" }));
+    await waitFor(() => expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Session signed out",
+    })));
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/api/auth/me/sessions/" + id + "/revoke", {},
+    );
+    expect(apiClient.get).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText("Remote Browser", { exact: false })).toBeNull();
+  });
+
+  it("never confirms remote sign-out after a lost receipt or stale inventory", async () => {
+    const id = "44444444-4444-4444-4444-444444444444";
+    const remote = {
+      session_id: id, is_current: false, created_at: null, last_accessed: null,
+      expires_at: null, user_agent: "Another Browser", ip_address: null,
+    };
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/auth/me/sessions" ? { sessions: [remote] } : account(),
+    );
+    vi.mocked(apiClient.post).mockResolvedValue({ session_id: id, revoked: true });
+    render(<AccountPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "View active sessions" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out session" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("still active");
+    expect(state.toast).not.toHaveBeenCalledWith(expect.objectContaining({
+      title: "Session signed out",
+    }));
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a session inventory containing authentication secrets", async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/api/auth/me/sessions" ? { sessions: [{
+        session_id: "44444444-4444-4444-4444-444444444444",
+        is_current: false, access_token: "unexpected",
+      }] } : account(),
+    );
+    render(<AccountPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "View active sessions" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("unsafe");
+    expect(screen.queryByRole("button", { name: "Sign out session" })).toBeNull();
+  });
+
 });
