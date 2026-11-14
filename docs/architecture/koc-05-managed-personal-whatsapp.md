@@ -36,7 +36,8 @@ Project: https://github.com/evolution-foundation/evolution-api
 - [ ] Authenticated consumer endpoint, live provider pairing and proof of operator/owner experience.
 - [ ] Qualified third-party provider and adapter with authenticated inbound webhook.
 - [ ] Live pairing, QR expiry/replay, reconnect, tenant, unlink and deletion proof.
-- [ ] One truthful Channels UI driven exclusively by backend connection state.
+- [x] Read-only personal Channels inventory/settings driven by backend connection state (no pairing controls).
+- [ ] Full governed Connect → Verify → Enable → Connected → Disconnect UI with live provider evidence.
 
 Policy assessment is NOT an external pairing token. The governed activation path must still revalidate before side effects.
 
@@ -275,6 +276,51 @@ or switch operator identity merely by changing provider_id in the URL.
 After provider disablement, reading or revoking previously recorded consent
 remains available, so users are not locked out of their audit and privacy
 controls. Revoke still does **not** attest remote provider unlink.
+
+## Authenticated personal Channels inventory and settings (read-only)
+
+The existing Channels API now exposes
+`GET /api/channels/personal/connections`, using `get_current_user`
+without caller-selectable tenant, user, provider or installation arguments.
+This is the data source for **Settings → Personal → Channels**, not a new
+Channels system or extension manager.
+
+- `SqlChannelRepository.list_personal_owned_connections` executes one
+  tenant-RLS SQL query joined against `channel_connection_owners` with the
+  exact authenticated `user_id`. The response is bounded at 50 rows,
+  failing rather than silently truncating if more are present.
+- `ChannelHost.list_owned_personal_channels` checks the host lifecycle,
+  rejects cross-tenant or unavailable installations and mints a **fresh
+  channel.consent** plan for each connection using the canonical activation
+  service. It reuses `get_personal_pairing_status` and its exact SQL
+  owner/policy validation, not an independent state machine.
+- HTTP returns only `connection_id`, `installation_id`, configured
+  `provider_id` (if any), `availability`, `last_observed_phase`,
+  `live_connected`, `qr_available`, and `provider_unlinked`. Credentials,
+  provider account identifiers, native events, QR payload and internal
+  authorization plans are never serialized.
+- Unauthenticated/unverified principals or denied policy fail closed.
+  Disabled/missing host remains an explicit error, **not** an empty
+  connection list. A valid empty list means no owner-assigned connections
+  were returned by the backend, not no installed providers.
+- The UI shows backend-provided status only, explicitly labels persisted
+  pairing phases as historical and never promotes them to live health.
+  Refresh clears the previous view; read errors cannot retain stale
+  connected badges. The panel has **no** connect, QR, unlink, delete,
+  activation, consent or provider-changing actions.
+- Ownership inventory is **not a provider-side live pairing check**.
+  Existing consent and read-only status endpoints remain canonical.
+  No managed personal vendor is approved by this milestone.
+
+Proof:
+`pytest -q tests/extensions/test_personal_channel_consent_api.py
+tests/extensions/test_channel_connection_repository.py
+tests/extensions/test_channel_host_lifecycle.py`
+and frontend
+`vitest run tests/settings/channels-settings.test.tsx
+tests/settings/settings-ux-ownership.test.ts`
+through existing workflows. Provider, session, live browser, authenticated
+PostgreSQL and release gates remain separate.
 
 ## User-visible read-only pairing state
 

@@ -181,6 +181,36 @@ class PersonalPairingStatus(BaseModel):
     provider_unlinked: bool = False
 
 
+class PersonalChannelInventoryItem(PersonalPairingStatus):
+    connection_id: str
+    installation_id: str
+    provider_id: str | None = None
+
+
+class PersonalChannelInventoryResponse(BaseModel):
+    connections: list[PersonalChannelInventoryItem]
+
+
+@router.get("/connections", response_model=PersonalChannelInventoryResponse)
+async def list_personal_channel_connections(
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> PersonalChannelInventoryResponse:
+    """Show only the caller's assigned channels; never expose credentials.
+
+    No caller may select tenant, owner, installation or provider via query.
+    The host performs fresh per-installation policy and exact owner checks.
+    """
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        connections = await host.list_owned_personal_channels(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+    except Exception as exc:
+        raise _translate(exc) from None
+    return PersonalChannelInventoryResponse(connections=connections)
+
+
 @router.get("/{connection_id}/{provider_id}/status", response_model=PersonalPairingStatus)
 async def get_personal_whatsapp_pairing_status(
     connection_id: UUID,
