@@ -623,6 +623,7 @@ class ProviderRegistryService:
             # Prefer GEMINI_API_KEY while supporting legacy GOOGLE_API_KEY.
             "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
             "deepseek": ("DEEPSEEK_API_KEY",),
+            "nous": ("NOUS_API_KEY",),
             "huggingface": ("HUGGINGFACE_API_KEY",),
             "cohere": ("COHERE_API_KEY",),
             # Test providers that require API keys
@@ -950,6 +951,7 @@ class ProviderRegistryService:
                         "anthropic": "ANTHROPIC_API_KEY",
                         "gemini": "GEMINI_API_KEY",
                         "deepseek": "DEEPSEEK_API_KEY",
+                        "nous": "NOUS_API_KEY",
                         "huggingface": "HUGGINGFACE_API_KEY",
                         # Test providers
                         "failed_provider": "FAILED_PROVIDER_API_KEY",
