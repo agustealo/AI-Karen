@@ -237,6 +237,17 @@ async def test_session_issuance_commits_before_success_and_rejects_commit_failur
 
 
 @pytest.mark.asyncio
+async def test_strict_database_outage_is_unavailable_not_revocation():
+    class Down:
+        async def execute(self, statement):
+            raise OSError("database offline")
+
+    svc = session_service(Down())
+    with pytest.raises(RuntimeError, match="Session verification unavailable"):
+        await svc.validate_session(token(), strict_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_login_denied_when_durable_session_persistence_fails():
     svc = object.__new__(AuthService)
     svc._initialized = True
@@ -412,7 +423,7 @@ async def test_middleware_uses_backend_roles_not_stale_jwt_claims(monkeypatch):
     assert result["roles"] == ["user"]
     assert result["permissions"] == []
     assert result["email"] == "current@example.org"
-    authoritative.validate_session.assert_awaited_once_with("signed-token")
+    authoritative.validate_session.assert_awaited_once_with("signed-token", strict_errors=True)
 
 
 @pytest.mark.asyncio
