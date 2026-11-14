@@ -115,3 +115,21 @@ origin marker require a separate operator provenance audit. Merely finding a
 package under the built-in directory is not proof that it was shipped as a
 built-in. Do not claim historical packages have been reclassified until that
 audit is complete.
+
+
+## 8. Durable local enable and disable intent
+
+For built-in or explicitly trusted local plugins, `rbac.default_enabled` is
+the initial policy default, not a command to overwrite later user choices.
+A successful explicit Enable of a default-disabled plugin now publishes
+`.karen-manual-enabled` with an exact verified `enabled` record. Rebuilding
+the catalog or restarting the runtime restores that choice after the usual
+validation, dependency, channel, and trust checks.
+
+Disable writes `.karen-manual-disabled` before the runtime transition and
+removes any earlier explicit-enable marker only after disabling succeeds.
+If both markers are present following an interrupted operation, Disable wins.
+Invalid or symlinked opt-in markers cannot enable code. Uploaded archives are
+forbidden from supplying these markers, and upload-origin quarantine takes
+priority over either user lifecycle marker. Lifecycle changes must not bypass
+the canonical plugin-management permission, audit, or authorization gates.
