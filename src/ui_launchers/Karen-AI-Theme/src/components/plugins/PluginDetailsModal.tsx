@@ -32,10 +32,13 @@ import { PluginStatusBadge } from './PluginStatusBadge';
 interface PluginDetailsModalProps {
   details: PluginDetails | null;
   loading?: boolean;
+  error?: string | null;
   installing?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onInstall?: () => void;
+  onEnable?: () => void;
+  onDisable?: () => void;
 }
 
 type ExternalLinkConfig = {
@@ -176,21 +179,21 @@ const isPluginCompatible = (plugin: NonNullable<PluginDetails['plugin']>): boole
     return true;
   }
 
-  /*
-   * Compatibility evaluation is intentionally conservative here because the UI
-   * does not own version comparison. Backend should provide a resolved
-   * compatibility status when that contract exists.
-   */
-  return !compatibilityInfo.min_karen_version && !compatibilityInfo.max_karen_version;
+  // The backend owns compatibility decisions; the client does not compare
+  // Karen versions or invent a more restrictive result from manifest text.
+  return plugin.status !== 'incompatible';
 };
 
 export function PluginDetailsModal({
   details,
   loading = false,
+  error = null,
   installing = false,
   open,
   onOpenChange,
   onInstall,
+  onEnable,
+  onDisable,
 }: PluginDetailsModalProps) {
   // All React hooks must be called unconditionally at the top level
   const dependencies = useMemo(
@@ -237,9 +240,22 @@ export function PluginDetailsModal({
     return links;
   }, [details?.plugin]);
 
-  // Early return for invalid props
+  // Keep the dialog mounted through pending and failed lookups. A details
+  // request must never turn Manage into a silent no-op.
   if (!details?.plugin) {
-    return null;
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Plugin details</DialogTitle>
+            <DialogDescription>
+              {loading ? 'Loading plugin information...' : error || 'Plugin details are unavailable.'}
+            </DialogDescription>
+          </DialogHeader>
+          {loading && <Loader2 className="h-5 w-5 animate-spin" aria-label="Loading plugin details" />}
+        </DialogContent>
+      </Dialog>
+    );
   }
 
   const plugin = details.plugin;
@@ -290,7 +306,7 @@ export function PluginDetailsModal({
               </DialogDescription>
 
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <PluginStatusBadge status={plugin.status} />
+                <PluginStatusBadge status={plugin.runtime_status === 'disabled' ? 'disabled' : plugin.status} />
 
                 {updateAvailable && (
                   <Badge variant="secondary" className="text-xs">
@@ -381,11 +397,11 @@ export function PluginDetailsModal({
                 <div className="flex-1">
                   {isCompatible ? (
                     <p className="text-sm">
-                      This plugin is compatible with your Karen AI version.
+                      The backend has not reported an incompatibility for this plugin.
                     </p>
                   ) : (
                     <p className="text-sm">
-                      This plugin may not be compatible with your Karen AI version.
+                      The plugin catalog marks this plugin incompatible with this setup.
                       {compatibilityInfo.min_karen_version && (
                         <span>
                           {' '}
@@ -469,13 +485,21 @@ export function PluginDetailsModal({
 
         <DialogFooter>
           {installed ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Close
-            </Button>
+            <div className="flex w-full justify-end gap-2">
+              {plugin.runtime_status === 'disabled' && onEnable && (
+                <Button type="button" onClick={onEnable} disabled={installing || loading}>
+                  {installing ? 'Enabling...' : 'Enable'}
+                </Button>
+              )}
+              {['enabled', 'active', 'loaded'].includes(plugin.runtime_status || '') && onDisable && (
+                <Button type="button" variant="destructive" onClick={onDisable} disabled={installing || loading}>
+                  {installing ? 'Disabling...' : 'Disable'}
+                </Button>
+              )}
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            </div>
           ) : (
             <Button
               type="button"
