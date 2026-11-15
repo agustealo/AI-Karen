@@ -42,6 +42,7 @@ from ai_karen_engine.services.identity_vault.credential_vault_service import (
 from ai_karen_engine.services.plugin_settings_repository import (
     PluginSettingsContract,
     PluginSettingsNotConfigured,
+    PluginSettingsValidationError,
     PluginSettingsRepository,
 )
 
@@ -542,6 +543,83 @@ class PluginService:
         )
         return {"plugin_id": plugin_id, "field_key": field_key, **receipt}
 
+    async def _execution_configuration_readiness(
+        self, plugin_name: str, tenant_id: str
+    ) -> Optional[str]:
+        """Check persisted tenant configuration and Vault status, never values.
+
+        Admission is fail-closed for configured plugins. This is not a secret
+        resolution API: the executor never receives settings or credentials.
+        """
+        record = self._get_kernel().get_record(plugin_name)
+        if record is None or record.get("error_message") or record.get("is_valid") is False:
+            return "plugin_manifest_invalid"
+        if record.get("activation_blocked_reason"):
+            return "plugin_origin_untrusted"
+        manifest = record.get("manifest")
+        if manifest is None:
+            return "plugin_manifest_invalid"
+        config = getattr(manifest, "config_schema", None)
+        if config is None:
+            return None
+
+        try:
+            contract = self._settings_contract(record)
+        except PluginSettingsNotConfigured:
+            return "plugin_configuration_invalid"
+        required = set(getattr(config, "required", ()) or ())
+        definitions = getattr(config, "properties", {}) or {}
+        if not isinstance(definitions, dict) or not required.issubset(definitions):
+            return "plugin_configuration_invalid"
+        required_secret = {
+            key for key in required
+            if isinstance(definitions[key], dict)
+            and PluginSettingsRepository._is_secret(key, definitions[key])
+        }
+        required_nonsecret = required - required_secret
+        # Required read-only/unsupported fields cannot be fulfilled by settings.
+        if not required_nonsecret.issubset(contract.rules):
+            return "plugin_configuration_invalid"
+
+        if required_nonsecret:
+            try:
+                persisted = await self._settings_repository.get(tenant_id, plugin_name)
+                if int(persisted["revision"]) <= 0:
+                    return "plugin_configuration_missing"
+                contract.validate(persisted["settings"], require_configured=True)
+            except PluginSettingsValidationError:
+                return "plugin_configuration_invalid"
+            except Exception:
+                logger.exception(
+                    "plugin.configuration_readiness_unavailable",
+                    extra={"plugin_id": plugin_name},
+                )
+                return "plugin_configuration_unavailable"
+
+        if required_secret:
+            try:
+                allowed = self._plugin_credential_field_keys(record)
+                if not required_secret.issubset(allowed):
+                    return "plugin_configuration_invalid"
+                states = await get_credential_vault_service().list_plugin_credential_status(
+                    tenant_id=uuid.UUID(str(tenant_id)),
+                    plugin_id=plugin_name,
+                    field_keys=frozenset(required_secret),
+                )
+                if any(
+                    not isinstance(states.get(key), dict)
+                    or states[key].get("status") != "active"
+                    for key in required_secret
+                ):
+                    return "plugin_credentials_unavailable"
+            except Exception:
+                logger.exception(
+                    "plugin.credential_readiness_unavailable",
+                    extra={"plugin_id": plugin_name},
+                )
+                return "plugin_credentials_unavailable"
+        return None
+
     async def refresh_plugins(self) -> int:
         await self._ensure_initialized()
         return await self._get_kernel().refresh()
@@ -892,6 +970,15 @@ class PluginService:
             return failure(
                 "action_gate_denied",
                 "Plugin execution denied by ActionExecutionGate",
+            )
+
+        readiness = await self._execution_configuration_readiness(
+            plugin_name, resolved_tenant
+        )
+        if readiness is not None:
+            return failure(
+                readiness,
+                "Plugin tenant configuration is not ready for execution",
             )
 
         context = ExtensionExecutionContext(
