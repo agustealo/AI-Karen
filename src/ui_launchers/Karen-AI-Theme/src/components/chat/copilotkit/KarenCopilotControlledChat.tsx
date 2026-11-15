@@ -11,8 +11,7 @@
  */
 import { CopilotChatView, useCopilotKit } from "@copilotkit/react-core/v2";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KarenLocalDictationCapture } from "../KarenLocalDictationCapture";
-import { KarenBrowserDictationCapture } from "../KarenBrowserDictationCapture";
+import { KarenCopilotVoiceDock } from "./KarenCopilotVoiceDock";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
 
@@ -458,11 +457,10 @@ export function KarenCopilotControlledChat({
           input={{ value: draft, onChange: onDraftChange, onSubmitMessage, onStop }}
         />
       </div>
-      <div data-testid="karen-copilot-voice-controls"
-        className="flex shrink-0 items-center gap-2 border-t border-border/50 px-3 py-1">
-        <KarenLocalDictationCapture port={draftPort} />
-        <KarenBrowserDictationCapture port={draftPort} />
-      </div>
+      <KarenCopilotVoiceDock
+        port={draftPort}
+        disabled={draftStatus !== "ready" || agent.isRunning || failedSubmission !== null}
+      />
     </div>
   );
 }

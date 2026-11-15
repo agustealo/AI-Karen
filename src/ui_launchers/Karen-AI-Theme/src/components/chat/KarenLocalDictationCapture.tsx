@@ -11,8 +11,9 @@ import { canCommitVoiceResult, isCurrentVoiceSession } from "./voiceSessionGuard
 type Capabilities = { transcription_available: boolean; status: string };
 
 /** Shared local microphone capture, explicit transcription and draft-only commit. */
-export function KarenLocalDictationCapture({ port }: {
+export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
   port: KarenVoiceDraftPort;
+  onAvailabilityChange?: (available: boolean) => void;
 }) {
   const [available, setAvailable] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -33,9 +34,16 @@ export function KarenLocalDictationCapture({ port }: {
     mounted.current = true;
     apiClient.get<Capabilities>("/api/voice/capabilities")
       .then((cap) => {
-        if (active && mounted.current) setAvailable(cap.status === "ready" && cap.transcription_available === true);
+        if (!active || !mounted.current) return;
+        const ready = cap.status === "ready" && cap.transcription_available === true;
+        setAvailable(ready);
+        onAvailabilityChange?.(ready);
       })
-      .catch(() => { if (active && mounted.current) setAvailable(false); });
+      .catch(() => {
+        if (!active || !mounted.current) return;
+        setAvailable(false);
+        onAvailabilityChange?.(false);
+      });
     return () => {
       active = false;
       mounted.current = false;
@@ -46,7 +54,7 @@ export function KarenLocalDictationCapture({ port }: {
       try { if (recorder.current?.state === "recording") recorder.current.stop(); } catch { /* Recorder may already be closed. */ }
       stream.current?.getTracks().forEach((track) => track.stop());
     };
-  }, []);
+  }, [onAvailabilityChange]);
 
   if (!available) return null;
 

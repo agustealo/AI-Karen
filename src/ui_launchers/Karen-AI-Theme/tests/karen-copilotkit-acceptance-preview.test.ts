@@ -41,6 +41,8 @@ const presentationOwner = readFileSync(resolve(root,
   "src/components/chat/KarenPresentationRegistry.tsx"), "utf8");
 const controlledChat = readFileSync(resolve(root,
   "src/components/chat/copilotkit/KarenCopilotControlledChat.tsx"), "utf8");
+const voiceDock = readFileSync(resolve(root,
+  "src/components/chat/copilotkit/KarenCopilotVoiceDock.tsx"), "utf8");
 const localCapture = readFileSync(resolve(root,
   "src/components/chat/KarenLocalDictationCapture.tsx"), "utf8");
 const browserCapture = readFileSync(resolve(root,
@@ -84,8 +86,9 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
   });
 
   it("uses only canonical draft-port voice capture, not the retired assistant-ui runtime", () => {
-    expect(controlledChat).toContain('from "../KarenLocalDictationCapture"');
-    expect(controlledChat).toContain('from "../KarenBrowserDictationCapture"');
+    expect(controlledChat).toContain('from "./KarenCopilotVoiceDock"');
+    expect(voiceDock).toContain('from "../KarenLocalDictationCapture"');
+    expect(voiceDock).toContain('from "../KarenBrowserDictationCapture"');
     expect(controlledChat).not.toContain('from "../assistant-ui/KarenLocalDictation"');
     expect(controlledChat).not.toContain('from "../assistant-ui/KarenBrowserDictation"');
     expect(localCapture).not.toContain("@assistant-ui/react");

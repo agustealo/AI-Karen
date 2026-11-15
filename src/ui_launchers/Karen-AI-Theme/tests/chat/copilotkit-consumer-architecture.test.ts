@@ -9,6 +9,7 @@ const dashboard = read("src/app/dashboard/page.tsx");
 const consumer = read("src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx");
 const shell = read("src/components/chat/copilotkit/KarenCopilotChat.tsx");
 const controller = read("src/components/chat/copilotkit/KarenCopilotControlledChat.tsx");
+const voiceDock = read("src/components/chat/copilotkit/KarenCopilotVoiceDock.tsx");
 const history = read("src/components/chat/copilotkit/KarenCopilotHistoryGate.tsx");
 const verified = read("src/components/chat/copilotkit/KarenCopilotVerifiedHistory.tsx");
 const rail = read("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx");
@@ -239,8 +240,15 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(controller).toContain("copilotkit.runAgent({ agent })");
     expect(controller).toContain("validStopReceipt(receipt)");
     expect(controller).toContain("copilotkit.stopAgent({ agent })");
-    expect(controller).toContain("KarenLocalDictationCapture");
-    expect(controller).toContain("KarenBrowserDictationCapture");
+    expect(controller).toContain("KarenCopilotVoiceDock");
+    expect(controller).toContain('disabled={draftStatus !== "ready" || agent.isRunning || failedSubmission !== null}');
+    expect(voiceDock).toContain("KarenLocalDictationCapture");
+    expect(voiceDock).toContain("KarenBrowserDictationCapture");
+    expect(voiceDock).toContain("apiClient.getVoiceEngineCatalog()");
+    expect(voiceDock).toContain("apiClient.getVoiceSelection()");
+    expect(voiceDock).toContain("apiClient.setVoiceSelection(");
+    expect(voiceDock).not.toContain("runAgent(");
+    expect(voiceDock).not.toContain("transcribeLocalAudio(");
     expect(controller).not.toContain("@assistant-ui/");
   });
 
