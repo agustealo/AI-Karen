@@ -7,10 +7,12 @@
 - **Wiki and navigation:** [PR #863](https://github.com/agustealo/AI-Karen/pull/863) merged to `main` as `c18b3dfe3376a02e1c5de51e0195b9be7e0af182`.
 - **KCOG-00A first containment:** [PR #864](https://github.com/agustealo/AI-Karen/pull/864) passed every exact-head check and merged as `2d8b0171b9f37f4eb1e2b32290b51d3ec36c916d`.
 - **Continuity checkpoint:** [PR #866](https://github.com/agustealo/AI-Karen/pull/866) passed exact-head checks and merged as `724edec8ec12425bc193510270e6bdbb04677f30`. Post-merge Main Quality on this commit was green at inspection.
-- **KCOG-00A2 causal effects/counterfactuals:** [PR #868](https://github.com/agustealo/AI-Karen/pull/868), head `92f10a63aee39735f8e4e2dca0423b9521eb2c67`, OPEN / exact-head CI pending. The proposal abstains instead of emitting guessed causal effects, scenario probabilities or responsibility scores.
-- **KCOG-00B1 calibration/attribution:** [PR #869](https://github.com/agustealo/AI-Karen/pull/869), head `6d3ccda84bf8495b0fc7080b42d480bd5e0cfb0b`, OPEN / exact-head CI pending. The proposal distinguishes unknown error and unidentified causal contribution from numerical zero.
+- **KCOG-00A2 causal effects/counterfactuals:** [PR #868](https://github.com/agustealo/AI-Karen/pull/868) passed all exact-head gates, including first-boot, and merged as `afa845187151715692ca15a75b93871c7403351f`; **containment only**, not proven causal inference.
+- **KCOG-00B1 calibration/attribution:** [PR #869](https://github.com/agustealo/AI-Karen/pull/869) passed all exact-head gates, including first-boot, and merged as `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3`; **truth semantics only**, not independently calibrated cognition.
 - **Current verified production claim:** no real deployed causal inference, independent metacognitive calibration or cognitive improvement benchmark has been accepted as part of this sprint.
-- **Next:** verify all PR checks, merge green exact heads, then audit causal strategy reachability and tackle typed metacognitive evidence. Never fabricate success or merge against failed/pending required gates.
+- **KCOG-00A3 default causal strategy:** [PR #871](https://github.com/agustealo/AI-Karen/pull/871), head `b05942395f328533dc3990cb6a24bc1d0535950a`, OPEN; Cognitive Proof, Reasoning Smoke, Main Quality, Backend and Frontend passed, Production First-Boot pending at checkpoint.
+- **KCOG-01A discovered gap:** `CognitiveState` and `MetaCognitiveAssessor` are defined, but their integration into the canonical `RuntimeDecisionPipeline` / ChatRuntime decision lifecycle is not shown in the inspected files. `ContextSnapshot` is already consumed by `core/context/contracts.py`; reuse that owner. First prove scope/authorization, then typed metacognitive decisions without guessed calibration.
+- **Next:** verify #871 exact-head first boot and merge only if green; then implement KCOG-01A through the canonical decision lifecycle with real evidence and shadow-safe acceptance.
 - **Sprint tracker:** GitHub Issues are disabled; use this versioned wiki and linked PRs.
 
 ## Every new session starts here
