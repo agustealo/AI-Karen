@@ -1030,6 +1030,18 @@ class PluginService:
             plugin_name, resolved_tenant
         )
         if readiness_failure:
+            logger.warning(
+                "plugin.execution_readiness_denied",
+                extra={
+                    "plugin_id": plugin_name,
+                    "tenant_id": resolved_tenant,
+                    "user_id": resolved_user,
+                    "correlation_id": resolved_correlation,
+                    "policy_decision_id": policy_decision_id,
+                    "reason_code": readiness_failure,
+                    "status": "denied",
+                },
+            )
             return failure(
                 readiness_failure,
                 "Plugin execution is not ready for the current tenant",
