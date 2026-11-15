@@ -9,9 +9,6 @@ const api = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 vi.mock("@/lib/api", () => ({ apiClient: api }));
-vi.mock("@/components/chat/KarenLocalDictationCapture", () => ({
-  KarenLocalDictationCapture: () => <button type="button">Local microphone control</button>,
-}));
 vi.mock("@/components/chat/KarenBrowserDictationCapture", () => ({
   KarenBrowserDictationCapture: () => <button type="button">Optional browser microphone</button>,
 }));
@@ -63,7 +60,7 @@ afterEach(() => {
 describe("first-class Copilot voice dock", () => {
   it("surfaces separately verified listen and speak capabilities without auto speech", async () => {
     render(<KarenCopilotVoiceDock port={port} />);
-    expect(await screen.findByText("Local microphone control")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Start local dictation" })).toBeTruthy();
     expect(screen.getByTestId("karen-copilot-voice-output").textContent)
       .toContain("Open voice options to check");
     expect(api.getVoiceEngineCatalog).not.toHaveBeenCalled();
@@ -84,7 +81,7 @@ describe("first-class Copilot voice dock", () => {
     await waitFor(() => expect(
       screen.getByTestId("karen-copilot-voice-listening").textContent
     ).toContain("Local dictation unavailable"));
-    expect(screen.queryByText("Local microphone control")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start local dictation" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     expect(await screen.findByText(/No local speech engine is ready/)).toBeTruthy();
     expect(screen.queryByText("Pocket TTS · Local")).toBeNull();
@@ -167,7 +164,7 @@ describe("first-class Copilot voice dock", () => {
   it("keeps local STT usable when local TTS discovery fails", async () => {
     api.getVoiceEngineCatalog.mockRejectedValue(new Error("private server problem"));
     render(<KarenCopilotVoiceDock port={port} />);
-    expect(await screen.findByText("Local microphone control")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Start local dictation" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     expect(await screen.findByRole("alert")).toHaveProperty(
       "textContent", expect.stringMatching(/could not verify permitted speech engines/i)
@@ -179,9 +176,9 @@ describe("first-class Copilot voice dock", () => {
 
   it("unmounts microphone capture when drafting or conversation execution is locked", async () => {
     const { rerender } = render(<KarenCopilotVoiceDock port={port} />);
-    await screen.findByText("Local microphone control");
+    await screen.findByRole("button", { name: "Start local dictation" });
     rerender(<KarenCopilotVoiceDock port={port} disabled />);
-    expect(screen.queryByText("Local microphone control")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start local dictation" })).toBeNull();
     expect(screen.queryByText("Optional browser microphone")).toBeNull();
     expect(screen.getByText(/Voice dictation is paused/)).toBeTruthy();
     expect(port.writeText).not.toHaveBeenCalled();
