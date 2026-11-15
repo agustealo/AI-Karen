@@ -859,3 +859,62 @@ a valid original-revision claim, replaces the unlink receipt with historical
 whitespace to prove it no longer counts, then restores the valid receipt and
 proves that only local provider/revision correlation returns. Independent
 session identity and credential/backup retention scope remain unverified.
+
+## KOC-05 exact read-only blocker consistency (v2, no new authority)
+
+The thin retirement-evidence API must reject an assessment whose claimed local
+blockers disagree with the stored source flags, even if all four mandatory
+independent-verification blockers are present. It now recomputes the expected
+read-only assessment through the existing
+`assess_retirement_evidence_snapshot` owner and requires an exact match to the
+typed response, including local reasons and their canonical order. Evidence
+booleans and connection revision use strict Pydantic types, so strings or
+integer surrogates cannot become apparently valid flags.
+
+The Channels Settings panel independently validates that each reported
+local blocker matches the corresponding backend flag. It refuses stale,
+missing, extra, contradictory, or reordered blockers rather than displaying
+a misleading partly complete report. This validation never invents provider
+health or erasure evidence, and it never constitutes deletion authority.
+The `retirement-verification-readiness-v2` shape and all mandatory blockers
+remain unchanged. A bad response is a redacted failure, not a partial success.
+
+Existing API and frontend contract tests exercise every local flag, evidence
+coercion, conflicting blocker lists and the unchanged legitimate blocked
+report. Independent provider-session authentication, remote credential erasure
+and retention/backup coverage are still unavailable. Finalization remains
+disabled and requires its own security review.
+
+## KOC-05 historical verified-label containment (v2, read-only)
+
+The canonical `SqlChannelRepository.list_owned_personal_retirement_evidence`
+reports `unverified_deletion_request=true` for **every retained credential
+deletion request**, regardless of its historical `status` label. Previous
+SQL used `d.status <> 'verified'`, which could have misrepresented an old
+`verified` row as independently attested erasure even though this runtime
+has no independently authenticated remote erasure verifier or provenance
+ledger. The original immutable history is preserved: no rows are rewritten
+or deleted, no triggers or tenant-RLS policy are bypassed.
+
+Until a genuine source-authenticated verifier exists, the same owner-scoped
+SQL observation reports request existence and unverified status together.
+The pure `assess_retirement_evidence_snapshot` owner rejects contradictory
+`deletion_request_recorded` / `unverified_deletion_request` values and any
+credential-deletion claim without a recorded request. The strict API
+re-evaluates that assessment; the Settings parser rejects an inconsistent
+backend response rather than hiding the `credential_deletion_requests_unverified`
+blocker. A connection with no deletion request still reports the missing
+request blocker, not a fabricated pending request. The API shape and
+`retirement-verification-readiness-v2` contract are unchanged.
+
+This is intentionally conservative: a provider claim or a historical
+`verified` status never establishes remote session identity, erasure,
+retention/backup coverage or any final deletion permission. The
+`cleanup_authorized=false` contract, four mandatory independent-proof
+blockers, immutable retirement hold, tenant RBAC and audit constraints remain.
+
+Existing canonical unit/API/Settings tests cover contradictory flags,
+historical-status projection rules and no-request behavior; the existing
+disposable live PostgreSQL suite continues to exercise real pending and
+provider-claimed requests under tenant isolation, without disabling the
+ledger integrity trigger or pretending a third-party verifier exists.

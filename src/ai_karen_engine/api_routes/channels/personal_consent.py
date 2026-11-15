@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -21,6 +21,7 @@ from ai_karen_engine.persistence.repositories.channel_repository import (
 from ai_karen_engine.services.channels.consent_recovery import (
     PersonalConsentRecoveryService,
     RETIREMENT_MANDATORY_VERIFICATION_BLOCKERS,
+    assess_retirement_evidence_snapshot,
 )
 from ai_karen_engine.services.channels.personal_pairing_policy import (
     PERSONAL_WHATSAPP_CONSENT_VERSION,
@@ -353,38 +354,34 @@ class PersonalRetirementAssessment(BaseModel):
 
 
 class PersonalRetirementEvidenceItem(BaseModel):
-    connection_id: str
-    connection_revision: int
-    connection_enabled: bool
-    retirement_held: bool
-    active_consent: bool
-    unresolved_pairing: bool
-    provider_unlink_claim_recorded: bool
-    deletion_request_recorded: bool
-    credential_deletion_claim_recorded: bool
-    provider_revision_claims_correlated: bool
-    unverified_deletion_request: bool
-    inbox_not_completed: bool
-    outbound_not_confirmed: bool
+    """Backend facts and derived blockers must describe the same snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: str = Field(min_length=1, max_length=256)
+    connection_revision: StrictInt = Field(gt=0)
+    connection_enabled: StrictBool
+    retirement_held: StrictBool
+    active_consent: StrictBool
+    unresolved_pairing: StrictBool
+    provider_unlink_claim_recorded: StrictBool
+    deletion_request_recorded: StrictBool
+    credential_deletion_claim_recorded: StrictBool
+    provider_revision_claims_correlated: StrictBool
+    unverified_deletion_request: StrictBool
+    inbox_not_completed: StrictBool
+    outbound_not_confirmed: StrictBool
     retirement_assessment: PersonalRetirementAssessment
 
     @model_validator(mode="after")
-    def require_consistent_provider_revision_correlation(self) -> "PersonalRetirementEvidenceItem":
-        paired_claims = (
-            self.provider_unlink_claim_recorded
-            and self.credential_deletion_claim_recorded
-        )
-        if self.provider_revision_claims_correlated and not (
-            self.retirement_held
-            and not self.connection_enabled
-            and paired_claims
-        ):
-            raise ValueError("Inconsistent retirement claim correlation")
-        mismatched = "provider_revision_claims_mismatched" in (
-            self.retirement_assessment.blocking_reasons
-        )
-        if mismatched != (paired_claims and not self.provider_revision_claims_correlated):
-            raise ValueError("Missing or contradictory retirement claim mismatch evidence")
+    def require_consistent_retirement_assessment(self) -> "PersonalRetirementEvidenceItem":
+        # Reuse the canonical assessment owner. A mocked, stale or malformed
+        # service response cannot detach blockers from the SQL facts. The
+        # existing API never grants cleanup or invents independent verification.
+        facts = self.model_dump(exclude={"retirement_assessment"})
+        expected = assess_retirement_evidence_snapshot(facts)
+        if expected["retirement_assessment"] != self.retirement_assessment.model_dump():
+            raise ValueError("Retirement assessment does not match stored evidence")
         return self
 
 

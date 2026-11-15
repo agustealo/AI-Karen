@@ -144,6 +144,9 @@ async def test_owned_text_continuation_is_explicit_and_requires_completed_run_di
             thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
         )
     assert default_failure.value.status_code == 409
+    assert default_failure.value.headers is not None
+    assert default_failure.value.headers["X-Karen-History-Replay-Reason"] == "unsupported_rich_history"
+    assert default_failure.value.headers["X-Correlation-Id"]
 
     response = await route.get_ag_ui_owned_history(
         thread_id=THREAD, user={"user_id": USER, "tenant_id": TENANT},
@@ -172,6 +175,8 @@ async def test_owned_text_continuation_is_explicit_and_requires_completed_run_di
             view="text_continuation",
         )
     assert tampered.value.status_code == 409
+    assert tampered.value.headers is not None
+    assert tampered.value.headers["X-Karen-History-Replay-Reason"] == "modified_attested_message"
 
 
 @pytest.mark.asyncio
@@ -355,6 +360,9 @@ async def test_unknown_or_unattested_rich_history_refuses_entire_snapshot(
         )
     assert error.value.status_code == 409
     assert error.value.detail == "Complete governed replay is unavailable"
+    assert error.value.headers is not None
+    assert error.value.headers["X-Karen-History-Replay-Reason"] == "unattested_runtime_metadata"
+    assert error.value.headers["X-Correlation-Id"]
     rejected = [
         record for record in caplog.records
         if record.message == "governed_history_replay_rejected"

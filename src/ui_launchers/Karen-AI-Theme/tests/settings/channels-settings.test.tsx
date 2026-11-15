@@ -736,6 +736,32 @@ describe('KOC-05 read-only retirement evidence review', () => {
     { provider_revision_claims_correlated: undefined },
     { provider_unlink_claim_recorded: false },
     { credential_deletion_claim_recorded: false },
+    { retirement_held: false },
+    { connection_enabled: true },
+    { active_consent: true },
+    { unresolved_pairing: false },
+    { deletion_request_recorded: false },
+    { unverified_deletion_request: false },
+    { deletion_request_recorded: false, unverified_deletion_request: true },
+    { inbox_not_completed: true },
+    { outbound_not_confirmed: false },
+    { retirement_assessment: {
+      ...evidence.retirement_assessment,
+      blocking_reasons: [
+        'local_retirement_hold_missing',
+        ...evidence.retirement_assessment.blocking_reasons,
+      ],
+    } },
+    { retirement_assessment: {
+      ...evidence.retirement_assessment,
+      blocking_reasons: [...evidence.retirement_assessment.blocking_reasons].reverse(),
+    } },
+    { retirement_assessment: {
+      ...evidence.retirement_assessment,
+      blocking_reasons: evidence.retirement_assessment.blocking_reasons.filter(
+        (reason) => reason !== 'outbound_delivery_unconfirmed',
+      ),
+    } },
   ])('refuses forged or incomplete verification contracts %#', async (override) => {
     vi.mocked(apiClient.get).mockImplementation(async (path) => {
       if (path === '/api/channels/personal/connections') return { connections: [] };
@@ -760,8 +786,9 @@ describe('KOC-05 read-only retirement evidence review', () => {
       retirement_assessment: {
         ...evidence.retirement_assessment,
         blocking_reasons: [
-          ...evidence.retirement_assessment.blocking_reasons,
+          'pairing_teardown_unresolved',
           'provider_revision_claims_mismatched',
+          ...evidence.retirement_assessment.blocking_reasons.slice(1),
         ],
       },
     };
@@ -781,15 +808,16 @@ describe('KOC-05 read-only retirement evidence review', () => {
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 
-  it('stays blocked even when every local observation appears complete', async () => {
+  it('stays blocked when local transport is quiet but deletion lacks independent proof', async () => {
     const localComplete = {
       ...evidence,
       unresolved_pairing: false,
-      unverified_deletion_request: false,
+      unverified_deletion_request: true,
       outbound_not_confirmed: false,
       retirement_assessment: {
         ...evidence.retirement_assessment,
         blocking_reasons: [
+          'credential_deletion_requests_unverified',
           'provider_unlink_independent_verification_unavailable',
           'credential_erasure_independent_verification_unavailable',
           'retention_and_backup_scope_verification_unavailable',
@@ -808,6 +836,7 @@ describe('KOC-05 read-only retirement evidence review', () => {
     }));
     expect(await screen.findByText('Final cleanup: blocked')).toBeTruthy();
     expect(screen.getByText('Governed final cleanup is unavailable')).toBeTruthy();
+    expect(screen.getByText('Credential-deletion request remains unverified')).toBeTruthy();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.delete).not.toHaveBeenCalled();
   });

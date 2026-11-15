@@ -11,6 +11,7 @@ fallback chains to ensure system resilience when providers are unavailable.
 import asyncio
 import os
 import threading
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -314,8 +315,11 @@ class ProviderRegistryService:
     ) -> List[ProviderEndpoint]:
         """Find endpoints matching required capabilities."""
         targets: List[ProviderEndpoint] = []
-        for endpoint in self._provider_endpoints.values():
-            if not endpoint.enabled:
+        # Snapshot first: reconciliation may revoke a stale configured
+        # endpoint while the candidate list is being traversed.
+        for candidate in tuple(self._provider_endpoints.values()):
+            endpoint = self.get_provider_endpoint(candidate.provider_id)
+            if endpoint is None or not endpoint.enabled:
                 continue
             if kind is not None and endpoint.kind != kind:
                 continue
@@ -339,7 +343,7 @@ class ProviderRegistryService:
     ) -> Optional[ProviderEndpoint]:
         """Select the best available target for required capabilities."""
         if preferred_target_id:
-            endpoint = self._provider_endpoints.get(preferred_target_id)
+            endpoint = self.get_provider_endpoint(preferred_target_id)
             if endpoint and endpoint.enabled:
                 cap_lower = self.effective_endpoint_capabilities(endpoint)
                 if required_capabilities.issubset(cap_lower):
@@ -351,6 +355,13 @@ class ProviderRegistryService:
             kind=kind,
             healthy_only=healthy_only,
         )
+        # An explicit target request may choose a permitted cloud provider,
+        # but automatic selection never promotes a non-fallback cloud endpoint.
+        targets = [
+            endpoint for endpoint in targets
+            if endpoint.kind != EndpointKind.CLOUD_PROVIDER
+            or endpoint.fallback_eligible
+        ]
         return targets[0] if targets else None
 
     def _endpoint_to_capabilities(
@@ -450,9 +461,109 @@ class ProviderRegistryService:
         self.register_provider_endpoint(endpoint)
         return endpoint
 
+    def _configured_external_endpoint(
+        self, provider_id: str
+    ) -> Optional[ProviderEndpoint]:
+        """Project a configured provider into the canonical execution registry.
+
+        The provider config manager is the sole source for vendor endpoints and
+        credentials. Only registered HTTPS vendor URLs are eligible here; a
+        workspace's custom server belongs to the separately governed custom
+        endpoint path. Never substitute discovery hints for configuration.
+        """
+        from ai_karen_engine.config.llm_provider_config import (
+            AuthenticationType,
+            OPENAI_COMPATIBLE_PROVIDER_DEFAULTS,
+            ProviderType,
+            get_provider_config_manager,
+        )
+
+        registered = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS.get(provider_id)
+        if not registered:
+            return None
+        manager = get_provider_config_manager()
+        config = manager.get_provider(provider_id)
+        if (
+            config is None
+            or not config.enabled
+            or config.provider_type != ProviderType.EXTERNAL
+            or config.authentication is None
+            or config.authentication.type != AuthenticationType.API_KEY
+            or config.authentication.api_key_env_var != registered.get("api_key_env")
+            or config.endpoint is None
+            or not manager.is_provider_configured(provider_id)
+        ):
+            return None
+
+        # Prevent saved bearer tokens from being forwarded to user-supplied
+        # alternative hosts or paths. The custom provider has its own workflow.
+        url = str(config.endpoint.base_url or "").rstrip("/")
+        approved_url = str(registered.get("base_url") or "").rstrip("/")
+        parsed = urlsplit(url)
+        if (
+            not url
+            or url != approved_url
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+
+        return ProviderEndpoint(
+            provider_id=provider_id,
+            display_name=config.display_name,
+            endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+            base_url=url,
+            api_key_env=config.authentication.api_key_env_var,
+            enabled=True,
+            builtin=False,
+            tenant_scoped=True,
+            timeout_seconds=float(config.endpoint.timeout or 30.0),
+            supports_streaming="streaming" in config.capabilities,
+            supports_embeddings=False,
+            supports_models_endpoint=bool(config.endpoint.models_endpoint),
+            fallback_eligible=False,
+            capabilities=("chat_completion", "text_generation", "streaming"),
+            default_model=config.default_model,
+            kind=EndpointKind.CLOUD_PROVIDER,
+            protocol=EndpointProtocol.OPENAI_COMPATIBLE,
+            runtime_engine=RuntimeEngine.REMOTE_API,
+            locality=Locality.CLOUD,
+            metadata={
+                "configuration_owner": "llm_provider_config",
+                "priority": config.priority,
+            },
+        )
+
     def get_provider_endpoint(self, provider_id: str) -> Optional[ProviderEndpoint]:
-        """Return a registered endpoint if one exists."""
-        return self._provider_endpoints.get(provider_id)
+        """Return a registered endpoint, reconciling governed cloud settings."""
+        with self._lock:
+            existing = self._provider_endpoints.get(provider_id)
+            if existing is not None and existing.metadata.get(
+                "configuration_owner"
+            ) != "llm_provider_config":
+                return existing
+
+            try:
+                configured = self._configured_external_endpoint(provider_id)
+            except Exception as exc:
+                logger.warning(
+                    "configured_external_endpoint_unavailable",
+                    extra={"provider": provider_id, "error_type": type(exc).__name__},
+                )
+                configured = None
+
+            if configured is None:
+                if existing is not None:
+                    self._provider_endpoints.pop(provider_id, None)
+                    self._provider_status_cache.pop(provider_id, None)
+                return None
+            if existing != configured:
+                self.register_provider_endpoint(configured)
+            return configured
 
     def list_provider_endpoints(self) -> List[ProviderEndpoint]:
         """List all canonical endpoints."""
@@ -519,7 +630,7 @@ class ProviderRegistryService:
         capabilities = self._endpoint_to_capabilities(endpoint)
         has_api_key = True
         if endpoint.api_key_env:
-            has_api_key = bool((os.getenv(endpoint.api_key_env) or "").strip())
+            has_api_key = self._check_api_key_availability(endpoint.provider_id)
 
         # Registration/configuration is not an observed health probe.
         # UNKNOWN remains eligible for a first verified runtime attempt; the
@@ -660,7 +771,7 @@ class ProviderRegistryService:
     def get_provider_status(self, name: str) -> Optional[ProviderStatus]:
         """Get current status of a provider"""
         with self._lock:
-            endpoint = self._provider_endpoints.get(name)
+            endpoint = self.get_provider_endpoint(name)
             if endpoint is not None:
                 status = self._provider_status_cache.get(name)
                 if status is None or (datetime.utcnow() - status.last_check).total_seconds() > self._cache_ttl:
@@ -902,7 +1013,12 @@ class ProviderRegistryService:
                         return fallback_provider
 
         # Last resort: try any available provider with required capability
-        available_providers = self.get_available_providers(capability=capability)
+        available_providers = [
+            provider for provider in self.get_available_providers(capability=capability)
+            if (endpoint := self.get_provider_endpoint(provider)) is None
+            or endpoint.kind != EndpointKind.CLOUD_PROVIDER
+            or endpoint.fallback_eligible
+        ]
         if available_providers:
             selected = available_providers[0]
             logger.warning(f"Using last resort provider: {selected}")

@@ -38,8 +38,47 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   return JSON.parse(content);
 }
 
-function failure(detail: string, status: number): NextResponse {
-  return NextResponse.json({ detail }, { status, headers: { "Cache-Control": "no-store" } });
+type ReplayDiagnostic = { error_code: string; correlation_id?: string };
+
+// A provider response, error text, request parameter or saved message must
+// never decide which diagnostic becomes public. Map only backend-owned,
+// allow-listed projection reason codes to fixed, nonsensitive categories.
+const REPLAY_PUBLIC_REASONS: Readonly<Record<string, string>> = {
+  history_message_limit: "HISTORY_REPLAY_LIMIT",
+  history_byte_limit: "HISTORY_REPLAY_LIMIT",
+  incomplete_presentation_capture: "HISTORY_PRESENTATION_INCOMPLETE",
+  invalid_persisted_presentation: "HISTORY_PRESENTATION_INVALID",
+  invalid_presentation_projection: "HISTORY_PRESENTATION_INVALID",
+  unsupported_rich_history: "HISTORY_RICH_UNSUPPORTED",
+  invalid_canonical_message: "HISTORY_MESSAGE_INVALID",
+  invalid_message_metadata: "HISTORY_MESSAGE_INVALID",
+  unattested_runtime_metadata: "HISTORY_ATTESTATION_MISSING",
+  modified_attested_message: "HISTORY_ATTESTATION_MISMATCH",
+  unattested_observed_activity: "HISTORY_ATTESTATION_MISMATCH",
+  invalid_attested_agent_activity: "HISTORY_ATTESTATION_MISMATCH",
+  orphaned_observed_activity: "HISTORY_ATTESTATION_MISMATCH",
+  unserializable_attested_message: "HISTORY_ATTESTATION_MISMATCH",
+  unexpected_replay_event: "HISTORY_EVENT_INVALID",
+  unserializable_history: "HISTORY_REPLAY_INVALID",
+} as const;
+
+function governedReplayDiagnostic(response: Response): ReplayDiagnostic | undefined {
+  const reason = response.headers.get("x-karen-history-replay-reason");
+  if (!reason || !Object.hasOwn(REPLAY_PUBLIC_REASONS, reason)) return undefined;
+  const correlation = response.headers.get("x-correlation-id");
+  return {
+    error_code: REPLAY_PUBLIC_REASONS[reason],
+    ...(correlation && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(correlation)
+      ? { correlation_id: correlation }
+      : {}),
+  };
+}
+
+function failure(detail: string, status: number, diagnostic?: ReplayDiagnostic): NextResponse {
+  return NextResponse.json(
+    { detail, ...(diagnostic ?? {}) },
+    { status, headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 async function readKarenGovernedHistory(
@@ -64,10 +103,16 @@ async function readKarenGovernedHistory(
     return failure("Conversation unavailable", 404);
   }
   if (response.status === 409) {
-    return failure("Complete governed replay is unavailable", 409);
+    return failure(
+      "Complete governed replay is unavailable", 409,
+      governedReplayDiagnostic(response),
+    );
   }
   if (response.status === 502) {
-    return failure("Complete governed replay could not be verified", 502);
+    return failure(
+      "Complete governed replay could not be verified", 502,
+      governedReplayDiagnostic(response),
+    );
   }
   if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
     return failure("Governed conversation history unavailable", 503);

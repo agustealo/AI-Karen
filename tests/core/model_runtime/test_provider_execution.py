@@ -91,3 +91,122 @@ def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
     assert result.text == "A partial response"
     assert result.finish_reason == "length"
     assert result.usage == {"completion_tokens": 32}
+
+
+
+def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
+    monkeypatch,
+) -> None:
+    import json
+    import sys
+    import types
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    import pytest
+
+    from ai_karen_engine.core.model_runtime import provider_execution
+    from ai_karen_engine.core.model_runtime.provider_endpoint import (
+        ProviderEndpoint,
+        ProviderEndpointType,
+    )
+    from ai_karen_engine.core.model_runtime.runtime_engine import (
+        EndpointKind,
+        Locality,
+        RuntimeEngine,
+    )
+
+    # This lean provider-wiring test uses the real canonical HTTP transport
+    # without importing the application config package's optional YAML stack.
+    # The full config/registry wiring is proved in the resolver owner tests.
+    secret = {"value": "credential-from-settings"}
+    configured = SimpleNamespace(
+        enabled=True,
+        authentication=SimpleNamespace(api_key_env_var="NOUS_API_KEY"),
+        endpoint=SimpleNamespace(
+            base_url="https://inference-api.nousresearch.com/v1"
+        ),
+    )
+    manager = SimpleNamespace(
+        get_provider=lambda provider: configured if provider == "nous" else None,
+        is_provider_configured=lambda provider: provider == "nous" and bool(secret["value"]),
+        get_api_key=lambda provider: secret["value"] if provider == "nous" else None,
+    )
+    config_package = types.ModuleType("ai_karen_engine.config")
+    config_package.__path__ = []
+    config_module = types.ModuleType("ai_karen_engine.config.llm_provider_config")
+    config_module.get_provider_config_manager = lambda: manager
+    monkeypatch.setitem(sys.modules, "ai_karen_engine.config", config_package)
+    monkeypatch.setitem(
+        sys.modules, "ai_karen_engine.config.llm_provider_config", config_module
+    )
+    monkeypatch.delenv("NOUS_API_KEY", raising=False)
+
+    endpoint = ProviderEndpoint(
+        provider_id="nous",
+        display_name="Nous Portal (Hermes)",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        base_url="https://inference-api.nousresearch.com/v1",
+        api_key_env="NOUS_API_KEY",
+        kind=EndpointKind.CLOUD_PROVIDER,
+        locality=Locality.CLOUD,
+        runtime_engine=RuntimeEngine.REMOTE_API,
+        metadata={"configuration_owner": "llm_provider_config"},
+    )
+    requests = []
+
+    class Response:
+        def read(self) -> bytes:
+            return json.dumps({
+                "choices": [{"message": {"content": "Real adapter response"}}],
+                "model": "Hermes-4.3-36B",
+            }).encode()
+
+    @contextmanager
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        yield Response()
+
+    monkeypatch.setattr(provider_execution, "urlopen", fake_urlopen)
+    result = provider_execution._sync_openai_compatible_request(
+        endpoint,
+        messages=[{"role": "user", "content": "Hello Hermes"}],
+        model="Hermes-4.3-36B",
+        max_tokens=64,
+        temperature=0.2,
+    )
+    assert result.text == "Real adapter response"
+    assert result.provider_id == "nous"
+    assert result.model == "Hermes-4.3-36B"
+    assert requests[0].full_url == "https://inference-api.nousresearch.com/v1/chat/completions"
+    assert requests[0].get_header("Authorization") == "Bearer credential-from-settings"
+    payload = json.loads(requests[0].data)
+    assert payload["model"] == "Hermes-4.3-36B"
+    assert payload["messages"] == [{"role": "user", "content": "Hello Hermes"}]
+    assert "NOUS_API_KEY" not in __import__("os").environ
+
+    secret["value"] = None
+    with pytest.raises(
+        provider_execution.ProviderExecutionError,
+        match="provider_credential_unavailable",
+    ):
+        provider_execution._sync_openai_compatible_request(
+            endpoint,
+            messages=[{"role": "user", "content": "Hello Hermes"}],
+            model="Hermes-4.3-36B",
+            max_tokens=64,
+            temperature=0.2,
+        )
+    assert len(requests) == 1
+
+
+def test_streaming_uses_same_governed_credential_resolver_as_sync_transport() -> None:
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "src/ai_karen_engine/core/model_runtime/provider_execution.py"
+    ).read_text(encoding="utf-8")
+    assert "api_key = _resolve_api_key(endpoint)" in source
+    assert source.count("provider_credential_unavailable") == 2
+    assert "get_provider_config_manager()" in source

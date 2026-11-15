@@ -727,6 +727,32 @@ type PersonalRetirementEvidence = {
   retirement_assessment: RetirementAssessment;
 };
 
+function expectedRetirementBlockers(row: Record<string, unknown>): RetirementBlocker[] {
+  // Mirror the canonical backend assessment order when validating an
+  // untrusted wire response. No blocker is derived from UI-local state.
+  const reasons: RetirementBlocker[] = [];
+  const blockIf = (condition: boolean, reason: RetirementBlocker) => {
+    if (condition) reasons.push(reason);
+  };
+  blockIf(row.retirement_held === false, 'local_retirement_hold_missing');
+  blockIf(row.connection_enabled === true, 'local_connection_still_enabled');
+  blockIf(row.active_consent === true, 'active_pairing_consent_remains');
+  blockIf(row.unresolved_pairing === true, 'pairing_teardown_unresolved');
+  blockIf(row.provider_unlink_claim_recorded === false, 'provider_unlink_claim_missing');
+  blockIf(row.deletion_request_recorded === false, 'credential_deletion_request_missing');
+  blockIf(row.credential_deletion_claim_recorded === false, 'credential_deletion_claim_missing');
+  blockIf(
+    row.provider_unlink_claim_recorded === true &&
+    row.credential_deletion_claim_recorded === true &&
+    row.provider_revision_claims_correlated === false,
+    'provider_revision_claims_mismatched',
+  );
+  blockIf(row.unverified_deletion_request === true, 'credential_deletion_requests_unverified');
+  blockIf(row.inbox_not_completed === true, 'inbound_work_unresolved');
+  blockIf(row.outbound_not_confirmed === true, 'outbound_delivery_unconfirmed');
+  return [...reasons, ...RETIREMENT_REQUIRED_BLOCKERS];
+}
+
 function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
   if (!value || typeof value !== 'object') {
     throw new Error('Missing channel retirement evidence');
@@ -751,7 +777,10 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
       row.connection_id.length > 256 || seen.has(row.connection_id) ||
       typeof row.connection_revision !== 'number' ||
       !Number.isSafeInteger(row.connection_revision) || row.connection_revision < 1 ||
-      booleanFields.some((field) => typeof row[field] !== 'boolean')
+      booleanFields.some((field) => typeof row[field] !== 'boolean') ||
+      row.deletion_request_recorded !== row.unverified_deletion_request ||
+      (row.credential_deletion_claim_recorded === true &&
+        row.deletion_request_recorded !== true)
     ) {
       throw new Error('Incomplete retirement evidence');
     }
@@ -787,6 +816,13 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
       )
     ) {
       throw new Error('Untrusted or incomplete retirement verification');
+    }
+    const expected = expectedRetirementBlockers(row);
+    if (
+      blockers.length !== expected.length ||
+      expected.some((reason, index) => blockers[index] !== reason)
+    ) {
+      throw new Error('Retirement blockers contradict stored connection evidence');
     }
     seen.add(row.connection_id);
   }
@@ -903,7 +939,7 @@ function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: bo
               <p className="text-xs">
                 {record.unverified_deletion_request
                   ? 'Credential deletion request not verified'
-                  : 'No pending unverified request observed'}
+                  : 'No credential-deletion request awaiting independent verification observed'}
               </p>
               <p className="text-xs">
                 {record.inbox_not_completed
