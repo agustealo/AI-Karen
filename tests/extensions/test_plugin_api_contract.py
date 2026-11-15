@@ -237,16 +237,48 @@ async def test_parameter_validation_uses_catalog_manifest_schema():
 
 
 @pytest.mark.asyncio
-async def test_execution_delegates_typed_request_to_canonical_kernel():
+async def test_execution_delegates_typed_request_to_canonical_kernel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ai_karen_engine.services import plugin_service as plugin_service_module
+
     service, kernel = _service()
     policy = _Policy()
     service._policy_enforcer = policy
+
+    # A configured plugin can execute only when its installed package,
+    # tenant-scoped persisted settings and Vault credential status are ready.
+    # Do not bypass the production readiness gate in this API contract test.
+    tenant_id = "00000000-0000-4000-8000-000000000001"
+    package = tmp_path / "alpha-plugin"
+    package.mkdir()
+    kernel.record["path"] = package
+    service._resolve_root = lambda: tmp_path
+
+    async def read_settings(tenant: str, plugin_id: str):
+        assert (tenant, plugin_id) == (tenant_id, "alpha-plugin")
+        return {"settings": {"region": "east"}, "revision": 1}
+
+    async def read_credential_status(*, tenant_id, plugin_id, field_keys):
+        assert str(tenant_id) == "00000000-0000-4000-8000-000000000001"
+        assert plugin_id == "alpha-plugin"
+        assert field_keys == frozenset({"api_key"})
+        return {"api_key": {"status": "active", "revision": 1}}
+
+    service._settings_repository = SimpleNamespace(get=read_settings)
+    monkeypatch.setattr(
+        plugin_service_module,
+        "get_credential_vault_service",
+        lambda: SimpleNamespace(
+            list_plugin_credential_status=read_credential_status
+        ),
+    )
 
     result = await service.execute_plugin(
         "alpha-plugin",
         parameters={"query": "hello"},
         user_id="user-1",
-        tenant_id="tenant-a",
+        tenant_id=tenant_id,
         session_id="session-1",
         correlation_id="corr-1",
         roles=["user"],
@@ -256,9 +288,9 @@ async def test_execution_delegates_typed_request_to_canonical_kernel():
 
     assert result.status is ExecutionStatus.COMPLETED
     assert result.user_id == "user-1"
-    assert result.tenant_id == "tenant-a"
+    assert result.tenant_id == tenant_id
     assert result.correlation_id == "corr-1"
-    assert policy.request.tenant_id == "tenant-a"
+    assert policy.request.tenant_id == tenant_id
     assert policy.request.plugin_id == "alpha-plugin"
     assert kernel.request is not None
     assert kernel.request.plugin_id == "alpha-plugin"
