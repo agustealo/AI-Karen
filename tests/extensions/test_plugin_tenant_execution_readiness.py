@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
@@ -43,11 +44,29 @@ def _manifest(*, include_secret: bool = True) -> ExtensionManifest:
     })
 
 
-def _service(*, record: dict, saved: dict | None = None) -> PluginService:
+def _service(
+    *, tmp_path: Path, record: dict, saved: dict | None = None
+) -> PluginService:
+    # A configured plugin requires verified canonical package provenance.
+    # The temporary installed package is real; settings and Vault status
+    # remain independently controllable for these admission tests.
+    package = tmp_path / "tenant-ready"
+    package.mkdir(exist_ok=True)
+    installed_record = {
+        "path": package,
+        "status": "enabled",
+        "dependencies_resolved": True,
+        "compatibility_checked": True,
+        **record,
+    }
     service = PluginService()
-    service.kernel = SimpleNamespace(get_record=lambda _: record)
+    service._resolve_root = lambda: tmp_path
+    service.kernel = SimpleNamespace(
+        get_record=lambda _: installed_record,
+        _is_uploaded_plugin=lambda _: False,
+    )
     service._settings_repository = SimpleNamespace(
-        get=AsyncMock(return_value=saved or {
+        get=AsyncMock(return_value=saved if saved is not None else {
             "revision": 1, "settings": {"region": "east"},
         })
     )
@@ -55,8 +74,8 @@ def _service(*, record: dict, saved: dict | None = None) -> PluginService:
 
 
 @pytest.mark.asyncio
-async def test_configuration_readiness_rejects_unsaved_required_settings():
-    service = _service(
+async def test_configuration_readiness_rejects_unsaved_required_settings(tmp_path: Path):
+    service = _service(tmp_path=tmp_path, 
         record={"manifest": _manifest(include_secret=False)},
         saved={"revision": 0, "settings": {}},
     )
@@ -66,8 +85,8 @@ async def test_configuration_readiness_rejects_unsaved_required_settings():
 
 
 @pytest.mark.asyncio
-async def test_configuration_readiness_rejects_invalid_persisted_settings():
-    service = _service(
+async def test_configuration_readiness_rejects_invalid_persisted_settings(tmp_path: Path):
+    service = _service(tmp_path=tmp_path, 
         record={"manifest": _manifest(include_secret=False)},
         saved={"revision": 1, "settings": {"region": "invalid"}},
     )
@@ -77,8 +96,8 @@ async def test_configuration_readiness_rejects_invalid_persisted_settings():
 
 
 @pytest.mark.asyncio
-async def test_configuration_readiness_rejects_database_outage():
-    service = _service(record={"manifest": _manifest(include_secret=False)})
+async def test_configuration_readiness_rejects_database_outage(tmp_path: Path):
+    service = _service(tmp_path=tmp_path, record={"manifest": _manifest(include_secret=False)})
     service._settings_repository.get.side_effect = RuntimeError("database unavailable")
     assert await service._execution_configuration_readiness(
         "tenant-ready", TENANT
@@ -88,9 +107,9 @@ async def test_configuration_readiness_rejects_database_outage():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["missing", "revoked", "unavailable"])
 async def test_configuration_readiness_rejects_inactive_vault_credential(
-    monkeypatch, state: str
+    monkeypatch, state: str, tmp_path: Path
 ):
-    service = _service(record={"manifest": _manifest()})
+    service = _service(tmp_path=tmp_path, record={"manifest": _manifest()})
     vault = SimpleNamespace(list_plugin_credential_status=AsyncMock(
         return_value={"api_key": {
             "status": state, "configured": False, "revision": 2,
@@ -107,9 +126,9 @@ async def test_configuration_readiness_rejects_inactive_vault_credential(
 
 @pytest.mark.asyncio
 async def test_configuration_readiness_checks_status_without_reading_secret(
-    monkeypatch,
+    monkeypatch, tmp_path: Path,
 ):
-    service = _service(record={"manifest": _manifest()})
+    service = _service(tmp_path=tmp_path, record={"manifest": _manifest()})
     vault = SimpleNamespace(list_plugin_credential_status=AsyncMock(
         return_value={"api_key": {
             "status": "active", "configured": True, "revision": 2,
@@ -126,8 +145,8 @@ async def test_configuration_readiness_checks_status_without_reading_secret(
 
 
 @pytest.mark.asyncio
-async def test_configuration_readiness_refuses_untrusted_installation():
-    service = _service(record={
+async def test_configuration_readiness_refuses_untrusted_installation(tmp_path: Path):
+    service = _service(tmp_path=tmp_path, record={
         "manifest": _manifest(),
         "activation_blocked_reason": "isolated_runtime_required",
     })
@@ -138,8 +157,8 @@ async def test_configuration_readiness_refuses_untrusted_installation():
 
 
 @pytest.mark.asyncio
-async def test_configuration_readiness_does_not_query_storage_for_legacy_plugin():
-    service = _service(record={"manifest": SimpleNamespace(config_schema=None)})
+async def test_configuration_readiness_does_not_query_storage_for_legacy_plugin(tmp_path: Path):
+    service = _service(tmp_path=tmp_path, record={"manifest": SimpleNamespace(config_schema=None)})
     assert await service._execution_configuration_readiness(
         "tenant-ready", TENANT
     ) is None
