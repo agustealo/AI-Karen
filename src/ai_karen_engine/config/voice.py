@@ -42,7 +42,7 @@ class LocalPiperSettings:
             if config_text
             else Path(str(model_path) + ".json")
         )
-        voice_id = os.getenv("KAREN_LOCAL_TTS_VOICE_ID", model_path.stem).strip()
+        voice_id = os.getenv("KAREN_LOCAL_TTS_VOICE_ID", "").strip() or model_path.stem
         if not _VOICE_ID.fullmatch(voice_id):
             raise ValueError("invalid_local_tts_voice_id")
         executable = os.getenv("KAREN_LOCAL_TTS_EXECUTABLE", "piper").strip()
