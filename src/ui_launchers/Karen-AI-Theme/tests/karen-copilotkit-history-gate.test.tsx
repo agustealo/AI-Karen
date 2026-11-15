@@ -283,6 +283,90 @@ describe("CopilotKit canonical conversation hydration", () => {
     },
   );
 
+  it("explains safe presentation capture failures without disclosing private backend text", async () => {
+    const supportId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("private history metadata"), {
+        status: 409,
+        details: {
+          detail: "private history metadata",
+          error_code: "HISTORY_PRESENTATION_INCOMPLETE",
+          correlation_id: supportId,
+        },
+      }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A,
+        read_only: true, text_only: true, omitted_entries: 0,
+        messages: [{ id: "original", role: "assistant", content: "Preserved answer" }],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByText("Preserved answer")).toBeTruthy());
+    const error = screen.getByRole("alert").textContent ?? "";
+    expect(error).toContain("A saved presentation was not completely captured.");
+    expect(error).toContain(supportId);
+    expect(error).not.toContain("private history metadata");
+    expect(backend.agent.setMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not echo unrecognized diagnostic codes or correlation strings", async () => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("private runtime secret"), {
+        status: 409,
+        details: {
+          error_code: "TOKEN_PRIVATE_RUNTIME_ACCESS",
+          correlation_id: "token-private-runtime-access",
+        },
+      }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A,
+        read_only: true, text_only: true, omitted_entries: 0,
+        messages: [{ id: "original", role: "user", content: "Saved question" }],
+      });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByText("Saved question")).toBeTruthy());
+    const error = screen.getByRole("alert").textContent ?? "";
+    expect(error).toContain("cannot faithfully restore");
+    expect(error).not.toContain("TOKEN_PRIVATE_RUNTIME_ACCESS");
+    expect(error).not.toContain("token-private-runtime-access");
+    expect(error).not.toContain("private runtime secret");
+  });
+
+  it("never carries consent to text-only continuation into another conversation", async () => {
+    backend.fetchConversation
+      .mockRejectedValueOnce(Object.assign(new Error("unsupported rich"), { status: 409 }))
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, read_only: true, text_only: true,
+        omitted_entries: 0,
+        messages: [{ id: "a-old", role: "user", content: "Earlier project" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_A, text_only: true, continuation_authorized: true,
+        omitted_rich_message_count: 0, replayEvents: [],
+        history_window_has_older: false, history_window_message_limit: 500,
+        messages: [{ id: "a-old", role: "user", content: "Earlier project" }],
+      })
+      .mockResolvedValueOnce({
+        threadId: CONVERSATION_B, replayEvents: [],
+        messages: [{ id: "b-old", role: "user", content: "Different conversation" }],
+      });
+    const view = render(guardedHistory());
+    await waitFor(() => expect(screen.getByText("Earlier project")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", {
+      name: "Continue original conversation with verified text only",
+    }));
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      3, "/api/copilotkit/threads/" + CONVERSATION_A + "/messages?view=continuation",
+    );
+
+    view.rerender(guardedHistory(CONVERSATION_B));
+    await waitFor(() => expect(backend.fetchConversation).toHaveBeenCalledTimes(4));
+    expect(backend.fetchConversation).toHaveBeenNthCalledWith(
+      4, "/api/copilotkit/threads/" + CONVERSATION_B + "/messages",
+    );
+    expect(screen.queryByTestId("karen-text-continuation-banner")).toBeNull();
+  });
+
   it("recovers the complete authorized text view from an unsupported rich replay without mounting SDK chat", async () => {
     backend.fetchConversation
       .mockRejectedValueOnce(
