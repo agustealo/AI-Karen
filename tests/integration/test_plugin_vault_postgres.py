@@ -335,6 +335,86 @@ async def test_live_plugin_secret_enrollment_rotation_revoke_and_audit_rollback(
         assert await vault.find_unambiguous_owned_model_key_candidate(
             context=owner_a, provider_id="openai",
         ) == credential_a
+        # A persisted owner opt-in must match the exact model. It remains
+        # consent metadata, not authorization to read the encrypted key.
+        from ai_karen_engine.database.models.identity_vault import (
+            CredentialSecretCreate,
+        )
+
+        consented_model = "gpt-4o-mini"
+        assert await vault.set_owned_personal_model_chat_consent(
+            credential_id=credential_a,
+            tenant_id=tenant_a,
+            user_id=owner,
+            model_id=consented_model,
+            enabled=True,
+            correlation_id="live-consent-enabled",
+        ) is True
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+            consented_model_id=consented_model,
+        ) == credential_a
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+            consented_model_id="some-other-model",
+        ) is None
+        stored_metadata = await raw.fetchval(
+            "SELECT credential_metadata FROM public.credentials "
+            "WHERE id = $1 AND tenant_id = $2", credential_a, tenant_a,
+        )
+        if isinstance(stored_metadata, str):
+            stored_metadata = json.loads(stored_metadata)
+        assert stored_metadata["personal_model_chat_consent"] == {
+            "enabled": True, "model_id": consented_model,
+        }
+
+        # Explicit opt-out must clear stored consent without re-provisioning.
+        assert await vault.set_owned_personal_model_chat_consent(
+            credential_id=credential_a,
+            tenant_id=tenant_a,
+            user_id=owner,
+            model_id=None,
+            enabled=False,
+            correlation_id="live-consent-disabled",
+        ) is True
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+            consented_model_id=consented_model,
+        ) is None
+
+        # A newly rotated secret must not inherit the previous selection.
+        assert await vault.set_owned_personal_model_chat_consent(
+            credential_id=credential_a,
+            tenant_id=tenant_a,
+            user_id=owner,
+            model_id=consented_model,
+            enabled=True,
+            correlation_id="live-consent-before-rotation",
+        ) is True
+        rotated = await vault.rotate_owned_credential(
+            credential_a,
+            [CredentialSecretCreate(
+                secret_type="api_key",
+                encrypted_value="non-production-rotated-model-test-key",
+            )],
+            tenant_a, owner,
+        )
+        assert rotated is not None
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+            consented_model_id=consented_model,
+        ) is None
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) == credential_a
+        rotated_metadata = await raw.fetchval(
+            "SELECT credential_metadata FROM public.credentials "
+            "WHERE id = $1 AND tenant_id = $2", credential_a, tenant_a,
+        )
+        if isinstance(rotated_metadata, str):
+            rotated_metadata = json.loads(rotated_metadata)
+        assert "personal_model_chat_consent" not in rotated_metadata
+
         await raw.execute(
             "UPDATE public.credentials "
             "SET expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second' "
