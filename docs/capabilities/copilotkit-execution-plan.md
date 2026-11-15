@@ -137,7 +137,7 @@ Definitions: **TAKE** = adopt native CopilotKit behavior/hooks/UI where availabl
 | Skills | Discover/describe eligible skills and task need | Existing plugin/capability contracts, versioned prompts, RBAC | GAP: no second skill engine | KCON-510 |
 | Sandbox | Status/approval/artifact UI | Existing isolated execution infrastructure, egress/secrets and tenant fences | SOURCE_ONLY related utility; enforcement audit required | KCON-520 |
 | Attachments, files, images | Native input affordances only if supported/pinned | Upload scan, MIME/size quotas, canonical storage/ACL, model capability | GAP/UNVERIFIED for this mounted journey | KCON-530 |
-| Voice/dictation | Native voice where reliably supported | Karen browser/local speech capture, permissions, safe draft port | SOURCE_ONLY existing voice controls | KCON-540 |
+| Voice/dictation and read-aloud | Native voice where reliably supported | Karen browser/local speech capture, permissions, safe draft port; explicit browser read-aloud only when voices actually exist | SOURCE_ONLY; server Piper synthesis remains separate and unverified | KCON-540, KCON-901 |
 | Channels (Slack/Teams/etc.) | Channels SDK UI/transport only when useful | Existing ChannelHost, ingress, identity, queues, delivery, secrets | SOURCE_ONLY backend host; integration optional | KCON-550 |
 | Security / RBAC | UI approval/notification only | Auth, RLS, policy, audit, tool execution, tenant isolation | SOURCE_ONLY defenses; negative live proof needed | KCON-600 |
 | Observability/diagnostics | UI activity/status slots | Structured traces, receipts, persisted result, redaction | SOURCE_ONLY metrics; parity audit needed | KCON-650 |
@@ -721,3 +721,9 @@ conversation, inspect its safe reason and correlation against the live
 request, then implement that specific format or evidence repair in the
 canonical projection owner. Never bypass digest, tenant, owner, run
 completion, content-size or presentation validation to silence the UI.
+
+
+## KCON-540 / KCON-901: Browser voice selection and read-aloud, PR #850 (IN_PROGRESS)
+
+- 2026-11-15 source candidate `fix/voice-discovery-playback-20261115`: existing `VoiceSettings` now retries voice inventory and reacts to `voiceschanged` and visibility transitions, with truthful empty/unsupported states and explicit preview. Karen's canonical CopilotKit assistant-message slot gains user-click-only read-aloud/stop with browser voice preference, text-only extraction, no autoplay, and cancellation on unmount. No fake backend synthesis, second renderer, hidden vendor STT fallback, or semantic-memory write.
+- Current proof: exact-head CI on `0c797bd4864bbe053a0e028ad89c50fc6bb8e968` found a Radix Select test assertion that incorrectly expected a closed menu's options in the DOM; this branch corrects the test. The backend quality guard also required this existing KCON ledger update. Rerun full frontend/backend-quality, chat burn, presentation integrity and typed build at revised HEAD. User-visible browser audio at 390/768/1024/1440px, account switch and Linux zero/late-voice recovery remain NOT_RUN. Source work must not be promoted to DONE solely by CI.
