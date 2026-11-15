@@ -108,6 +108,34 @@ class MainExtension(ExtensionBase):
             "host_services_bound": self._secret_resolver is not None and self._http_client is not None,
         }
 
+    async def verify_subscription(
+        self, *, connection: ChannelConnection, verify_token: str,
+    ) -> bool:
+        """Verify Meta's callback handshake using host-resolved Vault secret.
+
+        No query-string token is a user credential; the host still resolves
+        this connection from tenant-scoped, enabled persistence and checks the
+        canonical installed transport before calling this method.
+        """
+        self._require_active(connection)
+        if (
+            not isinstance(verify_token, str)
+            or not 8 <= len(verify_token) <= 256
+            or any(ord(char) < 33 or ord(char) > 126 for char in verify_token)
+        ):
+            return False
+        credentials = await self._credentials(connection)
+        expected = credentials.get("webhook_verify_token")
+        if (
+            not isinstance(expected, str)
+            or not 8 <= len(expected) <= 256
+            or any(ord(char) < 33 or ord(char) > 126 for char in expected)
+        ):
+            return False
+        return hmac.compare_digest(
+            expected.encode("utf-8"), verify_token.encode("utf-8"),
+        )
+
     async def verify_event(
         self, *, connection: ChannelConnection,
         headers: Mapping[str, str], body: bytes,
