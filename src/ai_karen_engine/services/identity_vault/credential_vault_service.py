@@ -1381,11 +1381,12 @@ class CredentialVaultService(BaseService):
                 or not model_id
                 or model_id != model_id.strip()
                 or len(model_id) > 255
-                or not context.correlation_id
                 or not isinstance(context.correlation_id, str)
+                or not context.correlation_id
+                or len(context.correlation_id) > 128
                 or any(
                     ord(char) < 32 or ord(char) == 127
-                    for char in provider_id + model_id
+                    for char in provider_id + model_id + context.correlation_id
                 )
                 or not principal.is_active
                 or not principal.is_verified
@@ -1413,8 +1414,10 @@ class CredentialVaultService(BaseService):
             or constraints.get("personal_model_credential") != exact_grant
             or constraints.get("external_allowed") is not True
             or constraints.get("local_only") is not False
-            or provider_id not in (constraints.get("eligible_providers") or ())
-            or provider_id in (constraints.get("forbidden_providers") or ())
+            or not isinstance(constraints.get("eligible_providers"), (list, tuple, set))
+            or not isinstance(constraints.get("forbidden_providers"), (list, tuple, set))
+            or provider_id not in constraints["eligible_providers"]
+            or provider_id in constraints["forbidden_providers"]
         ):
             raise PermissionError(denial)
 
@@ -1462,7 +1465,12 @@ class CredentialVaultService(BaseService):
                 or provider.config != {"managed_for": "model_api_key"}
                 or (
                     credential.expires_at is not None
-                    and credential.expires_at <= datetime.now(timezone.utc)
+                    and (
+                        not isinstance(credential.expires_at, datetime)
+                        or credential.expires_at.tzinfo is None
+                        or credential.expires_at.utcoffset() is None
+                        or credential.expires_at <= datetime.now(timezone.utc)
+                    )
                 )
                 or len(credential.secrets) != 1
             ):
