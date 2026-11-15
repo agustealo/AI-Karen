@@ -613,7 +613,7 @@ async def revoke_consumer_model_key(
         raise _consumer_vault_error(exc) from None
     if not revoked:
         raise HTTPException(status_code=404, detail="Personal credential not found")
-    return {"revoked": True}
+    return {"locally_revoked": True, "provider_revocation_verified": False}
 
 
 @router.delete("/credentials/{credential_id}")
@@ -633,7 +633,7 @@ async def delete_consumer_model_key(
         raise HTTPException(
             status_code=409, detail="Credential unavailable or has active bindings"
         )
-    return {"deleted": True}
+    return {"locally_deleted": True, "provider_revocation_verified": False}
 
 
 @router.get("", response_model=ModelSettingsResponse)
