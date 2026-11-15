@@ -214,9 +214,10 @@ export default function LocalVoiceEngineSettings() {
             </p>}
             <div className="space-y-2">
               <Label htmlFor="karen-local-engine">Speech output source</Label>
-              <Select value={selectedEngine?.engine_id ?? BROWSER} onValueChange={changeEngine}>
+              <Select value={engineId === BROWSER || selectedEngine ? engineId : "_missing_saved_"} onValueChange={changeEngine}>
                 <SelectTrigger id="karen-local-engine"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  {engineId !== BROWSER && !selectedEngine && <SelectItem value="_missing_saved_" disabled>Saved engine unavailable</SelectItem>}
                   <SelectItem value={BROWSER}>Browser speech (device-dependent)</SelectItem>
                   {catalog?.engines.map((engine) => (
                     <SelectItem key={engine.engine_id} value={engine.engine_id}>
