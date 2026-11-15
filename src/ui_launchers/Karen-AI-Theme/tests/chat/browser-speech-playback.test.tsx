@@ -1,10 +1,22 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   extractAssistantSpeech,
   KarenBrowserSpeechPlayback,
 } from "@/components/chat/KarenBrowserSpeechPlayback";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
+
+const local = vi.hoisted(() => ({
+  get: vi.fn(),
+  synthesize: vi.fn(),
+}));
+
+vi.mock("@/lib/api", () => ({
+  apiClient: {
+    get: local.get,
+    synthesizeLocalSpeech: local.synthesize,
+  },
+}));
 
 const voices = [
   { voiceURI: "local-en", name: "Local English", lang: "en-US", default: true },
@@ -21,6 +33,10 @@ let cancel: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   localStorage.clear();
+  local.get.mockReset().mockResolvedValue({
+    synthesis_available: false, synthesis_engine: null, synthesis_voice_id: null,
+  });
+  local.synthesize.mockReset().mockResolvedValue(new Blob(["RIFF"], { type: "audio/wav" }));
   spoken = [];
   speak = vi.fn();
   cancel = vi.fn();
@@ -101,5 +117,84 @@ describe("canonical assistant speech playback", () => {
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
     view.unmount();
     expect(cancel).toHaveBeenCalled();
+  });
+});
+
+
+describe("authenticated local speech replay", () => {
+  class AudioDouble {
+    static instances: AudioDouble[] = [];
+    src: string;
+    onended: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    pause = vi.fn();
+    play = vi.fn().mockResolvedValue(undefined);
+    removeAttribute = vi.fn();
+    constructor(src: string) {
+      this.src = src;
+      AudioDouble.instances.push(this);
+    }
+  }
+
+  beforeEach(() => {
+    AudioDouble.instances = [];
+    vi.stubGlobal("Audio", AudioDouble);
+    vi.stubGlobal("URL", Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:local-karen"),
+      revokeObjectURL: vi.fn(),
+    }));
+  });
+
+  it("does not synthesize, stream or play model audio before explicit user action", () => {
+    render(<KarenBrowserSpeechPlayback message={{ content: "Saved reply" }} />);
+    expect(local.get).not.toHaveBeenCalled();
+    expect(local.synthesize).not.toHaveBeenCalled();
+    expect(AudioDouble.instances).toHaveLength(0);
+  });
+
+  it("fails closed when backend capability is unverified without browser vendor fallback", async () => {
+    render(<KarenBrowserSpeechPlayback message={{ content: "Saved reply" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Try Karen local voice" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/not ready/i));
+    expect(local.get).toHaveBeenCalledWith("/api/voice/capabilities");
+    expect(local.synthesize).not.toHaveBeenCalled();
+    expect(speak).not.toHaveBeenCalled();
+    expect(AudioDouble.instances).toHaveLength(0);
+  });
+
+  it("requests actual WAV only after verified readiness and revokes audio on Stop", async () => {
+    local.get.mockResolvedValue({
+      synthesis_available: true,
+      synthesis_engine: "piper-onnx-local",
+      synthesis_voice_id: "en_US-local",
+    });
+    render(<KarenBrowserSpeechPlayback message={{ content: "Hello Karen" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Try Karen local voice" }));
+    await waitFor(() => expect(local.synthesize).toHaveBeenCalledTimes(1));
+    expect(local.synthesize.mock.calls[0][0]).toBe("Hello Karen");
+    expect(local.synthesize.mock.calls[0][1]).toBe("en_US-local");
+    await waitFor(() => expect(AudioDouble.instances).toHaveLength(1));
+    expect(AudioDouble.instances[0].play).toHaveBeenCalledTimes(1);
+    expect(speak).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop Karen local voice" }));
+    expect(AudioDouble.instances[0].pause).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:local-karen");
+    expect(local.synthesize.mock.calls[0][2].aborted).toBe(true);
+  });
+
+  it("does not play late synthesis after account-owned assistant unmount", async () => {
+    let resolveAudio!: (value: Blob) => void;
+    local.get.mockResolvedValue({
+      synthesis_available: true,
+      synthesis_engine: "piper-onnx-local",
+      synthesis_voice_id: "en_US-local",
+    });
+    local.synthesize.mockImplementationOnce(() => new Promise((resolve) => { resolveAudio = resolve; }));
+    const view = render(<KarenBrowserSpeechPlayback message={{ content: "Old account reply" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Try Karen local voice" }));
+    await waitFor(() => expect(local.synthesize).toHaveBeenCalledTimes(1));
+    view.unmount();
+    await act(async () => resolveAudio(new Blob(["RIFF"], { type: "audio/wav" })));
+    expect(AudioDouble.instances).toHaveLength(0);
   });
 });
