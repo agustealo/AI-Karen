@@ -1497,26 +1497,29 @@ class CredentialVaultService(BaseService):
             ):
                 raise PermissionError(denial)
 
-            await self._audit(
-                session,
-                tenant_id=tenant_id,
-                user_id=context.user_id,
-                event_type=AuditEventType.ACCESS,
-                action="personal_model_credential_resolved",
-                resource_type="credential",
-                resource_id=str(credential.id),
-                credential_id=credential.id,
-                provider_id=provider.id,
-                correlation_id=context.correlation_id,
-                metadata={
-                    "provider_id": provider_id,
-                    "model_id": model_id,
-                    "execution_id": plan.execution_id,
-                    "policy_decision_id": plan.policy_decision_id,
-                },
-            )
-            # A failed audit commit denies the secret to the transport.
-            await session.commit()
+            try:
+                await self._audit(
+                    session,
+                    tenant_id=tenant_id,
+                    user_id=context.user_id,
+                    event_type=AuditEventType.ACCESS,
+                    action="personal_model_credential_resolved",
+                    resource_type="credential",
+                    resource_id=str(credential.id),
+                    credential_id=credential.id,
+                    provider_id=provider.id,
+                    correlation_id=context.correlation_id,
+                    metadata={
+                        "provider_id": provider_id,
+                        "model_id": model_id,
+                        "execution_id": plan.execution_id,
+                        "policy_decision_id": plan.policy_decision_id,
+                    },
+                )
+                # A failed durable audit denies the secret to the transport.
+                await session.commit()
+            except Exception:
+                raise PermissionError(denial) from None
             return plaintext
 
     async def create_external_account(
