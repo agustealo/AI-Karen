@@ -200,22 +200,18 @@ async def initialize_application_runtime(app: FastAPI) -> None:
     # This is the canonical production lifespan. The older startup helper's
     # optional voice hook is not invoked through create_application_lifespan.
     # Register only explicitly opted-in, locally healthy engines here.
-    from ai_karen_engine.services.voice_runtime import (
-        configure_local_voice_runtime,
-        configure_local_synthesis_runtime,
-    )
-    for mode, configure in (
-        ("transcription", configure_local_voice_runtime),
-        ("synthesis", configure_local_synthesis_runtime),
-    ):
-        try:
-            await configure()
-        except Exception as exc:
-            # Voice is optional. Never hide failures as a healthy capability.
-            logger.warning(
-                "Optional local voice initialization unavailable",
-                extra={"voice_mode": mode, "error_type": type(exc).__name__},
-            )
+    from ai_karen_engine.services.voice_runtime import configure_local_voice_runtime
+
+    try:
+        await configure_local_voice_runtime()
+    except Exception as exc:
+        # Transcription remains an optional host-configured engine. Synthesis
+        # must be authorized through the chosen governed modality owner;
+        # the retired Piper implementation must not be initialized here.
+        logger.warning(
+            "Optional local voice transcription initialization unavailable",
+            extra={"voice_mode": "transcription", "error_type": type(exc).__name__},
+        )
 
     setattr(app.state, _RUNTIME_ATTACHED_STATE_KEY, True)
 

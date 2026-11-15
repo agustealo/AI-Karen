@@ -11,7 +11,6 @@ import logging
 import os
 from typing import Awaitable, Callable, Protocol, TypeVar
 
-from ai_karen_engine.config.voice import LocalPiperSettings
 from ai_karen_engine.core.voice.contracts import (
     AudioInput,
     SynthesisInput,
@@ -40,7 +39,7 @@ class LocalSpeechEngine(Protocol):
 
 
 class LocalSynthesisEngine(Protocol):
-    """Registered local TTS engine; one configured voice per process."""
+    """Engine-neutral interface; registration must be governance-authorized."""
 
     @property
     def engine_id(self) -> str: ...
@@ -85,7 +84,7 @@ async def _execute_exclusively(
 
 @dataclass
 class VoiceRuntime:
-    """Single engine registry; no mock or browser-vendor fallback."""
+    """Shared voice capability owner; no implicit vendor fallback."""
 
     speech_engine: LocalSpeechEngine | None = None
     synthesis_engine: LocalSynthesisEngine | None = None
@@ -96,9 +95,6 @@ class VoiceRuntime:
         default_factory=asyncio.Lock, init=False, repr=False
     )
     _local_engine_config: tuple[str, str, str] | None = field(
-        default=None, init=False, repr=False
-    )
-    _local_tts_config: LocalPiperSettings | None = field(
         default=None, init=False, repr=False
     )
 
@@ -235,54 +231,6 @@ async def configure_local_voice_runtime() -> VoiceCapabilities:
             return await runtime.capabilities()
 
 
-async def configure_local_synthesis_runtime() -> VoiceCapabilities:
-    """Register verified on-disk Piper engine only with explicit opt-in."""
-    async with _voice_bootstrap_lock:
-        runtime = get_voice_runtime()
-        async with runtime._synthesis_lock:
-            try:
-                settings = LocalPiperSettings.from_environment()
-            except ValueError as exc:
-                runtime.synthesis_engine = None
-                runtime._local_tts_config = None
-                logger.warning(
-                    "Local speech synthesis configuration rejected",
-                    extra={"error_code": str(exc)},
-                )
-                return await runtime.capabilities()
-            if not settings.enabled:
-                runtime.synthesis_engine = None
-                runtime._local_tts_config = None
-                return await runtime.capabilities()
-            current = await runtime.capabilities()
-            if current.synthesis_available and runtime._local_tts_config == settings:
-                return current
-            runtime.synthesis_engine = None
-            runtime._local_tts_config = None
-
-            from ai_karen_engine.services.local_piper_adapter import LocalPiperAdapter
-
-            adapter = LocalPiperAdapter(settings)
-            try:
-                await adapter.load()
-            except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
-                # Never log user text, model paths, CLI stderr or raw audio.
-                logger.warning(
-                    "Local speech synthesis unavailable",
-                    extra={"error_type": type(exc).__name__},
-                )
-                return await runtime.capabilities()
-            try:
-                unchanged = LocalPiperSettings.from_environment() == settings
-            except ValueError:
-                unchanged = False
-            if not unchanged:
-                return await runtime.capabilities()
-            runtime.synthesis_engine = adapter
-            runtime._local_tts_config = settings
-            return await runtime.capabilities()
-
-
 async def shutdown_local_voice_runtime() -> None:
     """Revoke process-owned voice engines once active inference has drained."""
     async with _voice_bootstrap_lock:
@@ -292,4 +240,3 @@ async def shutdown_local_voice_runtime() -> None:
                 runtime.speech_engine = None
                 runtime.synthesis_engine = None
                 runtime._local_engine_config = None
-                runtime._local_tts_config = None
