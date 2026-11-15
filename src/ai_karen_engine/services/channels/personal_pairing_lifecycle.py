@@ -12,6 +12,7 @@ from enum import StrEnum
 
 
 PAIRING_EVIDENCE_MAX_AGE = timedelta(minutes=5)
+PAIRING_QR_MAX_LIFETIME = timedelta(minutes=5)
 
 
 class PairingEvent(StrEnum):
@@ -133,7 +134,10 @@ def apply_pairing_observation(
             or not isinstance(expiry, datetime)
             or expiry.tzinfo is None or expiry.utcoffset() is None
             or expiry <= now
-            or (expiry - now).total_seconds() > 300
+            # Bound the QR's *entire* lifetime from provider issuance.
+            # An aged, still-authenticated callback must not reset its TTL
+            # to another five minutes at the time of SQL admission.
+            or expiry - observation.observed_at > PAIRING_QR_MAX_LIFETIME
             or observation.provider_receipt_id is not None
         ):
             raise PairingEvidenceDenied("Invalid, expired, or unsafely long-lived QR")
