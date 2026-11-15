@@ -143,8 +143,8 @@ export interface PluginCatalogEntry {
   enabled: boolean;
   /** Whether the plugin declares a GUI component */
   has_gui: boolean;
-  /** Backend-declared communication transport, not a generic executable UI. */
-  isCommunicationChannel: boolean;
+  /** Backend-declared communication transport. Older catalog fixtures omit it. */
+  isCommunicationChannel?: boolean;
   /** Whether the plugin passes prompt-first validation */
   promptFirstValid: boolean;
   /** Normalised UI manifest (present when has_gui is true) */
