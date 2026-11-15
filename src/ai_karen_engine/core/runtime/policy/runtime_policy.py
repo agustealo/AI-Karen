@@ -268,6 +268,24 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # The host-only Identity Vault resolver requires an exact personal
+        # credential execution grant. A general PolicyEvaluationRequest is
+        # intentionally NOT that trusted grant source: its capability list,
+        # permissions and provider choices can originate at ingress. A later
+        # runtime-owned admission step must verify the credential, model and
+        # authenticated principal before minting the exact execution grant.
+        if "model.personal_key.execute" in request.requested_capabilities:
+            return PolicyDecision(
+                decision_id=decision_id,
+                policy_version=policy_version,
+                allowed=False,
+                reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                denied_capabilities=["model.personal_key.execute"],
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
+                risk_level="high",
+                evaluated_at=evaluated_at,
+            )
+
         # Transport side effects must never be granted simply because the
         # caller requested a capability or named an installed plugin.
         # Only trusted ingress-authenticated permission context may authorize
