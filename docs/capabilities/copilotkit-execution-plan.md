@@ -432,6 +432,7 @@ Merge / rollout / rollback:
 
 | Date | Main/candidate SHA | What changed / observed | Affected IDs | Proof / next gate |
 |---|---|---|---|---|
+| 2026-11-15 | PR #849 `457cc58ee0e738584203eeb0d0f2286a8014f800` candidate | KCON-490: reject CORTEX-requested `model.personal_key.execute` at canonical `ChatRuntime` plan creation; retain other capabilities. Identity Vault exact execution grants remain unminted and provider execution disabled | KCON-490 | Existing Vault regression added; initial Main Quality Gate failed ledger-contract check; new exact-head CI and authorized live provider execution pending. NOT_DONE |
 | 2026-11-05 | `main@66c8913e` | Consolidated earlier static plan into this one living ledger; no runtime/code/browser acceptance claimed; CopilotKit view and source-level runtime mapped | KCON-001–980 baseline | Source review only; all implementation task checkboxes remain open pending task-specific proof |
 | 2026-11-05 | `main@66c8913e` | #648 and #658 previously merged; first-prompt cards/replay remain unverified in deployed consumer browser; #659 open | KCON-160, 260, 720, 730 | Exact-head authenticated browser + #659 conflict/CI disposition |
 | 2026-11-05 | `main@f200a885` | #661 merged verified text copy and explicit *new* canonical conversation handoff, not same-thread continuation | KCON-160 | Main Quality, Chat Burn, Presentation Contract green on PR head; deployed browser remains NOT_RUN |
