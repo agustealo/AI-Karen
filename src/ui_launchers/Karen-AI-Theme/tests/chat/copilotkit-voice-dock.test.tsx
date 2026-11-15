@@ -130,6 +130,23 @@ describe("first-class Copilot voice dock", () => {
     ).toContain("Browser speech"));
   });
 
+  it("recovers a retired voice from an otherwise available engine", async () => {
+    const retired = {
+      voice: { engine_id: "pocket-tts", voice_id: "retired" }, available: false,
+    };
+    api.getVoiceSelection.mockResolvedValueOnce(retired).mockResolvedValueOnce(approved);
+    render(<KarenCopilotVoiceDock port={port} />);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    expect(await screen.findByText("Saved voice unavailable")).toBeTruthy();
+    const voiceSelect = screen.getByRole("combobox", { name: "Local voice" }) as HTMLSelectElement;
+    expect(voiceSelect.value).toBe("_missing_voice_");
+    expect(screen.getByRole("button", { name: "Save voice" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.change(voiceSelect, { target: { value: "alba" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save voice" }));
+    await waitFor(() => expect(api.setVoiceSelection).toHaveBeenCalledWith("pocket-tts", "alba"));
+    expect(await screen.findByText(/Local voice saved for your account/)).toBeTruthy();
+  });
+
   it("never confirms a voice preference when server readback disagrees", async () => {
     api.getVoiceSelection.mockResolvedValue(browser);
     render(<KarenCopilotVoiceDock port={port} />);
