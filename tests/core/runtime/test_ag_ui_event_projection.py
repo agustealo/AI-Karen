@@ -867,7 +867,7 @@ def test_time_capability_projects_attested_card_without_inventing_model_receipt(
     [
         ("", 2),
         (" ", 2),
-        ("\\t", 2),
+        ("\t", 2),
         ("p" * 129, 2),
         ("valid", -1),
         ("valid", True),
