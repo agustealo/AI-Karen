@@ -1,10 +1,16 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   extractAssistantSpeech,
   KarenBrowserSpeechPlayback,
 } from "@/components/chat/KarenBrowserSpeechPlayback";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
+
+const api = vi.hoisted(() => ({
+  getVoiceSelection: vi.fn(),
+  synthesizeLocalVoice: vi.fn(),
+}));
+vi.mock("@/lib/api", () => ({ apiClient: api }));
 
 const voices = [
   { voiceURI: "local-en", name: "Local English", lang: "en-US", default: true },
@@ -21,6 +27,11 @@ let cancel: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   localStorage.clear();
+  api.getVoiceSelection.mockReset();
+  api.synthesizeLocalVoice.mockReset();
+  api.getVoiceSelection.mockResolvedValue({
+    voice: { engine_id: null, voice_id: null }, available: false,
+  });
   spoken = [];
   speak = vi.fn();
   cancel = vi.fn();
@@ -49,21 +60,20 @@ afterEach(() => {
 });
 
 describe("canonical assistant speech playback", () => {
-  it("requires an explicit click and uses the selected browser voice", () => {
+  it("requires an explicit click and uses a selected browser voice", async () => {
     localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify({ ttsVoiceURI: "local-fr" }));
     render(<KarenBrowserSpeechPlayback message={{ id: "a1", content: "Bonjour Karen" }} />);
     expect(speak).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
-    expect(speak).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(1));
     expect(spoken[0].voice?.voiceURI).toBe("local-fr");
     expect(spoken[0].text).toBe("Bonjour Karen");
-    expect(screen.getByRole("button", { name: "Stop reading Karen's reply" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Stop reading Karen's reply" }));
     expect(cancel).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Read Karen's reply aloud" })).toBeTruthy();
   });
 
-  it("reads SDK text parts, but ignores non-text presentations", () => {
+  it("reads SDK text parts, never non-text presentations", async () => {
     const msg = { parts: [
       { type: "text", text: "First" }, { type: "tool", value: "secret" },
       { type: "text", text: "second" },
@@ -71,35 +81,89 @@ describe("canonical assistant speech playback", () => {
     expect(extractAssistantSpeech(msg)).toBe("First second");
     render(<KarenBrowserSpeechPlayback message={msg} />);
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(spoken.length).toBe(1));
     expect(spoken[0].text).toBe("First second");
     expect(spoken[0].text).not.toContain("secret");
   });
 
-  it("fails closed rather than silently choosing a different saved voice", () => {
+  it("fails closed rather than silently choosing a different saved browser voice", async () => {
     localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify({ ttsVoiceURI: "missing" }));
     render(<KarenBrowserSpeechPlayback message={{ content: "Hello" }} />);
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
-    expect(screen.getByRole("alert").textContent).toMatch(/saved browser voice is unavailable/i);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/saved browser voice is unavailable/i));
     expect(speak).not.toHaveBeenCalled();
   });
 
-  it("plays all chunks without truncation, and never advances after cancellation", () => {
+  it("plays all browser chunks without truncation, and never advances after cancellation", async () => {
     const text = Array.from({ length: 300 }, (_, i) => "word" + i).join(" ");
     render(<KarenBrowserSpeechPlayback message={{ content: text }} />);
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
-    expect(spoken.length).toBe(1);
+    await waitFor(() => expect(spoken.length).toBe(1));
     act(() => spoken[0].onend?.());
-    expect(spoken.length).toBe(2);
+    await waitFor(() => expect(spoken.length).toBe(2));
     fireEvent.click(screen.getByRole("button", { name: "Stop reading Karen's reply" }));
     act(() => spoken[1].onend?.());
     expect(spoken.length).toBe(2);
   });
 
-  it("has no autoplay on saved history mount and revokes speech on unmount", () => {
+  it("has no autoplay on saved history and revokes speech on unmount", async () => {
     const view = render(<KarenBrowserSpeechPlayback message={{ content: "Saved assistant reply" }} />);
     expect(speak).not.toHaveBeenCalled();
+    expect(api.getVoiceSelection).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(1));
     view.unmount();
     expect(cancel).toHaveBeenCalled();
+  });
+
+  it("runs the user-selected local engine without invoking browser speech", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    api.synthesizeLocalVoice.mockResolvedValue(new Blob([new Uint8Array(48)], { type: "audio/wav" }));
+    const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:karen");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const pause = vi.fn();
+    const play = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("Audio", class {
+      src: string;
+      onended?: () => void;
+      onerror?: () => void;
+      pause = pause;
+      play = play;
+      constructor(url: string) { this.src = url; }
+    });
+    render(<KarenBrowserSpeechPlayback message={{ content: "Hello from Pocket." }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(api.synthesizeLocalVoice).toHaveBeenCalledOnce());
+    expect(api.synthesizeLocalVoice.mock.calls[0].slice(0, 3)).toEqual([
+      "pocket-tts", "alba", "Hello from Pocket.",
+    ]);
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(speak).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop reading Karen's reply" }));
+    expect(pause).toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledWith("blob:karen");
+    create.mockRestore();
+    revoke.mockRestore();
+  });
+
+  it("never falls back to vendor speech when selected model is unavailable", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: false,
+    });
+    render(<KarenBrowserSpeechPlayback message={{ content: "Private" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/local speech engine is unavailable/i));
+    expect(speak).not.toHaveBeenCalled();
+    expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when user voice preferences cannot be verified", async () => {
+    api.getVoiceSelection.mockRejectedValue(new Error("network unavailable"));
+    render(<KarenBrowserSpeechPlayback message={{ content: "Private" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/network unavailable/i));
+    expect(speak).not.toHaveBeenCalled();
   });
 });
