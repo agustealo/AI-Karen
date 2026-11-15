@@ -85,6 +85,8 @@ class PluginCredentialDenied(PermissionError):
 class CredentialVaultService(BaseService):
     """Canonical tenant-scoped runtime for credentials and external accounts."""
 
+    _OWNED_MODEL_CREDENTIAL_TYPE = "model_api_key"
+
     _REQUIRED_TABLES = {
         "identity_providers",
         "credentials",
@@ -206,7 +208,10 @@ class CredentialVaultService(BaseService):
         """Add creator fencing without replacing the tenant query authority."""
         if owner_user_id is None:
             return ()
-        return (Credential.created_by == cls._require_credential_owner(owner_user_id),)
+        return (
+            Credential.created_by == cls._require_credential_owner(owner_user_id),
+            Credential.credential_type == cls._OWNED_MODEL_CREDENTIAL_TYPE,
+        )
 
     @classmethod
     def _require_matching_credential_actor(
@@ -1209,9 +1214,24 @@ class CredentialVaultService(BaseService):
         tenant_id: uuid.UUID,
         user_id: str,
     ) -> Credential:
+        self._require_credential_owner(user_id)
+        if credential_data.credential_type != self._OWNED_MODEL_CREDENTIAL_TYPE:
+            raise ValueError("Consumer credential must be a model API key")
+        self._require_owned_model_secret(secrets)
         return await self.create_credential(
-            credential_data, secrets, tenant_id, self._require_credential_owner(user_id)
+            credential_data, secrets, tenant_id, user_id
         )
+
+    @staticmethod
+    def _require_owned_model_secret(secrets: List[CredentialSecretCreate]) -> None:
+        if (
+            len(secrets) != 1
+            or secrets[0].secret_type != "api_key"
+            or not isinstance(secrets[0].encrypted_value, str)
+            or not secrets[0].encrypted_value.strip()
+            or len(secrets[0].encrypted_value.encode("utf-8")) > 4096
+        ):
+            raise ValueError("Consumer model credentials require one bounded API key")
 
     async def get_owned_credential(
         self, credential_id: uuid.UUID, tenant_id: uuid.UUID, user_id: str
@@ -1263,6 +1283,7 @@ class CredentialVaultService(BaseService):
         tenant_id: uuid.UUID,
         user_id: str,
     ) -> Optional[TokenRotationResult]:
+        self._require_owned_model_secret(new_secrets)
         return await self.rotate_credential(
             credential_id, new_secrets, tenant_id, self._require_credential_owner(user_id),
             owner_user_id=user_id,
