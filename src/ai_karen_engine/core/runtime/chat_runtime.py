@@ -2845,7 +2845,14 @@ class ChatRuntime:
                 else str(decision.risk_level)
             ),
         )
-        allowed_caps = list(decision.required_capabilities)
+        # Cognitive requirements are not authorization to decrypt personal
+        # model credentials. RuntimePolicy must mint this capability only with
+        # an exact subject/provider/model/credential execution grant.
+        # Until that trusted grant path exists, fail closed at plan creation.
+        allowed_caps = [
+            capability for capability in decision.required_capabilities
+            if capability != "model.personal_key.execute"
+        ]
         if decision.memory_write_allowed and "memory.write" not in allowed_caps:
             allowed_caps.append("memory.write")
 
