@@ -18,7 +18,7 @@ import type {
   VoiceCatalog, VoiceEngine, VoiceSelectionResponse,
 } from "@/lib/voice-capabilities";
 
-type Discovery = "loading" | "ready" | "unavailable";
+type Discovery = "idle" | "loading" | "ready" | "unavailable";
 type Listening = "checking" | "ready" | "unavailable";
 type STTCapabilities = { status: string; transcription_available: boolean };
 
@@ -44,7 +44,7 @@ export function KarenCopilotVoiceDock({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [discovery, setDiscovery] = useState<Discovery>("loading");
+  const [discovery, setDiscovery] = useState<Discovery>("idle");
   const [listening, setListening] = useState<Listening>("checking");
   const [catalog, setCatalog] = useState<VoiceCatalog | null>(null);
   const [saved, setSaved] = useState<VoiceSelectionResponse | null>(null);
@@ -87,12 +87,24 @@ export function KarenCopilotVoiceDock({
   useEffect(() => {
     mounted.current = true;
     const generation = ++epoch.current;
-    void refresh(generation);
+    // Do not cold-load every TTS model when opening a chat. The expensive
+    // engine/voice catalog is requested only after an explicit UI gesture.
+    void apiClient.get<STTCapabilities>("/api/voice/capabilities")
+      .then((capabilities) => {
+        if (!mounted.current || epoch.current !== generation) return;
+        setListening(capabilities.transcription_available === true &&
+          capabilities.status === "ready" ? "ready" : "unavailable");
+      })
+      .catch(() => {
+        if (mounted.current && epoch.current === generation) {
+          setListening("unavailable");
+        }
+      });
     return () => {
       mounted.current = false;
       ++epoch.current;
     };
-  }, [refresh]);
+  }, []);
 
   const retry = () => {
     if (savingRef.current) return;
@@ -117,7 +129,8 @@ export function KarenCopilotVoiceDock({
   );
   const savedMissing = Boolean(saved?.voice.engine_id &&
     (!saved.available || !savedEngine || !savedVoice));
-  const outputLabel = discovery !== "ready" ? "Checking speech…" :
+  const outputLabel = discovery === "idle" ? "Open voice options to check" :
+    discovery !== "ready" ? "Checking speech…" :
     savedMissing ? "Saved voice unavailable" :
     saved?.voice.engine_id && savedEngine && savedVoice
       ? `${savedEngine.display_name} · ${savedVoice.name}`
@@ -216,7 +229,14 @@ export function KarenCopilotVoiceDock({
           <button type="button"
             aria-expanded={open}
             aria-controls="karen-copilot-voice-options"
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => {
+              const opening = !open;
+              setOpen(opening);
+              if (opening && discovery === "idle") {
+                setDiscovery("loading");
+                void refresh(++epoch.current);
+              }
+            }}
             className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-input px-3 text-xs font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
             <Settings2 className="h-4 w-4" aria-hidden="true" />
             {open ? "Hide voice options" : "Voice options"}
