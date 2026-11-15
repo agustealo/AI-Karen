@@ -10,9 +10,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Volume2, Square } from "lucide-react";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
+import { apiClient } from "@/lib/api";
 
 type SpeechPart = { type?: unknown; text?: unknown };
-type SpeechState = "idle" | "speaking";
+type SpeechState = "idle" | "speaking" | "local";
+type LocalVoiceCapabilities = {
+  synthesis_available: boolean;
+  synthesis_engine: string | null;
+  synthesis_voice_id: string | null;
+};
 
 // A browser can play only one response at a time. Keep one renderer-neutral
 // playback owner, and let message unmounting revoke only its own session.
@@ -144,6 +150,96 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
     speakNext();
   };
 
+  const playLocal = async () => {
+    if (state === "local") {
+      stop();
+      return;
+    }
+    if (!eligible) return;
+
+    // Every backend synthesis request is initiated by this explicit click.
+    // Browser speech is never started as an implicit fallback.
+    activePlayback?.();
+    setError(null);
+    const controller = new AbortController();
+    let active = true;
+    let media: HTMLAudioElement | null = null;
+    let objectUrl: string | null = null;
+    let releasePlayback: (() => void) | null = null;
+    const stopSession = () => {
+      if (!active) return;
+      active = false;
+      controller.abort();
+      releasePlayback?.();
+      releasePlayback = null;
+      if (media) {
+        media.onended = null;
+        media.onerror = null;
+        media.pause();
+        media.removeAttribute("src");
+        media = null;
+      }
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      if (activePlayback === stopSession) activePlayback = null;
+      if (session.current === stopSession) session.current = null;
+      setState("idle");
+    };
+    session.current = stopSession;
+    activePlayback = stopSession;
+    setState("local");
+
+    try {
+      const capabilities = await apiClient.get<LocalVoiceCapabilities>("/api/voice/capabilities");
+      if (!active) return;
+      if (capabilities?.synthesis_available !== true ||
+          typeof capabilities.synthesis_engine !== "string" ||
+          !capabilities.synthesis_engine.trim() ||
+          typeof capabilities.synthesis_voice_id !== "string" ||
+          !capabilities.synthesis_voice_id.trim()) {
+        setError("Local voice synthesis is not ready. Browser read-aloud remains available.");
+        stopSession();
+        return;
+      }
+      for (const chunk of speechChunks(text)) {
+        if (!active) return;
+        const audio = await apiClient.synthesizeLocalSpeech(
+          chunk, capabilities.synthesis_voice_id, controller.signal,
+        );
+        if (!active) return;
+        objectUrl = URL.createObjectURL(audio);
+        media = new Audio(objectUrl);
+        const current = media;
+        await new Promise<void>((resolve, reject) => {
+          releasePlayback = resolve;
+          current.onended = () => resolve();
+          current.onerror = () => reject(new Error("local_audio_playback_failed"));
+          try {
+            void current.play().catch(reject);
+          } catch (error) {
+            reject(error);
+          }
+        });
+        if (!active) return;
+        releasePlayback = null;
+        current.onended = null;
+        current.onerror = null;
+        current.pause();
+        current.removeAttribute("src");
+        media = null;
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      stopSession();
+    } catch {
+      if (!active) return;
+      setError("Karen's local speech engine could not play this reply. Try browser read-aloud.");
+      stopSession();
+    }
+  };
+
   if (!eligible) return null;
   return (
     <div className="mt-2 flex flex-col items-start gap-1" data-testid="karen-assistant-speech">
@@ -158,6 +254,18 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
           ? <Square className="h-3.5 w-3.5" aria-hidden="true" />
           : <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />}
         {state === "speaking" ? "Stop reading" : "Read aloud"}
+      </button>
+      <button
+        type="button"
+        onClick={() => void playLocal()}
+        aria-label={state === "local" ? "Stop Karen local voice" : "Try Karen local voice"}
+        title="Checks whether Karen's authenticated offline speech engine is ready. No external voice provider is selected."
+        className="inline-flex h-9 items-center gap-2 rounded-lg border border-border/70 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        {state === "local"
+          ? <Square className="h-3.5 w-3.5" aria-hidden="true" />
+          : <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />}
+        {state === "local" ? "Stop local voice" : "Try local voice"}
       </button>
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
     </div>
