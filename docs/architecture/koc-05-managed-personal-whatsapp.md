@@ -918,3 +918,36 @@ historical-status projection rules and no-request behavior; the existing
 disposable live PostgreSQL suite continues to exercise real pending and
 provider-claimed requests under tenant isolation, without disabling the
 ledger integrity trigger or pretending a third-party verifier exists.
+
+## KOC-05 canonical pairing reducer evidence freshness and type guards
+
+The signed callback decoder already enforced HMAC integrity, strict JSON type
+contracts, tenant/provider/connection scope and a five-minute observation age
+window, but the canonical `apply_pairing_observation` reducer previously
+accepted any truthy `authenticated` flag and typed Python dataclasses did not
+perform runtime validation. Internal invocation with a correct sequence and
+revision could also submit an arbitrarily old unlink observation.
+
+The reducer now enforces strict native booleans for authentication and
+approval flags, strict integer revision and sequence types (excluding bool),
+actual `PairingEvent` values, timezone-aware timestamps and a
+`PAIRING_EVIDENCE_MAX_AGE` of five minutes. The signed callback imports
+this same age contract instead of maintaining an independent constant.
+Malformed QR timestamps fail closed with a `PairingEvidenceDenied` error,
+not an unhandled `AttributeError`/type error.
+
+This is a **secondary validation boundary**, not an alternative callback
+authentication path. HMAC source authentication, vetted installation lookup,
+vault-resolved signing secrets, owner/tenant isolation, serializable revision
+and sequence fencing, retired-session terminal-only transitions, and the
+independent-erasure blockers remain in their existing owners. Local consent
+revocation still allows timely authenticated teardown, without asserting
+remote credential erasure.
+
+Canonical unit tests cover truthy type coercions, exact five-minute edge
+behavior, old QR/unlink observations, malformed timestamp data and legitimate
+consent-revoked teardown. The existing real PostgreSQL integration now
+attempts a stale, otherwise correct next-sequence disconnect and verifies the
+stored pairing sequence cannot advance before continuing the valid teardown.
+No provider was activated, no migration or new route added, and final
+retirement cleanup remains unauthorized.
