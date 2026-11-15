@@ -7,8 +7,11 @@ pure reducer must never be called with raw unverified webhook/QR payloads.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
+
+
+PAIRING_EVIDENCE_MAX_AGE = timedelta(minutes=5)
 
 
 class PairingEvent(StrEnum):
@@ -72,19 +75,42 @@ def apply_pairing_observation(
     Persist transitions through a connection-scoped, revision-fenced SQL CAS.
     This reducer alone cannot commit, generate, or return a pairing QR.
     """
-    if now.tzinfo is None or observation.observed_at.tzinfo is None:
-        raise PairingEvidenceDenied("Timezone-aware server and event timestamps required")
     if (
-        not observation.authenticated
-        or not snapshot.tenant_id
-        or not snapshot.connection_id
-        or not snapshot.provider_id
+        not isinstance(now, datetime)
+        or not isinstance(observation.observed_at, datetime)
+        or now.tzinfo is None
+        or observation.observed_at.tzinfo is None
+        or now.utcoffset() is None
+        or observation.observed_at.utcoffset() is None
+    ):
+        raise PairingEvidenceDenied("Timezone-aware server and event timestamps required")
+    # Dataclass annotations do not enforce runtime types. Do not let bool/int
+    # equivalence, truthy authentication claims, or stale internal events
+    # bypass the signed callback's admission constraints at the SQL reducer.
+    if (
+        type(observation.authenticated) is not bool
+        or observation.authenticated is not True
+        or type(consent_current) is not bool
+        or type(provider_vetted_and_enabled) is not bool
+        or type(snapshot.connection_revision) is not int
+        or type(observation.connection_revision) is not int
+        or type(snapshot.sequence) is not int
+        or type(observation.sequence) is not int
+        or type(observation.event) is not PairingEvent
+        or not isinstance(snapshot.tenant_id, str)
+        or not isinstance(snapshot.connection_id, str)
+        or not isinstance(snapshot.provider_id, str)
+        or not snapshot.tenant_id.strip()
+        or not snapshot.connection_id.strip()
+        or not snapshot.provider_id.strip()
         or (snapshot.tenant_id, snapshot.connection_id, snapshot.provider_id)
         != (observation.tenant_id, observation.connection_id, observation.provider_id)
         or observation.connection_revision != snapshot.connection_revision
         or observation.connection_revision < 1
+        or snapshot.sequence < 0
         or observation.sequence != snapshot.sequence + 1
         or observation.observed_at > now
+        or now - observation.observed_at > PAIRING_EVIDENCE_MAX_AGE
     ):
         raise PairingEvidenceDenied("Provider evidence or pairing scope not authorized")
     # Reject unusable receipt identifiers before the phase reducer can
@@ -104,7 +130,8 @@ def apply_pairing_observation(
         expiry = observation.qr_expires_at
         if (
             snapshot.phase not in (PairingPhase.READY, PairingPhase.QR_AVAILABLE)
-            or expiry is None or expiry.tzinfo is None
+            or not isinstance(expiry, datetime)
+            or expiry.tzinfo is None or expiry.utcoffset() is None
             or expiry <= now
             or (expiry - now).total_seconds() > 300
             or observation.provider_receipt_id is not None
@@ -121,7 +148,9 @@ def apply_pairing_observation(
     if observation.event is PairingEvent.LINK_CONFIRMED:
         if (
             snapshot.phase is not PairingPhase.QR_AVAILABLE
-            or snapshot.qr_expires_at is None
+            or not isinstance(snapshot.qr_expires_at, datetime)
+            or snapshot.qr_expires_at.tzinfo is None
+            or snapshot.qr_expires_at.utcoffset() is None
             or snapshot.qr_expires_at <= observation.observed_at
             or snapshot.qr_expires_at <= now
             or not observation.provider_receipt_id
