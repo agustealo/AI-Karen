@@ -285,6 +285,59 @@ async def test_pairing_status_never_promotes_saved_receipt_to_live_connected():
     assert kwargs["authorized_plan"] == "trusted-plan"
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forged", [
+    {"live_connected": True},
+    {"live_connected": 1},
+    {"qr_available": True},
+    {"qr_available": 0},
+    {"availability": "available"},
+    {"last_observed_phase": "remotely_verified"},
+    {"provider_unlinked": True},
+    {"provider_unlinked": "true"},
+    {"session_reference": "vendor-private-session"},
+])
+async def test_pairing_status_rejects_unsupported_live_or_malformed_host_claims(forged):
+    host, request = host_context()
+    host.get_personal_pairing_status.return_value = {
+        "availability": "unavailable",
+        "last_observed_phase": "connected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": False,
+        **forged,
+    }
+    with pytest.raises(HTTPException) as error:
+        await api.get_personal_whatsapp_pairing_status(
+            connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+            request=request, user=actor(),
+        )
+    assert error.value.status_code == 503
+    assert error.value.detail == "Personal channel status unavailable"
+    assert "vendor-private-session" not in error.value.detail
+    host.get_personal_pairing_status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pairing_status_keeps_vendor_unlink_claim_without_asserting_live_erasure():
+    host, request = host_context()
+    host.get_personal_pairing_status.return_value = {
+        "availability": "configured",
+        "last_observed_phase": "disconnected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": True,
+    }
+    result = await api.get_personal_whatsapp_pairing_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert result.provider_unlinked is True
+    assert result.live_connected is False
+    assert result.qr_available is False
+
+
 @pytest.mark.asyncio
 async def test_foreign_owner_cannot_query_pairing_status():
     host, request = host_context(owner=False)
