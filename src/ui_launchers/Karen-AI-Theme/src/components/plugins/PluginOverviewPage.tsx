@@ -124,6 +124,8 @@ type PluginHealthCardProps = {
   displayName: string;
   description: string;
   version: string;
+  declaresUi: boolean;
+  isCommunicationChannel: boolean;
 };
 
 type OperationOverrideState = {
@@ -507,6 +509,8 @@ function PluginHealthCard({
   displayName,
   description,
   version,
+  declaresUi,
+  isCommunicationChannel,
 }: PluginHealthCardProps) {
   const { refresh } = usePluginRegistry();
   const health = usePluginHealth(pluginId);
@@ -540,23 +544,10 @@ function PluginHealthCard({
     [health.backendState],
   );
 
-  const hasUiCapabilities = useMemo(() => {
-    /*
-     * UI capability should eventually come from plugin manifest/health metadata.
-     * Until that contract exists, use only observable frontend/import-map state.
-     */
-    return (
-      health.frontendMountState !== 'idle' ||
-      isUiRegistered ||
-      derivedUiInstallStatus === 'installed' ||
-      operationOverride.uiInstallStatus === 'installed'
-    );
-  }, [
-    derivedUiInstallStatus,
-    health.frontendMountState,
-    isUiRegistered,
-    operationOverride.uiInstallStatus,
-  ]);
+  // Only the backend manifest can declare a UI contribution. An installed
+  // backend transport (including intentionally disabled channels) never
+  // implies that a frontend package is missing or requires registration.
+  const hasUiCapabilities = declaresUi;
 
   const derivedUiRegistrationStatus = useMemo(
     () =>
@@ -799,7 +790,11 @@ function PluginHealthCard({
 
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">Frontend:</span>
-          <FrontendStateBadge state={frontendDisplayState} />
+          {hasUiCapabilities ? (
+            <FrontendStateBadge state={frontendDisplayState} />
+          ) : (
+            <span className="text-muted-foreground">not required (backend-only)</span>
+          )}
         </div>
 
         {hasUiCapabilities && (
@@ -822,6 +817,15 @@ function PluginHealthCard({
           Frontend registration only confirms that the plugin has a UI entry.
           Its installable UI package is not confirmed as installed. To upload or
           uninstall a complete plugin package, use the Plugin Store.
+        </p>
+      )}
+
+      {isCommunicationChannel && (
+        <p className="text-xs text-muted-foreground" role="note">
+          This is a communication transport governed by ChannelHost, not a
+          generic plugin executable. Backend disabled does not mean its UI
+          failed to register. Connection readiness requires a configured
+          host, Vault credentials, authorized activation and provider evidence.
         </p>
       )}
 
@@ -890,7 +894,7 @@ function PluginHealthCard({
           </Button>
         )}
 
-        {health.backendState !== 'error' && (
+        {!isCommunicationChannel && health.backendState !== 'error' && (
           <>
             {health.backendState === 'active' && (
               <Button
@@ -918,7 +922,7 @@ function PluginHealthCard({
           </>
         )}
 
-        {health.backendState !== 'uninstalled' && uiInstallStatus === 'installed' && (
+        {hasUiCapabilities && health.backendState !== 'uninstalled' && uiInstallStatus === 'installed' && (
           <Button
             type="button"
             variant="destructive"
@@ -930,7 +934,7 @@ function PluginHealthCard({
           </Button>
         )}
 
-        {health.backendState === 'uninstalled' && (
+        {hasUiCapabilities && health.backendState === 'uninstalled' && (
           <Button
             type="button"
             variant="outline"
@@ -1033,6 +1037,8 @@ export default function PluginOverviewPage() {
                   displayName={plugin.displayName}
                   description={plugin.description}
                   version={plugin.version}
+                  declaresUi={plugin.has_gui}
+                  isCommunicationChannel={plugin.isCommunicationChannel}
                 />
               ))}
             </div>
