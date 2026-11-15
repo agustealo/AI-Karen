@@ -126,7 +126,7 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q src server scripts
 
-      - name: Voice Runtime and opt-in Piper synthesis contracts
+      - name: Voice Runtime STT and engine-neutral synthesis contracts
         run: pytest tests/core/voice -q
 
       - name: Verify authentication and training route imports
