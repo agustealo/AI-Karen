@@ -1,278 +1,310 @@
-
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { Label } from '@/components/ui/label';
+/**
+ * Browser voice preference only. This UI must not claim that a missing
+ * Web Speech voice is a server outage or that a default voice can play.
+ * Karen's authenticated VoiceRuntime owns local model capabilities.
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertCircle, Loader2, RefreshCw, Volume2 } from "lucide-react";
+import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import type { KarenSettings } from '@/lib/types';
-import { KAREN_SETTINGS_LS_KEY, DEFAULT_KAREN_SETTINGS } from '@/lib/constants';
-import { Button } from '../ui/button';
-import { useToast } from '@/hooks/use-toast';
-import { AlertCircle, Loader2 } from 'lucide-react';
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
+import { DEFAULT_KAREN_SETTINGS, KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
 
 const DEFAULT_VOICE_SENTINEL = "_DEFAULT_VOICE_";
+const DISCOVERY_DELAYS_MS = [250, 1000, 3000] as const;
+type VoiceStatus = "loading" | "ready" | "empty" | "unsupported" | "failed";
 
-/**
- * @file VoiceSettings.tsx
- * @description Local-only browser voice preferences for Karen.
- *
- * Local-only boundary:
- * - Text-To-Speech (TTS) voices are browser-dependent.
- * - This preference is stored only in the browser's localStorage.
- * - It is not synced to the backend and does not affect server-side logic.
- */
+const readPreferredVoice = (): string | null => {
+  try {
+    const raw = localStorage.getItem(KAREN_SETTINGS_LS_KEY);
+    if (!raw) return DEFAULT_KAREN_SETTINGS.ttsVoiceURI;
+    const settings: unknown = JSON.parse(raw);
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return null;
+    const value = (settings as Record<string, unknown>).ttsVoiceURI;
+    return typeof value === "string" && value.trim() ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const persistPreferredVoice = (voiceURI: string | null): void => {
+  // Read the latest value at save time so a voice edit never overwrites
+  // unrelated settings saved by a different panel.
+  const raw = localStorage.getItem(KAREN_SETTINGS_LS_KEY);
+  const parsed: unknown = raw ? JSON.parse(raw) : DEFAULT_KAREN_SETTINGS;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("invalid_local_settings");
+  }
+  localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify({
+    ...(parsed as Record<string, unknown>), ttsVoiceURI: voiceURI,
+  }));
+};
+
 export default function VoiceSettings() {
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string | null>(
-    DEFAULT_KAREN_SETTINGS.ttsVoiceURI
-  );
-  const [isLoadingVoices, setIsLoadingVoices] = useState(true);
   const { toast } = useToast();
-
-  const populateVoiceList = useCallback(() => {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        setAvailableVoices(voices);
-        setIsLoadingVoices(false);
-      } else {
-        // Voices might load asynchronously. If no voices found, try again after a short delay.
-        // This timeout is a common workaround for browsers where getVoices() is initially empty.
-        setTimeout(() => {
-            const currentVoices = window.speechSynthesis.getVoices();
-            if(currentVoices.length === 0) {
-                 // Still no voices after delay
-                 setIsLoadingVoices(false);
-            } else {
-                setAvailableVoices(currentVoices);
-                setIsLoadingVoices(false);
-            }
-        }, 500); // Adjust delay as needed, 500ms is a reasonable starting point
-      }
-    } else {
-      setIsLoadingVoices(false); // Speech synthesis not supported
-    }
-  }, []); // Empty dependency array: populateVoiceList reference is stable
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [status, setStatus] = useState<VoiceStatus>("loading");
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string | null>(null);
+  const [cycle, setCycle] = useState(0);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   useEffect(() => {
-    populateVoiceList(); // Initial call
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      // Listen for changes in available voices
-      window.speechSynthesis.addEventListener('voiceschanged', populateVoiceList);
-      return () => {
-        window.speechSynthesis.removeEventListener('voiceschanged', populateVoiceList);
-      };
-    }
-  }, [populateVoiceList]); // populateVoiceList is stable due to its own empty dep array
+    setSelectedVoiceURI(readPreferredVoice());
+  }, []);
 
   useEffect(() => {
-    try {
-      const storedSettingsStr = localStorage.getItem(KAREN_SETTINGS_LS_KEY);
-      let fullSettings: KarenSettings;
-      if (storedSettingsStr) {
-        const parsedSettings = JSON.parse(storedSettingsStr) as Partial<KarenSettings>;
-         fullSettings = { // Ensure all fields are present by merging with defaults
-            ...DEFAULT_KAREN_SETTINGS,
-            ...parsedSettings,
-            notifications: { // Deep merge for nested objects
-                ...DEFAULT_KAREN_SETTINGS.notifications,
-                ...(parsedSettings.notifications || {}),
-            },
-            personalFacts: Array.isArray(parsedSettings.personalFacts)
-              ? parsedSettings.personalFacts
-              : DEFAULT_KAREN_SETTINGS.personalFacts,
-            // Ensure new fields are handled even if not in old stored settings
-            ttsVoiceURI: parsedSettings.ttsVoiceURI === undefined // Check explicitly for undefined
-              ? DEFAULT_KAREN_SETTINGS.ttsVoiceURI
-              : parsedSettings.ttsVoiceURI,
-            customPersonaInstructions: typeof parsedSettings.customPersonaInstructions === 'string'
-              ? parsedSettings.customPersonaInstructions
-              : DEFAULT_KAREN_SETTINGS.customPersonaInstructions,
-        };
-        // If the stored string doesn't exactly match the fully formed settings, update localStorage
-        // This helps in migrating old settings or correcting partially formed ones.
-        if (storedSettingsStr !== JSON.stringify(fullSettings)) {
-            localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify(fullSettings));
-        }
-      } else {
-        // If no settings are found in localStorage, initialize with defaults
-        fullSettings = DEFAULT_KAREN_SETTINGS;
-        localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify(DEFAULT_KAREN_SETTINGS));
-      }
-      setSelectedVoiceURI(fullSettings.ttsVoiceURI);
-    } catch (error) {
-      console.error("Failed to load voice settings from localStorage:", error);
-      setSelectedVoiceURI(DEFAULT_KAREN_SETTINGS.ttsVoiceURI);
-      // Attempt to ensure localStorage is initialized with defaults if an error occurred
+    if (typeof window === "undefined" || !window.speechSynthesis ||
+        typeof window.speechSynthesis.getVoices !== "function") {
+      setStatus("unsupported");
+      return;
+    }
+    const synthesis = window.speechSynthesis;
+    let active = true;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let finalAttempt = false;
+
+    const refresh = () => {
+      if (!active) return;
       try {
-        localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify(DEFAULT_KAREN_SETTINGS));
-      } catch (lsError) {
-         console.error("Failed to save default voice settings to localStorage after error:", lsError);
+        // voiceURI identifies the actual speech engine voice, not the row index.
+        const unique = new Map<string, SpeechSynthesisVoice>();
+        for (const voice of synthesis.getVoices()) {
+          if (voice.voiceURI && !unique.has(voice.voiceURI)) {
+            unique.set(voice.voiceURI, voice);
+          }
+        }
+        const inventory = [...unique.values()];
+        setVoices(inventory);
+        if (inventory.length) {
+          setStatus("ready");
+        } else {
+          setStatus(finalAttempt ? "empty" : "loading");
+        }
+      } catch {
+        setStatus("failed");
+        setVoices([]);
       }
+    };
+    const onVoicesChanged = () => refresh();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    setStatus("loading");
+    refresh();
+    synthesis.addEventListener("voiceschanged", onVoicesChanged);
+    document.addEventListener("visibilitychange", onVisibility);
+    DISCOVERY_DELAYS_MS.forEach((delay, index) => {
+      timers.push(setTimeout(() => {
+        if (index === DISCOVERY_DELAYS_MS.length - 1) finalAttempt = true;
+        refresh();
+      }, delay));
+    });
+    return () => {
+      active = false;
+      timers.forEach(clearTimeout);
+      synthesis.removeEventListener("voiceschanged", onVoicesChanged);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [cycle]);
+
+  useEffect(() => () => {
+    previewRef.current = null;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
     }
   }, []);
 
-  const getFullCurrentSettingsFromStorage = (): KarenSettings => {
-    let currentFullSettings = { ...DEFAULT_KAREN_SETTINGS };
-    try {
-      const storedSettingsStr = localStorage.getItem(KAREN_SETTINGS_LS_KEY);
-      if (storedSettingsStr) {
-        const parsed = JSON.parse(storedSettingsStr) as Partial<KarenSettings>;
-        // Robust merging with defaults to handle potentially incomplete stored settings
-        currentFullSettings = {
-          ...DEFAULT_KAREN_SETTINGS,
-          ...parsed,
-          notifications: { ...DEFAULT_KAREN_SETTINGS.notifications, ...(parsed.notifications || {}) },
-          personalFacts: Array.isArray(parsed.personalFacts) ? parsed.personalFacts : DEFAULT_KAREN_SETTINGS.personalFacts,
-          customPersonaInstructions: typeof parsed.customPersonaInstructions === 'string' ? parsed.customPersonaInstructions : DEFAULT_KAREN_SETTINGS.customPersonaInstructions,
-          // ensure behavior settings are also preserved if this component saves
-          memoryDepth: parsed.memoryDepth || DEFAULT_KAREN_SETTINGS.memoryDepth,
-          personalityTone: parsed.personalityTone || DEFAULT_KAREN_SETTINGS.personalityTone,
-          personalityVerbosity: parsed.personalityVerbosity || DEFAULT_KAREN_SETTINGS.personalityVerbosity,
-        };
-      }
-    } catch (e) {
-      console.error("Error parsing current settings from storage, falling back to defaults for merge", e);
+  const stopPreview = useCallback(() => {
+    previewRef.current = null;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
     }
-    return currentFullSettings;
+    setPreviewing(false);
+  }, []);
+
+  const selectedVoice = voices.find((voice) => voice.voiceURI === selectedVoiceURI);
+  const missingSavedVoice = Boolean(selectedVoiceURI && status === "ready" && !selectedVoice);
+  const activeSelection = selectedVoice || voices.find((voice) => voice.default) || voices[0];
+
+  const previewVoice = () => {
+    if (previewing) {
+      stopPreview();
+      return;
+    }
+    if (status !== "ready" || !activeSelection ||
+        typeof SpeechSynthesisUtterance === "undefined") {
+      setPreviewError("No verified browser voice is available for playback.");
+      return;
+    }
+    stopPreview();
+    setPreviewError(null);
+    const speech = new SpeechSynthesisUtterance("Hello, I am Karen. This is my voice preview.");
+    speech.voice = activeSelection;
+    speech.lang = activeSelection.lang;
+    speech.onend = () => {
+      if (previewRef.current === speech) {
+        previewRef.current = null;
+        setPreviewing(false);
+      }
+    };
+    speech.onerror = () => {
+      if (previewRef.current === speech) {
+        previewRef.current = null;
+        setPreviewing(false);
+        setPreviewError("This browser could not play the selected voice.");
+      }
+    };
+    previewRef.current = speech;
+    setPreviewing(true);
+    try {
+      window.speechSynthesis.speak(speech);
+    } catch {
+      previewRef.current = null;
+      setPreviewing(false);
+      setPreviewError("This browser could not start speech playback.");
+    }
   };
 
   const saveSettings = () => {
-    try {
-      const currentFullSettings = getFullCurrentSettingsFromStorage();
-      const newSettings: KarenSettings = {
-        ...currentFullSettings, // Preserve settings from other tabs
-        ttsVoiceURI: selectedVoiceURI,
-      };
-      localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify(newSettings));
+    if (missingSavedVoice) {
       toast({
-        title: "Voice Settings Saved",
-        description: "Your preferred voice has been updated.",
+        title: "Voice unavailable",
+        description: "Select an available voice or reset to the default before saving.",
+        variant: "destructive",
       });
-    } catch (error) {
-      console.error("Failed to save voice settings to localStorage:", error);
+      return;
+    }
+    try {
+      persistPreferredVoice(selectedVoiceURI);
       toast({
-        title: "Error Saving Voice Settings",
-        description: "Could not save voice preferences. localStorage might be disabled or full.",
+        title: "Browser voice preference saved",
+        description: "The preference is stored on this device, not in Karen's server settings.",
+      });
+    } catch {
+      toast({
+        title: "Voice preference not saved",
+        description: "Browser storage is unavailable or contains invalid settings.",
         variant: "destructive",
       });
     }
   };
 
   const resetToDefaults = () => {
-    setSelectedVoiceURI(DEFAULT_KAREN_SETTINGS.ttsVoiceURI);
     try {
-      const currentFullSettings = getFullCurrentSettingsFromStorage();
-      const newSettings: KarenSettings = {
-        ...currentFullSettings, // Preserve settings from other tabs
-        ttsVoiceURI: DEFAULT_KAREN_SETTINGS.ttsVoiceURI // Reset only voice
-      };
-      localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify(newSettings));
+      persistPreferredVoice(null);
+      stopPreview();
+      setSelectedVoiceURI(null);
+      toast({ title: "Browser voice preference reset" });
+    } catch {
       toast({
-        title: "Voice Settings Reset",
-        description: "Voice preference has been reset to default.",
+        title: "Voice preference not reset",
+        description: "Browser storage is unavailable.",
+        variant: "destructive",
       });
-    } catch (error) {
-       console.error("Failed to reset voice settings in localStorage:", error);
-       toast({
-          title: "Error Resetting Voice Settings",
-          description: "Could not reset voice preferences.",
-          variant: "destructive",
-        });
     }
   };
-
-  if (typeof window !== 'undefined' && !window.speechSynthesis) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Text-to-Speech Voice</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Speech Synthesis Not Supported</AlertTitle>
-            <AlertDescription>
-              Your browser does not support the Web Speech API, which is required for changing voices.
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
-    );
-  }
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-lg">Text-to-Speech Voice</CardTitle>
         <CardDescription>
-          Choose a preferred voice for Karen AI&apos;s spoken responses. Availability depends on your browser and operating system.
+          Select and preview a browser voice for spoken replies. Local model-based
+          speech synthesis is a separate Karen runtime capability.
         </CardDescription>
       </CardHeader>
-      <CardContent className="p-0">
-        <div className="divide-y divide-border">
-            <div className="px-6 py-4">
-                {isLoadingVoices && (
-                <div className="flex items-center space-x-2 text-muted-foreground">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    <span>Loading available voices...</span>
-                </div>
-                )}
-                {!isLoadingVoices && availableVoices.length === 0 && (
-                <Alert variant="default" className="bg-muted/30">
-                    <AlertCircle className="h-4 w-4 !text-accent-foreground" />
-                    <AlertTitle className="font-semibold text-accent-foreground">No Voices Found</AlertTitle>
-                    <AlertDescription className="text-muted-foreground text-xs">
-                    No speech synthesis voices were found in your browser. Voice selection is not available.
-                    Karen will use the default system voice if TTS is attempted.
-                    </AlertDescription>
-                </Alert>
-                )}
-                {availableVoices.length > 0 && (
-                <div className="space-y-2">
-                    <Label htmlFor="tts-voice">Select Voice</Label>
-                    <Select
-                    value={selectedVoiceURI || DEFAULT_VOICE_SENTINEL} 
-                    onValueChange={(value) => setSelectedVoiceURI(value === DEFAULT_VOICE_SENTINEL ? null : value)}
-                    disabled={availableVoices.length === 0 || isLoadingVoices}
-                    >
-                    <SelectTrigger id="tts-voice">
-                        <SelectValue placeholder="Default system voice" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value={DEFAULT_VOICE_SENTINEL}>Default system voice</SelectItem>
-                        {availableVoices.map((voice, index) => (
-                        <SelectItem
-                            key={`voice-option-${voice.voiceURI}-${index}`} // Ensures unique key
-                            value={voice.voiceURI} // Value should still be voice.voiceURI
-                        >
-                            {voice.name} ({voice.lang}) {voice.default ? "[System Default]" : ""}
-                        </SelectItem>
-                        ))}
-                    </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                    If no voice is selected, or the selected voice is unavailable, the browser&apos;s default will be used.
-                    </p>
-                </div>
-                )}
-            </div>
+      <CardContent className="space-y-4">
+        {status === "loading" && (
+          <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            Checking browser speech voices…
+          </p>
+        )}
+        {(status === "empty" || status === "unsupported" || status === "failed") && (
+          <Alert>
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>
+              {status === "empty" ? "No Browser Voices Found" :
+                status === "unsupported" ? "Browser Speech Unsupported" : "Voice Discovery Failed"}
+            </AlertTitle>
+            <AlertDescription>
+              {status === "empty"
+                ? "This browser reported no installed speech voices. Check the operating system speech service or try another browser. Spoken output cannot be assumed to work."
+                : status === "unsupported"
+                  ? "This browser does not expose speech synthesis."
+                  : "The browser failed to enumerate speech voices. Retry discovery."}
+            </AlertDescription>
+          </Alert>
+        )}
+        {status === "ready" && (
+          <div className="space-y-2">
+            <Label htmlFor="tts-voice">Browser voice</Label>
+            <Select
+              value={selectedVoice ? selectedVoice.voiceURI : DEFAULT_VOICE_SENTINEL}
+              onValueChange={(value) => {
+                stopPreview();
+                setSelectedVoiceURI(value === DEFAULT_VOICE_SENTINEL ? null : value);
+              }}
+            >
+              <SelectTrigger id="tts-voice">
+                <SelectValue placeholder="Browser default voice" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={DEFAULT_VOICE_SENTINEL}>Browser default voice</SelectItem>
+                {voices.map((voice) => (
+                  <SelectItem key={voice.voiceURI} value={voice.voiceURI}>
+                    {voice.name} ({voice.lang}) {voice.default ? "[Default]" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {missingSavedVoice && (
+              <p role="alert" className="text-sm text-destructive">
+                Your previously selected voice is no longer available on this device.
+                Select a new one or reset to the browser default.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Browser voices and quality depend on your operating system. Voice
+              preview does not send a chat message.
+            </p>
+          </div>
+        )}
+        {previewError && <p role="alert" className="text-sm text-destructive">{previewError}</p>}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button" variant="outline"
+            onClick={() => { stopPreview(); setCycle((current) => current + 1); }}
+            aria-label="Refresh browser voices"
+          >
+            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />Refresh voices
+          </Button>
+          <Button
+            type="button" variant="outline" onClick={previewVoice}
+            disabled={status !== "ready" || !activeSelection}
+          >
+            <Volume2 className="mr-2 h-4 w-4" aria-hidden="true" />
+            {previewing ? "Stop preview" : "Preview voice"}
+          </Button>
         </div>
       </CardContent>
-      <CardFooter className="flex justify-end space-x-2">
-          <Button variant="outline" onClick={resetToDefaults}>Reset to Default</Button>
-          <Button onClick={saveSettings}>Save Settings</Button>
+      <CardFooter className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="outline" onClick={resetToDefaults}>Reset to Default</Button>
+        <Button type="button" onClick={saveSettings} disabled={status === "loading" || missingSavedVoice}>
+          Save Settings
+        </Button>
       </CardFooter>
     </Card>
   );
 }
-
-    
