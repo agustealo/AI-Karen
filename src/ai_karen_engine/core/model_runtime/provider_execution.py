@@ -91,7 +91,10 @@ async def _resolve_personal_transport_key(
 
     try:
         from ai_karen_engine.config.llm_provider_config import (
+            AuthenticationType,
             OPENAI_COMPATIBLE_PROVIDER_DEFAULTS,
+            ProviderType,
+            get_provider_config_manager,
         )
         from ai_karen_engine.services.identity_vault.credential_vault_service import (
             get_credential_vault_service,
@@ -111,6 +114,24 @@ async def _resolve_personal_transport_key(
             or parsed.query
             or parsed.fragment
             or endpoint.api_key_env != approved.get("api_key_env")
+        ):
+            raise ProviderExecutionError(denial)
+
+        # The registry endpoint may have been obtained before an administrator
+        # disabled or changed its provider. Re-read the canonical current
+        # provider definition immediately before the Vault resolution.
+        # Unlike workspace credential resolution, a personal key does not
+        # require an unrelated workspace API key to be configured.
+        config = get_provider_config_manager().get_provider(endpoint.provider_id)
+        if (
+            config is None
+            or not config.enabled
+            or config.provider_type != ProviderType.EXTERNAL
+            or config.authentication is None
+            or config.authentication.type != AuthenticationType.API_KEY
+            or config.authentication.api_key_env_var != endpoint.api_key_env
+            or config.endpoint is None
+            or str(config.endpoint.base_url or "").rstrip("/") != approved_url
         ):
             raise ProviderExecutionError(denial)
 
