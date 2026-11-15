@@ -101,7 +101,9 @@ async def _resolve_personal_transport_key(
         )
 
         approved = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS.get(endpoint.provider_id)
-        approved_url = str((approved or {}).get("base_url") or "").rstrip("/")
+        if not isinstance(approved, dict):
+            raise ProviderExecutionError(denial)
+        approved_url = str(approved.get("base_url") or "").rstrip("/")
         base_url = str(endpoint.base_url or "").rstrip("/")
         parsed = urlsplit(base_url)
         if (
