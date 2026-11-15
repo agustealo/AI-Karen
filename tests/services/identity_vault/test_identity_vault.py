@@ -1956,3 +1956,44 @@ async def test_personal_model_credential_resolution_rejects_invalid_row_integrit
     with pytest.raises(PermissionError, match="execution denied"):
         await service.resolve_authorized_personal_model_key(**kwargs)
     session.commit.assert_not_awaited()
+
+
+def test_personal_model_credential_resolution_cognitive_requirement_cannot_mint_grant():
+    """CORTEX requirements and arbitrary constraints never authorize key use."""
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(
+        required_capabilities=[
+            "memory.read",
+            "model.personal_key.execute",
+        ],
+        policy_constraints={
+            "personal_model_credential": {
+                "provider_id": "openai",
+                "model_id": "gpt-4o-mini",
+                "credential_id": str(uuid.uuid4()),
+            },
+            "external_allowed": True,
+        },
+    )
+    request = SimpleNamespace(
+        context=SimpleNamespace(
+            request_id="request-1",
+            correlation_id="correlation-1",
+            user_id="alice",
+            tenant_id=str(uuid.uuid4()),
+            session_id="session-1",
+        ),
+        max_tokens=128,
+    )
+
+    plan = ChatRuntime._build_authorized_plan(None, request, decision)
+
+    assert "memory.read" in plan.allowed_capabilities
+    assert "model.personal_key.execute" not in plan.allowed_capabilities
+    assert "personal_model_credential" not in plan.provider_constraints
+    assert plan.authorized_user_id == "alice"
+    assert plan.authorized_session_id == "session-1"
