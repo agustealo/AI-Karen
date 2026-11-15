@@ -18,6 +18,7 @@ Cognitive Extensions (NEW):
 
 from ai_karen_engine.core.reasoning.causal.engine import (
     CausalReasoningEngine,
+    CausalIdentificationError,
     CausalGraph,
     CausalEdge,
     CausalIntervention,
@@ -41,6 +42,7 @@ from ai_karen_engine.core.reasoning.causal.cognitive_causal import (
 __all__ = [
     # Core causal reasoning
     "CausalReasoningEngine",
+    "CausalIdentificationError",
     "CausalGraph",
     "CausalEdge",
     "CausalIntervention",

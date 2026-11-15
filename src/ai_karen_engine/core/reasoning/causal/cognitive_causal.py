@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
+from ai_karen_engine.core.reasoning.causal.engine import CausalIdentificationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -166,6 +168,10 @@ class CognitiveCausalReasoner:
                     context
                 )
                 reasoning_trace.append(f"Identified {len(basic_explanation.actual_causes)} potential causes")
+            except CausalIdentificationError:
+                # A separate causal identification contract is required.
+                # Do not fabricate a confidence-weighted explanation here.
+                raise
             except Exception as e:
                 logger.error(f"Causal engine failed: {e}")
                 basic_explanation = None
@@ -283,7 +289,9 @@ class CognitiveCausalReasoner:
         Returns:
             Detailed comparison with causal attribution
         """
-        logger.info(f"Comparing {len(interventions)} counterfactual interventions")
+        logger.info("Comparing counterfactual interventions, count=%d", len(interventions))
+        if not interventions or not self.causal_engine:
+            raise CausalIdentificationError("counterfactual_unidentifiable")
 
         # Predict counterfactual outcomes
         counterfactual_outcome = {}
@@ -292,6 +300,10 @@ class CognitiveCausalReasoner:
                 try:
                     outcomes = self.causal_engine.do_intervention(var, val, context=factual)
                     counterfactual_outcome.update(outcomes)
+                except CausalIdentificationError:
+                    # Do not convert missing counterfactual predictions into
+                    # zero effects, differences or synthetic plausibility.
+                    raise
                 except Exception as e:
                     logger.warning(f"Intervention prediction failed for {var}: {e}")
 
