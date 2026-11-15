@@ -1098,6 +1098,21 @@ class CredentialVaultService(BaseService):
             if credential is None:
                 return None
             patch = update_data.model_dump(exclude_unset=True)
+            if credential.credential_type == self._OWNED_MODEL_CREDENTIAL_TYPE:
+                prior = dict(credential.credential_metadata or {})
+                replacement = patch.get("credential_metadata", prior)
+                if (
+                    not isinstance(replacement, dict)
+                    or replacement.get("personal_model_chat_consent")
+                    != prior.get("personal_model_chat_consent")
+                ):
+                    raise PermissionError(
+                        "Personal model chat consent requires owner confirmation"
+                    )
+                if "status" in patch or "expires_at" in patch:
+                    replacement = dict(replacement)
+                    replacement.pop("personal_model_chat_consent", None)
+                    patch["credential_metadata"] = replacement
             for field, value in patch.items():
                 setattr(credential, field, self._enum_value(value))
             credential.updated_at = datetime.utcnow()
@@ -1193,6 +1208,10 @@ class CredentialVaultService(BaseService):
                     )
                 )
             credential.status = CredentialStatus.ACTIVE.value
+            if credential.credential_type == self._OWNED_MODEL_CREDENTIAL_TYPE:
+                metadata = dict(credential.credential_metadata or {})
+                metadata.pop("personal_model_chat_consent", None)
+                credential.credential_metadata = metadata
             credential.updated_at = datetime.utcnow()
             new_hash = hashlib.sha256(new_secrets[0].encrypted_value.encode()).hexdigest()
             await self._audit(
@@ -1234,6 +1253,10 @@ class CredentialVaultService(BaseService):
             if credential is None:
                 return False
             credential.status = CredentialStatus.REVOKED.value
+            if credential.credential_type == self._OWNED_MODEL_CREDENTIAL_TYPE:
+                metadata = dict(credential.credential_metadata or {})
+                metadata.pop("personal_model_chat_consent", None)
+                credential.credential_metadata = metadata
             credential.updated_at = datetime.utcnow()
             await self._audit(
                 session,
@@ -1345,11 +1368,124 @@ class CredentialVaultService(BaseService):
             reason=reason, owner_user_id=user_id,
         )
 
+    async def set_owned_personal_model_chat_consent(
+        self,
+        *,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: str,
+        model_id: Optional[str],
+        enabled: bool,
+        correlation_id: str,
+    ) -> bool:
+        """Persist explicit owner-selected model use without releasing a key.
+
+        Only a verified owner ingress may call this through model settings.
+        This is consent storage, NOT RuntimePolicy authorization or a claim
+        that the provider/model is installed, healthy or permitted to execute.
+        Revocation and key rotation erase this consent before committing.
+        """
+        actor = self._require_credential_owner(user_id)
+        if (
+            not isinstance(credential_id, uuid.UUID)
+            or not isinstance(tenant_id, uuid.UUID)
+            or type(enabled) is not bool
+            or not isinstance(correlation_id, str)
+            or not correlation_id
+            or len(correlation_id) > 128
+            or any(ord(char) < 32 or ord(char) == 127 for char in correlation_id)
+            or (
+                enabled and (
+                    not isinstance(model_id, str)
+                    or not model_id
+                    or model_id != model_id.strip()
+                    or len(model_id) > 255
+                    or model_id == "auto"
+                    or any(
+                        ord(char) < 32 or ord(char) == 127
+                        for char in model_id
+                    )
+                )
+            )
+        ):
+            raise ValueError("Invalid personal model consent selection")
+
+        async with self._session_scope() as session:
+            credential = await self._tenant_entity(
+                session, Credential, tenant_id, Credential.id == credential_id,
+                Credential.created_by == actor,
+                Credential.credential_type == self._OWNED_MODEL_CREDENTIAL_TYPE,
+                for_update=True,
+            )
+            if credential is None:
+                return False
+            if enabled:
+                expires = credential.expires_at
+                if (
+                    credential.status != CredentialStatus.ACTIVE.value
+                    or (
+                        expires is not None
+                        and (
+                            not isinstance(expires, datetime)
+                            or expires.tzinfo is None
+                            or expires.utcoffset() is None
+                            or expires <= datetime.now(timezone.utc)
+                        )
+                    )
+                ):
+                    raise PermissionError("Personal model credential consent denied")
+                provider = await self._tenant_entity(
+                    session, ProviderDefinition, tenant_id,
+                    ProviderDefinition.id == credential.provider_id,
+                )
+                if (
+                    provider is None
+                    or provider.tenant_id != tenant_id
+                    or not provider.is_system
+                    or not provider.enabled
+                    or provider.provider_type != ProviderType.API_KEY.value
+                    or provider.config != {"managed_for": "model_api_key"}
+                ):
+                    raise PermissionError("Personal model credential consent denied")
+
+            metadata = dict(credential.credential_metadata or {})
+            if enabled:
+                metadata["personal_model_chat_consent"] = {
+                    "enabled": True,
+                    "model_id": model_id,
+                }
+            else:
+                metadata.pop("personal_model_chat_consent", None)
+            credential.credential_metadata = metadata
+            credential.updated_at = datetime.now(timezone.utc)
+            await self._audit(
+                session,
+                tenant_id=tenant_id,
+                user_id=actor,
+                event_type=AuditEventType.UPDATED,
+                action=(
+                    "personal_model_chat_consent_enabled"
+                    if enabled else "personal_model_chat_consent_disabled"
+                ),
+                resource_type="credential",
+                resource_id=str(credential.id),
+                credential_id=credential.id,
+                provider_id=credential.provider_id,
+                correlation_id=correlation_id,
+                metadata={
+                    "enabled": enabled,
+                    "model_id": model_id if enabled else None,
+                },
+            )
+            await session.commit()
+            return True
+
     async def find_unambiguous_owned_model_key_candidate(
         self,
         *,
         context: "ChatExecutionContext",
         provider_id: str,
+        consented_model_id: Optional[str] = None,
     ) -> Optional[uuid.UUID]:
         """Find an owner's sole active personal model key, without reading secrets.
 
@@ -1362,6 +1498,8 @@ class CredentialVaultService(BaseService):
         Fail closed when no active credential exists or multiple keys match:
         never silently choose between credentials and never accept a caller-
         supplied credential identifier from chat metadata or a plugin payload.
+        When consented_model_id is supplied, require an exact durable owner-
+        selected model opt-in; a request-supplied flag is never authorization.
         """
         from ai_karen_engine.core.runtime.chat_runtime_contract import (
             ChatExecutionContext,
@@ -1384,6 +1522,20 @@ class CredentialVaultService(BaseService):
                 or provider_id != provider_id.strip()
                 or len(provider_id) > 128
                 or any(ord(char) < 32 or ord(char) == 127 for char in provider_id)
+                or (
+                    consented_model_id is not None
+                    and (
+                        not isinstance(consented_model_id, str)
+                        or not consented_model_id
+                        or consented_model_id != consented_model_id.strip()
+                        or consented_model_id == "auto"
+                        or len(consented_model_id) > 255
+                        or any(
+                            ord(char) < 32 or ord(char) == 127
+                            for char in consented_model_id
+                        )
+                    )
+                )
             ):
                 raise PermissionError(denial)
         except (TypeError, ValueError, AttributeError, PermissionError):
@@ -1430,6 +1582,17 @@ class CredentialVaultService(BaseService):
                 or not isinstance(record.id, uuid.UUID)
             ):
                 return None
+            if consented_model_id is not None:
+                metadata = record.credential_metadata
+                if not isinstance(metadata, dict):
+                    return None
+                consent = metadata.get("personal_model_chat_consent")
+                if (
+                    not isinstance(consent, dict)
+                    or consent.get("enabled") is not True
+                    or consent.get("model_id") != consented_model_id
+                ):
+                    return None
             return record.id
 
     async def resolve_authorized_personal_model_key(
