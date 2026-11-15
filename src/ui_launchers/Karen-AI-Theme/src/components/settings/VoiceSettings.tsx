@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Browser voice preference only. This UI must not claim that a missing
+ * Browser voice preference coexists with backend-governed local engines. Neither may claim that a missing
  * Web Speech voice is a server outage or that a default voice can play.
  * Karen's authenticated VoiceRuntime owns local model capabilities.
  */
@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_KAREN_SETTINGS, KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
+import LocalVoiceEngineSettings from "@/components/settings/LocalVoiceEngineSettings";
 
 const DEFAULT_VOICE_SENTINEL = "_DEFAULT_VOICE_";
 const DISCOVERY_DELAYS_MS = [250, 1000, 3000] as const;
@@ -216,7 +217,9 @@ export default function VoiceSettings() {
   };
 
   return (
-    <Card>
+    <div className="space-y-4">
+      <LocalVoiceEngineSettings />
+      <Card>
       <CardHeader>
         <CardTitle className="text-lg">Text-to-Speech Voice</CardTitle>
         <CardDescription>
@@ -305,6 +308,7 @@ export default function VoiceSettings() {
           Save Settings
         </Button>
       </CardFooter>
-    </Card>
+      </Card>
+    </div>
   );
 }
