@@ -165,14 +165,15 @@ class LearningFailureClassification:
 class OutcomeAttribution:
     """Attribution of outcome to contributing factors with uncertainty."""
 
-    memory_contribution: float = 0.0
-    reasoning_strategy_contribution: float = 0.0
-    capability_contribution: float = 0.0
-    user_clarification_contribution: float = 0.0
-    verification_contribution: float = 0.0
-    workflow_contribution: float = 0.0
-    fallback_contribution: float = 0.0
-    uncertainty: float = 0.0
+    # None means not identified. Zero would assert a measured zero effect.
+    memory_contribution: float | None = None
+    reasoning_strategy_contribution: float | None = None
+    capability_contribution: float | None = None
+    user_clarification_contribution: float | None = None
+    verification_contribution: float | None = None
+    workflow_contribution: float | None = None
+    fallback_contribution: float | None = None
+    uncertainty: float | None = None
     primary_driver: str = "unknown"
     metadata: dict[str, Any] = field(default_factory=dict)
 
