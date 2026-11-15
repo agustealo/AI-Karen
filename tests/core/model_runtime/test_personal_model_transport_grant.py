@@ -222,6 +222,49 @@ async def test_streamed_personal_key_uses_fresh_audited_vault_resolution(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_structured_tool_transport_uses_same_one_shot_personal_key(monkeypatch):
+    endpoint = replace(_endpoint(), capabilities=("chat_completion", "tools"))
+    grant = _grant()
+    vault_reads = _fake_vault(monkeypatch)
+    _no_workspace_credential(monkeypatch)
+    seen = []
+
+    class Response:
+        def read(self):
+            return json.dumps({
+                "model": "authorized-model",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Structured provider reply",
+                        "tool_calls": [],
+                    },
+                    "finish_reason": "stop",
+                }],
+            }).encode()
+
+    @contextmanager
+    def open_request(request, timeout):
+        seen.append(request.get_header("Authorization"))
+        yield Response()
+
+    monkeypatch.setattr(transport, "_open_provider_request", open_request)
+    result = await transport.execute_structured_provider_endpoint(
+        endpoint,
+        messages=[{"role": "user", "content": "Classify this"}],
+        model="authorized-model",
+        tools=[],
+        max_tokens=40,
+        temperature=0.0,
+        personal_model_grant=grant,
+    )
+    assert result.message["content"] == "Structured provider reply"
+    assert result.model == "authorized-model"
+    assert seen == ["Bearer personal-only-token"]
+    assert len(vault_reads) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", [
     {"base_url": "https://attacker.invalid/v1"},
     {"base_url": "http://api.openai.com/v1"},
