@@ -299,7 +299,8 @@ export function KarenCopilotVoiceDock({
                 {selectedEngine && (
                   <label className="flex min-w-44 flex-1 flex-col gap-1 text-xs font-medium">
                     Local voice
-                    <select aria-label="Local voice" value={selectedVoice?.id ?? ""}
+                    <select aria-label="Local voice"
+                      value={selectedVoice?.id ?? "_missing_voice_"}
                       disabled={saving}
                       onChange={(event) => {
                         setVoiceId(event.target.value);
@@ -307,6 +308,11 @@ export function KarenCopilotVoiceDock({
                         setError(null);
                       }}
                       className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground">
+                      {!selectedVoice && (
+                        <option value="_missing_voice_" disabled>
+                          Saved voice unavailable
+                        </option>
+                      )}
                       {selectedEngine.voices.map((voice) => (
                         <option key={voice.id} value={voice.id}>
                           {voice.name} ({voice.language})
