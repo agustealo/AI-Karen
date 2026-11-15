@@ -66,7 +66,9 @@ class AccountService:
 
     async def update_user_profile(self, user_id: str, **changes: Any):
         self.profile_calls.append({"user_id": user_id, **changes})
-        for key in ("email", "username", "full_name"):
+        if changes.get("email") is not None and changes["email"] != self.account.email:
+            return None, "Email change requires verified ownership"
+        for key in ("username", "full_name"):
             if changes.get(key) is not None:
                 setattr(self.account, key, changes[key])
         if changes.get("preferences") is not None:
@@ -167,15 +169,30 @@ async def test_account_profile_normalizes_fields_without_cross_scope_write() -> 
         auth_routes.UpdateProfileRequest(
             username="  named-member  ",
             full_name="  Member Two ",
-            email=" MEMBER2@EXAMPLE.ORG ",
         ),
         current_user=principal(),
         auth_svc=service,
     )
     assert updated["username"] == "named-member"
     assert updated["full_name"] == "Member Two"
-    assert updated["email"] == "member2@example.org"
+    assert updated["email"] == "member@example.org"
     assert updated["tenant_id"] == TENANT_A
+
+
+@pytest.mark.asyncio
+async def test_account_email_change_requires_independent_verification() -> None:
+    service = AccountService()
+    with pytest.raises(HTTPException) as error:
+        await auth_routes.update_current_user_info(
+            auth_routes.UpdateProfileRequest(
+                email="proposed@example.org", full_name="Unverified Name"
+            ),
+            current_user=principal(),
+            auth_svc=service,
+        )
+    assert error.value.status_code == 409
+    assert service.account.email == "member@example.org"
+    assert service.account.full_name == "Member One"
 
 
 @pytest.mark.parametrize(
