@@ -2151,7 +2151,10 @@ async def test_personal_model_credential_candidate_sql_is_tenant_owner_provider_
     assert context.user_id in compiled.params.values()
     assert context.tenant_id in {str(value) for value in compiled.params.values()}
     assert "openai" in compiled.params.values()
-    assert {"managed_for": "model_api_key"} in compiled.params.values()
+    assert "managed_for" in compiled.params.values()
+    assert "model_api_key" in compiled.params.values()
+    assert "->>" in sql  # PostgreSQL JSON scalar extraction, never json=json equality.
+    assert "identity_providers.config =" not in sql
     assert 2 in compiled.params.values()
     assert not statement._with_options
     session.commit.assert_not_awaited()
