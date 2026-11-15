@@ -17,6 +17,14 @@
 | CI-009 | `core/cognitive/state.py` | typed envelope with scope, belief/goals/meta | INTEGRATION UNKNOWN | verify real runtime use, completeness, cancellation/tenant provenance |
 | CI-010 | `core/intelligence/ml/training/transformer_executor.py` | local governed text LoRA executor | CAPABILITY LIMITED | require actual worker/adapter proof; never call this image-generation expertise |
 
+## Remediation status and new reachability finding
+
+- **CI-001 guarded:** #864 merged with all exact-head gates passing. Correlational data no longer auto-adds causal graph edges; existing edges remain unvalidated until provenance is established.
+- **CI-002 and CI-003 proposed containment:** #868 open, in CI. Its `CausalIdentificationError` rejects unidentified effects, simulated interventions, numeric counterfactuals, causal narratives and responsibility scores. It does **not** implement an estimator.
+- **CI-004 and CI-005 proposed containment:** #869 open, in CI. Missing calibration targets and unidentifiable outcome contributions become explicit unknowns. Verified calibration using durable labeled evidence remains future work.
+- **CI-011 new source finding:** `core/reasoning/strategies/causal_strategy.py::CausalReasoner.execute` calls `build_causal_graph` and `generate_counterfactuals`, which do not exist on the current `CausalReasoningEngine`; the broad catch returns a strategy failure. Audit actual registry/runtime reachability and correct using the existing reasoning strategy authority, not by implementing fake methods. Classified **SOURCE_CONFIRMED / RUNTIME_UNVERIFIED**.
+- **Important:** exact-head passing checks do not prove that production cognitive reasoning invokes these paths, nor that a validated causal model exists. Do not conflate release-safety containment with intelligence evaluation.
+
 ## No misleading probability, causality, or competence claims
 
 **Association:** may express correlation and sample/segment limits; cannot produce a directed causal edge without validated identifying assumptions or an independently established causal mechanism.
