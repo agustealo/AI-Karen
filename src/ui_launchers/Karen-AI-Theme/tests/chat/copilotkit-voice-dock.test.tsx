@@ -64,12 +64,13 @@ describe("first-class Copilot voice dock", () => {
   it("surfaces separately verified listen and speak capabilities without auto speech", async () => {
     render(<KarenCopilotVoiceDock port={port} />);
     expect(await screen.findByText("Local microphone control")).toBeTruthy();
-    await waitFor(() => expect(
-      screen.getByTestId("karen-copilot-voice-output").textContent
-    ).toContain("Browser speech"));
+    expect(screen.getByTestId("karen-copilot-voice-output").textContent)
+      .toContain("Open voice options to check");
+    expect(api.getVoiceEngineCatalog).not.toHaveBeenCalled();
     expect(screen.getByTestId("karen-copilot-voice-listening").textContent)
       .toContain("Local dictation ready");
     fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    await screen.findByText("Pocket TTS · Local");
     expect(screen.getByRole("combobox", { name: "Speech output engine" })).toBeTruthy();
     expect(screen.getByText("Pocket TTS · Local")).toBeTruthy();
     expect(api.setVoiceSelection).not.toHaveBeenCalled();
@@ -85,7 +86,7 @@ describe("first-class Copilot voice dock", () => {
     ).toContain("Local dictation unavailable"));
     expect(screen.queryByText("Local microphone control")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
-    expect(screen.getByText(/No local speech engine is ready/)).toBeTruthy();
+    expect(await screen.findByText(/No local speech engine is ready/)).toBeTruthy();
     expect(screen.queryByText("Pocket TTS · Local")).toBeNull();
     expect(screen.getByRole("button", { name: "Save voice" }).hasAttribute("disabled")).toBe(true);
   });
@@ -114,10 +115,10 @@ describe("first-class Copilot voice dock", () => {
     api.getVoiceSelection.mockResolvedValueOnce(revoked).mockResolvedValueOnce(browser);
     api.setVoiceSelection.mockResolvedValue({ status: "success", ...browser });
     render(<KarenCopilotVoiceDock port={port} />);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     await waitFor(() => expect(
       screen.getByTestId("karen-copilot-voice-output").textContent
     ).toContain("Saved voice unavailable"));
-    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     expect(screen.getByRole("alert").textContent).toContain("not been replaced");
     expect(api.setVoiceSelection).not.toHaveBeenCalled();
     const source = screen.getByRole("combobox", { name: "Speech output engine" });
@@ -150,8 +151,11 @@ describe("first-class Copilot voice dock", () => {
     api.getVoiceEngineCatalog.mockRejectedValue(new Error("private server problem"));
     render(<KarenCopilotVoiceDock port={port} />);
     expect(await screen.findByText("Local microphone control")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).not.toContain("private server problem");
     fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent", expect.stringMatching(/could not verify permitted speech engines/i)
+    );
+    expect(screen.getByRole("alert").textContent).not.toContain("private server problem");
     expect(screen.queryByRole("combobox", { name: "Speech output engine" })).toBeNull();
     expect(api.setVoiceSelection).not.toHaveBeenCalled();
   });
