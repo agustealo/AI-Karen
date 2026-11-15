@@ -1,21 +1,18 @@
 "use client";
 
 /**
- * Opt-in read-aloud control for authenticated assistant messages.
- *
- * This is browser-device playback, not a claim of backend synthesis. No speech
- * occurs on render, during history hydration or on a model stream event.
- * VoiceRuntime remains the only authority for server-side voice engines.
+ * One opt-in assistant read-aloud controller for both local model speech and
+ * device-dependent browser speech. User preference comes from authenticated
+ * backend state. No voice output occurs during rendering or chat hydration.
  */
 import { useEffect, useRef, useState } from "react";
 import { Volume2, Square } from "lucide-react";
+import { apiClient } from "@/lib/api";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
 
 type SpeechPart = { type?: unknown; text?: unknown };
 type SpeechState = "idle" | "speaking";
 
-// A browser can play only one response at a time. Keep one renderer-neutral
-// playback owner, and let message unmounting revoke only its own session.
 let activePlayback: (() => void) | null = null;
 
 export function extractAssistantSpeech(message: unknown): string {
@@ -45,8 +42,8 @@ function savedBrowserVoiceURI(): string | null {
 }
 
 function speechChunks(text: string): string[] {
-  // Avoid browser-specific long-utterance truncation while reading the full
-  // eligible assistant message. Never silently omit or fabricate words.
+  // Both the browser speech layer and model-backed synthesis use bounded
+  // chunks. Never silently discard words at a 2,000-character API limit.
   const words = text.replace(/\s+/g, " ").trim().split(" ");
   const chunks: string[] = [];
   let current = "";
@@ -68,80 +65,146 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
   const text = extractAssistantSpeech(message);
   const eligible = text.length > 0 && text.length <= 8000;
 
-  const stop = () => {
-    session.current?.();
-  };
-
   useEffect(() => () => {
-    // Own only this message's playback. Another message may have started
-    // speaking after this one was stopped.
     session.current?.();
   }, []);
 
   const play = () => {
-    if (state === "speaking") {
-      stop();
+    if (session.current) {
+      session.current();
       return;
     }
     if (!eligible) return;
-    const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
-    if (!synth || typeof SpeechSynthesisUtterance === "undefined") {
-      setError("This browser does not support speech playback.");
-      return;
-    }
-    const available = synth.getVoices();
-    if (!available.length) {
-      setError("No browser voices are available. Check Voice settings.");
-      return;
-    }
-    const savedURI = savedBrowserVoiceURI();
-    const selected = savedURI
-      ? available.find((voice) => voice.voiceURI === savedURI)
-      : available.find((voice) => voice.default) || available[0];
-    if (!selected) {
-      setError("The saved browser voice is unavailable. Update Voice settings.");
-      return;
-    }
 
+    // Revoke any prior message playback before creating the new session.
     activePlayback?.();
     setError(null);
+    const abort = new AbortController();
     let stopped = false;
-    const chunks = speechChunks(text);
-    let index = 0;
+    let audio: HTMLAudioElement | null = null;
+    let objectUrl: string | null = null;
+    let pendingResolve: (() => void) | null = null;
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+
     const stopSession = () => {
       if (stopped) return;
       stopped = true;
+      abort.abort();
+      synth?.cancel();
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+        audio = null;
+      }
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      pendingResolve?.();
+      pendingResolve = null;
       if (activePlayback === stopSession) activePlayback = null;
       if (session.current === stopSession) session.current = null;
-      synth.cancel();
       setState("idle");
     };
     session.current = stopSession;
     activePlayback = stopSession;
     setState("speaking");
 
-    const speakNext = () => {
-      if (stopped) return;
-      if (index >= chunks.length) {
-        stopSession();
-        return;
+    const playBrowser = async (chunks: string[]) => {
+      if (!synth || typeof SpeechSynthesisUtterance === "undefined") {
+        throw new Error("This browser does not support speech playback.");
       }
-      const utterance = new SpeechSynthesisUtterance(chunks[index++]);
-      utterance.voice = selected;
-      utterance.lang = selected.lang;
-      utterance.onend = () => speakNext();
-      utterance.onerror = () => {
-        if (!stopped) setError("Speech playback failed; no message was resent.");
-        stopSession();
-      };
-      try {
-        synth.speak(utterance);
-      } catch {
-        setError("The browser could not start speech playback.");
-        stopSession();
+      const available = synth.getVoices();
+      if (!available.length) {
+        throw new Error("No browser voices are available. Check Voice settings.");
+      }
+      const savedURI = savedBrowserVoiceURI();
+      const selected = savedURI
+        ? available.find((voice) => voice.voiceURI === savedURI)
+        : available.find((voice) => voice.default) || available[0];
+      if (!selected) {
+        throw new Error("The saved browser voice is unavailable. Update Voice settings.");
+      }
+      for (const chunk of chunks) {
+        if (stopped) break;
+        await new Promise<void>((resolve, reject) => {
+          pendingResolve = resolve;
+          const utterance = new SpeechSynthesisUtterance(chunk);
+          utterance.voice = selected;
+          utterance.lang = selected.lang;
+          utterance.onend = () => {
+            pendingResolve = null;
+            resolve();
+          };
+          utterance.onerror = () => {
+            pendingResolve = null;
+            reject(new Error("Browser speech playback failed."));
+          };
+          try {
+            synth.speak(utterance);
+          } catch {
+            pendingResolve = null;
+            reject(new Error("The browser could not start speech playback."));
+          }
+        });
       }
     };
-    speakNext();
+
+    const playLocal = async (engineId: string, voiceId: string, chunks: string[]) => {
+      for (const chunk of chunks) {
+        if (stopped) break;
+        const wav = await apiClient.synthesizeLocalVoice(engineId, voiceId, chunk, abort.signal);
+        if (stopped) break;
+        objectUrl = URL.createObjectURL(wav);
+        audio = new Audio(objectUrl);
+        const playing = audio;
+        await new Promise<void>((resolve, reject) => {
+          pendingResolve = resolve;
+          playing.onended = () => {
+            pendingResolve = null;
+            resolve();
+          };
+          playing.onerror = () => {
+            pendingResolve = null;
+            reject(new Error("Karen's local speech could not be played."));
+          };
+          void playing.play().catch(reject);
+        });
+        if (stopped) break;
+        playing.pause();
+        playing.src = "";
+        audio = null;
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+        }
+      }
+    };
+
+    void (async () => {
+      try {
+        // Never silently replace a saved local model with a potentially
+        // vendor-backed browser voice when the server is unavailable.
+        const preference = await apiClient.getVoiceSelection();
+        if (stopped) return;
+        const choice = preference.voice;
+        const chunks = speechChunks(text);
+        if (choice.engine_id !== null && choice.voice_id !== null) {
+          if (!preference.available) {
+            throw new Error("Saved local speech engine is unavailable. Update Voice settings.");
+          }
+          await playLocal(choice.engine_id, choice.voice_id, chunks);
+        } else {
+          await playBrowser(chunks);
+        }
+      } catch (cause) {
+        if (!stopped) {
+          setError(cause instanceof Error ? cause.message : "Speech playback failed.");
+        }
+      } finally {
+        stopSession();
+      }
+    })();
   };
 
   if (!eligible) return null;
@@ -151,7 +214,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
         type="button"
         onClick={play}
         aria-label={state === "speaking" ? "Stop reading Karen's reply" : "Read Karen's reply aloud"}
-        title="Read aloud with a browser voice. Some system voices may use a browser-vendor service."
+        title="Read aloud using your saved local speech engine or browser voice."
         className="inline-flex h-9 items-center gap-2 rounded-lg border border-border/70 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         {state === "speaking"
