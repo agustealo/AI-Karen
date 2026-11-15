@@ -462,7 +462,7 @@ class ProviderRegistryService:
         return endpoint
 
     def _configured_external_endpoint(
-        self, provider_id: str
+        self, provider_id: str, *, require_workspace_credential: bool = True
     ) -> Optional[ProviderEndpoint]:
         """Project a configured provider into the canonical execution registry.
 
@@ -491,7 +491,10 @@ class ProviderRegistryService:
             or config.authentication.type != AuthenticationType.API_KEY
             or config.authentication.api_key_env_var != registered.get("api_key_env")
             or config.endpoint is None
-            or not manager.is_provider_configured(provider_id)
+            or (
+                require_workspace_credential
+                and not manager.is_provider_configured(provider_id)
+            )
         ):
             return None
 
@@ -537,6 +540,33 @@ class ProviderRegistryService:
                 "priority": config.priority,
             },
         )
+
+    def get_personal_model_provider_endpoint(
+        self, provider_id: str
+    ) -> Optional[ProviderEndpoint]:
+        """Project a registered vendor target without a workspace bearer.
+
+        This is only a candidate for host-authorized personal-key execution,
+        never an availability claim or permission to use a personal key.
+        The caller must still pass the exact RuntimePolicy execution grant to
+        the canonical transport, which rechecks current provider configuration
+        and uses audited Identity Vault resolution.
+
+        In particular, never register this candidate in the general endpoint
+        registry, health/status cache, or local-first fallback inventory.
+        Without a workspace credential, ordinary get_provider_endpoint()
+        continues to refuse the provider.
+        """
+        try:
+            return self._configured_external_endpoint(
+                provider_id, require_workspace_credential=False
+            )
+        except Exception as exc:
+            logger.warning(
+                "personal_model_endpoint_candidate_unavailable",
+                extra={"provider": provider_id, "error_type": type(exc).__name__},
+            )
+            return None
 
     def get_provider_endpoint(self, provider_id: str) -> Optional[ProviderEndpoint]:
         """Return a registered endpoint, reconciling governed cloud settings."""
