@@ -79,6 +79,7 @@ async def test_runtime_failure_maps_to_accurate_http_status(
     failure, expected_status, expected_detail
 ):
     runtime = SimpleNamespace(
+        transcription_busy=Mock(return_value=False),
         capabilities=AsyncMock(return_value=VoiceCapabilities(
             status=VoiceEngineStatus.READY, transcription_available=True, engine="local"
         )),
@@ -175,4 +176,4 @@ async def test_unexpected_model_exception_is_not_logged_verbatim(caplog):
     assert caught.value.status_code == 503
     assert "secret-path-and-private-input" not in caplog.text
     assert "secret-path-and-private-input" not in str(caught.value.detail)
-    assert "ValueError" in caplog.text
+    assert any(getattr(record, "error_type", None) == "ValueError" for record in caplog.records)
