@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import asyncio
+import uuid
 import json
 import logging
 import os
@@ -21,7 +22,7 @@ from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from ai_karen_engine.auth.rbac_middleware import Permission, require_permission
 from ai_karen_engine.services.admin.admin_provider_service import AdminProviderService
@@ -63,6 +64,15 @@ from ai_karen_engine.config.provider_authentication import (
 )
 
 logger = logging.getLogger(__name__)
+
+from ai_karen_engine.database.models.identity_vault import (
+    CredentialCreate,
+    CredentialSecretCreate,
+    ProviderType as VaultProviderType,
+)
+from ai_karen_engine.services.identity_vault.credential_vault_service import (
+    get_credential_vault_service,
+)
 
 router = APIRouter(prefix="/settings/model", tags=["model-settings"])
 LEGACY_OLLAMA_IN_STACK_URL = "http://ollama:11434"
@@ -413,6 +423,217 @@ CUSTOM_PROVIDER_TEMPLATES = [
         icon_name="vllm",
     ),
 ]
+
+
+
+class ConsumerModelKeyCreate(BaseModel):
+    """Personal credential ingress, with no caller-controlled tenant or endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(min_length=2, max_length=64)
+    api_key: SecretStr = Field(repr=False)
+
+
+class ConsumerModelKeyReceipt(BaseModel):
+    id: uuid.UUID
+    provider: str
+    status: str
+    masked_hint: Optional[str] = None
+    # Storage is not a grant to run an external model.
+    runtime_authorized: bool = False
+
+
+class ConsumerModelKeyList(BaseModel):
+    credentials: List[ConsumerModelKeyReceipt]
+    limit: int
+    offset: int
+
+
+def _consumer_key_identity(user: Any) -> tuple[uuid.UUID, str]:
+    """Use the authenticated user and tenant from get_current_user only."""
+    if not isinstance(user, dict):
+        raise HTTPException(status_code=403, detail="Authenticated identity required")
+    actor = user.get("user_id")
+    if (
+        not isinstance(actor, str)
+        or not actor
+        or actor != actor.strip()
+        or len(actor) > 255
+    ):
+        raise HTTPException(status_code=403, detail="Authenticated owner required")
+    try:
+        tenant = uuid.UUID(str(user.get("tenant_id") or ""))
+    except (TypeError, AttributeError, ValueError):
+        raise HTTPException(status_code=403, detail="Explicit UUID tenant required") from None
+    return tenant, actor
+
+
+def _consumer_key_material(secret: SecretStr) -> str:
+    key = secret.get_secret_value()
+    if (
+        not key
+        or key != key.strip()
+        or len(key.encode("utf-8")) > 4096
+        or any(ord(char) < 32 or ord(char) == 127 for char in key)
+    ):
+        raise HTTPException(status_code=422, detail="Invalid API key format")
+    return key
+
+
+def _consumer_key_receipt(record: Any, provider: str) -> ConsumerModelKeyReceipt:
+    return ConsumerModelKeyReceipt(
+        id=record.id,
+        provider=provider,
+        status=str(getattr(record.status, "value", record.status)),
+        masked_hint=record.masked_hint,
+        runtime_authorized=False,
+    )
+
+
+def _consumer_vault_error(exc: Exception) -> HTTPException:
+    logger.warning(
+        "consumer_model_vault_unavailable",
+        extra={"error_type": type(exc).__name__},
+    )
+    return HTTPException(status_code=503, detail="Credential Vault unavailable")
+
+
+@router.get("/credentials", response_model=ConsumerModelKeyList)
+async def list_consumer_model_keys(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: Any = Depends(get_current_user),
+) -> ConsumerModelKeyList:
+    tenant, actor = _consumer_key_identity(current_user)
+    vault = get_credential_vault_service()
+    try:
+        owned = await vault.list_owned_credentials(
+            tenant, actor, limit=limit, offset=offset
+        )
+        providers = await vault.list_providers(tenant, limit=1000)
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    provider_names = {provider.id: provider.provider_id for provider in providers}
+    return ConsumerModelKeyList(
+        credentials=[
+            _consumer_key_receipt(
+                record, provider_names.get(record.provider_id, "unavailable")
+            )
+            for record in owned
+        ],
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/credentials", response_model=ConsumerModelKeyReceipt, status_code=201
+)
+async def create_consumer_model_key(
+    payload: ConsumerModelKeyCreate,
+    current_user: Any = Depends(get_current_user),
+) -> ConsumerModelKeyReceipt:
+    tenant, actor = _consumer_key_identity(current_user)
+    key = _consumer_key_material(payload.api_key)
+    canonical = _normalize_provider_id(payload.provider)
+
+    # The existing admin-owned provider registry controls eligibility.
+    # Consumer input cannot register vendors or override upstream endpoints.
+    provider = get_provider_config_manager().get_provider(canonical)
+    if (
+        canonical not in MODEL_SETTINGS_PROVIDER_ORDER
+        or canonical in {"custom", "fallback"}
+        or provider is None
+        or provider.name != canonical
+        or not provider.enabled
+        or not provider.chat_enabled
+        or provider.provider_type not in {ProviderType.EXTERNAL, ProviderType.HYBRID}
+        or provider.authentication is None
+        or provider.authentication.type != AuthenticationType.API_KEY
+    ):
+        raise HTTPException(status_code=403, detail="Personal credentials not permitted for provider")
+
+    vault = get_credential_vault_service()
+    try:
+        definition = await vault.get_provider(canonical, tenant)
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    if (
+        definition is None
+        or not definition.enabled
+        or str(getattr(definition.provider_type, "value", definition.provider_type))
+        != VaultProviderType.API_KEY.value
+    ):
+        # Tenant provisioning is governed, not performed by user API calls.
+        raise HTTPException(status_code=409, detail="Tenant provider credential storage is not enabled")
+
+    try:
+        result = await get_provider_auth_manager().validate_candidate_api_key(
+            canonical, key
+        )
+    except Exception as exc:
+        logger.warning(
+            "consumer_model_key_probe_unavailable",
+            extra={"provider": canonical, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=503, detail="Provider validation unavailable") from None
+    if result.status != AuthenticationStatus.VALID:
+        raise HTTPException(
+            status_code=422, detail="Provider did not verify the API key; nothing was saved"
+        )
+
+    try:
+        record = await vault.create_owned_credential(
+            CredentialCreate(
+                name=f"Personal {canonical} model API key",
+                provider_id=definition.id,
+                credential_type="model_api_key",
+                masked_hint=f"••••{key[-4:]}",
+            ),
+            [CredentialSecretCreate(secret_type="api_key", encrypted_value=key)],
+            tenant,
+            actor,
+        )
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    return _consumer_key_receipt(record, canonical)
+
+
+@router.post("/credentials/{credential_id}/revoke")
+async def revoke_consumer_model_key(
+    credential_id: uuid.UUID,
+    current_user: Any = Depends(get_current_user),
+) -> Dict[str, bool]:
+    tenant, actor = _consumer_key_identity(current_user)
+    try:
+        revoked = await get_credential_vault_service().revoke_owned_credential(
+            credential_id, tenant, actor, reason="consumer_request"
+        )
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Personal credential not found")
+    return {"locally_revoked": True, "provider_revocation_verified": False}
+
+
+@router.delete("/credentials/{credential_id}")
+async def delete_consumer_model_key(
+    credential_id: uuid.UUID,
+    current_user: Any = Depends(get_current_user),
+) -> Dict[str, bool]:
+    tenant, actor = _consumer_key_identity(current_user)
+    try:
+        deleted = await get_credential_vault_service().delete_owned_credential(
+            credential_id, tenant, actor
+        )
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    if not deleted:
+        # The Vault refuses deletion while active references still exist.
+        raise HTTPException(
+            status_code=409, detail="Credential unavailable or has active bindings"
+        )
+    return {"locally_deleted": True, "provider_revocation_verified": False}
 
 
 @router.get("", response_model=ModelSettingsResponse)
