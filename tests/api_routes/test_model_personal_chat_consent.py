@@ -149,3 +149,41 @@ async def test_consumer_consent_never_claims_uncommitted_or_denied_save(
             current_user={"user_id": "alice", "tenant_id": str(tenant)},
         )
     assert exc.value.status_code == expected_code
+
+
+def test_personal_key_receipt_truthfully_separates_consent_from_authorization():
+    credential_id = uuid.uuid4()
+    record = SimpleNamespace(
+        id=credential_id, status="active", masked_hint="••••1234",
+        credential_metadata={
+            "personal_model_chat_consent": {
+                "enabled": True, "model_id": "gpt-4o-mini",
+            },
+        },
+    )
+    receipt = model_settings._consumer_key_receipt(record, "openai")
+    assert receipt.id == credential_id
+    assert receipt.chat_consent_enabled is True
+    assert receipt.chat_consent_model_id == "gpt-4o-mini"
+    assert receipt.runtime_authorized is False
+    assert not hasattr(receipt, "api_key")
+
+    record.credential_metadata = {
+        "personal_model_chat_consent": {
+            "enabled": False, "model_id": "gpt-4o-mini",
+        },
+    }
+    receipt = model_settings._consumer_key_receipt(record, "openai")
+    assert receipt.chat_consent_enabled is False
+    assert receipt.chat_consent_model_id is None
+    assert receipt.runtime_authorized is False
+
+    record.credential_metadata = {
+        "personal_model_chat_consent": {
+            "enabled": True, "model_id": " auto",
+        },
+    }
+    receipt = model_settings._consumer_key_receipt(record, "openai")
+    assert receipt.chat_consent_enabled is False
+    assert receipt.chat_consent_model_id is None
+    assert receipt.runtime_authorized is False
