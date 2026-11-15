@@ -20,8 +20,6 @@ import type {
 
 type Discovery = "idle" | "loading" | "ready" | "unavailable";
 type Listening = "checking" | "ready" | "unavailable";
-type STTCapabilities = { status: string; transcription_available: boolean };
-
 const BROWSER = "_browser_speech_";
 
 /** Only an actually permitted engine/voice combination can be saved. */
@@ -46,6 +44,10 @@ export function KarenCopilotVoiceDock({
   const [open, setOpen] = useState(false);
   const [discovery, setDiscovery] = useState<Discovery>("idle");
   const [listening, setListening] = useState<Listening>("checking");
+  const [listenCycle, setListenCycle] = useState(0);
+  const onListeningAvailability = useCallback((ready: boolean) => {
+    setListening(ready ? "ready" : "unavailable");
+  }, []);
   const [catalog, setCatalog] = useState<VoiceCatalog | null>(null);
   const [saved, setSaved] = useState<VoiceSelectionResponse | null>(null);
   const [engineId, setEngineId] = useState(BROWSER);
@@ -60,15 +62,11 @@ export function KarenCopilotVoiceDock({
   const refresh = useCallback(async (generation: number) => {
     // STT and TTS are independent. An unavailable model-backed speaker must
     // not hide local dictation, nor can an STT failure invent TTS readiness.
-    const [engines, preference, capabilities] = await Promise.allSettled([
+    const [engines, preference] = await Promise.allSettled([
       apiClient.getVoiceEngineCatalog(),
       apiClient.getVoiceSelection(),
-      apiClient.get<STTCapabilities>("/api/voice/capabilities"),
     ]);
     if (!mounted.current || epoch.current !== generation) return;
-    setListening(capabilities.status === "fulfilled" &&
-      capabilities.value.transcription_available === true &&
-      capabilities.value.status === "ready" ? "ready" : "unavailable");
 
     if (engines.status !== "fulfilled" || preference.status !== "fulfilled") {
       setCatalog(null);
@@ -86,20 +84,9 @@ export function KarenCopilotVoiceDock({
 
   useEffect(() => {
     mounted.current = true;
-    const generation = ++epoch.current;
-    // Do not cold-load every TTS model when opening a chat. The expensive
-    // engine/voice catalog is requested only after an explicit UI gesture.
-    void apiClient.get<STTCapabilities>("/api/voice/capabilities")
-      .then((capabilities) => {
-        if (!mounted.current || epoch.current !== generation) return;
-        setListening(capabilities.transcription_available === true &&
-          capabilities.status === "ready" ? "ready" : "unavailable");
-      })
-      .catch(() => {
-        if (mounted.current && epoch.current === generation) {
-          setListening("unavailable");
-        }
-      });
+    // The existing local dictation adapter owns the single STT probe. Only
+    // a user opening Voice options can trigger heavier TTS discovery.
+    ++epoch.current;
     return () => {
       mounted.current = false;
       ++epoch.current;
@@ -110,6 +97,7 @@ export function KarenCopilotVoiceDock({
     if (savingRef.current) return;
     setDiscovery("loading");
     setListening("checking");
+    setListenCycle((value) => value + 1);
     setError(null);
     setNotice(null);
     void refresh(++epoch.current);
@@ -212,7 +200,8 @@ export function KarenCopilotVoiceDock({
           </span>
           <span data-testid="karen-copilot-voice-listening"
             className="text-xs text-muted-foreground">
-            Listen: {listening === "ready" ? "Local dictation ready" :
+            Listen: {disabled ? "Dictation paused" :
+              listening === "ready" ? "Local dictation ready" :
               listening === "checking" ? "Checking…" : "Local dictation unavailable"}
           </span>
           <span data-testid="karen-copilot-voice-output"
@@ -222,8 +211,9 @@ export function KarenCopilotVoiceDock({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {!disabled && listening === "ready" && (
-            <KarenLocalDictationCapture port={port} />
+          {!disabled && (
+            <KarenLocalDictationCapture key={listenCycle}
+              port={port} onAvailabilityChange={onListeningAvailability} />
           )}
           {!disabled && <KarenBrowserDictationCapture port={port} />}
           <button type="button"
