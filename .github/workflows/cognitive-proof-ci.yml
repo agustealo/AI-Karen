@@ -28,6 +28,8 @@ on:
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
       - 'tests/architecture/test_cognitive_execution_authority.py'
+      - 'tests/core/test_cognitive_state_conflict_handoff.py'
+      - 'tests/core/test_runtime_decision_pipeline.py'
       - 'requirements/ci/base.txt'
       - 'requirements/ci/cognitive.txt'
       - '.github/workflows/cognitive-proof-ci.yml'
@@ -58,6 +60,8 @@ on:
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
       - 'tests/architecture/test_cognitive_execution_authority.py'
+      - 'tests/core/test_cognitive_state_conflict_handoff.py'
+      - 'tests/core/test_runtime_decision_pipeline.py'
       - 'requirements/ci/base.txt'
       - 'requirements/ci/cognitive.txt'
       - '.github/workflows/cognitive-proof-ci.yml'
@@ -137,6 +141,14 @@ jobs:
         if: ${{ always() }}
         run: |
           pytest tests/core/reasoning -q --timeout=300 --tb=short
+
+      - name: Prove authorized cognitive state and conflict-driven decisions
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/test_cognitive_state_conflict_handoff.py \
+            tests/core/test_runtime_decision_pipeline.py \
+            -q --timeout=300 --tb=short
 
       - name: Run full cognitive benchmark proof
         if: ${{ always() }}
