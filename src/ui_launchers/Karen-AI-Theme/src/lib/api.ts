@@ -582,7 +582,12 @@ class ApiClient {
     }
   }
 
-  private async request<T>(endpoint: string, init: RequestInit = {}, skipAuth: boolean = false): Promise<T> {
+  private async request<T>(
+    endpoint: string,
+    init: RequestInit = {},
+    skipAuth: boolean = false,
+    responseKind: 'json' | 'blob' = 'json',
+  ): Promise<T> {
     const send = async (baseUrl: string | null): Promise<Response> => {
       const authHeaders = skipAuth ? {} : await this.getAuthHeaders();
       const requestHeaders = {
@@ -749,6 +754,7 @@ class ApiClient {
     }
 
     if (response.status === 204) return undefined as T;
+    if (responseKind === 'blob') return await response.blob() as T;
     const text = await response.text();
     return (text ? JSON.parse(text) : undefined) as T;
   }
@@ -759,6 +765,72 @@ class ApiClient {
    */
   async getRuntimeProviderCatalog(): Promise<RuntimeProviderCatalogResponse> {
     return this.get('/api/runtime/providers');
+  }
+
+  /** List only backend-verified, per-user approved speech engines. */
+  async getVoiceEngineCatalog(): Promise<import('./voice-capabilities').VoiceCatalog> {
+    const result = await this.get<unknown>('/api/voice/engines');
+    const { parseVoiceCatalog } = await import('./voice-capabilities');
+    return parseVoiceCatalog(result);
+  }
+
+  /** Persist a voice choice through the existing authenticated user record. */
+  async getVoiceSelection(): Promise<import('./voice-capabilities').VoiceSelectionResponse> {
+    const result = await this.get<unknown>('/api/settings/voice');
+    const { parseVoiceSelection } = await import('./voice-capabilities');
+    return parseVoiceSelection(result);
+  }
+
+  async setVoiceSelection(
+    engineId: string | null,
+    voiceId: string | null,
+  ): Promise<import('./voice-capabilities').VoiceSelectionResponse> {
+    const result = await this.put<unknown>('/api/settings/voice', {
+      engine_id: engineId,
+      voice_id: voiceId,
+    });
+    const { parseVoiceSelection } = await import('./voice-capabilities');
+    const response = parseVoiceSelection(result);
+    if (
+      !result || typeof result !== 'object' ||
+      (result as Record<string, unknown>).status !== 'success' ||
+      response.voice.engine_id !== engineId ||
+      response.voice.voice_id !== voiceId
+    ) {
+      throw new Error('Karen did not acknowledge the requested voice preference');
+    }
+    return response;
+  }
+
+  /** One binary response; authorization, refresh and errors use the same client. */
+  async synthesizeLocalVoice(
+    engineId: string,
+    voiceId: string,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    if (!/^[a-z][a-z0-9-]{0,49}$/.test(engineId) ||
+        !/^[A-Za-z][A-Za-z0-9_-]{0,95}$/.test(voiceId) ||
+        !text.trim() || text.length > 2000) {
+      throw new Error('Invalid speech request');
+    }
+    const output = await this.request<Blob>(
+      '/api/voice/engines/' + encodeURIComponent(engineId) + '/synthesis',
+      {
+        method: 'POST',
+        body: JSON.stringify({ text, voice_id: voiceId }),
+        signal,
+        headers: { 'Content-Type': 'application/json' },
+      },
+      false,
+      'blob',
+    );
+    if (!(output instanceof Blob) ||
+        !output.type.startsWith('audio/wav') ||
+        output.size < 44 || output.size > 16 * 1024 * 1024) {
+      throw new Error('Local speech engine returned no verified WAV audio');
+    }
+    return output;
   }
 
   async transcribeLocalAudio(wav: Blob, durationSeconds: number, signal?: AbortSignal): Promise<{
