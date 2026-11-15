@@ -28,8 +28,10 @@ vi.mock("@/app/api/_lib/backend-proxy", () => ({
   getBackendBaseUrl: () => "http://api:8000",
 }));
 
-import { GET, POST, verifyKarenCopilotSession } from
+import { GET, POST } from
   "@/app/api/copilotkit/[[...slug]]/route";
+import { verifyKarenCopilotSession } from
+  "@/app/api/copilotkit/_lib/verify-session";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 

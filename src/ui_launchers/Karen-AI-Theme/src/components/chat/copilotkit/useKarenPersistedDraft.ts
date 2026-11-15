@@ -43,7 +43,7 @@ export function useKarenPersistedDraft(conversationId: string) {
   const abortRef = useRef<AbortController | null>(null);
   // Reuse the existing CAS write when Submit races with the debounce timer.
   // Do not create a second draft store or submit before an authenticated ack.
-  const pendingSaveRef = useRef<Promise<void> | null>(null);
+  const pendingSaveRef = useRef<Promise<boolean> | null>(null);
 
   const endpoint = "/api/conversations/" + encodeURIComponent(conversationId) + "/draft";
 
@@ -177,9 +177,9 @@ export function useKarenPersistedDraft(conversationId: string) {
     }
   }, [endpoint]);
 
-  const save = useCallback(async () => {
+  const save = useCallback(async (): Promise<boolean> => {
     if (!activeRef.current || !dirtyRef.current ||
-        busyRef.current || revisionRef.current === null) return;
+        busyRef.current || revisionRef.current === null) return false;
     busyRef.current = true;
     const generation = generationRef.current;
     const sentText = textRef.current;
@@ -191,7 +191,7 @@ export function useKarenPersistedDraft(conversationId: string) {
         sentText, expectedRevision, controller.signal,
       );
       if (!activeRef.current || generationRef.current !== generation ||
-          controller.signal.aborted) return;
+          controller.signal.aborted) return false;
       revisionRef.current = response.revision;
       readSequenceRef.current += 1;
       if (textRef.current === sentText) {
@@ -204,20 +204,22 @@ export function useKarenPersistedDraft(conversationId: string) {
       }
       setStatus("ready");
       setFailureStatus(null);
+      return true;
     } catch (error) {
       if (!activeRef.current || generationRef.current !== generation ||
-          controller.signal.aborted) return;
+          controller.signal.aborted) return false;
       setSynced(false);
       setStatus(error instanceof ApiError && error.status === 409 ?
         "conflict" : "unavailable");
       setFailureStatus(error instanceof ApiError ? error.status : null);
+      return false;
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       busyRef.current = false;
     }
   }, [commitDraftWrite]);
 
-  const startSave = useCallback((): Promise<void> => {
+  const startSave = useCallback((): Promise<boolean> => {
     if (pendingSaveRef.current) return pendingSaveRef.current;
     const pending = save();
     pendingSaveRef.current = pending;
@@ -235,9 +237,15 @@ export function useKarenPersistedDraft(conversationId: string) {
 
   const clearBeforeSubmit = useCallback(async (submittedText: string): Promise<boolean> => {
     if (!activeRef.current || busyRef.current || dirtyRef.current ||
-        revisionRef.current === null ||
-        textRef.current.trim() !== submittedText.trim()) {
+        revisionRef.current === null || !submittedText.trim()) {
       return false;
+    }
+    if (textRef.current.trim() !== submittedText.trim()) {
+      if (textRef.current === "") {
+        textRef.current = submittedText;
+      } else {
+        return false;
+      }
     }
     busyRef.current = true;
     const generation = generationRef.current;
@@ -253,7 +261,7 @@ export function useKarenPersistedDraft(conversationId: string) {
           controller.signal.aborted) return false;
       revisionRef.current = response.revision;
       readSequenceRef.current += 1;
-      if (textRef.current === originalText) {
+      if (textRef.current === originalText || textRef.current === "") {
         textRef.current = "";
         dirtyRef.current = false;
         setDraft("");
@@ -286,18 +294,51 @@ export function useKarenPersistedDraft(conversationId: string) {
     // Flush an edited draft immediately and await a verified CAS receipt
     // before the existing revision-fenced clear and one SDK model run.
     if (!activeRef.current || revisionRef.current === null ||
-        !submittedText.trim() || textRef.current.trim() !== submittedText.trim()) {
+        !submittedText.trim()) {
       return false;
+    }
+    // CopilotKit or controlled inputs may clear their internal value to ""
+    // synchronously upon submit dispatch. Restore textRef to the authoritative
+    // submitted text so the CAS save-and-clear invariant holds.
+    if (textRef.current.trim() !== submittedText.trim()) {
+      if (textRef.current === "") {
+        textRef.current = submittedText;
+        dirtyRef.current = true;
+      } else {
+        return false;
+      }
     }
     const pending = pendingSaveRef.current;
-    if (pending) await pending;
-    if (!activeRef.current || textRef.current.trim() !== submittedText.trim()) {
+    if (pending) {
+      const ok = await pending;
+      if (!ok) return false;
+    }
+    if (!activeRef.current) return false;
+    if (textRef.current.trim() !== submittedText.trim()) {
+      if (textRef.current === "") {
+        textRef.current = submittedText;
+        dirtyRef.current = true;
+      } else {
+        return false;
+      }
+    }
+    if (dirtyRef.current) {
+      const ok = await startSave();
+      if (!ok) return false;
+    }
+    if (!activeRef.current || busyRef.current) {
       return false;
     }
-    if (dirtyRef.current) await startSave();
-    if (!activeRef.current || dirtyRef.current || busyRef.current ||
-        textRef.current.trim() !== submittedText.trim()) {
-      return false;
+    // If startSave succeeded, but an optimistic clear arrived while startSave
+    // was in flight, textRef became "" and dirtyRef remained true.
+    // Reset dirtyRef since submittedText was confirmed saved.
+    if (dirtyRef.current) {
+      if (textRef.current === "" || textRef.current.trim() === submittedText.trim()) {
+        textRef.current = submittedText;
+        dirtyRef.current = false;
+      } else {
+        return false;
+      }
     }
     return clearBeforeSubmit(submittedText);
   }, [startSave, clearBeforeSubmit]);

@@ -93,6 +93,9 @@ export function KarenCopilotControlledChat({
     // CopilotKit may echo the existing controlled value after send or stream
     // teardown. Only a real edit may dismiss a visible persistence/run error.
     if (value === readDraftText()) return;
+    // An optimistic empty clear dispatched by CopilotKit's input handler during
+    // message send must not clobber the authoritative draft or mark it dirty.
+    if (submitPending.current && value === "") return;
     setError(null);
     setDraftText(value);
   }, [readDraftText, setDraftText]);

@@ -7,74 +7,10 @@ import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilo
 import { connectKarenOwnedThread, readKarenConnectThreadId } from "../../copilotkit/_lib/owned-thread-reconnect";
 import { readKarenScopedStopRunId, stopKarenOwnedRun, readKarenOwnedRunStatus } from "../../copilotkit/_lib/owned-run-stop";
 import { ownedRunEventTarget, readKarenOwnedRunEvents } from "../../copilotkit/_lib/owned-run-events";
+import { verifyKarenCopilotSession } from "../../copilotkit/_lib/verify-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type AuthenticatedPrincipal = {
-  user_id: string;
-  tenant_id: string;
-  is_active: boolean;
-};
-
-/**
- * Resolve the current actor through Karen's canonical auth service.
- *
- * Neither CopilotKit state nor a browser x-user-id/x-tenant-id is an authority.
- * This check is repeated for every SDK discovery, run and thread request.
- */
-export async function verifyKarenCopilotSession(
-  request: NextRequest,
-  backendBaseUrl: string,
-): Promise<{ principal: AuthenticatedPrincipal; headers: Record<string, string> } | NextResponse> {
-  const authorization = request.headers.get("authorization");
-  const cookie = sanitizeBackendCookies(request.headers.get("cookie") || "");
-  if (!authorization && !cookie) {
-    return NextResponse.json({ detail: "Authentication required" }, { status: 401 });
-  }
-
-  const headers: Record<string, string> = {};
-  if (authorization) headers.Authorization = authorization;
-  if (cookie) headers.Cookie = cookie;
-
-  let response: Response;
-  try {
-    response = await fetch(`${backendBaseUrl}/api/auth/me`, {
-      method: "GET",
-      headers,
-      cache: "no-store",
-      redirect: "manual",
-      signal: request.signal,
-    });
-  } catch {
-    return NextResponse.json({ detail: "Authentication service unavailable" }, { status: 503 });
-  }
-  if (response.status === 401 || response.status === 403) {
-    return NextResponse.json({ detail: "Authentication required" }, { status: response.status });
-  }
-  if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
-    return NextResponse.json({ detail: "Authentication service unavailable" }, { status: 503 });
-  }
-
-  let principal: Partial<AuthenticatedPrincipal>;
-  try {
-    principal = (await response.json()) as Partial<AuthenticatedPrincipal>;
-  } catch {
-    return NextResponse.json({ detail: "Invalid authentication response" }, { status: 503 });
-  }
-
-  if (
-    typeof principal.user_id !== "string" ||
-    !principal.user_id ||
-    typeof principal.tenant_id !== "string" ||
-    !principal.tenant_id ||
-    principal.tenant_id === "default" ||
-    principal.is_active !== true
-  ) {
-    return NextResponse.json({ detail: "Authentication required" }, { status: 401 });
-  }
-  return { principal: principal as AuthenticatedPrincipal, headers };
-}
 
 /**
  * CopilotKit is an interaction gateway, not Karen's model/tool executor.
@@ -95,7 +31,7 @@ const RUN_STATUS_ROUTE =
 const MAX_RUN_BYTES = 262144;
 
 /** Refuse SDK endpoints without canonical thread authorization or durability. */
-export function validateCopilotRoute(request: NextRequest): NextResponse | null {
+function validateCopilotRoute(request: NextRequest): NextResponse | null {
   const path = request.nextUrl.pathname;
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
   if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
@@ -167,7 +103,7 @@ async function validateRunEnvelope(request: NextRequest): Promise<NextResponse |
  * Feature eligibility comes from the same canonical runtime flag as AG-UI
  * execution. Successful SDK discovery alone cannot prove the transport is on.
  */
-export async function readKarenAgUiCapabilities(
+async function readKarenAgUiCapabilities(
   request: NextRequest,
   backendBaseUrl: string,
   headers: Record<string, string>,
@@ -210,7 +146,7 @@ export async function readKarenAgUiCapabilities(
   }
 }
 
-export async function verifyKarenAgUiEnabled(
+async function verifyKarenAgUiEnabled(
   request: NextRequest,
   backendBaseUrl: string,
   headers: Record<string, string>,
