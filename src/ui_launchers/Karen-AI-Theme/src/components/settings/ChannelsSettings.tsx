@@ -39,6 +39,13 @@ type ChannelInventoryResponse = {
   connections: PersonalChannel[];
 };
 
+// The backend currently admits historical pairing phases, not a live
+// provider probe or a QR. These are the only stored reducer states.
+const PERSONAL_PAIRING_PHASES = new Set([
+  'ready', 'qr_available', 'connected',
+  'disconnect_pending', 'disconnected', 'unknown',
+]);
+
 function isPersonalChannel(value: unknown): value is PersonalChannel {
   if (!value || typeof value !== 'object') {
     return false;
@@ -58,10 +65,17 @@ function isPersonalChannel(value: unknown): value is PersonalChannel {
     ) &&
     new Set(record.active_consent_provider_ids).size === record.active_consent_provider_ids.length &&
     (record.availability === 'configured' || record.availability === 'unavailable') &&
-    (record.last_observed_phase === null || typeof record.last_observed_phase === 'string') &&
-    typeof record.live_connected === 'boolean' &&
-    typeof record.qr_available === 'boolean' &&
-    typeof record.provider_unlinked === 'boolean'
+    (record.last_observed_phase === null || (
+      typeof record.last_observed_phase === 'string' &&
+      PERSONAL_PAIRING_PHASES.has(record.last_observed_phase)
+    )) &&
+    record.live_connected === false &&
+    record.qr_available === false &&
+    typeof record.provider_unlinked === 'boolean' &&
+    (record.provider_unlinked === false || (
+      record.availability === 'configured' &&
+      record.last_observed_phase === 'disconnected'
+    ))
   );
 }
 
