@@ -10,8 +10,10 @@
 - Wiki #863 merged to main `c18b3dfe3376a02e1c5de51e0195b9be7e0af182`.
 - First KCOG-00A containment #864 merged to main `2d8b0171b9f37f4eb1e2b32290b51d3ec36c916d`, all exact-head checks green.
 - Documentation checkpoint #866 merged `724edec8ec12425bc193510270e6bdbb04677f30` and post-merge Main Quality green at inspection.
-- KCOG-00A2 #868 (**OPEN**) head `92f10a63aee39735f8e4e2dca0423b9521eb2c67`: replace fabricated causal numerical effects with explicit abstention; First-Boot still pending at the recorded inspection.
-- KCOG-00B1 #869 (**OPEN**) head `6d3ccda84bf8495b0fc7080b42d480bd5e0cfb0b`: distinguish unknown calibration and attribution from zero; exact-head CI still pending.
+- KCOG-00A2 #868 (**MERGED**) `afa845187151715692ca15a75b93871c7403351f`, exact-head CI green including First-Boot; unsupported causal numerical APIs abstain.
+- KCOG-00B1 #869 (**MERGED**) `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3`, exact-head CI green including First-Boot; unknown calibration and attribution cannot masquerade as zero.
+- KCOG-00A3 #871 (**OPEN**) head `b05942395f328533dc3990cb6a24bc1d0535950a`: registered causal strategy now abstains instead of calling absent methods; first-boot pending at checkpoint.
+- KCOG-01A **NEXT**: reuse existing `CognitiveState`, `ContextSnapshot`, `MetaCognitiveAssessor`, `RuntimeDecisionPipeline`, CORTEX and RuntimePolicy; prove a typed, authorized and measurable state-to-decision contract.
 - GitHub Issues are disabled (HTTP 410); this wiki and PR descriptions retain sprint continuity. Verify live CI before acting.
 - **No claims yet** of validated causal-effect estimation, calibrated metacognition, specialist competence gain, or cross-task transfer.
 

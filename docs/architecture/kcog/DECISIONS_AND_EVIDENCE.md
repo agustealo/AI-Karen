@@ -31,8 +31,11 @@
 | 2026-11-15 | KCOG-00A initial safety guard | PR #864; merged `2d8b0171b9f37f4eb1e2b32290b51d3ec36c916d` | All exact-head CI green including Cognitive Proof, Main Quality, Reasoning Smoke, Production First-Boot | MERGED, cognitive runtime acceptance still separate |
 
 | 2026-11-15 | KCOG S1 continuity checkpoint | PR #866; merged `724edec8ec12425bc193510270e6bdbb04677f30` | Exact-head and post-merge Main Quality green at inspection | MERGED |
-| 2026-11-15 | KCOG-00A2 identified causal inference containment | PR #868; head `92f10a63aee39735f8e4e2dca0423b9521eb2c67` | Cognitive Proof, Reasoning Smoke, Main Quality, Backend, Frontend and classifier green in latest inspection; First-Boot pending | OPEN, not merged |
-| 2026-11-15 | KCOG-00B1 truth semantics | PR #869; head `6d3ccda84bf8495b0fc7080b42d480bd5e0cfb0b` | Cognitive Proof and Reasoning Smoke green in latest inspection; remaining CI pending | OPEN, not merged |
+| 2026-11-15 | KCOG-00A2 causal identification containment | PR #868; merged `afa845187151715692ca15a75b93871c7403351f` | All exact-head CI green incl. first-boot | MERGED, future estimator still unimplemented |
+| 2026-11-15 | KCOG-00B1 calibration and attribution truth | PR #869; merged `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3` | All exact-head CI green incl. first-boot | MERGED, validated calibration still unimplemented |
+
+| 2026-11-15 | KCOG-00A3 causal strategy wiring | PR #871; head `b05942395f328533dc3990cb6a24bc1d0535950a` | Exact-head Cognitive Proof, Reasoning Smoke and Main Quality green; first-boot pending at checkpoint | OPEN, not merged |
+| 2026-11-15 | KCOG-01A state integration source review | main `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3` | `CognitiveState` and `MetaCognitiveAssessor` not referenced directly in inspected decision_pipeline, ChatRuntime and CORTEX executive; `ContextSnapshot` already referenced in context contracts | SOURCE-LEVEL GAP, integration not claimed |
 
 **Non-closure:** these safety slices do not implement causal identification, independently verified calibration or cross-domain transfer. A future real-model runtime trial is still required.
 

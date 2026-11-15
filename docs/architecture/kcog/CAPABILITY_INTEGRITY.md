@@ -20,9 +20,10 @@
 ## Remediation status and new reachability finding
 
 - **CI-001 guarded:** #864 merged with all exact-head gates passing. Correlational data no longer auto-adds causal graph edges; existing edges remain unvalidated until provenance is established.
-- **CI-002 and CI-003 proposed containment:** #868 open, in CI. Its `CausalIdentificationError` rejects unidentified effects, simulated interventions, numeric counterfactuals, causal narratives and responsibility scores. It does **not** implement an estimator.
-- **CI-004 and CI-005 proposed containment:** #869 open, in CI. Missing calibration targets and unidentifiable outcome contributions become explicit unknowns. Verified calibration using durable labeled evidence remains future work.
-- **CI-011 new source finding:** `core/reasoning/strategies/causal_strategy.py::CausalReasoner.execute` calls `build_causal_graph` and `generate_counterfactuals`, which do not exist on the current `CausalReasoningEngine`; the broad catch returns a strategy failure. Audit actual registry/runtime reachability and correct using the existing reasoning strategy authority, not by implementing fake methods. Classified **SOURCE_CONFIRMED / RUNTIME_UNVERIFIED**.
+- **CI-002 and CI-003 containment merged:** #868 merged as `afa845187151715692ca15a75b93871c7403351f` after all exact-head checks passed. `CausalIdentificationError` rejects unidentified effects and counterfactuals. It does **not** implement an estimator.
+- **CI-004 and CI-005 containment merged:** #869 merged as `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3` after all exact-head checks passed. Missing calibration targets and unidentifiable outcome contributions now have explicit unknown semantics; verified calibration still requires durable independent labels.
+- **CI-011 candidate:** #871 changes the default causal strategy to explicit typed abstention, removes its unsupported general evidence-synthesis claim and tests the canonical executor. Exact-head boot remains pending; real production invocation still unverified.
+- **CI-012 next integration gap:** `core/cognitive/state.py::CognitiveState` and `core/reasoning/meta/assessment.py::MetaCognitiveAssessor` have no direct use in inspected `RuntimeDecisionPipeline`, `ChatRuntime`, `CortexExecutionDecider` files. `ContextSnapshot` already feeds `core/context/contracts.py`. KCOG-01 must converge these types, not introduce a duplicate state/executive.
 - **Important:** exact-head passing checks do not prove that production cognitive reasoning invokes these paths, nor that a validated causal model exists. Do not conflate release-safety containment with intelligence evaluation.
 
 ## No misleading probability, causality, or competence claims
