@@ -1038,7 +1038,7 @@ export default function PluginOverviewPage() {
                   description={plugin.description}
                   version={plugin.version}
                   declaresUi={plugin.has_gui}
-                  isCommunicationChannel={plugin.isCommunicationChannel}
+                  isCommunicationChannel={plugin.isCommunicationChannel === true}
                 />
               ))}
             </div>
