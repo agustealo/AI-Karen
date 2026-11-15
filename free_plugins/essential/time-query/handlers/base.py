@@ -444,7 +444,10 @@ class TimeHandlerBase:
         if timezone_name:
             tz = zoneinfo.ZoneInfo(timezone_name)
             return datetime.datetime.now(tz)
-        return datetime.datetime.now().astimezone()
+        # The Docker host timezone is not the authenticated user's timezone.
+        # Without an explicitly selected or authorized zone, report UTC
+        # honestly instead of inventing a local wall-clock reading.
+        return cls.get_system_now_utc()
 
     @classmethod
     def get_system_now_utc(cls) -> datetime.datetime:
