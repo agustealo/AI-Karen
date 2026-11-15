@@ -18,10 +18,17 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_KAREN_SETTINGS, KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
+import { apiClient } from "@/lib/api";
 
 const DEFAULT_VOICE_SENTINEL = "_DEFAULT_VOICE_";
 const DISCOVERY_DELAYS_MS = [250, 1000, 3000] as const;
 type VoiceStatus = "loading" | "ready" | "empty" | "unsupported" | "failed";
+type LocalStatus = "unchecked" | "checking" | "ready" | "unavailable" | "error";
+type LocalCapability = {
+  synthesis_available: boolean;
+  synthesis_engine: string | null;
+  synthesis_voice_id: string | null;
+};
 
 const readPreferredVoice = (): string | null => {
   try {
@@ -58,6 +65,37 @@ export default function VoiceSettings() {
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const [localStatus, setLocalStatus] = useState<LocalStatus>("unchecked");
+  const [localVoice, setLocalVoice] = useState<{ engine: string; voiceId: string } | null>(null);
+  const localGeneration = useRef(0);
+
+  useEffect(() => () => {
+    localGeneration.current += 1;
+  }, []);
+
+  const checkLocalVoice = async () => {
+    const generation = ++localGeneration.current;
+    setLocalStatus("checking");
+    setLocalVoice(null);
+    try {
+      const capabilities = await apiClient.get<LocalCapability>("/api/voice/capabilities");
+      if (localGeneration.current !== generation) return;
+      const engine = capabilities?.synthesis_engine;
+      const voiceId = capabilities?.synthesis_voice_id;
+      if (capabilities?.synthesis_available === true &&
+          typeof engine === "string" && /^[a-zA-Z0-9_.-]{1,96}$/.test(engine) &&
+          typeof voiceId === "string" && /^[a-zA-Z0-9_.-]{1,96}$/.test(voiceId)) {
+        setLocalVoice({ engine, voiceId });
+        setLocalStatus("ready");
+      } else {
+        setLocalStatus("unavailable");
+      }
+    } catch {
+      if (localGeneration.current !== generation) return;
+      setLocalStatus("error");
+    }
+  };
+
 
   useEffect(() => {
     setSelectedVoiceURI(readPreferredVoice());
@@ -281,6 +319,34 @@ export default function VoiceSettings() {
             </p>
           </div>
         )}
+        <section className="space-y-2 rounded-lg border border-border/60 p-3" aria-label="Karen local speech runtime">
+          <div className="text-sm font-semibold">Karen local speech engine</div>
+          <p className="text-xs text-muted-foreground">
+            An installed offline Piper model is separate from browser voices.
+            This checks the authenticated runtime; no model is downloaded.
+          </p>
+          <Button type="button" variant="outline" onClick={() => void checkLocalVoice()}
+            disabled={localStatus === "checking"}>
+            {localStatus === "checking" ? "Checking local voice…" : "Check local voice engine"}
+          </Button>
+          {localStatus === "ready" && localVoice && (
+            <p role="status" className="text-xs text-muted-foreground">
+              Local synthesis ready: {localVoice.engine} ({localVoice.voiceId}).
+              Use “Try local voice” on a Karen reply to hear it.
+            </p>
+          )}
+          {localStatus === "unavailable" && (
+            <p role="status" className="text-xs text-muted-foreground">
+              No verified local synthesis engine is ready. An installed model and
+              enabled runtime configuration are required.
+            </p>
+          )}
+          {localStatus === "error" && (
+            <p role="alert" className="text-xs text-destructive">
+              Karen's authenticated local voice capability check failed.
+            </p>
+          )}
+        </section>
         {previewError && <p role="alert" className="text-sm text-destructive">{previewError}</p>}
         <div className="flex flex-wrap gap-2">
           <Button
