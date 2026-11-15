@@ -114,6 +114,78 @@ describe("CopilotKit canonical conversation hydration", () => {
   });
 
 
+  it("faithfully hydrates a completed backend persona receipt before opening SDK chat", async () => {
+    const original = {
+      actual_provider: "local",
+      actual_model: "verified-model",
+      response_source: "local_inference",
+      runtime_engine: "vllm",
+      persona_id: "tenant-persona-1",
+      persona_selection_revision: 12,
+    };
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A,
+      messages: [
+        { id: "u1", role: "user", content: "Who are you?" },
+        { id: "a1", role: "assistant", content: "Saved model answer" },
+      ],
+      replayEvents: [{
+        type: "CUSTOM",
+        name: "karen.execution_receipt.v1",
+        messageId: "a1",
+        value: original,
+      }],
+    });
+    render(guardedHistory());
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toBeTruthy());
+    expect(backend.agent.setMessages).toHaveBeenCalledWith([
+      { id: "u1", role: "user", content: "Who are you?" },
+      { id: "a1", role: "assistant", content: "Saved model answer" },
+    ]);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(1);
+    expect(backend.agent.subscribe).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("karen-read-only-transcript")).toBeNull();
+  });
+
+  it("accepts only an intact bounded persona identity and integer revision on a saved receipt", () => {
+    const messages = [{ id: "answer-1", role: "assistant" }];
+    const base = {
+      actual_provider: "local", actual_model: "verified-model",
+      response_source: "local_inference",
+    };
+    const event = (value: Record<string, unknown>) => [{
+      type: "CUSTOM", name: "karen.execution_receipt.v1",
+      messageId: "answer-1", value,
+    }];
+    for (const revision of [0, 12, Number.MAX_SAFE_INTEGER]) {
+      const valid = {
+        ...base,
+        persona_id: "tenant-persona-1",
+        persona_selection_revision: revision,
+      };
+      expect(parseKarenVerifiedHistory(event(valid), messages).get("answer-1"))
+        .toEqual([{ type: "receipt", value: valid }]);
+    }
+    for (const invalid of [
+      { persona_id: "p" },
+      { persona_selection_revision: 1 },
+      { persona_id: "", persona_selection_revision: 1 },
+      { persona_id: " ", persona_selection_revision: 1 },
+      { persona_id: "p".repeat(129), persona_selection_revision: 1 },
+      { persona_id: "p", persona_selection_revision: null },
+      { persona_id: "p", persona_selection_revision: -1 },
+      { persona_id: "p", persona_selection_revision: 1.5 },
+      { persona_id: "p", persona_selection_revision: "1" },
+      { persona_id: "p", persona_selection_revision: Number.MAX_SAFE_INTEGER + 1 },
+      { persona_id: "p", persona_selection_revision: true },
+      { persona_id: "p", persona_selection_revision: 1, private_provider_key: "secret" },
+    ]) {
+      expect(() => parseKarenVerifiedHistory(event({ ...base, ...invalid }), messages))
+        .toThrow("Unsupported verified execution receipt");
+    }
+  });
+
   it("registers one SDK agent when history hydration and the controlled view share the scope", async () => {
     backend.fetchConversation.mockResolvedValue({
       threadId: CONVERSATION_A,
